@@ -337,6 +337,12 @@ class ArgumentParser:
             required=False,
         )
         parser.add_argument(
+            "--signalmonitorstream",
+            action="store_true",
+            help="Experimental fast live mode: preload cached history and bootstrap from the previous board before periodic full refreshes",
+            required=False,
+        )
+        parser.add_argument(
             "--signalscorecard",
             nargs="?",
             const="nifty50",
@@ -2331,6 +2337,7 @@ def pkscreenercli():
                 alert_channels=signalmonitor_alerts,
                 reset_state=bool(args.signalmonitorreset),
                 strong_buy_only=bool(args.signalmonitorstrongbuyonly),
+                streaming_mode=bool(args.signalmonitorstream),
             )
             while True:
                 runner.run()

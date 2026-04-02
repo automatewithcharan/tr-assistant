@@ -29,6 +29,7 @@ class SignalMonitorRunner:
     FULL_REFRESH_EVERY_CYCLES = 10
     MEANINGFUL_PRICE_MOVE_PCT = 0.75
     TRIGGER_PROXIMITY_PCT = 1.0
+    STREAM_BOOTSTRAP_MAX_SYMBOLS = 600
 
     SUMMARY_COLUMNS = [
         "Universe",
@@ -89,6 +90,7 @@ class SignalMonitorRunner:
         alert_channels: str = "none",
         reset_state: bool = False,
         strong_buy_only: bool = False,
+        streaming_mode: bool = False,
     ):
         self.config_manager = config_manager
         self.universe = universe
@@ -103,12 +105,14 @@ class SignalMonitorRunner:
         self.alert_channels = self._normalize_alert_channels(alert_channels)
         self.reset_state = bool(reset_state)
         self.strong_buy_only = bool(strong_buy_only)
+        self.streaming_mode = bool(streaming_mode)
         self.output_dir = Archiver.get_user_data_dir()
         self.run_at = PKDateUtilities.currentDateTime()
         self.run_at_str = self.run_at.strftime("%Y-%m-%d %H:%M:%S")
         self.timestamp = self.run_at.strftime("%Y%m%d_%H%M%S")
         self._previous_live_ticks_by_symbol: Dict[str, Dict] = {}
         self._cycle_number = 0
+        self._preload_done = False
         self.actionable_runner = ActionableReportRunner(
             config_manager=config_manager,
             universe=universe,
@@ -150,6 +154,18 @@ class SignalMonitorRunner:
                 "  [+] No symbols found for monitor mode."
             )
             return None, None, None, None
+
+        if self.streaming_mode and self.use_live_kite and not self._preload_done:
+            loaded, missing = self.actionable_runner.preload_symbols(
+                symbols,
+                cache_only=True,
+                show_progress=True,
+            )
+            self._preload_done = True
+            OutputControls().printOutput(
+                f"  [+] Live memory preload complete for {loaded}/{total} symbols"
+                + (f" ({missing} missing from cache)." if missing else ".")
+            )
 
         previous_state_df = self._load_previous_state()
         previous_simple_df = self._load_previous_simple()
@@ -219,6 +235,14 @@ class SignalMonitorRunner:
         if not current_ticks:
             return symbols
         if self._cycle_number <= 0:
+            if self.streaming_mode:
+                bootstrap_symbols = self._bootstrap_symbols_for_first_cycle(
+                    symbols,
+                    current_ticks,
+                    previous_simple_df,
+                )
+                if bootstrap_symbols:
+                    return bootstrap_symbols
             return symbols
 
         previous_ticks = self._previous_live_ticks_by_symbol
@@ -265,6 +289,60 @@ class SignalMonitorRunner:
                 changed_symbols.append(normalized_symbol)
 
         return changed_symbols or symbols
+
+    def _bootstrap_symbols_for_first_cycle(
+        self,
+        symbols: List[str],
+        current_ticks: Dict[str, Dict],
+        previous_simple_df: pd.DataFrame,
+    ) -> List[str]:
+        """Use the previous board to narrow the first live cycle in streaming mode."""
+        previous_map = self._simple_row_map(previous_simple_df)
+        if not previous_map:
+            return []
+
+        prioritized: List[Tuple[float, str]] = []
+        selected: Set[str] = set()
+        symbol_set = {str(symbol).strip().upper() for symbol in symbols}
+
+        for symbol, row in previous_map.items():
+            if symbol not in symbol_set:
+                continue
+            tick = current_ticks.get(symbol)
+            if not tick:
+                continue
+
+            action = str(row.get("What To Do", "")).strip()
+            strength = self._to_float(row.get("Signal Strength %"))
+            price = self._to_float(tick.get("last_price"))
+            if price <= 0:
+                continue
+
+            score = strength
+            if action in ["Strong Buy Now", "Buy Now", "Sell / Exit"]:
+                score += 1000.0
+            elif action in ["Watch for Buy", "Watch for Sell"]:
+                score += 100.0
+
+            if self._near_level(price, self._to_float(row.get("Buy Above"))):
+                score += 50.0
+            if self._near_level(price, self._to_float(row.get("Sell If Below"))):
+                score += 50.0
+            if self._near_level(price, self._to_float(row.get("Take Profit 1"))):
+                score += 25.0
+            if self._near_level(price, self._to_float(row.get("Take Profit 2"))):
+                score += 25.0
+
+            prioritized.append((score, symbol))
+
+        if not prioritized:
+            return []
+
+        prioritized.sort(key=lambda item: (-item[0], item[1]))
+        for _, symbol in prioritized[: self.STREAM_BOOTSTRAP_MAX_SYMBOLS]:
+            selected.add(symbol)
+
+        return [symbol for symbol in symbols if str(symbol).strip().upper() in selected]
 
     def _simple_row_map(self, simple_df: pd.DataFrame) -> Dict[str, Dict]:
         """Build a fast lookup map from the previous simple board."""

@@ -87,6 +87,55 @@ class ActionableReportRunner:
         """Return symbols for the selected universe."""
         return self._load_universe_symbols()
 
+    def preload_symbols(
+        self,
+        symbols: List[str],
+        cache_only: bool = True,
+        show_progress: bool = False,
+    ) -> Tuple[int, int]:
+        """Preload prepared OHLCV frames into memory for faster live monitoring."""
+        if not symbols:
+            return 0, 0
+
+        total = len(symbols)
+        loaded = 0
+        missing = 0
+
+        for index, symbol in enumerate(symbols, start=1):
+            try:
+                prepared = None
+                if cache_only and self.kite_history_provider is not None:
+                    history_count = max(self._estimate_history_count(), 120)
+                    cached_df = self.kite_history_provider.get_cached_stock_data(
+                        symbol,
+                        interval=self.config_manager.duration,
+                        count=history_count,
+                    )
+                    prepared = self._normalize_if_ohlcv(cached_df)
+                else:
+                    prepared = self._load_prepared_base_data(symbol, self.fetcher)
+
+                if prepared is not None and not prepared.empty and len(prepared) >= 60:
+                    self._store_cached_prepared_data(symbol, prepared)
+                    loaded += 1
+                else:
+                    missing += 1
+            except Exception as exc:
+                default_logger().debug(
+                    f"Preload failed for {symbol}: {exc}",
+                    exc_info=True,
+                )
+                missing += 1
+
+            if show_progress and (index % 100 == 0 or index == total):
+                OutputControls().printOutput(
+                    f"  [+] Preloaded {index}/{total} symbols into live memory...", end="\r"
+                )
+
+        if show_progress:
+            OutputControls().printOutput("")
+        return loaded, missing
+
     def build_report(
         self,
         symbols: Optional[List[str]] = None,
