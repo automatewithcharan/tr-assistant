@@ -538,6 +538,102 @@ class LivePortfolioRunner(PaperTradingRunner):
             OutputControls().printOutput("  [+] Live portfolio updated.")
         return trades_df, positions_df, summary_df
 
+    def _apply_manual_buys(
+        self,
+        trades_df: pd.DataFrame,
+        market_map: Dict[str, pd.Series],
+        cashflows_df: pd.DataFrame,
+    ) -> Tuple[pd.DataFrame, List[str]]:
+        """Record manual live buys even when tracked cash is lower than broker cash."""
+        events: List[str] = []
+        if not self.manual_buys:
+            return trades_df, events
+
+        next_trade_id = self._next_trade_id(trades_df)
+        new_rows = []
+        tracked_cash_before = self._compute_cash(trades_df, cashflows_df)
+        tracked_cash_after = float(tracked_cash_before)
+
+        for order in self.manual_buys:
+            symbol = str(order.get("symbol", "")).strip().upper()
+            quantity = int(order.get("quantity", 0) or 0)
+            entry_price = max(self._to_float(order.get("price")), 0.01)
+            invested_amount = round(quantity * entry_price, 2)
+            entry_charges = self._estimate_buy_charges(invested_amount)
+            total_entry_debit = round(invested_amount + entry_charges, 2)
+
+            if not symbol or quantity <= 0:
+                continue
+
+            market_row = market_map.get(symbol)
+            current_price = self._to_float(
+                market_row.get("LTP") if market_row is not None else entry_price,
+                fallback=entry_price,
+            )
+            current_value = round(current_price * quantity, 2)
+            unrealized_pnl = round(current_value - invested_amount, 2)
+            unrealized_return = (
+                round((unrealized_pnl * 100) / invested_amount, 2)
+                if invested_amount > 0
+                else 0.0
+            )
+
+            new_rows.append(
+                {
+                    "TradeId": next_trade_id,
+                    "Universe": self.universe,
+                    "Symbol": symbol,
+                    "Side": "LONG",
+                    "Status": "OPEN",
+                    "EntryDate": self.run_date,
+                    "EntryPrice": entry_price,
+                    "Quantity": quantity,
+                    "InvestedAmount": invested_amount,
+                    "StopLoss": self._to_float(market_row.get("StopLoss")) if market_row is not None else 0.0,
+                    "Target1": self._to_float(market_row.get("Target1")) if market_row is not None else 0.0,
+                    "Target2": self._to_float(market_row.get("Target2")) if market_row is not None else 0.0,
+                    "EntrySignal": str(market_row.get("Signal", "MANUAL BUY")).strip() if market_row is not None else "MANUAL BUY",
+                    "EntryConfidencePct": self._to_float(market_row.get("ConfidencePct")) if market_row is not None else 0.0,
+                    "EntryReason": "Manual buy entry",
+                    "CurrentPrice": current_price,
+                    "CurrentValue": current_value,
+                    "UnrealizedPnL": unrealized_pnl,
+                    "UnrealizedReturnPct": unrealized_return,
+                    "LastAction": str(market_row.get("NowAction", market_row.get("Action", "MANUAL BUY"))).strip() if market_row is not None else "MANUAL BUY",
+                    "LastSignal": str(market_row.get("Signal", "MANUAL BUY")).strip() if market_row is not None else "MANUAL BUY",
+                    "LastConfidencePct": self._to_float(market_row.get("ConfidencePct")) if market_row is not None else 0.0,
+                    "LastReason": "Manual buy entry",
+                    "LastUpdatedAt": self.run_at_str,
+                    "ExitDate": "",
+                    "ExitPrice": 0.0,
+                    "ExitValue": 0.0,
+                    "ExitReason": "",
+                    "RealizedPnL": 0.0,
+                    "RealizedReturnPct": 0.0,
+                }
+            )
+
+            tracked_cash_after = round(tracked_cash_after - total_entry_debit, 2)
+            shortage_text = ""
+            if total_entry_debit > tracked_cash_before:
+                shortage_text = f" | tracked cash short by {total_entry_debit - max(tracked_cash_before, 0.0):.2f}"
+            events.append(
+                f"Manual BUY {symbol} x{quantity} at {entry_price:.2f} | est charges {entry_charges:.2f}{shortage_text}"
+            )
+            next_trade_id += 1
+
+        if new_rows:
+            trades_df = pd.concat(
+                [trades_df, pd.DataFrame(new_rows, columns=self.TRADE_COLUMNS)],
+                axis=0,
+                ignore_index=True,
+            )
+            if tracked_cash_after < 0:
+                events.append(
+                    f"Tracked cash would go negative by {abs(tracked_cash_after):.2f}; trade was still recorded for live/manual tracking."
+                )
+        return trades_df[self.TRADE_COLUMNS].copy(), events
+
     def _build_scan_symbols(self, trades_df: pd.DataFrame) -> List[str]:
         """Refresh only currently open positions and any incoming buy symbols."""
         open_symbols = [
