@@ -1,0 +1,26 @@
+name: Charan CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  syntax-smoke:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Compile Python sources
+        run: python -m compileall pkscreener
+
+      - name: Basic repo smoke check
+        run: |
+          test -f pkscreener/pkscreenercli.py
+          test -f requirements.txt

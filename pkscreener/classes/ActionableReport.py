@@ -1,0 +1,788 @@
+"""
+Actionable trade-plan report generation for local PKScreener usage.
+
+This module bypasses the legacy menu flow and uses the existing multi-indicator
+signal engine to produce a practical BUY / SELL / HOLD report with simple
+entry, stop-loss, and target levels.
+"""
+
+import os
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Dict, List, Optional, Tuple
+
+import pandas as pd
+
+from PKDevTools.classes import Archiver
+from PKDevTools.classes.OutputControls import OutputControls
+from PKDevTools.classes.PKDateUtilities import PKDateUtilities
+from PKDevTools.classes.log import default_logger
+
+from pkscreener.classes.Fetcher import screenerStockDataFetcher
+from pkscreener.classes.KiteHistoricalData import KiteHistoricalDataProvider
+from pkscreener.classes.KiteTickerStream import load_latest_live_ticks
+from pkscreener.classes.Pktalib import pktalib
+from pkscreener.classes.screening.signals import SignalStrength, TradingSignals
+
+
+class ActionableReportRunner:
+    """Generate an actionable local report from PKScreener signals."""
+
+    UNIVERSE_FILES = {
+        "allstocks": os.path.join("results", "Indices", "EQUITY_L.csv"),
+        "nifty50": os.path.join("results", "Indices", "ind_nifty50list.csv"),
+        "next50": os.path.join("results", "Indices", "ind_niftynext50list.csv"),
+        "nifty100": os.path.join("results", "Indices", "ind_nifty100list.csv"),
+        "nifty200": os.path.join("results", "Indices", "ind_nifty200list.csv"),
+        "nifty500": os.path.join("results", "Indices", "ind_nifty500list.csv"),
+        "midcap50": os.path.join("results", "Indices", "ind_niftymidcap50list.csv"),
+        "midcap100": os.path.join("results", "Indices", "ind_niftymidcap100list.csv"),
+        "midcap150": os.path.join("results", "Indices", "ind_niftymidcap150list.csv"),
+        "smallcap50": os.path.join("results", "Indices", "ind_niftysmallcap50list.csv"),
+        "smallcap100": os.path.join("results", "Indices", "ind_niftysmallcap100list.csv"),
+        "smallcap250": os.path.join("results", "Indices", "ind_niftysmallcap250list.csv"),
+        "fo": os.path.join("results", "Indices", "NSE_FO_SosScheme.csv"),
+    }
+
+    def __init__(
+        self,
+        config_manager,
+        universe: str = "nifty50",
+        limit: int = 50,
+        min_confidence: float = 10.0,
+        budget_amount: Optional[float] = None,
+        risk_percent: float = 1.0,
+        min_trade_value: float = 10000000.0,
+        min_volume_ratio: float = 1.0,
+        max_workers: int = 3,
+        use_live_kite: bool = False,
+        strong_buy_only: bool = False,
+    ):
+        self.config_manager = config_manager
+        self.universe = universe
+        self.limit = limit
+        self.min_confidence = min_confidence
+        self.budget_amount = float(budget_amount) if budget_amount not in [None, ""] else None
+        self.risk_percent = float(risk_percent)
+        self.min_trade_value = float(min_trade_value)
+        self.min_volume_ratio = float(min_volume_ratio)
+        self.max_workers = max(1, int(max_workers or 1))
+        self.use_live_kite = bool(use_live_kite)
+        self.strong_buy_only = bool(strong_buy_only)
+        self.buy_ready_max_gap_pct = 0.60
+        self.strong_buy_max_gap_pct = 0.35
+        self.strong_buy_min_confidence = max(float(self.min_confidence) + 7.5, 22.5)
+        self.strong_buy_min_volume_ratio = max(float(self.min_volume_ratio) + 0.35, 1.35)
+        self.strong_buy_min_trade_value = max(float(self.min_trade_value) * 1.5, 15000000.0)
+        self.fetcher = screenerStockDataFetcher(config_manager)
+        self.signals = TradingSignals(config_manager)
+        self._thread_local = threading.local()
+        self.live_ticks: Dict[str, Dict] = {}
+        self.kite_history_provider = KiteHistoricalDataProvider() if self.use_live_kite else None
+
+    def get_universe_symbols(self) -> List[str]:
+        """Return symbols for the selected universe."""
+        return self._load_universe_symbols()
+
+    def build_report(
+        self,
+        symbols: Optional[List[str]] = None,
+        show_progress: bool = False,
+        progress_label: str = "Processed",
+    ) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+        """Build report data without printing or saving side effects."""
+        symbols = symbols or self._load_universe_symbols()
+        if not symbols:
+            return None, None
+        self._refresh_live_ticks()
+
+        rows = self._collect_rows(
+            symbols=symbols[: len(symbols)],
+            show_progress=show_progress,
+            progress_label=progress_label,
+        )
+
+        return self._build_from_rows(rows)
+
+    def _build_from_rows(self, rows: List[Dict]) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+        """Finalize raw rows into sorted full and actionable report frames."""
+        if not rows:
+            return None, None
+        report_df = pd.DataFrame(rows)
+        report_df["ActionRank"] = report_df["Action"].map(
+            {
+                "BUY": 0,
+                "WATCH BUY": 1,
+                "HOLD": 2,
+                "WATCH SELL": 3,
+                "SELL/EXIT": 4,
+            }
+        ).fillna(9)
+        report_df["NowActionRank"] = report_df["NowAction"].map(
+            {
+                "Strong Buy Now": 0,
+                "Buy Now": 1,
+                "Sell Now": 2,
+                "Watch for Buy": 3,
+                "Watch for Sell": 4,
+                "Hold / Do Nothing": 5,
+            }
+        ).fillna(9)
+        report_df.sort_values(
+            by=["NowActionRank", "ActionRank", "ConfidencePct", "Symbol"],
+            ascending=[True, True, False, True],
+            inplace=True,
+        )
+
+        actionable_df = report_df[
+            (report_df["Action"] != "HOLD")
+            & (report_df["ConfidencePct"] >= self.min_confidence)
+        ].copy()
+        return report_df, actionable_df
+
+    def run(self) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
+        """Generate and save actionable reports."""
+        symbols = self._load_universe_symbols()
+        if not symbols:
+            OutputControls().printOutput(
+                "  [+] No symbols found for actionable report generation."
+            )
+            return None, None
+        self._refresh_live_ticks()
+
+        total = min(len(symbols), self.limit)
+        OutputControls().printOutput(
+            f"  [+] Building actionable report for {total} symbols from {self.universe}..."
+        )
+
+        scanned_symbols = symbols[:total]
+        rows = self._collect_rows(
+            symbols=scanned_symbols,
+            show_progress=True,
+            progress_label="Processed",
+        )
+
+        if not rows:
+            OutputControls().printOutput(
+                "  [+] No actionable rows could be generated from the selected universe."
+            )
+            return None, None
+
+        report_df, actionable_df = self._build_from_rows(rows)
+        if report_df is None or actionable_df is None:
+            OutputControls().printOutput(
+                "  [+] No actionable rows could be generated from the selected universe."
+            )
+            return None, None
+
+        self._save_reports(report_df, actionable_df)
+        self._print_summary(report_df, actionable_df)
+
+        report_df.drop(columns=["ActionRank"], inplace=True, errors="ignore")
+        report_df.drop(columns=["NowActionRank"], inplace=True, errors="ignore")
+        actionable_df.drop(columns=["ActionRank"], inplace=True, errors="ignore")
+        actionable_df.drop(columns=["NowActionRank"], inplace=True, errors="ignore")
+        return report_df, actionable_df
+
+    def _load_universe_symbols(self) -> List[str]:
+        """Load stock symbols from the selected universe."""
+        if self.universe == "watchlist":
+            symbols = self.fetcher.fetchWatchlist()
+            return [str(s).strip().upper() for s in symbols] if symbols else []
+
+        csv_path = self.UNIVERSE_FILES.get(self.universe)
+        if not csv_path or not os.path.exists(csv_path):
+            default_logger().warning(
+                f"Actionable universe file not found for {self.universe}: {csv_path}"
+            )
+            return []
+
+        try:
+            universe_df = pd.read_csv(csv_path)
+            symbol_column = None
+            for candidate in ["Symbol", "SYMBOL", "symbol"]:
+                if candidate in universe_df.columns:
+                    symbol_column = candidate
+                    break
+            if symbol_column is None:
+                return []
+            return [
+                str(symbol).strip().upper()
+                for symbol in universe_df[symbol_column].tolist()
+                if str(symbol).strip()
+            ]
+        except Exception as exc:
+            default_logger().debug(f"Failed loading actionable universe: {exc}", exc_info=True)
+            return []
+
+    def _refresh_live_ticks(self) -> None:
+        """Load the latest official Kite live ticks for this universe if requested."""
+        if not self.use_live_kite:
+            self.live_ticks = {}
+            return
+        self.live_ticks = load_latest_live_ticks(self.universe)
+
+    def _collect_rows(
+        self,
+        symbols: List[str],
+        show_progress: bool = False,
+        progress_label: str = "Processed",
+    ) -> List[Dict]:
+        """Collect analyzed rows, optionally in parallel, with lightweight progress updates."""
+        if not symbols:
+            return []
+
+        total = len(symbols)
+        if self.max_workers <= 1 or total <= 1:
+            rows: List[Dict] = []
+            for index, symbol in enumerate(symbols, start=1):
+                row = self._analyze_symbol(symbol)
+                if row is not None:
+                    rows.append(row)
+                if show_progress and (index % 25 == 0 or index == total):
+                    OutputControls().printOutput(
+                        f"  [+] {progress_label} {index}/{total} symbols...", end="\r"
+                    )
+            if show_progress:
+                OutputControls().printOutput("")
+            return rows
+
+        rows = []
+        completed = 0
+        with ThreadPoolExecutor(max_workers=self.max_workers) as executor:
+            future_map = {
+                executor.submit(self._analyze_symbol, symbol): symbol
+                for symbol in symbols
+            }
+            for future in as_completed(future_map):
+                completed += 1
+                try:
+                    row = future.result()
+                    if row is not None:
+                        rows.append(row)
+                except Exception as exc:
+                    symbol = future_map.get(future, "UNKNOWN")
+                    default_logger().debug(
+                        f"Actionable analysis failed for {symbol}: {exc}",
+                        exc_info=True,
+                    )
+                if show_progress and (completed % 25 == 0 or completed == total):
+                    OutputControls().printOutput(
+                        f"  [+] {progress_label} {completed}/{total} symbols...", end="\r"
+                    )
+        if show_progress:
+            OutputControls().printOutput("")
+        return rows
+
+    def _get_thread_components(self):
+        """Create per-thread fetcher/signal helpers for safe concurrent analysis."""
+        if not hasattr(self._thread_local, "fetcher"):
+            self._thread_local.fetcher = screenerStockDataFetcher(self.config_manager)
+        if not hasattr(self._thread_local, "signals"):
+            self._thread_local.signals = TradingSignals(self.config_manager)
+        return self._thread_local.fetcher, self._thread_local.signals
+
+    def _analyze_symbol(self, symbol: str) -> Optional[Dict]:
+        """Analyze a single symbol and return an actionable row."""
+        try:
+            fetcher, signals = self._get_thread_components()
+            data = fetcher.fetchStockData(
+                symbol,
+                period=self.config_manager.period,
+                duration=self.config_manager.duration,
+                exchangeSuffix=".NS" if self.universe != "watchlist" else "",
+            )
+            data = self._prepare_ohlcv_data(symbol, data)
+            if len(data) < 60:
+                return None
+
+            if self.use_live_kite and self.live_ticks:
+                data = self._apply_live_tick(symbol, data)
+                if data is None or len(data) < 60:
+                    return None
+            return self.analyze_prepared_data(
+                symbol=symbol,
+                data=data,
+                signals=signals,
+                live_tick_used=bool(
+                    self.use_live_kite and str(symbol).strip().upper() in self.live_ticks
+                ),
+            )
+        except Exception as exc:
+            default_logger().debug(f"Actionable analysis failed for {symbol}: {exc}", exc_info=True)
+            return None
+
+    def analyze_prepared_data(
+        self,
+        symbol: str,
+        data: pd.DataFrame,
+        signals=None,
+        run_at_text: Optional[str] = None,
+        live_tick_used: bool = False,
+    ) -> Optional[Dict]:
+        """Analyze an already prepared OHLCV frame using the same live-signal logic."""
+        if data is None or len(data) < 60:
+            return None
+
+        signals = signals or self.signals
+        result = signals.analyze(data)
+        close = float(data["close"].iloc[-1])
+        prev_close = float(data["close"].iloc[-2]) if len(data) >= 2 else close
+        volume = float(data["volume"].iloc[-1]) if "volume" in data.columns else 0.0
+        change_pct = ((close - prev_close) * 100 / prev_close) if prev_close else 0.0
+        avg_volume_20 = float(data["volume"].tail(20).mean()) if "volume" in data.columns else 0.0
+        volume_ratio = (volume / avg_volume_20) if avg_volume_20 else 0.0
+        avg_trade_value_20 = float((data["close"].tail(20) * data["volume"].tail(20)).mean())
+        atr = self._compute_atr(data, close)
+        action = self._signal_to_action(result.signal)
+        entry, stop_loss, target_1, target_2, risk_pct = self._build_trade_plan(
+            close, atr, action
+        )
+        risk_per_share = round(max(abs(entry - stop_loss), 0.01), 2)
+        entry_gap_pct = (
+            round((max(entry - close, 0.0) * 100.0 / close), 2)
+            if close > 0 and entry > 0
+            else 0.0
+        )
+        trigger_ready = close >= entry if entry > 0 else False
+        liquidity_ok = avg_trade_value_20 >= self.min_trade_value
+        volume_ok = volume_ratio >= self.min_volume_ratio
+        strong_liquidity_ok = avg_trade_value_20 >= self.strong_buy_min_trade_value
+        strong_volume_ok = volume_ratio >= self.strong_buy_min_volume_ratio
+        now_action, quality_checks = self._determine_now_action(
+            action=action,
+            confidence=float(result.confidence),
+            close=close,
+            entry=entry,
+            stop_loss=stop_loss,
+            trigger_ready=trigger_ready,
+            entry_gap_pct=entry_gap_pct,
+            liquidity_ok=liquidity_ok,
+            volume_ok=volume_ok,
+            strong_liquidity_ok=strong_liquidity_ok,
+            strong_volume_ok=strong_volume_ok,
+        )
+
+        return {
+            "Symbol": symbol,
+            "Action": action,
+            "NowAction": now_action,
+            "Signal": result.signal.name.replace("_", " "),
+            "ConfidencePct": round(float(result.confidence), 1),
+            "LTP": round(close, 2),
+            "ChangePct": round(change_pct, 2),
+            "Volume": int(volume) if volume == volume else 0,
+            "AvgVolume20": int(avg_volume_20) if avg_volume_20 == avg_volume_20 else 0,
+            "VolumeRatio": round(volume_ratio, 2),
+            "AvgTradeValue20": round(avg_trade_value_20, 2),
+            "TriggerReady": trigger_ready,
+            "EntryGapPct": entry_gap_pct,
+            "LiquidityOk": liquidity_ok,
+            "VolumeOk": volume_ok,
+            "StrongLiquidityOk": strong_liquidity_ok,
+            "StrongVolumeOk": strong_volume_ok,
+            "LiveTickUsed": bool(live_tick_used),
+            "Entry": entry,
+            "StopLoss": stop_loss,
+            "Target1": target_1,
+            "Target2": target_2,
+            "RiskPct": risk_pct,
+            "RiskPerShare": risk_per_share,
+            "QualityChecks": quality_checks,
+            "Reason": " | ".join(result.reasons[:3]) if result.reasons else "No strong reason",
+            "RunAt": run_at_text or PKDateUtilities.currentDateTime().strftime("%Y-%m-%d %H:%M:%S"),
+        }
+
+    def _prepare_ohlcv_data(self, symbol: str, data: Optional[pd.DataFrame]) -> pd.DataFrame:
+        """Normalize the fetched frame and, if needed, fall back to official Kite history."""
+        prepared = self._normalize_if_ohlcv(data)
+        if prepared is None and self.use_live_kite and self.kite_history_provider is not None:
+            try:
+                history_count = max(self._estimate_history_count(), 120)
+                prepared = self.kite_history_provider.get_stock_data(
+                    symbol,
+                    interval=self.config_manager.duration,
+                    count=history_count,
+                )
+                prepared = self._normalize_if_ohlcv(prepared)
+            except Exception as exc:
+                default_logger().debug(f"Kite history fallback failed for {symbol}: {exc}", exc_info=True)
+                prepared = None
+        return prepared if prepared is not None else pd.DataFrame()
+
+    def _normalize_if_ohlcv(self, data: Optional[pd.DataFrame]) -> Optional[pd.DataFrame]:
+        """Return a cleaned OHLCV frame only when the input really contains candle columns."""
+        if data is None or not hasattr(data, "columns"):
+            return None
+        normalized = self._normalize_ohlcv_columns(data.copy()).dropna()
+        required = {"open", "high", "low", "close", "volume"}
+        if not required.issubset(set(normalized.columns)):
+            return None
+        return normalized
+
+    def _estimate_history_count(self) -> int:
+        """Estimate how many candles we need from history based on config period/duration."""
+        period_days = {
+            "1d": 1,
+            "5d": 5,
+            "1wk": 7,
+            "1mo": 30,
+            "3mo": 90,
+            "6mo": 180,
+            "1y": 365,
+            "2y": 730,
+            "5y": 1825,
+            "10y": 3650,
+            "max": 5000,
+        }
+        interval_minutes = {
+            "minute": 1,
+            "1m": 1,
+            "3minute": 3,
+            "3m": 3,
+            "5minute": 5,
+            "5m": 5,
+            "10minute": 10,
+            "10m": 10,
+            "15minute": 15,
+            "15m": 15,
+            "30minute": 30,
+            "30m": 30,
+            "60minute": 60,
+            "60m": 60,
+            "1h": 60,
+            "day": 1440,
+            "1d": 1440,
+        }
+        days = period_days.get(str(self.config_manager.period or "1y").strip().lower(), 365)
+        interval = str(self.config_manager.duration or "1d").strip().lower()
+        interval_mins = interval_minutes.get(interval, 1440)
+        if interval_mins >= 1440:
+            return days
+        return min(int((days * 375) / interval_mins), 5000)
+
+    def _normalize_ohlcv_columns(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Normalize OHLCV columns to the lowercase format expected by the signal engine."""
+        rename_map = {}
+        for column in df.columns:
+            lowered = str(column).strip().lower()
+            if lowered in ["open", "high", "low", "close", "volume"]:
+                rename_map[column] = lowered
+        return df.rename(columns=rename_map)
+
+    def _apply_live_tick(self, symbol: str, df: pd.DataFrame) -> pd.DataFrame:
+        """Overlay the latest official Kite tick as the newest candle in the series."""
+        tick = self.live_ticks.get(str(symbol).strip().upper())
+        if not tick:
+            return df
+
+        last_price = self._to_float(tick.get("last_price"))
+        if last_price <= 0:
+            return df
+
+        open_price = self._first_positive(
+            self._to_float(tick.get("open")),
+            self._to_float(tick.get("close")),
+            last_price,
+        )
+        high_price = self._first_positive(
+            self._to_float(tick.get("high")),
+            last_price,
+            open_price,
+        )
+        low_price = self._first_positive(
+            self._to_float(tick.get("low")),
+            last_price,
+            open_price,
+        )
+        volume = max(self._to_float(tick.get("volume_traded")), 0.0)
+
+        timestamp_text = str(tick.get("exchange_timestamp") or tick.get("received_at") or "").strip()
+        try:
+            tick_timestamp = pd.Timestamp(timestamp_text) if timestamp_text else pd.Timestamp.now()
+        except Exception:
+            tick_timestamp = pd.Timestamp.now()
+
+        updated_row = df.iloc[-1].copy()
+        updated_row["open"] = open_price
+        updated_row["high"] = max(high_price, last_price, open_price)
+        updated_row["low"] = min(low_price, last_price, open_price)
+        updated_row["close"] = last_price
+        updated_row["volume"] = volume
+
+        if isinstance(df.index, pd.DatetimeIndex) and len(df.index) > 0:
+            last_ts = pd.Timestamp(df.index[-1])
+            if last_ts.date() == tick_timestamp.date():
+                df.loc[df.index[-1], ["open", "high", "low", "close", "volume"]] = [
+                    updated_row["open"],
+                    updated_row["high"],
+                    updated_row["low"],
+                    updated_row["close"],
+                    updated_row["volume"],
+                ]
+                return df
+
+        updated_df = pd.concat([df, pd.DataFrame([updated_row], index=[tick_timestamp])])
+        updated_df = updated_df[~updated_df.index.duplicated(keep="last")]
+        return updated_df.sort_index()
+
+    def _compute_atr(self, df: pd.DataFrame, close: float) -> float:
+        """Compute ATR with a safe fallback."""
+        try:
+            atr_series = pktalib.ATR(df["high"], df["low"], df["close"], timeperiod=14)
+            atr_value = atr_series.iloc[-1] if hasattr(atr_series, "iloc") else atr_series[-1]
+            if atr_value is not None and atr_value == atr_value and atr_value > 0:
+                return float(atr_value)
+        except Exception as exc:
+            default_logger().debug(f"ATR computation failed: {exc}")
+        return max(close * 0.02, 0.5)
+
+    def _to_float(self, value) -> float:
+        """Best-effort float conversion helper."""
+        try:
+            if value in [None, "", "None"]:
+                return 0.0
+            return float(value)
+        except Exception:
+            return 0.0
+
+    def _first_positive(self, *values: float) -> float:
+        """Return the first positive numeric candidate, else 0."""
+        for value in values:
+            numeric = self._to_float(value)
+            if numeric > 0:
+                return numeric
+        return 0.0
+
+    def _signal_to_action(self, signal: SignalStrength) -> str:
+        """Map signal strength to a practical action label."""
+        if signal in [SignalStrength.STRONG_BUY, SignalStrength.BUY]:
+            return "BUY"
+        if signal == SignalStrength.WEAK_BUY:
+            return "WATCH BUY"
+        if signal in [SignalStrength.STRONG_SELL, SignalStrength.SELL]:
+            return "SELL/EXIT"
+        if signal == SignalStrength.WEAK_SELL:
+            return "WATCH SELL"
+        return "HOLD"
+
+    def _build_trade_plan(self, close: float, atr: float, action: str) -> Tuple[float, float, float, float, float]:
+        """Build a simple entry / stop / target plan."""
+        buffer_amt = max(close * 0.0025, atr * 0.15)
+        risk_amt = max(close * 0.015, atr * 1.5)
+
+        if action in ["BUY", "WATCH BUY"]:
+            entry = round(close + buffer_amt, 2)
+            stop_loss = round(max(entry - risk_amt, 0.01), 2)
+            risk = max(entry - stop_loss, 0.01)
+            target_1 = round(entry + (risk * 1.5), 2)
+            target_2 = round(entry + (risk * 2.5), 2)
+        elif action in ["SELL/EXIT", "WATCH SELL"]:
+            entry = round(max(close - buffer_amt, 0.01), 2)
+            stop_loss = round(entry + risk_amt, 2)
+            risk = max(stop_loss - entry, 0.01)
+            target_1 = round(max(entry - (risk * 1.5), 0.01), 2)
+            target_2 = round(max(entry - (risk * 2.5), 0.01), 2)
+        else:
+            return round(close, 2), 0.0, 0.0, 0.0, 0.0
+
+        risk_pct = round((risk * 100 / entry), 2) if entry else 0.0
+        return entry, stop_loss, target_1, target_2, risk_pct
+
+    def _determine_now_action(
+        self,
+        action: str,
+        confidence: float,
+        close: float,
+        entry: float,
+        stop_loss: float,
+        trigger_ready: bool,
+        entry_gap_pct: float,
+        liquidity_ok: bool,
+        volume_ok: bool,
+        strong_liquidity_ok: bool,
+        strong_volume_ok: bool,
+    ) -> Tuple[str, str]:
+        """Turn a raw signal into a stricter real-time decision label."""
+        checks = []
+        if confidence >= self.min_confidence:
+            checks.append("confidence ok")
+        else:
+            checks.append("confidence low")
+        near_trigger = bool(trigger_ready or entry_gap_pct <= self.buy_ready_max_gap_pct)
+        strong_trigger = bool(trigger_ready or entry_gap_pct <= self.strong_buy_max_gap_pct)
+        checks.append(
+            "trigger hit"
+            if trigger_ready
+            else ("near trigger" if near_trigger else "waiting for trigger")
+        )
+        checks.append("liquidity ok" if liquidity_ok else "low liquidity")
+        checks.append("volume ok" if volume_ok else "low volume")
+        strong_confidence_ok = confidence >= self.strong_buy_min_confidence
+        if strong_confidence_ok:
+            checks.append("strong confidence")
+        if strong_liquidity_ok:
+            checks.append("strong liquidity")
+        if strong_volume_ok:
+            checks.append("strong volume")
+
+        normalized = str(action).strip().upper()
+        if normalized in ["BUY", "WATCH BUY"]:
+            if (
+                normalized == "BUY"
+                and strong_confidence_ok
+                and strong_trigger
+                and strong_liquidity_ok
+                and strong_volume_ok
+            ):
+                return "Strong Buy Now", ", ".join(checks)
+            if (
+                not self.strong_buy_only
+                and confidence >= self.min_confidence
+                and near_trigger
+                and liquidity_ok
+                and volume_ok
+            ):
+                return "Buy Now", ", ".join(checks)
+            return "Watch for Buy", ", ".join(checks)
+        if normalized in ["SELL/EXIT", "WATCH SELL"]:
+            if close <= stop_loss or normalized == "SELL/EXIT":
+                return "Sell Now", ", ".join(checks)
+            return "Watch for Sell", ", ".join(checks)
+        return "Hold / Do Nothing", ", ".join(checks)
+
+    def _save_reports(self, full_df: pd.DataFrame, actionable_df: pd.DataFrame) -> None:
+        """Save dated and latest report snapshots."""
+        output_dir = Archiver.get_user_data_dir()
+        timestamp = PKDateUtilities.currentDateTime().strftime("%Y%m%d_%H%M%S")
+
+        full_latest = os.path.join(output_dir, f"actionable_{self.universe}_latest.csv")
+        full_dated = os.path.join(output_dir, f"actionable_{self.universe}_{timestamp}.csv")
+        actionable_latest = os.path.join(output_dir, f"actionable_{self.universe}_only_latest.csv")
+        actionable_dated = os.path.join(output_dir, f"actionable_{self.universe}_only_{timestamp}.csv")
+        simple_latest = os.path.join(output_dir, f"actionable_{self.universe}_simple_latest.csv")
+        simple_dated = os.path.join(output_dir, f"actionable_{self.universe}_simple_{timestamp}.csv")
+        actionable_simple_latest = os.path.join(output_dir, f"actionable_{self.universe}_only_simple_latest.csv")
+        actionable_simple_dated = os.path.join(output_dir, f"actionable_{self.universe}_only_simple_{timestamp}.csv")
+
+        full_df.drop(columns=["ActionRank"], inplace=True, errors="ignore")
+        full_df.drop(columns=["NowActionRank"], inplace=True, errors="ignore")
+        actionable_df.drop(columns=["ActionRank"], inplace=True, errors="ignore")
+        actionable_df.drop(columns=["NowActionRank"], inplace=True, errors="ignore")
+
+        full_df.to_csv(full_latest, index=False)
+        full_df.to_csv(full_dated, index=False)
+        actionable_df.to_csv(actionable_latest, index=False)
+        actionable_df.to_csv(actionable_dated, index=False)
+        self._build_simple_view(full_df).to_csv(simple_latest, index=False)
+        self._build_simple_view(full_df).to_csv(simple_dated, index=False)
+        self._build_simple_view(actionable_df).to_csv(actionable_simple_latest, index=False)
+        self._build_simple_view(actionable_df).to_csv(actionable_simple_dated, index=False)
+
+        OutputControls().printOutput(f"  [+] Saved full report: {full_latest}")
+        OutputControls().printOutput(f"  [+] Saved actionable report: {actionable_latest}")
+        OutputControls().printOutput(f"  [+] Saved simple report: {actionable_simple_latest}")
+
+    def _print_summary(self, full_df: pd.DataFrame, actionable_df: pd.DataFrame) -> None:
+        """Print a compact console summary."""
+        action_counts = full_df["NowAction"].value_counts().to_dict()
+        OutputControls().printOutput(
+            f"  [+] Decision summary: {action_counts}"
+        )
+
+        if actionable_df is None or actionable_df.empty:
+            OutputControls().printOutput(
+                "  [+] No rows met the actionable confidence threshold in this run."
+            )
+            return
+
+        preview_df = self._build_simple_view(actionable_df).head(12).copy()
+        OutputControls().printOutput(
+            preview_df.to_string(index=False),
+            enableMultipleLineOutput=True
+        )
+
+    def _build_simple_view(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Create a plain-English report view for easier manual use."""
+        if df is None or df.empty:
+            return pd.DataFrame()
+
+        run_at_series = df["RunAt"] if "RunAt" in df.columns else pd.Series([""] * len(df))
+        quality_checks_series = df["QualityChecks"] if "QualityChecks" in df.columns else pd.Series([""] * len(df))
+        entry_gap_series = df["EntryGapPct"] if "EntryGapPct" in df.columns else pd.Series([0.0] * len(df))
+        what_to_do = [
+            self._human_action_label(action, price_now, buy_above)
+            for action, price_now, buy_above in zip(df["NowAction"], df["LTP"], df["Entry"])
+        ]
+        simple_df = pd.DataFrame(
+            {
+                "Stock": df["Symbol"],
+                "What To Do": what_to_do,
+                "Signal Strength %": df["ConfidencePct"],
+                "Price Now": df["LTP"],
+                "Buy Above": df["Entry"],
+                "Entry Gap %": entry_gap_series,
+                "Sell If Below": df["StopLoss"],
+                "Take Profit 1": df["Target1"],
+                "Take Profit 2": df["Target2"],
+                "Risk %": df["RiskPct"],
+                "Volume vs Avg": df["VolumeRatio"],
+                "Avg Daily Value": df["AvgTradeValue20"].apply(self._format_rupee_amount),
+                "Checks": quality_checks_series,
+                "Why": df["Reason"],
+                "Checked At": run_at_series,
+            }
+        )
+        if self.budget_amount is not None and self.budget_amount > 0:
+            risk_capital = round(self.budget_amount * self.risk_percent / 100.0, 2)
+            risk_qty = df.apply(
+                lambda row: int(risk_capital // float(row["RiskPerShare"])) if float(row["RiskPerShare"]) > 0 else 0,
+                axis=1,
+            )
+            qty_series = df["Entry"].apply(
+                lambda value: int(self.budget_amount // float(value)) if float(value) > 0 else 0
+            )
+            suggested_qty = pd.concat([qty_series, risk_qty], axis=1).min(axis=1).astype(int)
+            money_used = (suggested_qty * df["Entry"]).round(2)
+            money_left = (self.budget_amount - money_used).round(2)
+            insert_at = 5
+            simple_df.insert(insert_at, "Qty By Budget", qty_series)
+            simple_df.insert(insert_at + 1, "Qty By Risk", risk_qty)
+            simple_df.insert(insert_at + 2, "Suggested Qty", suggested_qty)
+            simple_df.insert(insert_at + 3, "Risk Money", risk_capital)
+            simple_df.insert(insert_at + 4, "Money Used", money_used)
+            simple_df.insert(insert_at + 5, "Money Left", money_left)
+        return simple_df
+
+    def build_simple_view(self, df: pd.DataFrame) -> pd.DataFrame:
+        """Public wrapper for generating the plain-English report view."""
+        return self._build_simple_view(df)
+
+    def _human_action_label(self, action: str, price_now: float = 0.0, buy_above: float = 0.0) -> str:
+        """Translate terse action codes into plain English."""
+        normalized = str(action).strip().upper()
+        price_now = float(price_now or 0.0)
+        buy_above = float(buy_above or 0.0)
+
+        if normalized == "STRONG BUY NOW":
+            return "Strong Buy Now"
+        if normalized in ["BUY NOW", "WATCH FOR BUY"]:
+            return "Buy Now" if normalized == "BUY NOW" else "Watch for Buy"
+        if normalized in ["BUY", "WATCH BUY"]:
+            return "Buy Now" if buy_above > 0 and price_now >= buy_above else "Watch for Buy"
+        if normalized == "HOLD":
+            return "Hold / Do Nothing"
+        if normalized in ["WATCH SELL", "WATCH FOR SELL"]:
+            return "Watch for Sell"
+        if normalized in ["SELL/EXIT", "SELL NOW", "SELL / EXIT"]:
+            return "Sell / Exit"
+        return str(action)
+
+    def _format_rupee_amount(self, value: float) -> str:
+        """Format large rupee values compactly for the simple view."""
+        amount = float(value or 0.0)
+        if amount >= 10000000:
+            return f"{amount / 10000000:.2f} Cr"
+        if amount >= 100000:
+            return f"{amount / 100000:.2f} L"
+        return f"{amount:.0f}"
