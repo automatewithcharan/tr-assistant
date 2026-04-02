@@ -39,7 +39,6 @@ Wants=network-online.target
 Type=oneshot
 RemainAfterExit=yes
 User=%i
-WorkingDirectory=%E{REPO_ROOT}
 EnvironmentFile=/etc/default/trade-assistant
 ExecStartPre=/bin/bash -lc 'cd "$REPO_ROOT" && source .venv/bin/activate && python3 -m pkscreener.pkscreenercli --assistantstop || true'
 ExecStart=/bin/bash -lc 'cd "$REPO_ROOT" && source .venv/bin/activate && python3 -m pkscreener.pkscreenercli --assistantstart "$UNIVERSE" --assistantautotune --assistantstrongbuyonly --assistantbudget "$BUDGET" --assistantinterval "$INTERVAL" --assistantalerts discord'
@@ -51,7 +50,8 @@ WantedBy=multi-user.target
 EOF
 
 # Replace the unsupported %i placeholder with the concrete user now.
-sed -i "s/User=%i/User=${APP_USER}/" "$UNIT_PATH"
+sed -i "s|User=%i|User=${APP_USER}|" "$UNIT_PATH"
+sed -i "s|User=${APP_USER}|User=${APP_USER}\nWorkingDirectory=${REPO_ROOT}|" "$UNIT_PATH"
 
 systemctl daemon-reload
 systemctl enable trade-assistant.service
