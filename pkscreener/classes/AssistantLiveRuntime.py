@@ -1,5 +1,5 @@
 """
-Simple local supervisor for Charan's live trading assistant workflow.
+Simple local supervisor for the live trading assistant workflow.
 
 This runtime keeps the user-facing flow intentionally small:
 - one start command
@@ -45,7 +45,7 @@ def _safe_int(value, default: int = 0) -> int:
 
 
 @dataclass
-class CharanLiveSettings:
+class AssistantLiveSettings:
     universe: str = "nifty50"
     account_name: str = "main"
     budget_amount: float = 10000.0
@@ -63,8 +63,8 @@ class CharanLiveSettings:
     prewarm_workers: int = 4
     strong_buy_only: bool = False
 
-    def normalized(self) -> "CharanLiveSettings":
-        return CharanLiveSettings(
+    def normalized(self) -> "AssistantLiveSettings":
+        return AssistantLiveSettings(
             universe=str(self.universe or "nifty50").strip().lower(),
             account_name=str(self.account_name or "main").strip().lower().replace(" ", "_"),
             budget_amount=float(self.budget_amount or 10000.0),
@@ -84,15 +84,15 @@ class CharanLiveSettings:
         )
 
 
-class CharanRuntimeStore:
+class AssistantRuntimeStore:
     """SQLite-backed runtime state for the local live supervisor."""
 
     def __init__(self) -> None:
         self.output_dir = Path(Archiver.get_user_data_dir())
         self.output_dir.mkdir(parents=True, exist_ok=True)
-        self.logs_dir = self.output_dir / "charan_logs"
+        self.logs_dir = self.output_dir / "assistant_logs"
         self.logs_dir.mkdir(parents=True, exist_ok=True)
-        self.db_path = self.output_dir / "charan_runtime.db"
+        self.db_path = self.output_dir / "assistant_runtime.db"
         self._init_db()
 
     def _connect(self) -> sqlite3.Connection:
@@ -157,7 +157,7 @@ class CharanRuntimeStore:
                 """
             )
 
-    def create_session(self, settings: CharanLiveSettings) -> int:
+    def create_session(self, settings: AssistantLiveSettings) -> int:
         payload = asdict(settings.normalized())
         with self._connect() as connection:
             cursor = connection.execute(
@@ -360,18 +360,18 @@ class CharanRuntimeStore:
         return [dict(row) for row in rows]
 
 
-class CharanLiveSupervisor:
+class AssistantLiveSupervisor:
     """Background supervisor for live market worker processes."""
 
     def __init__(self, config_manager, session_id: int) -> None:
         self.config_manager = config_manager
         self.session_id = int(session_id)
-        self.store = CharanRuntimeStore()
+        self.store = AssistantRuntimeStore()
         session = self.store.get_session(self.session_id)
         if session is None:
             raise RuntimeError(f"Live session {self.session_id} was not found.")
         payload = json.loads(session["settings_json"])
-        self.settings = CharanLiveSettings(**payload).normalized()
+        self.settings = AssistantLiveSettings(**payload).normalized()
         self.repo_root = Path(__file__).resolve().parents[2]
         self.processes: Dict[str, Dict] = {}
         self.stop_requested = False
@@ -581,11 +581,11 @@ class CharanLiveSupervisor:
             self.store.mark_process_stopped(self.session_id, name, process.poll())
 
 
-class CharanLiveLauncher:
+class AssistantLiveLauncher:
     """User-facing helpers for start/stop/status commands."""
 
     def __init__(self) -> None:
-        self.store = CharanRuntimeStore()
+        self.store = AssistantRuntimeStore()
         self.repo_root = Path(__file__).resolve().parents[2]
 
     def _is_pid_running(self, pid: Optional[int]) -> bool:
@@ -632,7 +632,7 @@ class CharanLiveLauncher:
             except Exception:
                 pass
 
-    def start(self, settings: CharanLiveSettings) -> int:
+    def start(self, settings: AssistantLiveSettings) -> int:
         settings = settings.normalized()
         active = self.store.get_active_session()
         if active:
@@ -640,7 +640,7 @@ class CharanLiveLauncher:
             if self._is_pid_running(active_pid):
                 raise RuntimeError(
                     f"A live session is already running for {active.get('universe')} (session {active.get('id')}, pid {active_pid}). "
-                    "Stop it first with --charanstop."
+                    "Stop it first with --assistantstop."
                 )
             self.store.mark_session_failed(
                 int(active["id"]),
@@ -652,8 +652,8 @@ class CharanLiveLauncher:
             sys.executable,
             "-m",
             "pkscreener.pkscreenercli",
-            "--charaninternalsupervisor",
-            "--charansessionid",
+            "--assistantinternalsupervisor",
+            "--assistantsessionid",
             str(session_id),
         ]
         supervisor_log = self.store.logs_dir / f"session_{session_id}_supervisor.log"
@@ -740,7 +740,7 @@ class CharanLiveLauncher:
             return
 
         session = report["session"]
-        OutputControls().printOutput("  [+] Charan live status")
+        OutputControls().printOutput("  [+] Live assistant status")
         OutputControls().printOutput(
             f"  [+] Session {session['id']} | Status: {session['status']} | Universe: {session['universe']} | Account: {session['account_name']}"
         )

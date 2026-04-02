@@ -1,4 +1,4 @@
-# Charan Trade Assistant
+# Trade Assistant
 
 Phone-first live trading assistant for NSE built on top of the PKScreener codebase, simplified around:
 
@@ -44,14 +44,14 @@ python -m pkscreener.pkscreenercli --kiteconnectdoctor
 5. Start the live assistant:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\start_charan_live.ps1 -Budget 3000 -IntervalSeconds 30
+powershell -ExecutionPolicy Bypass -File .\scripts\start_live_assistant.ps1 -Budget 3000 -IntervalSeconds 30
 ```
 
 6. Check or stop it:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\scripts\status_charan_live.ps1
-powershell -ExecutionPolicy Bypass -File .\scripts\stop_charan_live.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\status_live_assistant.ps1
+powershell -ExecutionPolicy Bypass -File .\scripts\stop_live_assistant.ps1
 ```
 
 ## Discord Commands
@@ -70,9 +70,9 @@ powershell -ExecutionPolicy Bypass -File .\scripts\stop_charan_live.ps1
 
 Generated files are written under `results/Data/`, including:
 
-- `charan_runtime.db`
-- `charan_portfolio.db`
-- `charan_logs/`
+- `assistant_runtime.db`
+- `assistant_portfolio.db`
+- `assistant_logs/`
 - live dashboards
 - signal exports
 

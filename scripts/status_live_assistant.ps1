@@ -1,4 +1,4 @@
 $repoRoot = Resolve-Path (Join-Path $PSScriptRoot "..")
 Set-Location $repoRoot
 
-python -m pkscreener.pkscreenercli --charanstop
+python -m pkscreener.pkscreenercli --assistantstatus

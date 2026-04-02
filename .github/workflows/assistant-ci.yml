@@ -1,4 +1,4 @@
-name: Charan CI
+name: Assistant CI
 
 on:
   push:

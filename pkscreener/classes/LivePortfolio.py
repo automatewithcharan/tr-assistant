@@ -418,7 +418,7 @@ class LivePortfolioRunner(PaperTradingRunner):
         self.account_name = str(account_name or "main").strip().lower().replace(" ", "_")
         self._portfolio_output_dir = Archiver.get_user_data_dir()
         self.store = LivePortfolioStore(
-            os.path.join(self._portfolio_output_dir, "charan_portfolio.db")
+            os.path.join(self._portfolio_output_dir, "assistant_portfolio.db")
         )
         self._live_reset_requested = bool(reset_account)
         self._live_reset_applied = False

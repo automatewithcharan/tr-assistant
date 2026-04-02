@@ -525,120 +525,120 @@ class ArgumentParser:
             required=False,
         )
         parser.add_argument(
-            "--charanstart",
+            "--assistantstart",
             nargs="?",
             const="nifty50",
             help="Start the simplified live assistant stack in the background (default universe: nifty50)",
             required=False,
         )
         parser.add_argument(
-            "--charanstop",
+            "--assistantstop",
             action="store_true",
             help="Stop the simplified live assistant stack",
             required=False,
         )
         parser.add_argument(
-            "--charanstatus",
+            "--assistantstatus",
             action="store_true",
             help="Show status for the simplified live assistant stack",
             required=False,
         )
         parser.add_argument(
-            "--charanaccount",
+            "--assistantaccount",
             help="Account name used by the simplified live assistant (default: main)",
             required=False,
         )
         parser.add_argument(
-            "--charanbudget",
+            "--assistantbudget",
             type=float,
             help="Budget used for suggested quantity in the simplified live assistant",
             required=False,
         )
         parser.add_argument(
-            "--charanriskpct",
+            "--assistantriskpct",
             type=float,
             help="Risk percent used for suggested quantity in the simplified live assistant",
             required=False,
         )
         parser.add_argument(
-            "--charanminconfidence",
+            "--assistantminconfidence",
             type=float,
             help="Minimum confidence needed before a live Buy Now alert is emitted in simplified mode",
             required=False,
         )
         parser.add_argument(
-            "--charanminliquidity",
+            "--assistantminliquidity",
             type=float,
             help="Minimum traded value required in simplified live mode",
             required=False,
         )
         parser.add_argument(
-            "--charanminvolratio",
+            "--assistantminvolratio",
             type=float,
             help="Minimum volume ratio required in simplified live mode",
             required=False,
         )
         parser.add_argument(
-            "--charanworkers",
+            "--assistantworkers",
             type=int,
             help="Worker count used by the simplified live assistant",
             required=False,
         )
         parser.add_argument(
-            "--charaninterval",
+            "--assistantinterval",
             type=int,
             help="Seconds between simplified live monitor refreshes (default: 30)",
             required=False,
         )
         parser.add_argument(
-            "--charanlimit",
+            "--assistantlimit",
             type=int,
             help="Optional symbol limit used by the simplified live monitor",
             required=False,
         )
         parser.add_argument(
-            "--charanalerts",
+            "--assistantalerts",
             help="Alert channels used by the simplified live assistant (default: discord)",
             required=False,
         )
         parser.add_argument(
-            "--charantickerlimit",
+            "--assistanttickerlimit",
             type=int,
             help="Optional symbol limit used by the Kite live ticker in simplified mode",
             required=False,
         )
         parser.add_argument(
-            "--charanprewarm",
+            "--assistantprewarm",
             action="store_true",
             help="Run a Kite historical prewarm before starting the simplified live assistant",
             required=False,
         )
         parser.add_argument(
-            "--charanprewarmworkers",
+            "--assistantprewarmworkers",
             type=int,
             help="Parallel worker count for the optional simplified prewarm step",
             required=False,
         )
         parser.add_argument(
-            "--charanautotune",
+            "--assistantautotune",
             action="store_true",
             help="Use the latest saved tuning profile when starting the simplified live assistant",
             required=False,
         )
         parser.add_argument(
-            "--charanstrongbuyonly",
+            "--assistantstrongbuyonly",
             action="store_true",
             help="Run the simplified live assistant in strict Strong Buy Now mode",
             required=False,
         )
         parser.add_argument(
-            "--charaninternalsupervisor",
+            "--assistantinternalsupervisor",
             action="store_true",
             help=argparse.SUPPRESS,
             required=False,
         )
         parser.add_argument(
-            "--charansessionid",
+            "--assistantsessionid",
             type=int,
             help=argparse.SUPPRESS,
             required=False,
@@ -1285,8 +1285,8 @@ class ApplicationRunner:
                 "signalvalidateminliquidity",
                 "signalvalidateminvolratio",
                 "signalvalidateworkers",
-                "charanautotune",
-                "charanstrongbuyonly",
+                "assistantautotune",
+                "assistantstrongbuyonly",
                 "papertrade",
                 "papertradeaddcash",
                 "papertradealerts",
@@ -1771,33 +1771,33 @@ def pkscreenercli():
         if not configManager.checkConfigFile():
             configManager.setConfig(ConfigManager.parser, default=True, showFileCreatedText=False)
 
-        if args.charaninternalsupervisor:
-            from pkscreener.classes.CharanLiveRuntime import CharanLiveSupervisor
+        if args.assistantinternalsupervisor:
+            from pkscreener.classes.AssistantLiveRuntime import AssistantLiveSupervisor
 
-            if args.charansessionid is None:
+            if args.assistantsessionid is None:
                 OutputControls().printOutput(
                     colorText.FAIL
-                    + "  [+] Internal live supervisor needs --charansessionid."
+                    + "  [+] Internal live supervisor needs --assistantsessionid."
                     + colorText.END
                 )
                 sys.exit(1)
-            supervisor = CharanLiveSupervisor(config_manager=configManager, session_id=args.charansessionid)
+            supervisor = AssistantLiveSupervisor(config_manager=configManager, session_id=args.assistantsessionid)
             supervisor.run()
             sys.exit(0)
 
-        if args.charanstatus or args.charanstop or args.charanstart is not None:
-            from pkscreener.classes.CharanLiveRuntime import (
-                CharanLiveLauncher,
-                CharanLiveSettings,
+        if args.assistantstatus or args.assistantstop or args.assistantstart is not None:
+            from pkscreener.classes.AssistantLiveRuntime import (
+                AssistantLiveLauncher,
+                AssistantLiveSettings,
             )
 
-            launcher = CharanLiveLauncher()
+            launcher = AssistantLiveLauncher()
 
-            if args.charanstatus:
+            if args.assistantstatus:
                 launcher.print_status()
                 sys.exit(0)
 
-            if args.charanstop:
+            if args.assistantstop:
                 stopped_session = launcher.stop()
                 if stopped_session is None:
                     OutputControls().printOutput("  [+] No live assistant session is running right now.")
@@ -1809,13 +1809,13 @@ def pkscreenercli():
                     )
                 sys.exit(0)
 
-            if args.charanstart is not None:
+            if args.assistantstart is not None:
                 tuned_profile = None
-                if args.charanautotune:
+                if args.assistantautotune:
                     from pkscreener.classes.SignalThresholdTuner import SignalThresholdTuner
 
                     tuned_profile = SignalThresholdTuner.load_latest_profile(
-                        str(args.charanstart or "nifty50").strip().lower()
+                        str(args.assistantstart or "nifty50").strip().lower()
                     )
                     if tuned_profile is not None:
                         OutputControls().printOutput(
@@ -1833,35 +1833,35 @@ def pkscreenercli():
                             "  [+] No saved tuning profile found. Using the configured live thresholds."
                         )
 
-                settings = CharanLiveSettings(
-                    universe=str(args.charanstart or "nifty50").strip().lower(),
-                    account_name=str(args.charanaccount or "main").strip().lower(),
-                    budget_amount=(args.charanbudget if args.charanbudget is not None else 10000.0),
-                    risk_percent=(args.charanriskpct if args.charanriskpct is not None else 1.0),
+                settings = AssistantLiveSettings(
+                    universe=str(args.assistantstart or "nifty50").strip().lower(),
+                    account_name=str(args.assistantaccount or "main").strip().lower(),
+                    budget_amount=(args.assistantbudget if args.assistantbudget is not None else 10000.0),
+                    risk_percent=(args.assistantriskpct if args.assistantriskpct is not None else 1.0),
                     min_confidence=(
-                        args.charanminconfidence
-                        if args.charanminconfidence is not None
+                        args.assistantminconfidence
+                        if args.assistantminconfidence is not None
                         else (tuned_profile.get("min_confidence") if tuned_profile is not None else 15.0)
                     ),
                     min_trade_value=(
-                        args.charanminliquidity
-                        if args.charanminliquidity is not None
+                        args.assistantminliquidity
+                        if args.assistantminliquidity is not None
                         else (tuned_profile.get("min_trade_value") if tuned_profile is not None else 10000000.0)
                     ),
                     min_volume_ratio=(
-                        args.charanminvolratio
-                        if args.charanminvolratio is not None
+                        args.assistantminvolratio
+                        if args.assistantminvolratio is not None
                         else (tuned_profile.get("min_volume_ratio") if tuned_profile is not None else 1.0)
                     ),
-                    max_workers=(args.charanworkers if args.charanworkers is not None else 3),
-                    signal_interval=(args.charaninterval if args.charaninterval is not None else 30),
-                    signal_limit=(args.charanlimit if args.charanlimit is not None else 0),
-                    alert_channels=str(args.charanalerts or "discord").strip().lower(),
-                    ticker_limit=(args.charantickerlimit if args.charantickerlimit is not None else 0),
+                    max_workers=(args.assistantworkers if args.assistantworkers is not None else 3),
+                    signal_interval=(args.assistantinterval if args.assistantinterval is not None else 30),
+                    signal_limit=(args.assistantlimit if args.assistantlimit is not None else 0),
+                    alert_channels=str(args.assistantalerts or "discord").strip().lower(),
+                    ticker_limit=(args.assistanttickerlimit if args.assistanttickerlimit is not None else 0),
                     ticker_save_interval=2,
-                    prewarm=bool(args.charanprewarm),
-                    prewarm_workers=(args.charanprewarmworkers if args.charanprewarmworkers is not None else 4),
-                    strong_buy_only=bool(args.charanstrongbuyonly),
+                    prewarm=bool(args.assistantprewarm),
+                    prewarm_workers=(args.assistantprewarmworkers if args.assistantprewarmworkers is not None else 4),
+                    strong_buy_only=bool(args.assistantstrongbuyonly),
                 )
                 try:
                     session_id = launcher.start(settings)
@@ -1879,7 +1879,7 @@ def pkscreenercli():
                     + colorText.END
                 )
                 OutputControls().printOutput(
-                    "  [+] Use '--charanstatus' to check health and '--charanstop' to stop everything."
+                    "  [+] Use '--assistantstatus' to check health and '--assistantstop' to stop everything."
                 )
                 launcher.print_status()
                 sys.exit(0)

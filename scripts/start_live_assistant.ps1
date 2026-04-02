@@ -11,16 +11,16 @@ Set-Location $repoRoot
 
 $args = @(
     "-m", "pkscreener.pkscreenercli",
-    "--charanstart", $Universe,
-    "--charanautotune",
-    "--charanstrongbuyonly",
-    "--charanbudget", $Budget,
-    "--charaninterval", $IntervalSeconds,
-    "--charanalerts", $Alerts
+    "--assistantstart", $Universe,
+    "--assistantautotune",
+    "--assistantstrongbuyonly",
+    "--assistantbudget", $Budget,
+    "--assistantinterval", $IntervalSeconds,
+    "--assistantalerts", $Alerts
 )
 
 if ($Prewarm) {
-    $args += "--charanprewarm"
+    $args += "--assistantprewarm"
 }
 
 python @args
