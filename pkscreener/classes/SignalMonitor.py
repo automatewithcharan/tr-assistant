@@ -215,6 +215,10 @@ class SignalMonitorRunner:
             simple_df,
             state_df,
         )
+        merged_simple_df, merged_state_df = self._refresh_live_prices_from_ticks(
+            merged_simple_df,
+            merged_state_df,
+        )
         alerts_df = self._build_alerts(previous_state_df, merged_state_df)
         summary_df = self._build_summary_from_simple(merged_simple_df, total, len(alerts_df))
         _, scorecard_df = self.performance_tracker.register_and_update(alerts_df)
@@ -454,6 +458,47 @@ class SignalMonitorRunner:
         merged_simple_df = self._merge_df_by_symbol(previous_simple_df, current_simple_df, "Stock")
         merged_state_df = self._merge_df_by_symbol(previous_state_df, current_state_df, "Symbol")
         return merged_simple_df, merged_state_df
+
+    def _refresh_live_prices_from_ticks(
+        self,
+        simple_df: pd.DataFrame,
+        state_df: pd.DataFrame,
+    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Refresh visible prices from the latest live ticks without forcing a full recompute."""
+        live_ticks = self.actionable_runner.live_ticks or {}
+        if not live_ticks:
+            return simple_df, state_df
+
+        refreshed_simple_df = simple_df.copy() if simple_df is not None else pd.DataFrame()
+        refreshed_state_df = state_df.copy() if state_df is not None else pd.DataFrame()
+
+        if not refreshed_simple_df.empty and "Stock" in refreshed_simple_df.columns and "Price Now" in refreshed_simple_df.columns:
+            stock_series = refreshed_simple_df["Stock"].astype(str).str.strip().str.upper()
+            for index, symbol in stock_series.items():
+                tick = live_ticks.get(symbol)
+                if not tick:
+                    continue
+                live_price = self._to_float(tick.get("last_price"))
+                if live_price <= 0:
+                    continue
+                refreshed_simple_df.loc[index, "Price Now"] = round(live_price, 2)
+                buy_above = self._to_float(refreshed_simple_df.loc[index].get("Buy Above"))
+                if buy_above > 0 and "Entry Gap %" in refreshed_simple_df.columns:
+                    entry_gap_pct = round(((buy_above - live_price) * 100.0) / buy_above, 2)
+                    refreshed_simple_df.loc[index, "Entry Gap %"] = entry_gap_pct
+
+        if not refreshed_state_df.empty and "Symbol" in refreshed_state_df.columns and "PriceNow" in refreshed_state_df.columns:
+            symbol_series = refreshed_state_df["Symbol"].astype(str).str.strip().str.upper()
+            for index, symbol in symbol_series.items():
+                tick = live_ticks.get(symbol)
+                if not tick:
+                    continue
+                live_price = self._to_float(tick.get("last_price"))
+                if live_price <= 0:
+                    continue
+                refreshed_state_df.loc[index, "PriceNow"] = round(live_price, 2)
+
+        return refreshed_simple_df, refreshed_state_df
 
     def _merge_df_by_symbol(
         self,
