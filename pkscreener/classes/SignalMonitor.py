@@ -26,6 +26,10 @@ from pkscreener.classes.SignalPerformanceTracker import SignalPerformanceTracker
 class SignalMonitorRunner:
     """Continuously monitor a universe and alert on fresh Buy Now / Sell Now changes."""
 
+    FULL_REFRESH_EVERY_CYCLES = 10
+    MEANINGFUL_PRICE_MOVE_PCT = 0.75
+    TRIGGER_PROXIMITY_PCT = 1.0
+
     SUMMARY_COLUMNS = [
         "Universe",
         "ScannedSymbols",
@@ -104,6 +108,7 @@ class SignalMonitorRunner:
         self.run_at_str = self.run_at.strftime("%Y-%m-%d %H:%M:%S")
         self.timestamp = self.run_at.strftime("%Y%m%d_%H%M%S")
         self._previous_live_ticks_by_symbol: Dict[str, Dict] = {}
+        self._cycle_number = 0
         self.actionable_runner = ActionableReportRunner(
             config_manager=config_manager,
             universe=universe,
@@ -146,14 +151,14 @@ class SignalMonitorRunner:
             )
             return None, None, None, None
 
-        cycle_symbols = self._select_symbols_for_cycle(symbols)
+        previous_state_df = self._load_previous_state()
+        previous_simple_df = self._load_previous_simple()
+        cycle_symbols = self._select_symbols_for_cycle(symbols, previous_simple_df)
         cycle_total = len(cycle_symbols)
         if cycle_total == 0:
             OutputControls().printOutput(
                 f"  [+] No changed symbols detected for {self.universe}. Reusing the last live board."
             )
-            previous_state_df = self._load_previous_state()
-            previous_simple_df = self._load_previous_simple()
             summary_df = self._build_summary_from_simple(previous_simple_df, total, 0)
             _, scorecard_df = self.performance_tracker.register_and_update()
             self._save_outputs(
@@ -186,8 +191,6 @@ class SignalMonitorRunner:
         if actionable_df is None:
             actionable_df = pd.DataFrame()
 
-        previous_state_df = self._load_previous_state()
-        previous_simple_df = self._load_previous_simple()
         simple_df = self.actionable_runner.build_simple_view(report_df)
         state_df = self._build_state(simple_df)
         merged_simple_df, merged_state_df = self._merge_with_previous(
@@ -203,9 +206,10 @@ class SignalMonitorRunner:
         self._save_outputs(report_df, actionable_df, merged_simple_df, merged_state_df, alerts_df, summary_df)
         self._print_summary(summary_df, merged_simple_df, alerts_df, scorecard_df)
         self._send_alerts(alerts_df, summary_df)
+        self._cycle_number += 1
         return report_df, merged_simple_df, alerts_df, summary_df
 
-    def _select_symbols_for_cycle(self, symbols: List[str]) -> List[str]:
+    def _select_symbols_for_cycle(self, symbols: List[str], previous_simple_df: pd.DataFrame) -> List[str]:
         """Return either the full universe or only changed live-tick symbols for this cycle."""
         if not self.use_live_kite:
             return symbols
@@ -213,6 +217,8 @@ class SignalMonitorRunner:
         self.actionable_runner._refresh_live_ticks()
         current_ticks = self.actionable_runner.live_ticks or {}
         if not current_ticks:
+            return symbols
+        if self._cycle_number <= 0:
             return symbols
 
         previous_ticks = self._previous_live_ticks_by_symbol
@@ -222,7 +228,10 @@ class SignalMonitorRunner:
         }
         if not previous_ticks:
             return symbols
+        if self._cycle_number % self.FULL_REFRESH_EVERY_CYCLES == 0:
+            return symbols
 
+        previous_simple_map = self._simple_row_map(previous_simple_df)
         changed_symbols: List[str] = []
         for symbol in symbols:
             normalized_symbol = str(symbol).strip().upper()
@@ -247,10 +256,103 @@ class SignalMonitorRunner:
                 previous_tick.get("exchange_timestamp"),
                 previous_tick.get("received_at"),
             )
-            if current_marker != previous_marker:
+            if current_marker != previous_marker and self._symbol_needs_refresh(
+                normalized_symbol,
+                previous_tick,
+                current_tick,
+                previous_simple_map.get(normalized_symbol),
+            ):
                 changed_symbols.append(normalized_symbol)
 
         return changed_symbols or symbols
+
+    def _simple_row_map(self, simple_df: pd.DataFrame) -> Dict[str, Dict]:
+        """Build a fast lookup map from the previous simple board."""
+        if simple_df is None or simple_df.empty or "Stock" not in simple_df.columns:
+            return {}
+        prepared = simple_df.copy()
+        prepared["Stock"] = prepared["Stock"].astype(str).str.strip().str.upper()
+        return {
+            str(row["Stock"]).strip().upper(): row.to_dict()
+            for _, row in prepared.iterrows()
+        }
+
+    def _symbol_needs_refresh(
+        self,
+        symbol: str,
+        previous_tick: Dict,
+        current_tick: Dict,
+        previous_simple_row: Optional[Dict],
+    ) -> bool:
+        """Decide whether a changed symbol needs a full signal recomputation."""
+        current_price = self._to_float(current_tick.get("last_price"))
+        previous_price = self._to_float(previous_tick.get("last_price"))
+        if current_price <= 0:
+            return False
+
+        if previous_price <= 0:
+            return True
+
+        price_move_pct = abs(current_price - previous_price) * 100.0 / previous_price
+        if price_move_pct >= self.MEANINGFUL_PRICE_MOVE_PCT:
+            return True
+
+        if not previous_simple_row:
+            return False
+
+        previous_action = str(previous_simple_row.get("What To Do", "")).strip()
+        if previous_action in ["Strong Buy Now", "Buy Now", "Sell / Exit"]:
+            return True
+
+        buy_above = self._to_float(previous_simple_row.get("Buy Above"))
+        sell_below = self._to_float(previous_simple_row.get("Sell If Below"))
+        target_1 = self._to_float(previous_simple_row.get("Take Profit 1"))
+        target_2 = self._to_float(previous_simple_row.get("Take Profit 2"))
+
+        if self._crossed_level(previous_price, current_price, buy_above):
+            return True
+        if self._crossed_level(previous_price, current_price, sell_below):
+            return True
+        if self._crossed_level(previous_price, current_price, target_1):
+            return True
+        if self._crossed_level(previous_price, current_price, target_2):
+            return True
+
+        if previous_action in ["Watch for Buy", "Watch for Sell"]:
+            if self._near_level(current_price, buy_above):
+                return True
+            if self._near_level(current_price, sell_below):
+                return True
+            if self._near_level(current_price, target_1):
+                return True
+            if self._near_level(current_price, target_2):
+                return True
+
+        return False
+
+    def _crossed_level(self, previous_price: float, current_price: float, level: float) -> bool:
+        """Return True when price crossed a relevant threshold between ticks."""
+        if level <= 0 or previous_price <= 0 or current_price <= 0:
+            return False
+        return (
+            (previous_price < level <= current_price)
+            or (previous_price > level >= current_price)
+        )
+
+    def _near_level(self, price: float, level: float) -> bool:
+        """Return True when price is close enough to a threshold to matter."""
+        if price <= 0 or level <= 0:
+            return False
+        return abs(price - level) * 100.0 / level <= self.TRIGGER_PROXIMITY_PCT
+
+    def _to_float(self, value) -> float:
+        """Best-effort numeric conversion helper."""
+        try:
+            if value in [None, "", "None"]:
+                return 0.0
+            return float(value)
+        except Exception:
+            return 0.0
 
     def _load_previous_simple(self) -> pd.DataFrame:
         """Load the last simple board so changed-only cycles can reuse unchanged rows."""
