@@ -103,6 +103,7 @@ class SignalMonitorRunner:
         self.run_at = PKDateUtilities.currentDateTime()
         self.run_at_str = self.run_at.strftime("%Y-%m-%d %H:%M:%S")
         self.timestamp = self.run_at.strftime("%Y%m%d_%H%M%S")
+        self._previous_live_ticks_by_symbol: Dict[str, Dict] = {}
         self.actionable_runner = ActionableReportRunner(
             config_manager=config_manager,
             universe=universe,
@@ -126,6 +127,14 @@ class SignalMonitorRunner:
         self,
     ) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[pd.DataFrame]]:
         """Run one monitor cycle and persist the current outputs."""
+        self.run_at = PKDateUtilities.currentDateTime()
+        self.run_at_str = self.run_at.strftime("%Y-%m-%d %H:%M:%S")
+        self.timestamp = self.run_at.strftime("%Y%m%d_%H%M%S")
+        self.performance_tracker = SignalPerformanceTracker(
+            config_manager=self.config_manager,
+            universe=self.universe,
+            use_live_kite=self.use_live_kite,
+        )
         symbols = self.actionable_runner.get_universe_symbols()
         if self.limit and self.limit > 0:
             symbols = symbols[: self.limit]
@@ -137,13 +146,38 @@ class SignalMonitorRunner:
             )
             return None, None, None, None
 
+        cycle_symbols = self._select_symbols_for_cycle(symbols)
+        cycle_total = len(cycle_symbols)
+        if cycle_total == 0:
+            OutputControls().printOutput(
+                f"  [+] No changed symbols detected for {self.universe}. Reusing the last live board."
+            )
+            previous_state_df = self._load_previous_state()
+            previous_simple_df = self._load_previous_simple()
+            summary_df = self._build_summary_from_simple(previous_simple_df, total, 0)
+            _, scorecard_df = self.performance_tracker.register_and_update()
+            self._save_outputs(
+                pd.DataFrame(),
+                pd.DataFrame(),
+                previous_simple_df,
+                previous_state_df,
+                pd.DataFrame(columns=self.ALERT_COLUMNS),
+                summary_df,
+            )
+            self._print_summary(summary_df, previous_simple_df, pd.DataFrame(columns=self.ALERT_COLUMNS), scorecard_df)
+            return pd.DataFrame(), previous_simple_df, pd.DataFrame(columns=self.ALERT_COLUMNS), summary_df
+
+        label = (
+            f"  [+] Monitoring {cycle_total}/{total} changed symbols from {self.universe} with {self.max_workers} workers"
+            if cycle_total != total
+            else f"  [+] Monitoring {total} symbols from {self.universe} with {self.max_workers} workers"
+        )
         OutputControls().printOutput(
-            f"  [+] Monitoring {total} symbols from {self.universe} with {self.max_workers} workers"
-            + (" using official Kite live ticks..." if self.use_live_kite else "...")
+            label + (" using official Kite live ticks..." if self.use_live_kite else "...")
         )
 
         report_df, actionable_df = self.actionable_runner.build_report(
-            symbols=symbols,
+            symbols=cycle_symbols,
             show_progress=True,
             progress_label="Checked",
         )
@@ -152,17 +186,138 @@ class SignalMonitorRunner:
         if actionable_df is None:
             actionable_df = pd.DataFrame()
 
+        previous_state_df = self._load_previous_state()
+        previous_simple_df = self._load_previous_simple()
         simple_df = self.actionable_runner.build_simple_view(report_df)
         state_df = self._build_state(simple_df)
-        previous_state_df = self._load_previous_state()
-        alerts_df = self._build_alerts(previous_state_df, state_df)
-        summary_df = self._build_summary(report_df, total, len(alerts_df))
+        merged_simple_df, merged_state_df = self._merge_with_previous(
+            previous_simple_df,
+            previous_state_df,
+            simple_df,
+            state_df,
+        )
+        alerts_df = self._build_alerts(previous_state_df, merged_state_df)
+        summary_df = self._build_summary_from_simple(merged_simple_df, total, len(alerts_df))
         _, scorecard_df = self.performance_tracker.register_and_update(alerts_df)
 
-        self._save_outputs(report_df, actionable_df, simple_df, state_df, alerts_df, summary_df)
-        self._print_summary(summary_df, simple_df, alerts_df, scorecard_df)
+        self._save_outputs(report_df, actionable_df, merged_simple_df, merged_state_df, alerts_df, summary_df)
+        self._print_summary(summary_df, merged_simple_df, alerts_df, scorecard_df)
         self._send_alerts(alerts_df, summary_df)
-        return report_df, simple_df, alerts_df, summary_df
+        return report_df, merged_simple_df, alerts_df, summary_df
+
+    def _select_symbols_for_cycle(self, symbols: List[str]) -> List[str]:
+        """Return either the full universe or only changed live-tick symbols for this cycle."""
+        if not self.use_live_kite:
+            return symbols
+
+        self.actionable_runner._refresh_live_ticks()
+        current_ticks = self.actionable_runner.live_ticks or {}
+        if not current_ticks:
+            return symbols
+
+        previous_ticks = self._previous_live_ticks_by_symbol
+        self._previous_live_ticks_by_symbol = {
+            str(symbol).strip().upper(): tick
+            for symbol, tick in current_ticks.items()
+        }
+        if not previous_ticks:
+            return symbols
+
+        changed_symbols: List[str] = []
+        for symbol in symbols:
+            normalized_symbol = str(symbol).strip().upper()
+            current_tick = current_ticks.get(normalized_symbol)
+            if not current_tick:
+                continue
+            previous_tick = previous_ticks.get(normalized_symbol)
+            if previous_tick is None:
+                changed_symbols.append(normalized_symbol)
+                continue
+            current_marker = (
+                current_tick.get("last_price"),
+                current_tick.get("volume_traded"),
+                current_tick.get("last_trade_time"),
+                current_tick.get("exchange_timestamp"),
+                current_tick.get("received_at"),
+            )
+            previous_marker = (
+                previous_tick.get("last_price"),
+                previous_tick.get("volume_traded"),
+                previous_tick.get("last_trade_time"),
+                previous_tick.get("exchange_timestamp"),
+                previous_tick.get("received_at"),
+            )
+            if current_marker != previous_marker:
+                changed_symbols.append(normalized_symbol)
+
+        return changed_symbols or symbols
+
+    def _load_previous_simple(self) -> pd.DataFrame:
+        """Load the last simple board so changed-only cycles can reuse unchanged rows."""
+        path = self._latest_path("signals_simple")
+        if not os.path.exists(path):
+            return pd.DataFrame()
+        try:
+            return pd.read_csv(path)
+        except Exception as exc:
+            default_logger().debug(f"Failed loading monitor simple board: {exc}", exc_info=True)
+            return pd.DataFrame()
+
+    def _merge_with_previous(
+        self,
+        previous_simple_df: pd.DataFrame,
+        previous_state_df: pd.DataFrame,
+        current_simple_df: pd.DataFrame,
+        current_state_df: pd.DataFrame,
+    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Merge changed rows into the previous board/state so unchanged symbols persist."""
+        merged_simple_df = self._merge_df_by_symbol(previous_simple_df, current_simple_df, "Stock")
+        merged_state_df = self._merge_df_by_symbol(previous_state_df, current_state_df, "Symbol")
+        return merged_simple_df, merged_state_df
+
+    def _merge_df_by_symbol(
+        self,
+        previous_df: pd.DataFrame,
+        current_df: pd.DataFrame,
+        key_column: str,
+    ) -> pd.DataFrame:
+        """Replace previous rows with current rows keyed by symbol-like column."""
+        if previous_df is None or previous_df.empty:
+            return current_df.copy() if current_df is not None else pd.DataFrame()
+        if current_df is None or current_df.empty:
+            return previous_df.copy()
+        previous = previous_df.copy()
+        current = current_df.copy()
+        previous[key_column] = previous[key_column].astype(str).str.strip().str.upper()
+        current[key_column] = current[key_column].astype(str).str.strip().str.upper()
+        previous = previous[~previous[key_column].isin(set(current[key_column].tolist()))]
+        merged = pd.concat([previous, current], ignore_index=True)
+        return merged
+
+    def _build_summary_from_simple(self, simple_df: pd.DataFrame, scanned_symbols: int, alert_count: int) -> pd.DataFrame:
+        """Create summary counts from the merged simple board."""
+        what_to_do_counts = (
+            simple_df["What To Do"].value_counts().to_dict()
+            if simple_df is not None and not simple_df.empty and "What To Do" in simple_df.columns
+            else {}
+        )
+        return pd.DataFrame(
+            [
+                {
+                    "Universe": self.universe,
+                    "ScannedSymbols": int(scanned_symbols),
+                    "StrongBuyNowCount": int(what_to_do_counts.get("Strong Buy Now", 0)),
+                    "BuyNowCount": int(what_to_do_counts.get("Buy Now", 0)),
+                    "SellNowCount": int(what_to_do_counts.get("Sell / Exit", 0)),
+                    "WatchForBuyCount": int(what_to_do_counts.get("Watch for Buy", 0)),
+                    "WatchForSellCount": int(what_to_do_counts.get("Watch for Sell", 0)),
+                    "HoldCount": int(what_to_do_counts.get("Hold / Do Nothing", 0)),
+                    "FreshAlertsThisRun": int(alert_count),
+                    "LastRunAt": self.run_at_str,
+                }
+            ],
+            columns=self.SUMMARY_COLUMNS,
+        )
 
     def _build_state(self, simple_df: pd.DataFrame) -> pd.DataFrame:
         """Build a compact state table used for change detection."""

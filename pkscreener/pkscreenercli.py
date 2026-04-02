@@ -2317,24 +2317,24 @@ def pkscreenercli():
                         "  [+] No saved tuning profile found. Using the configured monitor thresholds."
                     )
 
-            first_run = True
+            runner = SignalMonitorRunner(
+                config_manager=configManager,
+                universe=signalmonitor_universe,
+                limit=signalmonitor_limit,
+                min_confidence=signalmonitor_min_conf,
+                budget_amount=signalmonitor_budget,
+                risk_percent=signalmonitor_risk_pct,
+                min_trade_value=signalmonitor_min_liquidity,
+                min_volume_ratio=signalmonitor_min_vol_ratio,
+                max_workers=signalmonitor_workers,
+                use_live_kite=args.signalmonitorlivekite,
+                alert_channels=signalmonitor_alerts,
+                reset_state=bool(args.signalmonitorreset),
+                strong_buy_only=bool(args.signalmonitorstrongbuyonly),
+            )
             while True:
-                runner = SignalMonitorRunner(
-                    config_manager=configManager,
-                    universe=signalmonitor_universe,
-                    limit=signalmonitor_limit,
-                    min_confidence=signalmonitor_min_conf,
-                    budget_amount=signalmonitor_budget,
-                    risk_percent=signalmonitor_risk_pct,
-                    min_trade_value=signalmonitor_min_liquidity,
-                    min_volume_ratio=signalmonitor_min_vol_ratio,
-                    max_workers=signalmonitor_workers,
-                    use_live_kite=args.signalmonitorlivekite,
-                    alert_channels=signalmonitor_alerts,
-                    reset_state=(args.signalmonitorreset if first_run else False),
-                    strong_buy_only=bool(args.signalmonitorstrongbuyonly),
-                )
                 runner.run()
+                runner.reset_state = False
                 if not signalmonitor_interval:
                     break
                 OutputControls().printOutput(
@@ -2343,7 +2343,6 @@ def pkscreenercli():
                     + colorText.END
                 )
                 sleep(signalmonitor_interval if not args.testbuild else min(signalmonitor_interval, 3))
-                first_run = False
             sys.exit(0)
 
         if args.signaltune is not None:

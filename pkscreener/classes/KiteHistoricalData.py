@@ -93,6 +93,32 @@ class KiteHistoricalDataProvider:
         df.to_csv(cache_path)
         return df.tail(count)
 
+    def get_cached_stock_data(
+        self,
+        symbol: str,
+        interval: str = "day",
+        count: int = 365,
+    ) -> Optional[pd.DataFrame]:
+        """Return only locally cached OHLCV data without making any network calls."""
+        normalized_symbol = str(symbol or "").strip().upper()
+        if not normalized_symbol:
+            return None
+
+        normalized_interval = self._normalize_interval(interval)
+        cache_path = self._cache_path(normalized_symbol, normalized_interval)
+        if not self._is_cache_usable(cache_path, normalized_interval):
+            return None
+
+        try:
+            df = pd.read_csv(cache_path, parse_dates=["datetime"]).set_index("datetime")
+            return df.tail(count)
+        except Exception as exc:
+            default_logger().debug(
+                f"Could not read cached Kite history for {normalized_symbol}: {exc}",
+                exc_info=True,
+            )
+            return None
+
     def get_history_range(
         self,
         symbol: str,

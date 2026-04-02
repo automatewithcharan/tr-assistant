@@ -77,6 +77,9 @@ class ActionableReportRunner:
         self.fetcher = screenerStockDataFetcher(config_manager)
         self.signals = TradingSignals(config_manager)
         self._thread_local = threading.local()
+        self._prepared_cache: Dict[str, pd.DataFrame] = {}
+        self._prepared_cache_lock = threading.Lock()
+        self._prepared_cache_date = PKDateUtilities.currentDateTime().date()
         self.live_ticks: Dict[str, Dict] = {}
         self.kite_history_provider = KiteHistoricalDataProvider() if self.use_live_kite else None
 
@@ -217,10 +220,73 @@ class ActionableReportRunner:
 
     def _refresh_live_ticks(self) -> None:
         """Load the latest official Kite live ticks for this universe if requested."""
+        self._reset_prepared_cache_if_day_changed()
         if not self.use_live_kite:
             self.live_ticks = {}
             return
         self.live_ticks = load_latest_live_ticks(self.universe)
+
+    def _reset_prepared_cache_if_day_changed(self) -> None:
+        """Clear the in-memory OHLCV cache once the trading date changes."""
+        current_date = PKDateUtilities.currentDateTime().date()
+        if current_date == self._prepared_cache_date:
+            return
+        with self._prepared_cache_lock:
+            self._prepared_cache.clear()
+            self._prepared_cache_date = current_date
+
+    def _get_cached_prepared_data(self, symbol: str) -> Optional[pd.DataFrame]:
+        """Return a copy of the in-memory prepared OHLCV data when available."""
+        normalized_symbol = str(symbol or "").strip().upper()
+        with self._prepared_cache_lock:
+            cached = self._prepared_cache.get(normalized_symbol)
+            if cached is None:
+                return None
+            return cached.copy(deep=True)
+
+    def _store_cached_prepared_data(self, symbol: str, df: pd.DataFrame) -> None:
+        """Persist a clean base OHLCV frame for reuse across live monitor cycles."""
+        if df is None or df.empty:
+            return
+        normalized_symbol = str(symbol or "").strip().upper()
+        with self._prepared_cache_lock:
+            self._prepared_cache[normalized_symbol] = df.copy(deep=True)
+
+    def _load_prepared_base_data(self, symbol: str, fetcher) -> pd.DataFrame:
+        """Load a reusable OHLCV frame, preferring local caches before expensive fetches."""
+        cached = self._get_cached_prepared_data(symbol)
+        if cached is not None:
+            return cached
+
+        history_count = max(self._estimate_history_count(), 120)
+        data = None
+
+        if self.use_live_kite and self.kite_history_provider is not None:
+            try:
+                data = self.kite_history_provider.get_cached_stock_data(
+                    symbol,
+                    interval=self.config_manager.duration,
+                    count=history_count,
+                )
+            except Exception as exc:
+                default_logger().debug(
+                    f"Kite history cache lookup failed for {symbol}: {exc}",
+                    exc_info=True,
+                )
+
+        if data is None:
+            data = fetcher.fetchStockData(
+                symbol,
+                period=self.config_manager.period,
+                duration=self.config_manager.duration,
+                exchangeSuffix=".NS" if self.universe != "watchlist" else "",
+            )
+
+        prepared = self._prepare_ohlcv_data(symbol, data)
+        if prepared is not None and not prepared.empty:
+            self._store_cached_prepared_data(symbol, prepared)
+            return prepared.copy(deep=True)
+        return pd.DataFrame()
 
     def _collect_rows(
         self,
@@ -286,13 +352,7 @@ class ActionableReportRunner:
         """Analyze a single symbol and return an actionable row."""
         try:
             fetcher, signals = self._get_thread_components()
-            data = fetcher.fetchStockData(
-                symbol,
-                period=self.config_manager.period,
-                duration=self.config_manager.duration,
-                exchangeSuffix=".NS" if self.universe != "watchlist" else "",
-            )
-            data = self._prepare_ohlcv_data(symbol, data)
+            data = self._load_prepared_base_data(symbol, fetcher)
             if len(data) < 60:
                 return None
 
