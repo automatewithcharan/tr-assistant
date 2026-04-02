@@ -50,6 +50,7 @@ os.environ['PROTOBUF_PYTHON_SILENT_WARNINGS'] = '1'
 os.environ["PYTHONWARNINGS"] = "ignore::UserWarning"
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "3"
 os.environ["AUTOGRAPH_VERBOSITY"] = "0"
+os.environ.setdefault("SUBSCRIPTION_ENABLED", "0")
 
 import multiprocessing
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
