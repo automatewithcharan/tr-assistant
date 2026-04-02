@@ -688,7 +688,6 @@ class SignalMonitorRunner:
             f"Strong Buy Now {summary.get('StrongBuyNowCount', 0)} | "
             f"Buy Now {summary.get('BuyNowCount', 0)} | "
             f"Sell Now {summary.get('SellNowCount', 0)} | "
-            f"Watch for Buy {summary.get('WatchForBuyCount', 0)} | "
             f"Fresh alerts {summary.get('FreshAlertsThisRun', 0)}"
         )
 
@@ -701,14 +700,18 @@ class SignalMonitorRunner:
             )
         elif simple_df is not None and not simple_df.empty:
             preview_df = simple_df[
-                simple_df["What To Do"].isin(["Strong Buy Now", "Buy Now", "Sell / Exit", "Watch for Buy"])
+                simple_df["What To Do"].isin(["Strong Buy Now", "Buy Now", "Sell / Exit"])
             ].head(12)
             if preview_df.empty:
-                preview_df = simple_df.head(12)
-            OutputControls().printOutput(
-                preview_df.to_string(index=False),
-                enableMultipleLineOutput=True,
-            )
+                OutputControls().printOutput(
+                    "  [+] No actionable Buy Now / Sell Now rows in this cycle.",
+                    enableMultipleLineOutput=True,
+                )
+            else:
+                OutputControls().printOutput(
+                    preview_df.to_string(index=False),
+                    enableMultipleLineOutput=True,
+                )
 
         if scorecard_df is not None and not scorecard_df.empty:
             all_row = scorecard_df[scorecard_df["Segment"] == "ALL"]
@@ -958,12 +961,10 @@ class SignalMonitorRunner:
         strong_buy_df = pd.DataFrame()
         buy_now_df = pd.DataFrame()
         sell_now_df = pd.DataFrame()
-        watch_buy_df = pd.DataFrame()
         if simple_df is not None and not simple_df.empty:
             strong_buy_df = simple_df[simple_df["What To Do"] == "Strong Buy Now"].head(25).copy()
             buy_now_df = simple_df[simple_df["What To Do"] == "Buy Now"].head(25).copy()
             sell_now_df = simple_df[simple_df["What To Do"] == "Sell / Exit"].head(25).copy()
-            watch_buy_df = simple_df[simple_df["What To Do"] == "Watch for Buy"].head(25).copy()
 
         cards = [
             ("Universe", summary_row.get("Universe", self.universe)),
@@ -971,7 +972,6 @@ class SignalMonitorRunner:
             ("Strong Buy Now", summary_row.get("StrongBuyNowCount", 0)),
             ("Buy Now", summary_row.get("BuyNowCount", 0)),
             ("Sell Now", summary_row.get("SellNowCount", 0)),
-            ("Watch for Buy", summary_row.get("WatchForBuyCount", 0)),
             ("Fresh Alerts", summary_row.get("FreshAlertsThisRun", 0)),
         ]
 
@@ -1115,10 +1115,6 @@ class SignalMonitorRunner:
       <section class="panel">
         <h2>Sell Now Board</h2>
         {_table_html(sell_now_df, "No Sell / Exit signals right now.")}
-      </section>
-      <section class="panel">
-        <h2>Watch for Buy</h2>
-        {_table_html(watch_buy_df, "No Watch for Buy names right now.")}
       </section>
     </div>
   </div>

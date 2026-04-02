@@ -217,8 +217,6 @@ def _load_signal_rows(universe: str, action, limit: int = 5) -> pd.DataFrame:
         "Strong Buy Now": 0,
         "Buy Now": 1,
         "Sell / Exit": 2,
-        "Watch for Buy": 3,
-        "Watch for Sell": 4,
     }
     filtered["__rank"] = filtered["What To Do"].astype(str).map(action_rank).fillna(99)
     filtered.sort_values(["__rank", "Signal Strength %", "Stock"], ascending=[True, False, True], inplace=True)
