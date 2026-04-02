@@ -54,6 +54,21 @@ powershell -ExecutionPolicy Bypass -File .\scripts\status_live_assistant.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\stop_live_assistant.ps1
 ```
 
+## Run On Linux VM
+
+For GCP/Ubuntu, use `systemd` so the assistant survives SSH/browser closure:
+
+```bash
+cd ~/tr-assistant
+sudo bash scripts/install_live_assistant_service.sh "$USER" "$HOME/tr-assistant" nifty500 3000 30
+sudo systemctl start trade-assistant
+sudo systemctl status trade-assistant
+```
+
+Full details:
+
+- `docs/SYSTEMD.md`
+
 ## Discord Commands
 
 - `/buynow`
