@@ -135,7 +135,7 @@ def _analyze_pre_move_signal(
 ) -> Dict:
     target_ts = pd.Timestamp(target_date)
     prior_df = full_history_df[full_history_df.index < target_ts].copy()
-    if len(prior_df) < 60:
+    if len(prior_df) < 30:
         return {
             "SignalDate": "",
             "Action": "",
@@ -247,6 +247,35 @@ def run_audit(days: int, top_n: int, universe_limit: int, start: str, end: str) 
 
     print("Summary")
     print(summary_df.to_string(index=False))
+
+    # Overall stats
+    total = len(audit_df)
+    triggered = int(audit_df["WouldTriggerEntry"].fillna(False).sum())
+    won = int(audit_df["WouldCloseAboveEntry"].fillna(False).sum())
+    buy_now = int(audit_df["NowAction"].astype(str).isin(["Strong Buy Now", "Buy Now"]).sum())
+    no_history = int((audit_df["Reason"].astype(str) == "Not enough history").sum())
+    print(f"\n=== Overall ({total} entries) ===")
+    print(f"  Triggered: {triggered}/{total} ({100*triggered/total:.1f}%)")
+    print(f"  Won:       {won}/{total} ({100*won/total:.1f}%)")
+    print(f"  Buy Now:   {buy_now}/{total} ({100*buy_now/total:.1f}%)")
+    print(f"  No history:{no_history}/{total}")
+
+    # Post-warmup stats (exclude entries with "Not enough history")
+    valid = audit_df[audit_df["Reason"].astype(str) != "Not enough history"]
+    if len(valid) > 0:
+        v_total = len(valid)
+        v_triggered = int(valid["WouldTriggerEntry"].fillna(False).sum())
+        v_won = int(valid["WouldCloseAboveEntry"].fillna(False).sum())
+        v_buy = int(valid["NowAction"].astype(str).isin(["Strong Buy Now", "Buy Now"]).sum())
+        print(f"\n=== Post-warmup ({v_total} entries, excludes {no_history} with no history) ===")
+        print(f"  Triggered: {v_triggered}/{v_total} ({100*v_triggered/v_total:.1f}%)")
+        print(f"  Won:       {v_won}/{v_total} ({100*v_won/v_total:.1f}%)")
+        print(f"  Buy Now:   {v_buy}/{v_total} ({100*v_buy/v_total:.1f}%)")
+        if v_triggered > 0:
+            triggered_df = valid[valid["WouldTriggerEntry"] == True]
+            print(f"  Median return: {triggered_df['CloseToClosePct'].median():.1f}%")
+            print(f"  Win rate (of triggered): {100*v_won/v_triggered:.1f}%")
+
     print("\nRecent rows")
     print(
         audit_df[

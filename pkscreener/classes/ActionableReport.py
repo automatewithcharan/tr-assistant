@@ -474,7 +474,7 @@ class ActionableReportRunner:
         live_tick_used: bool = False,
     ) -> Optional[Dict]:
         """Analyze an already prepared OHLCV frame using the same live-signal logic."""
-        if data is None or len(data) < 60:
+        if data is None or len(data) < 30:
             return None
 
         signals = signals or self.signals
@@ -833,7 +833,7 @@ class ActionableReportRunner:
 
     def _build_trade_plan(self, close: float, atr: float, action: str) -> Tuple[float, float, float, float, float]:
         """Build a simple entry / stop / target plan."""
-        buffer_amt = max(close * 0.0025, atr * 0.15)
+        buffer_amt = max(close * 0.002, atr * 0.10)
         risk_amt = max(close * 0.015, atr * 1.5)
 
         if action in ["BUY", "WATCH BUY"]:
