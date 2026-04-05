@@ -51,9 +51,9 @@ class AssistantLiveSettings:
     budget_amount: float = 10000.0
     risk_percent: float = 1.0
     min_confidence: float = 15.0
-    min_trade_value: float = 10000000.0
-    min_volume_ratio: float = 1.0
-    max_workers: int = 3
+    min_trade_value: float = 500000.0
+    min_volume_ratio: float = 0.5
+    max_workers: int = 6
     signal_interval: int = 30
     signal_limit: int = 0
     alert_channels: str = "discord"
