@@ -254,21 +254,32 @@ class KiteConnectSessionManager:
         )
         resp.raise_for_status()
 
-        # Step 3 — extract request_token via the OAuth redirect
+        # Step 3 — extract request_token via the OAuth redirect chain.
+        # Kite may redirect: login_url -> /connect/finish -> redirect_url?request_token=...
+        # We follow redirects manually to catch request_token before hitting localhost.
         login_url = self.get_login_url()
-        resp = sess.get(login_url, allow_redirects=False, timeout=30)
-        if resp.status_code not in (301, 302, 303):
+        request_token = ""
+        for _hop in range(5):
+            resp = sess.get(login_url, allow_redirects=False, timeout=30)
+            if resp.status_code not in (301, 302, 303):
+                break
+            redirect_location = resp.headers.get("Location", "")
+            parsed = parse_qs(urlparse(redirect_location).query)
+            tokens = parsed.get("request_token", [])
+            if tokens and str(tokens[0]).strip():
+                request_token = str(tokens[0]).strip()
+                break
+            # Follow to the next hop (but only if still on kite.zerodha.com)
+            if redirect_location.startswith("/"):
+                redirect_location = "https://kite.zerodha.com" + redirect_location
+            if not redirect_location.startswith("https://kite.zerodha.com"):
+                break
+            login_url = redirect_location
+
+        if not request_token:
             raise RuntimeError(
-                f"Expected redirect after TOTP login, got HTTP {resp.status_code}"
+                "Could not extract request_token from Kite redirect chain."
             )
-        redirect_location = resp.headers.get("Location", "")
-        parsed = parse_qs(urlparse(redirect_location).query)
-        request_tokens = parsed.get("request_token", [])
-        if not request_tokens:
-            raise RuntimeError(
-                f"No request_token in redirect URL: {redirect_location[:200]}"
-            )
-        request_token = request_tokens[0]
 
         # Step 4 — exchange for access_token via official SDK
         _log.info("Got request_token, exchanging for access_token …")
