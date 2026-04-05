@@ -533,6 +533,7 @@ class ActionableReportRunner:
             not self.strong_buy_only
             and now_action == "Watch for Buy"
             and momentum_setup == "Momentum Buy"
+            and float(result.confidence) >= self.min_confidence
             and volume_ratio >= self.buy_now_min_volume_ratio
         ):
             now_action = "Buy Now"
