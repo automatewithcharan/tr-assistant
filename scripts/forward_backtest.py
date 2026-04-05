@@ -75,7 +75,7 @@ def _extract_symbol_history(raw_df: pd.DataFrame, symbol: str) -> pd.DataFrame:
     return df.dropna()
 
 
-def _build_runner() -> ActionableReportRunner:
+def _build_runner(min_confidence: float = 40.0, min_volume_ratio: float = 0.5) -> ActionableReportRunner:
     config_manager = ConfigManager.tools()
     if not config_manager.checkConfigFile():
         config_manager.setConfig(ConfigManager.parser, default=True, showFileCreatedText=False)
@@ -86,11 +86,11 @@ def _build_runner() -> ActionableReportRunner:
         config_manager=config_manager,
         universe="allstocks",
         limit=0,
-        min_confidence=10.0,
+        min_confidence=min_confidence,
         budget_amount=None,
         risk_percent=1.0,
-        min_trade_value=0.0,
-        min_volume_ratio=0.0,
+        min_trade_value=500000.0,
+        min_volume_ratio=min_volume_ratio,
         max_workers=1,
         use_live_kite=False,
         strong_buy_only=False,
@@ -102,9 +102,12 @@ def run_forward_backtest(
     universe_limit: int,
     start: str,
     end: str,
+    min_confidence: float = 40.0,
+    min_volume_ratio: float = 0.5,
 ) -> Dict[str, Path]:
     symbols = _load_universe_symbols(limit=universe_limit)
     print(f"Downloading prices for {len(symbols)} symbols from {start} to {end}...")
+    print(f"Filters: min_confidence={min_confidence}, min_volume_ratio={min_volume_ratio}")
     raw_df = _download_daily_prices(symbols, start=start, end=end)
 
     # Build per-symbol history lookup
@@ -131,7 +134,7 @@ def run_forward_backtest(
         sampled_dates = eligible_dates
     print(f"  Testing {len(sampled_dates)} signal days out of {len(eligible_dates)} eligible")
 
-    runner = _build_runner()
+    runner = _build_runner(min_confidence=min_confidence, min_volume_ratio=min_volume_ratio)
     trade_rows: List[Dict] = []
     daily_summaries: List[Dict] = []
 
@@ -354,6 +357,10 @@ def main() -> None:
                         help="Download window start date (YYYY-MM-DD)")
     parser.add_argument("--end", type=str, default="2026-04-06",
                         help="Download window end date (YYYY-MM-DD)")
+    parser.add_argument("--min-conf", type=float, default=40.0,
+                        help="Minimum confidence %% for Buy Now (default: 40)")
+    parser.add_argument("--min-vol", type=float, default=0.5,
+                        help="Minimum volume ratio (default: 0.5)")
     args = parser.parse_args()
 
     run_forward_backtest(
@@ -361,6 +368,8 @@ def main() -> None:
         universe_limit=max(0, int(args.limit)),
         start=str(args.start),
         end=str(args.end),
+        min_confidence=float(args.min_conf),
+        min_volume_ratio=float(args.min_vol),
     )
 
 
