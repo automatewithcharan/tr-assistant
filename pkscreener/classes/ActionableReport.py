@@ -514,6 +514,7 @@ class ActionableReportRunner:
             volume_ok=volume_ok,
             strong_liquidity_ok=strong_liquidity_ok,
             strong_volume_ok=strong_volume_ok,
+            reason_text=" | ".join(result.reasons[:5]) if result.reasons else "",
         )
         momentum_score, momentum_setup, momentum_reason = self._score_momentum_setup(
             action=action,
@@ -866,6 +867,7 @@ class ActionableReportRunner:
         volume_ok: bool,
         strong_liquidity_ok: bool,
         strong_volume_ok: bool,
+        reason_text: str = "",
     ) -> Tuple[str, str]:
         """Turn a raw signal into a stricter real-time decision label."""
         checks = []
@@ -890,8 +892,21 @@ class ActionableReportRunner:
         if strong_volume_ok:
             checks.append("strong volume")
 
+        # Trend safety: block Buy Now for stocks in confirmed downtrends
+        reason_lower = str(reason_text).lower()
+        bearish_trend = (
+            "bearish alignment" in reason_lower
+            or "below all major ma" in reason_lower
+            or "death cross" in reason_lower
+        )
+        if bearish_trend:
+            checks.append("BEARISH TREND")
+
         normalized = str(action).strip().upper()
         if normalized in ["BUY", "WATCH BUY"]:
+            # Never promote to Buy Now if stock is in a bearish trend
+            if bearish_trend:
+                return "Watch for Buy", ", ".join(checks)
             if (
                 normalized == "BUY"
                 and strong_confidence_ok

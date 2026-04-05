@@ -279,11 +279,14 @@ class BlindBuyScorer:
 
         # -- Penalties for bearish conditions --
         if "below all major ma" in reason_text or "bearish alignment" in reason_text:
-            score -= 12
-            reasons.append("MA bearish")
+            score -= 25
+            reasons.append("BEARISH TREND - below all MAs")
         if "death cross" in reason_text:
-            score -= 10
-            reasons.append("death cross")
+            score -= 20
+            reasons.append("DEATH CROSS")
+        if "lower highs" in reason_text and "lower lows" in reason_text:
+            score -= 15
+            reasons.append("downtrend pattern")
 
         score = round(max(0, min(score, 100)), 1)
         return score, ", ".join(reasons)
