@@ -235,7 +235,12 @@ class KiteConnectSessionManager:
         if not request_id:
             raise RuntimeError(f"Kite login step-1 failed: {resp.text[:300]}")
 
-        # Step 2 — submit TOTP
+        # Step 2 — submit TOTP (detect the 2FA type the account expects)
+        twofa_type = login_data.get("twofa_type", "totp")
+        if twofa_type not in ("totp", "app_code"):
+            available = login_data.get("twofa_types", [])
+            twofa_type = "app_code" if "app_code" in available else "totp"
+
         totp_code = pyotp.TOTP(self.totp_secret).now()
         resp = sess.post(
             "https://kite.zerodha.com/api/twofa",
@@ -243,7 +248,7 @@ class KiteConnectSessionManager:
                 "user_id": self.user_id,
                 "request_id": request_id,
                 "twofa_value": totp_code,
-                "twofa_type": "totp",
+                "twofa_type": twofa_type,
             },
             timeout=30,
         )
