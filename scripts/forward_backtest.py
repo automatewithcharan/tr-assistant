@@ -174,6 +174,10 @@ def run_forward_backtest(
             target1 = float(analyzed.get("Target1", 0.0) or 0.0)
             target2 = float(analyzed.get("Target2", 0.0) or 0.0)
             confidence = float(analyzed.get("ConfidencePct", 0.0) or 0.0)
+            volume_ratio = float(analyzed.get("VolumeRatio", 0.0) or 0.0)
+            momentum_score = float(analyzed.get("MomentumScore", 0.0) or 0.0)
+            avg_trade_val = float(analyzed.get("AvgTradeValue20", 0.0) or 0.0)
+            action_raw = str(analyzed.get("Action", ""))
             reason = str(analyzed.get("Reason", ""))
 
             # Check next-day performance
@@ -212,8 +216,12 @@ def run_forward_backtest(
                 "SignalDate": signal_date_str,
                 "TradeDate": next_day_str,
                 "Symbol": symbol,
+                "Action": action_raw,
                 "NowAction": now_action,
                 "ConfidencePct": confidence,
+                "VolumeRatio": round(volume_ratio, 2),
+                "MomentumScore": round(momentum_score, 1),
+                "AvgTradeValue20": round(avg_trade_val, 0),
                 "Entry": entry,
                 "StopLoss": stop_loss,
                 "Target1": target1,
