@@ -63,6 +63,7 @@ PKBrokers>=0.1.20260313.67
 
 # Browser automation
 pyppeteer>=2.0.0
+pyotp>=2.9.0
 
 # Timezone handling
 pytz>=2024.2

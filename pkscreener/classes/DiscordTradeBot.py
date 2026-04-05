@@ -20,6 +20,7 @@ from PKDevTools.classes.OutputControls import OutputControls
 from PKDevTools.classes.log import default_logger
 
 from pkscreener.classes.LivePortfolio import LivePortfolioRunner
+from pkscreener.classes.RiskGuardrails import LiveTradingGuardrails
 
 
 def _get_secret(name: str, default: str = "") -> str:
@@ -224,6 +225,25 @@ def _load_signal_rows(universe: str, action, limit: int = 5) -> pd.DataFrame:
     return filtered.head(max(1, int(limit or 5)))
 
 
+def _guardrail_text(account_name: str) -> str:
+    """Return a short buy-side guardrail status line for Discord replies."""
+    max_daily_loss = _get_float_secret("ASSISTANT_MAX_DAILY_LOSS", 0.0)
+    max_consecutive_losses = _get_int_secret("ASSISTANT_MAX_CONSECUTIVE_LOSSES") or 0
+    status = LiveTradingGuardrails(
+        account_name=account_name,
+        max_daily_loss_amount=max_daily_loss,
+        max_consecutive_losses=max_consecutive_losses,
+    ).evaluate()
+    if not status.enabled:
+        return ""
+    if status.buy_paused:
+        return "Buy guardrail active: " + "; ".join(status.reasons)
+    return (
+        f"Buy guardrail clear: daily realized P&L {_format_money(status.daily_realized_pnl)} | "
+        f"consecutive losses {int(status.consecutive_losses)}"
+    )
+
+
 def _format_signal_rows_text(rows_df: pd.DataFrame, empty_text: str) -> str:
     """Format live signal rows for Discord-friendly reading on mobile."""
     if rows_df is None or rows_df.empty:
@@ -244,6 +264,105 @@ def _format_signal_rows_text(rows_df: pd.DataFrame, empty_text: str) -> str:
             ]
         )
     return "\n".join(lines).strip()
+
+
+def _tag_buy_with_blind_score(symbol: str, qty: int, price: float, account_name: str, universe: str) -> str:
+    """Score a manually-bought stock with BlindBuyScorer and log to trade journal CSV."""
+    import os
+    from datetime import datetime
+    import pandas as pd
+    from PKDevTools.classes import Archiver
+
+    output_dir = Archiver.get_user_data_dir()
+
+    # Try to find this symbol in the latest signal state
+    blind_score = 0.0
+    reasons = ""
+    for name in ["state", "signals", "actionable"]:
+        path = os.path.join(output_dir, f"signalmonitor_{universe}_{name}_latest.csv")
+        if os.path.isfile(path):
+            try:
+                df = pd.read_csv(path)
+                sym_col = "Symbol" if "Symbol" in df.columns else "Stock"
+                match = df[df[sym_col].astype(str).str.strip().str.upper() == symbol.strip().upper()]
+                if not match.empty:
+                    from pkscreener.classes.AutoPilotInvestor import BlindBuyScorer
+                    blind_score, reasons = BlindBuyScorer.score(match.iloc[0])
+                    break
+            except Exception:
+                continue
+
+    # Append to trade journal
+    journal_path = os.path.join(output_dir, f"trade_journal_{account_name}.csv")
+    row = {
+        "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "Action": "BUY",
+        "Symbol": symbol.strip().upper(),
+        "Qty": qty,
+        "Price": price,
+        "BlindScore": blind_score,
+        "Reasons": reasons,
+    }
+    row_df = pd.DataFrame([row])
+    if os.path.isfile(journal_path):
+        row_df.to_csv(journal_path, mode="a", header=False, index=False)
+    else:
+        row_df.to_csv(journal_path, index=False)
+
+    if blind_score > 0:
+        return f"_Blind-buy score at entry: **{blind_score:.0f}/100** ({reasons})_"
+    return ""
+
+
+def _tag_sell_in_journal(symbol: str, qty: int, price: float, account_name: str) -> str:
+    """Log a sell to the trade journal and compute return vs entry blind-buy score."""
+    import os
+    from datetime import datetime
+    import pandas as pd
+    from PKDevTools.classes import Archiver
+
+    output_dir = Archiver.get_user_data_dir()
+    journal_path = os.path.join(output_dir, f"trade_journal_{account_name}.csv")
+
+    # Find matching buy entry to compute return
+    entry_score = 0.0
+    entry_price = 0.0
+    if os.path.isfile(journal_path):
+        try:
+            journal = pd.read_csv(journal_path)
+            buys = journal[
+                (journal["Action"] == "BUY")
+                & (journal["Symbol"].astype(str).str.strip().str.upper() == symbol.strip().upper())
+            ]
+            if not buys.empty:
+                last_buy = buys.iloc[-1]
+                entry_score = float(last_buy.get("BlindScore", 0) or 0)
+                entry_price = float(last_buy.get("Price", 0) or 0)
+        except Exception:
+            pass
+
+    pnl_pct = round((price - entry_price) / entry_price * 100, 2) if entry_price > 0 else 0.0
+
+    # Append sell to journal
+    row = {
+        "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+        "Action": "SELL",
+        "Symbol": symbol.strip().upper(),
+        "Qty": qty,
+        "Price": price,
+        "BlindScore": entry_score,
+        "Reasons": f"entry@{entry_price:.2f} pnl={pnl_pct:+.1f}%",
+    }
+    row_df = pd.DataFrame([row])
+    if os.path.isfile(journal_path):
+        row_df.to_csv(journal_path, mode="a", header=False, index=False)
+    else:
+        row_df.to_csv(journal_path, index=False)
+
+    if entry_price > 0:
+        emoji = "+" if pnl_pct >= 0 else ""
+        return f"_Trade closed: entry score **{entry_score:.0f}/100**, return **{emoji}{pnl_pct:.1f}%**_"
+    return ""
 
 
 def _execute_live_portfolio_action(
@@ -407,11 +526,22 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
             [{"symbol": symbol, "quantity": qty, "price": price}],
             None,
         )
+
+        # Tag this buy with blind-buy score for trade journal
+        journal_line = ""
+        try:
+            journal_line = await asyncio.to_thread(
+                _tag_buy_with_blind_score, symbol, qty, price, account_name, universe
+            )
+        except Exception:
+            pass
+
         event_text = _format_event_lines("Buy:", runner.last_buy_events)
         positions_text = _format_positions_text(runner, positions_df)
-        message = "\n\n".join(
-            part for part in [event_text, _format_summary_text(summary_df), positions_text] if part
-        )
+        parts = [part for part in [event_text, _format_summary_text(summary_df), positions_text] if part]
+        if journal_line:
+            parts.append(journal_line)
+        message = "\n\n".join(parts)
         await interaction.followup.send(message[:1900])
 
     @bot.tree.command(name="sell", description="Log a real sell trade into the live portfolio")
@@ -432,11 +562,22 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
             None,
             [{"symbol": symbol, "quantity": qty, "price": price}],
         )
+
+        # Log sell to trade journal with P&L
+        journal_line = ""
+        try:
+            journal_line = await asyncio.to_thread(
+                _tag_sell_in_journal, symbol, qty, price, account_name
+            )
+        except Exception:
+            pass
+
         event_text = _format_event_lines("Sell:", runner.last_sell_events)
         positions_text = _format_positions_text(runner, positions_df)
-        message = "\n\n".join(
-            part for part in [event_text, _format_summary_text(summary_df), positions_text] if part
-        )
+        parts = [part for part in [event_text, _format_summary_text(summary_df), positions_text] if part]
+        if journal_line:
+            parts.append(journal_line)
+        message = "\n\n".join(parts)
         await interaction.followup.send(message[:1900])
 
     @bot.tree.command(name="portfolio", description="Show the current live portfolio summary")
@@ -517,10 +658,12 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
             return
 
         rows_df = await asyncio.to_thread(_load_signal_rows, universe, ["Strong Buy Now", "Buy Now"], limit or 5)
-        message = _format_signal_rows_text(
+        guardrail_text = _guardrail_text(account_name)
+        signal_text = _format_signal_rows_text(
             rows_df,
             f"No `Strong Buy Now` or `Buy Now` names are available in the latest `{universe}` monitor board yet.",
         )
+        message = "\n\n".join(part for part in [guardrail_text, signal_text] if part)
         await interaction.response.send_message(message[:1900], ephemeral=True)
 
     @bot.tree.command(name="sellnow", description="Show the latest Sell / Exit names from the signal monitor board")
@@ -579,6 +722,60 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
         )
         message = "\n\n".join([_format_summary_text(summary_df), _format_positions_text(runner, positions_df)])
         await interaction.followup.send(message[:1900])
+
+    @bot.tree.command(name="autopilot", description="Scan for blind-buy opportunities and check portfolio for sell alerts")
+    async def autopilot_cmd(interaction):  # type: ignore
+        ok, reason = _authorize(interaction)
+        if not ok:
+            await _reply_unauthorized(interaction, reason)
+            return
+
+        await interaction.response.defer(thinking=True)
+
+        def _run_autopilot():
+            from pkscreener.classes.AutoPilotInvestor import AutoPilotConfig, AutoPilotInvestor
+            cfg = AutoPilotConfig(
+                universe=universe,
+                account_name=account_name,
+                alert_channels="none",  # we'll format the response ourselves
+            )
+            investor = AutoPilotInvestor(config=cfg)
+            return investor.run_once()
+
+        result = await asyncio.to_thread(_run_autopilot)
+
+        parts = ["**Blind-Buy Scan Results**"]
+
+        if result.buy_candidates:
+            parts.append(f"Found **{len(result.buy_candidates)}** opportunity{'s' if len(result.buy_candidates) != 1 else ''}:")
+            for c in result.buy_candidates[:5]:
+                pct = f"+{c.change_pct:.1f}%" if c.change_pct > 0 else f"{c.change_pct:.1f}%"
+                parts.append(
+                    f"**BUY `{c.symbol}`** (Score: {c.blind_score:.0f}/100)\n"
+                    f"Price `{c.price:.2f}` ({pct}) | Buy Above `{c.buy_above:.2f}`\n"
+                    f"Stop `{c.stop_loss:.2f}` | T1 `{c.target1:.2f}` | T2 `{c.target2:.2f}`\n"
+                    f"Why: {c.reasons}"
+                )
+        else:
+            parts.append("No blind-buy opportunities right now.")
+
+        if result.sell_alerts:
+            parts.append(f"\n**SELL ALERTS ({len(result.sell_alerts)}):**")
+            for a in result.sell_alerts[:5]:
+                emoji = "+" if a.pnl_pct >= 0 else ""
+                parts.append(
+                    f"**SELL `{a.symbol}`** x{a.quantity} @ `{a.current_price:.2f}` "
+                    f"({emoji}{a.pnl_pct:.1f}%) — {a.reason}"
+                )
+
+        if result.buy_paused:
+            parts.append(f"\nBuy paused: {'; '.join(result.pause_reasons)}")
+        if result.error:
+            parts.append(f"\nError: {result.error}")
+
+        parts.append(f"\nPositions monitored: {result.open_positions}")
+
+        await interaction.followup.send("\n\n".join(parts)[:1900])
 
     try:
         await bot.start(token)

@@ -71,6 +71,8 @@ class ActionableReportRunner:
         self.strong_buy_only = bool(strong_buy_only)
         self.buy_ready_max_gap_pct = 0.60
         self.strong_buy_max_gap_pct = 0.35
+        self.momentum_buy_min_score = 68.0
+        self.momentum_watch_min_score = 55.0
         self.strong_buy_min_confidence = max(float(self.min_confidence) + 7.5, 22.5)
         self.strong_buy_min_volume_ratio = max(float(self.min_volume_ratio) + 0.35, 1.35)
         self.strong_buy_min_trade_value = max(float(self.min_trade_value) * 1.5, 15000000.0)
@@ -471,6 +473,25 @@ class ActionableReportRunner:
             strong_liquidity_ok=strong_liquidity_ok,
             strong_volume_ok=strong_volume_ok,
         )
+        momentum_score, momentum_setup, momentum_reason = self._score_momentum_setup(
+            action=action,
+            now_action=now_action,
+            confidence=float(result.confidence),
+            change_pct=change_pct,
+            volume_ratio=volume_ratio,
+            entry_gap_pct=entry_gap_pct,
+            trigger_ready=trigger_ready,
+            liquidity_ok=liquidity_ok,
+            volume_ok=volume_ok,
+            reason_text=" | ".join(result.reasons[:3]) if result.reasons else "",
+        )
+        if (
+            not self.strong_buy_only
+            and now_action == "Watch for Buy"
+            and momentum_setup == "Momentum Buy"
+        ):
+            now_action = "Buy Now"
+            quality_checks = f"{quality_checks}, momentum promotion".strip(", ")
 
         return {
             "Symbol": symbol,
@@ -490,6 +511,9 @@ class ActionableReportRunner:
             "VolumeOk": volume_ok,
             "StrongLiquidityOk": strong_liquidity_ok,
             "StrongVolumeOk": strong_volume_ok,
+            "MomentumScore": momentum_score,
+            "MomentumSetup": momentum_setup,
+            "MomentumReason": momentum_reason,
             "LiveTickUsed": bool(live_tick_used),
             "Entry": entry,
             "StopLoss": stop_loss,
@@ -499,8 +523,97 @@ class ActionableReportRunner:
             "RiskPerShare": risk_per_share,
             "QualityChecks": quality_checks,
             "Reason": " | ".join(result.reasons[:3]) if result.reasons else "No strong reason",
+            "RSI": round(float(result.indicators.get("RSI", 50)), 1),
+            "CCI": round(float(result.indicators.get("CCI", 0)), 1),
+            "MFI": round(float(result.indicators.get("MFI", 50)), 1),
             "RunAt": run_at_text or PKDateUtilities.currentDateTime().strftime("%Y-%m-%d %H:%M:%S"),
         }
+
+    def _score_momentum_setup(
+        self,
+        action: str,
+        now_action: str,
+        confidence: float,
+        change_pct: float,
+        volume_ratio: float,
+        entry_gap_pct: float,
+        trigger_ready: bool,
+        liquidity_ok: bool,
+        volume_ok: bool,
+        reason_text: str,
+    ) -> Tuple[float, str, str]:
+        """Score breakout-style momentum so strong watchlist names can be promoted."""
+        normalized_action = str(action or "").strip().upper()
+        normalized_now_action = str(now_action or "").strip().upper()
+        reason_lower = str(reason_text or "").strip().lower()
+        if normalized_action not in ["BUY", "WATCH BUY"] or normalized_now_action in ["SELL NOW", "SELL / EXIT"]:
+            return 0.0, "", ""
+
+        score = 0.0
+        reasons: List[str] = []
+        if normalized_action == "BUY":
+            score += 18.0
+            reasons.append("buy trend")
+        else:
+            score += 10.0
+            reasons.append("watchlist trend")
+
+        score += min(max(confidence, 0.0), 30.0) * 1.6
+        score += min(max(volume_ratio, 0.0), 4.0) * 8.0
+
+        if change_pct > 0:
+            score += 6.0
+            reasons.append("green day")
+        if change_pct >= 2.0:
+            score += 8.0
+            reasons.append("strong day")
+        if change_pct >= 4.0:
+            score += 10.0
+            reasons.append("breakout day")
+
+        if trigger_ready:
+            score += 10.0
+            reasons.append("trigger ready")
+        elif entry_gap_pct <= 0.30:
+            score += 8.0
+            reasons.append("very near trigger")
+        elif entry_gap_pct <= 0.60:
+            score += 5.0
+            reasons.append("near trigger")
+        elif entry_gap_pct <= 1.00:
+            score += 2.0
+        else:
+            score -= 8.0
+
+        if liquidity_ok:
+            score += 6.0
+        if volume_ok:
+            score += 6.0
+        if "above average volume" in reason_lower:
+            score += 4.0
+            reasons.append("volume expansion")
+
+        if "below all major mas" in reason_lower or "bearish alignment" in reason_lower:
+            score -= 18.0
+            reasons.append("ma contradiction")
+        if change_pct < 0:
+            score -= 10.0
+        if volume_ratio < 1.0:
+            score -= 8.0
+
+        score = round(max(0.0, min(score, 100.0)), 1)
+        setup = ""
+        if (
+            score >= self.momentum_buy_min_score
+            and change_pct > 0
+            and volume_ratio >= 1.3
+            and entry_gap_pct <= 1.0
+            and "ma contradiction" not in reasons
+        ):
+            setup = "Momentum Buy"
+        elif score >= self.momentum_watch_min_score:
+            setup = "Momentum Watch"
+        return score, setup, ", ".join(reasons)
 
     def _prepare_ohlcv_data(self, symbol: str, data: Optional[pd.DataFrame]) -> pd.DataFrame:
         """Normalize the fetched frame and, if needed, fall back to official Kite history."""
@@ -819,6 +932,8 @@ class ActionableReportRunner:
         run_at_series = df["RunAt"] if "RunAt" in df.columns else pd.Series([""] * len(df))
         quality_checks_series = df["QualityChecks"] if "QualityChecks" in df.columns else pd.Series([""] * len(df))
         entry_gap_series = df["EntryGapPct"] if "EntryGapPct" in df.columns else pd.Series([0.0] * len(df))
+        momentum_score_series = df["MomentumScore"] if "MomentumScore" in df.columns else pd.Series([0.0] * len(df))
+        momentum_setup_series = df["MomentumSetup"] if "MomentumSetup" in df.columns else pd.Series([""] * len(df))
         what_to_do = [
             self._human_action_label(action, price_now, buy_above)
             for action, price_now, buy_above in zip(df["NowAction"], df["LTP"], df["Entry"])
@@ -828,7 +943,10 @@ class ActionableReportRunner:
                 "Stock": df["Symbol"],
                 "What To Do": what_to_do,
                 "Signal Strength %": df["ConfidencePct"],
+                "Momentum Score": momentum_score_series,
+                "Momentum Setup": momentum_setup_series,
                 "Price Now": df["LTP"],
+                "Change %": df["ChangePct"],
                 "Buy Above": df["Entry"],
                 "Entry Gap %": entry_gap_series,
                 "Sell If Below": df["StopLoss"],
@@ -837,6 +955,9 @@ class ActionableReportRunner:
                 "Risk %": df["RiskPct"],
                 "Volume vs Avg": df["VolumeRatio"],
                 "Avg Daily Value": df["AvgTradeValue20"].apply(self._format_rupee_amount),
+                "RSI": df["RSI"] if "RSI" in df.columns else 50.0,
+                "CCI": df["CCI"] if "CCI" in df.columns else 0.0,
+                "MFI": df["MFI"] if "MFI" in df.columns else 50.0,
                 "Checks": quality_checks_series,
                 "Why": df["Reason"],
                 "Checked At": run_at_series,

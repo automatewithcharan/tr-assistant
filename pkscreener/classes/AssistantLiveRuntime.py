@@ -62,6 +62,10 @@ class AssistantLiveSettings:
     prewarm: bool = False
     prewarm_workers: int = 4
     strong_buy_only: bool = False
+    max_daily_loss_amount: float = 0.0
+    max_consecutive_losses: int = 0
+    autopilot_enabled: bool = False
+    autopilot_interval: int = 60
 
     def normalized(self) -> "AssistantLiveSettings":
         return AssistantLiveSettings(
@@ -81,6 +85,10 @@ class AssistantLiveSettings:
             prewarm=bool(self.prewarm),
             prewarm_workers=max(1, int(self.prewarm_workers or 1)),
             strong_buy_only=bool(self.strong_buy_only),
+            max_daily_loss_amount=max(0.0, float(self.max_daily_loss_amount or 0.0)),
+            max_consecutive_losses=max(0, int(self.max_consecutive_losses or 0)),
+            autopilot_enabled=bool(self.autopilot_enabled),
+            autopilot_interval=max(10, int(self.autopilot_interval or 60)),
         )
 
 
@@ -414,7 +422,8 @@ class AssistantLiveSupervisor:
     def _start_required_processes(self) -> None:
         from pkscreener.classes.KiteConnectManager import KiteConnectSessionManager
 
-        report = KiteConnectSessionManager().get_connection_report()
+        mgr = KiteConnectSessionManager()
+        report = mgr.ensure_fresh_session()
         if report.get("error"):
             raise RuntimeError(
                 "Official Kite session is not usable for live mode. "
@@ -423,6 +432,8 @@ class AssistantLiveSupervisor:
         self._launch_process("ticker", self._ticker_command())
         self._launch_process("monitor", self._monitor_command())
         self._launch_process("discord", self._discord_command())
+        if self.settings.autopilot_enabled:
+            self._launch_process("autopilot", self._autopilot_command())
 
     def _ticker_command(self) -> List[str]:
         command = [
@@ -469,6 +480,12 @@ class AssistantLiveSupervisor:
             command.extend(["--signalmonitorlimit", str(self.settings.signal_limit)])
         if self.settings.strong_buy_only:
             command.append("--signalmonitorstrongbuyonly")
+        if self.settings.account_name:
+            command.extend(["--signalmonitoraccount", str(self.settings.account_name)])
+        if self.settings.max_daily_loss_amount > 0:
+            command.extend(["--signalmonitormaxdailyloss", str(self.settings.max_daily_loss_amount)])
+        if self.settings.max_consecutive_losses > 0:
+            command.extend(["--signalmonitormaxconsecutivelosses", str(self.settings.max_consecutive_losses)])
         return command
 
     def _discord_command(self) -> List[str]:
@@ -482,6 +499,30 @@ class AssistantLiveSupervisor:
             "--discordtradeuniverse",
             self.settings.universe,
         ]
+
+    def _autopilot_command(self) -> List[str]:
+        command = [
+            sys.executable,
+            "-m",
+            "pkscreener.pkscreenercli",
+            "--autopilot",
+            self.settings.universe,
+            "--autopilotaccount",
+            self.settings.account_name,
+            "--autopilotminconfidence",
+            str(self.settings.min_confidence),
+            "--autopilotalerts",
+            self.settings.alert_channels,
+            "-c",
+            str(self.settings.autopilot_interval),
+            "-a",
+            "Y",
+        ]
+        if self.settings.max_daily_loss_amount > 0:
+            command.extend(["--autopilotmaxdailyloss", str(self.settings.max_daily_loss_amount)])
+        if self.settings.max_consecutive_losses > 0:
+            command.extend(["--autopilotmaxconsecutivelosses", str(self.settings.max_consecutive_losses)])
+        return command
 
     def _launch_process(self, name: str, command: List[str], restart_count: int = 0) -> None:
         log_path = self.store.logs_dir / f"session_{self.session_id}_{name}.log"

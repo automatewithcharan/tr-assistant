@@ -13,13 +13,18 @@ PKBrokers-specific login helpers. It focuses on the supported developer flow:
 from __future__ import annotations
 
 import json
+import logging
 import os
-from datetime import datetime
+from datetime import datetime, date
 from pathlib import Path
 from typing import Any, Dict, Optional
 from urllib.parse import parse_qs, urlparse
 
+import requests as _requests
+
 from PKDevTools.classes import Archiver
+
+_log = logging.getLogger(__name__)
 
 
 def _get_secret(name: str, default: str = "") -> str:
@@ -53,6 +58,9 @@ class KiteConnectSessionManager:
         self.api_secret = _normalize_secret("KITE_API_SECRET", "KITE_CONNECT_API_SECRET")
         self.redirect_url = _normalize_secret("KITE_REDIRECT_URL", "KITE_CONNECT_REDIRECT_URL")
         self.access_token_override = _normalize_secret("KITE_ACCESS_TOKEN", "KITE_CONNECT_ACCESS_TOKEN")
+        self.user_id = _normalize_secret("KITE_USER_ID", "KITE_CONNECT_USER_ID")
+        self.password = _normalize_secret("KITE_PASSWORD", "KITE_CONNECT_PASSWORD")
+        self.totp_secret = _normalize_secret("KITE_TOTP_SECRET", "KITE_CONNECT_TOTP_SECRET")
         self.session_file_path = Path(Archiver.get_user_data_dir()) / "kite_connect_session.json"
 
     def _load_client_class(self):
@@ -171,6 +179,127 @@ class KiteConnectSessionManager:
         self._write_session_file(payload)
         return payload
 
+    # ------------------------------------------------------------------
+    # TOTP auto-login
+    # ------------------------------------------------------------------
+
+    def can_auto_login(self) -> bool:
+        """Return True when all credentials for automated TOTP login are set."""
+        return bool(self.api_key and self.api_secret and self.user_id and self.password and self.totp_secret)
+
+    def is_session_fresh(self) -> bool:
+        """True if a saved access token exists and was created today."""
+        payload = self._read_session_file()
+        created = str(payload.get("created_at", "") or "").strip()
+        if not created:
+            return False
+        try:
+            created_date = datetime.fromisoformat(created).date()
+            return created_date == date.today()
+        except Exception:
+            return False
+
+    def auto_login(self) -> Dict[str, Any]:
+        """Perform a full headless Kite Connect login using TOTP.
+
+        Flow:
+        1. POST user_id + password → get request_id
+        2. Generate TOTP code from secret
+        3. POST request_id + TOTP → get request_token via redirect
+        4. Exchange request_token for access_token via official SDK
+        """
+        if not self.can_auto_login():
+            raise ValueError(
+                "Automated login requires KITE_API_KEY, KITE_API_SECRET, "
+                "KITE_USER_ID, KITE_PASSWORD, and KITE_TOTP_SECRET."
+            )
+
+        try:
+            import pyotp
+        except ImportError as exc:
+            raise RuntimeError("pyotp is required for TOTP auto-login. pip install pyotp") from exc
+
+        _log.info("Starting automated Kite Connect login for %s …", self.user_id)
+
+        sess = _requests.Session()
+
+        # Step 1 — login with user_id + password
+        resp = sess.post(
+            "https://kite.zerodha.com/api/login",
+            data={"user_id": self.user_id, "password": self.password},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        login_data = resp.json().get("data", {})
+        request_id = login_data.get("request_id", "")
+        if not request_id:
+            raise RuntimeError(f"Kite login step-1 failed: {resp.text[:300]}")
+
+        # Step 2 — submit TOTP
+        totp_code = pyotp.TOTP(self.totp_secret).now()
+        resp = sess.post(
+            "https://kite.zerodha.com/api/twofa",
+            data={
+                "user_id": self.user_id,
+                "request_id": request_id,
+                "twofa_value": totp_code,
+                "twofa_type": "totp",
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+
+        # Step 3 — extract request_token via the OAuth redirect
+        login_url = self.get_login_url()
+        resp = sess.get(login_url, allow_redirects=False, timeout=30)
+        if resp.status_code not in (301, 302, 303):
+            raise RuntimeError(
+                f"Expected redirect after TOTP login, got HTTP {resp.status_code}"
+            )
+        redirect_location = resp.headers.get("Location", "")
+        parsed = parse_qs(urlparse(redirect_location).query)
+        request_tokens = parsed.get("request_token", [])
+        if not request_tokens:
+            raise RuntimeError(
+                f"No request_token in redirect URL: {redirect_location[:200]}"
+            )
+        request_token = request_tokens[0]
+
+        # Step 4 — exchange for access_token via official SDK
+        _log.info("Got request_token, exchanging for access_token …")
+        return self.create_session(request_token)
+
+    def ensure_fresh_session(self) -> Dict[str, Any]:
+        """Ensure today's access token exists; auto-login if possible.
+
+        Returns the connection report dict. Raises on fatal errors.
+        """
+        if self.is_session_fresh():
+            report = self.get_connection_report()
+            if not report.get("error"):
+                _log.info("Kite session is fresh for today.")
+                return report
+
+        if self.can_auto_login():
+            _log.info("Session is stale or missing — running TOTP auto-login …")
+            self.auto_login()
+            report = self.get_connection_report()
+            if report.get("error"):
+                raise RuntimeError(
+                    f"Auto-login succeeded but session check failed: {report['error']}"
+                )
+            _log.info("TOTP auto-login complete. Session is ready.")
+            return report
+
+        report = self.get_connection_report()
+        if report.get("error"):
+            raise RuntimeError(
+                "Kite session is stale and auto-login is not configured. "
+                "Set KITE_USER_ID, KITE_PASSWORD, and KITE_TOTP_SECRET, "
+                f"or log in manually. Error: {report['error']}"
+            )
+        return report
+
     def get_profile(self) -> Dict[str, Any]:
         """Return the authenticated user profile."""
         client = self._build_client()
@@ -185,6 +314,8 @@ class KiteConnectSessionManager:
             "api_secret_configured": bool(self.api_secret),
             "redirect_url_configured": bool(self.redirect_url),
             "access_token_available": bool(access_token),
+            "auto_login_configured": self.can_auto_login(),
+            "session_fresh_today": self.is_session_fresh(),
             "session_file_exists": self.session_file_path.exists(),
             "session_file_path": str(self.session_file_path),
             "saved_user_id": session_payload.get("user_id") or session_payload.get("session", {}).get("user_id"),
@@ -238,6 +369,8 @@ def format_connection_report(report: Dict[str, Any]) -> str:
         f"Official Kite API secret configured: {'Yes' if report.get('api_secret_configured') else 'No'}",
         f"Redirect URL configured: {'Yes' if report.get('redirect_url_configured') else 'No'}",
         f"Access token available: {'Yes' if report.get('access_token_available') else 'No'}",
+        f"TOTP auto-login configured: {'Yes' if report.get('auto_login_configured') else 'No'}",
+        f"Session fresh today: {'Yes' if report.get('session_fresh_today') else 'No'}",
         f"Session file exists: {'Yes' if report.get('session_file_exists') else 'No'}",
         f"Session file: {report.get('session_file_path', '')}",
     ]

@@ -190,10 +190,12 @@ class TradingSignals:
             reasons.append(pa_reason)
         
         # 7. Momentum Analysis
-        mom_signal, mom_reason = self._analyze_momentum(df, pktalib)
+        mom_signal, mom_reason, cci_value, mfi_value = self._analyze_momentum(df, pktalib)
         signals.append(('momentum', mom_signal))
         if mom_reason:
             reasons.append(mom_reason)
+        indicators['CCI'] = cci_value
+        indicators['MFI'] = mfi_value
         
         # Calculate weighted score
         total_weight = sum(self.WEIGHTS.values())
@@ -209,8 +211,18 @@ class TradingSignals:
         # Determine signal strength
         overall_signal = self._score_to_signal(normalized_score)
         
-        # Calculate confidence
-        confidence = min(100, abs(normalized_score - 50) * 2)
+        # Calculate confidence: how many analyzers agree on the direction
+        # plus how strongly. Better than abs(score-50)*2 which gave weak numbers.
+        bullish_count = sum(1 for _, s in signals if s > 0.55)
+        bearish_count = sum(1 for _, s in signals if s < 0.45)
+        total_analyzers = len(signals)
+        # Direction agreement: what % of analyzers agree on the dominant side
+        dominant_count = max(bullish_count, bearish_count)
+        agreement_ratio = dominant_count / total_analyzers if total_analyzers > 0 else 0
+        # Directional strength: how far from neutral is the weighted score
+        directional_strength = abs(normalized_score - 50) / 50  # 0..1
+        # Combine: 60% agreement + 40% strength, scale to 0-100
+        confidence = min(100, round((agreement_ratio * 60 + directional_strength * 40) * 100 / 100, 1))
         
         # Update save/screen dicts
         signal_text = self._format_signal_text(overall_signal)
@@ -415,9 +427,12 @@ class TradingSignals:
                 mfi = None
             
             signals = []
+            cci_value = 0.0
+            mfi_value = 50.0
             
             if cci is not None and len(cci) > 0:
                 current_cci = cci.iloc[-1] if hasattr(cci, 'iloc') else cci[-1]
+                cci_value = float(current_cci) if current_cci == current_cci else 0.0
                 if current_cci < -100:
                     signals.append((0.75, "CCI oversold"))
                 elif current_cci > 100:
@@ -425,6 +440,7 @@ class TradingSignals:
             
             if mfi is not None and len(mfi) > 0:
                 current_mfi = mfi.iloc[-1] if hasattr(mfi, 'iloc') else mfi[-1]
+                mfi_value = float(current_mfi) if current_mfi == current_mfi else 50.0
                 if current_mfi < 20:
                     signals.append((0.8, "MFI oversold"))
                 elif current_mfi > 80:
@@ -433,12 +449,12 @@ class TradingSignals:
             if signals:
                 avg_signal = sum(s[0] for s in signals) / len(signals)
                 reasons = [s[1] for s in signals]
-                return avg_signal, "; ".join(reasons)
+                return avg_signal, "; ".join(reasons), cci_value, mfi_value
             
-            return 0.5, None
+            return 0.5, None, cci_value, mfi_value
         except Exception as e:
             self.logger.debug(f"Momentum analysis error: {e}")
-            return 0.5, None
+            return 0.5, None, 0.0, 50.0
     
     def _score_to_signal(self, score: float) -> SignalStrength:
         """Convert normalized score to signal strength."""

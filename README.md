@@ -54,6 +54,23 @@ powershell -ExecutionPolicy Bypass -File .\scripts\status_live_assistant.ps1
 powershell -ExecutionPolicy Bypass -File .\scripts\stop_live_assistant.ps1
 ```
 
+## Safer Live Mode
+
+If you want near-blind operation, use hard loss brakes instead of blindly accepting every buy alert.
+
+Example:
+
+```powershell
+python -m pkscreener.pkscreenercli --assistantstart nifty50 --assistantaccount main --assistantautotune --assistantstrongbuyonly --assistantmaxdailyloss 1500 --assistantmaxconsecutivelosses 2
+```
+
+This keeps sell-side alerts flowing, but suppresses fresh buy-side monitor ideas for the linked live account after:
+
+- realized loss for the current day breaches your limit
+- consecutive losing closed trades hit your limit
+
+For Discord `/buynow`, the bot also shows whether the buy-side guardrail is clear or paused.
+
 ## Run On Linux VM
 
 For GCP/Ubuntu, use `systemd` so the assistant survives SSH/browser closure:

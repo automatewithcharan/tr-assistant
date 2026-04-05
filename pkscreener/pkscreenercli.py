@@ -343,6 +343,23 @@ class ArgumentParser:
             required=False,
         )
         parser.add_argument(
+            "--signalmonitoraccount",
+            help="Linked live account name used for buy-side guardrails in signal monitor mode (default: main)",
+            required=False,
+        )
+        parser.add_argument(
+            "--signalmonitormaxdailyloss",
+            type=float,
+            help="Pause new buy-side monitor ideas after this much realized loss in the linked live account for today",
+            required=False,
+        )
+        parser.add_argument(
+            "--signalmonitormaxconsecutivelosses",
+            type=int,
+            help="Pause new buy-side monitor ideas after this many consecutive losing closed trades in the linked live account",
+            required=False,
+        )
+        parser.add_argument(
             "--signalscorecard",
             nargs="?",
             const="nifty50",
@@ -493,7 +510,62 @@ class ArgumentParser:
             help="Start a fresh paper account and ignore earlier paper positions",
             required=False,
         )
-        
+
+        # AutoPilot options
+        parser.add_argument(
+            "--autopilot",
+            nargs="?",
+            const="nifty50",
+            help="Run hands-off autopilot investing mode (default universe: nifty50)",
+            required=False,
+        )
+        parser.add_argument(
+            "--autopilotaccount",
+            help="Live account name for autopilot trades (default: main)",
+            required=False,
+        )
+        parser.add_argument(
+            "--autopilotminconfidence",
+            type=float,
+            help="Minimum signal confidence for autopilot buy decisions (default: 10.0)",
+            required=False,
+        )
+        parser.add_argument(
+            "--autopilotminliquidity",
+            type=float,
+            help="Minimum average daily traded value for autopilot buys (default: 10000000)",
+            required=False,
+        )
+        parser.add_argument(
+            "--autopilotminvolratio",
+            type=float,
+            help="Minimum volume ratio for autopilot buys (default: 1.0)",
+            required=False,
+        )
+        parser.add_argument(
+            "--autopilotmaxdailyloss",
+            type=float,
+            help="Pause autopilot buying after this much realized loss today (default: 0 = disabled)",
+            required=False,
+        )
+        parser.add_argument(
+            "--autopilotmaxconsecutivelosses",
+            type=int,
+            help="Pause autopilot buying after this many consecutive losing trades (default: 0 = disabled)",
+            required=False,
+        )
+        parser.add_argument(
+            "--autopilotalerts",
+            help="Alert channels for autopilot events: discord, telegram, desktop, or comma-separated",
+            required=False,
+        )
+        parser.add_argument(
+            "--autopilotworkers",
+            type=int,
+            help="Number of parallel workers for autopilot analysis (default: 3)",
+            required=False,
+        )
+
         # Barometer option
         parser.add_argument(
             "--barometer",
@@ -639,6 +711,30 @@ class ArgumentParser:
             required=False,
         )
         parser.add_argument(
+            "--assistantmaxdailyloss",
+            type=float,
+            help="Pause new buy-side assistant ideas after this much realized loss in the linked live account for today",
+            required=False,
+        )
+        parser.add_argument(
+            "--assistantmaxconsecutivelosses",
+            type=int,
+            help="Pause new buy-side assistant ideas after this many consecutive losing closed trades in the linked live account",
+            required=False,
+        )
+        parser.add_argument(
+            "--assistantautopilot",
+            action="store_true",
+            help="Enable blind-buy autopilot alerts alongside the live assistant",
+            required=False,
+        )
+        parser.add_argument(
+            "--assistantautopilotinterval",
+            type=int,
+            help="Autopilot scan interval in seconds (default: 60)",
+            required=False,
+        )
+        parser.add_argument(
             "--assistantinternalsupervisor",
             action="store_true",
             help=argparse.SUPPRESS,
@@ -677,6 +773,12 @@ class ArgumentParser:
             "--kiteconnectclearsession",
             action="store_true",
             help="Delete the locally saved official Kite Connect session file",
+            required=False,
+        )
+        parser.add_argument(
+            "--kiteautologin",
+            action="store_true",
+            help="Perform automated TOTP login using KITE_USER_ID, KITE_PASSWORD, KITE_TOTP_SECRET",
             required=False,
         )
         parser.add_argument(
@@ -1282,6 +1384,9 @@ class ApplicationRunner:
                 "signalmonitorreset",
                 "signalmonitorriskpct",
                 "signalmonitorstrongbuyonly",
+                "signalmonitoraccount",
+                "signalmonitormaxdailyloss",
+                "signalmonitormaxconsecutivelosses",
                 "signalmonitorworkers",
                 "signaltune",
                 "signaltuneminsamples",
@@ -1293,6 +1398,8 @@ class ApplicationRunner:
                 "signalvalidateminvolratio",
                 "signalvalidateworkers",
                 "assistantautotune",
+                "assistantmaxdailyloss",
+                "assistantmaxconsecutivelosses",
                 "assistantstrongbuyonly",
                 "papertrade",
                 "papertradeaddcash",
@@ -1308,6 +1415,15 @@ class ApplicationRunner:
                 "papertradeworkers",
                 "papertradesell",
                 "papertradereset",
+                "autopilot",
+                "autopilotaccount",
+                "autopilotminconfidence",
+                "autopilotminliquidity",
+                "autopilotminvolratio",
+                "autopilotmaxdailyloss",
+                "autopilotmaxconsecutivelosses",
+                "autopilotalerts",
+                "autopilotworkers",
                 "progressstatus",
                 "stocklist",
                 "systemlaunched",
@@ -1869,6 +1985,18 @@ def pkscreenercli():
                     prewarm=bool(args.assistantprewarm),
                     prewarm_workers=(args.assistantprewarmworkers if args.assistantprewarmworkers is not None else 4),
                     strong_buy_only=bool(args.assistantstrongbuyonly),
+                    max_daily_loss_amount=(args.assistantmaxdailyloss if args.assistantmaxdailyloss is not None else 0.0),
+                    max_consecutive_losses=(
+                        args.assistantmaxconsecutivelosses
+                        if args.assistantmaxconsecutivelosses is not None
+                        else 0
+                    ),
+                    autopilot_enabled=bool(getattr(args, 'assistantautopilot', False)),
+                    autopilot_interval=(
+                        args.assistantautopilotinterval
+                        if getattr(args, 'assistantautopilotinterval', None) is not None
+                        else 60
+                    ),
                 )
                 try:
                     session_id = launcher.start(settings)
@@ -2015,6 +2143,7 @@ def pkscreenercli():
             or args.kiteconnectdoctor
             or args.kiteconnectprofile
             or args.kiteconnectclearsession
+            or args.kiteautologin
         ):
             from pkscreener.classes.KiteConnectManager import (
                 KiteConnectSessionManager,
@@ -2093,6 +2222,34 @@ def pkscreenercli():
                     OutputControls().printOutput(
                         colorText.FAIL
                         + f"  [+] Could not load the official Kite profile: {exc}"
+                        + colorText.END
+                    )
+                    sys.exit(1)
+
+            if args.kiteautologin:
+                if not manager.can_auto_login():
+                    OutputControls().printOutput(
+                        colorText.FAIL
+                        + "  [!] Auto-login requires KITE_USER_ID, KITE_PASSWORD, and KITE_TOTP_SECRET."
+                        + colorText.END
+                    )
+                    sys.exit(1)
+                try:
+                    payload = manager.auto_login()
+                    profile = payload.get("profile", {}) or {}
+                    OutputControls().printOutput(
+                        colorText.GREEN
+                        + "  [+] TOTP auto-login successful!"
+                        + colorText.END
+                    )
+                    OutputControls().printOutput(
+                        f"  [+] User: {profile.get('user_name') or payload.get('user_id') or 'authenticated'}"
+                    )
+                    OutputControls().printOutput(f"  [+] Session file: {manager.session_file_path}")
+                except Exception as exc:
+                    OutputControls().printOutput(
+                        colorText.FAIL
+                        + f"  [!] TOTP auto-login failed: {exc}"
                         + colorText.END
                     )
                     sys.exit(1)
@@ -2338,6 +2495,17 @@ def pkscreenercli():
                 reset_state=bool(args.signalmonitorreset),
                 strong_buy_only=bool(args.signalmonitorstrongbuyonly),
                 streaming_mode=bool(args.signalmonitorstream),
+                guardrail_account_name=str(args.signalmonitoraccount or "main").strip().lower(),
+                guardrail_max_daily_loss_amount=(
+                    args.signalmonitormaxdailyloss
+                    if args.signalmonitormaxdailyloss is not None
+                    else 0.0
+                ),
+                guardrail_max_consecutive_losses=(
+                    args.signalmonitormaxconsecutivelosses
+                    if args.signalmonitormaxconsecutivelosses is not None
+                    else 0
+                ),
             )
             while True:
                 runner.run()
@@ -2574,6 +2742,57 @@ def pkscreenercli():
                 )
                 sleep(papertrade_interval if not args.testbuild else min(papertrade_interval, 3))
                 first_run = False
+            sys.exit(0)
+
+        if args.autopilot is not None:
+            from pkscreener.classes.AutoPilotInvestor import AutoPilotConfig, AutoPilotInvestor
+
+            autopilot_config = AutoPilotConfig(
+                universe=str(args.autopilot).strip().lower(),
+                account_name=str(args.autopilotaccount or "main").strip().lower(),
+                min_confidence=(
+                    args.autopilotminconfidence
+                    if args.autopilotminconfidence is not None
+                    else 5.0
+                ),
+                min_trade_value=(
+                    args.autopilotminliquidity
+                    if args.autopilotminliquidity is not None
+                    else 0.0
+                ),
+                min_volume_ratio=(
+                    args.autopilotminvolratio
+                    if args.autopilotminvolratio is not None
+                    else 0.0
+                ),
+                max_workers=(
+                    args.autopilotworkers
+                    if args.autopilotworkers is not None
+                    else 3
+                ),
+                max_daily_loss_amount=(
+                    args.autopilotmaxdailyloss
+                    if args.autopilotmaxdailyloss is not None
+                    else 0.0
+                ),
+                max_consecutive_losses=(
+                    args.autopilotmaxconsecutivelosses
+                    if args.autopilotmaxconsecutivelosses is not None
+                    else 0
+                ),
+                alert_channels=str(args.autopilotalerts or "discord").strip().lower(),
+                cycle_interval_sec=(
+                    int(args.croninterval)
+                    if args.croninterval is not None and str(args.croninterval).isdigit()
+                    else 60
+                ),
+            )
+
+            investor = AutoPilotInvestor(config=autopilot_config)
+            if autopilot_config.cycle_interval_sec > 0 and args.croninterval is not None:
+                investor.run_loop()
+            else:
+                investor.run_once()
             sys.exit(0)
 
         if args.discordtradebot:

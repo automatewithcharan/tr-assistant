@@ -20,6 +20,7 @@ from PKDevTools.classes.PKDateUtilities import PKDateUtilities
 from PKDevTools.classes.log import default_logger
 
 from pkscreener.classes.ActionableReport import ActionableReportRunner
+from pkscreener.classes.RiskGuardrails import LiveTradingGuardrails
 from pkscreener.classes.SignalPerformanceTracker import SignalPerformanceTracker
 
 
@@ -36,6 +37,7 @@ class SignalMonitorRunner:
         "ScannedSymbols",
         "StrongBuyNowCount",
         "BuyNowCount",
+        "MomentumBuyCount",
         "SellNowCount",
         "WatchForBuyCount",
         "WatchForSellCount",
@@ -54,6 +56,12 @@ class SignalMonitorRunner:
         "TakeProfit2",
         "SuggestedQty",
         "SignalStrengthPct",
+        "VolumeRatio",
+        "ChangePct",
+        "EntryGapPct",
+        "RSI",
+        "CCI",
+        "MFI",
         "Checks",
         "Why",
         "CheckedAt",
@@ -91,6 +99,9 @@ class SignalMonitorRunner:
         reset_state: bool = False,
         strong_buy_only: bool = False,
         streaming_mode: bool = False,
+        guardrail_account_name: str = "main",
+        guardrail_max_daily_loss_amount: float = 0.0,
+        guardrail_max_consecutive_losses: int = 0,
     ):
         self.config_manager = config_manager
         self.universe = universe
@@ -106,6 +117,9 @@ class SignalMonitorRunner:
         self.reset_state = bool(reset_state)
         self.strong_buy_only = bool(strong_buy_only)
         self.streaming_mode = bool(streaming_mode)
+        self.guardrail_account_name = str(guardrail_account_name or "main").strip().lower().replace(" ", "_")
+        self.guardrail_max_daily_loss_amount = max(0.0, float(guardrail_max_daily_loss_amount or 0.0))
+        self.guardrail_max_consecutive_losses = max(0, int(guardrail_max_consecutive_losses or 0))
         self.output_dir = Archiver.get_user_data_dir()
         self.run_at = PKDateUtilities.currentDateTime()
         self.run_at_str = self.run_at.strftime("%Y-%m-%d %H:%M:%S")
@@ -131,6 +145,7 @@ class SignalMonitorRunner:
             universe=universe,
             use_live_kite=use_live_kite,
         )
+        self.last_guardrail_status = None
 
     def run(
         self,
@@ -216,6 +231,10 @@ class SignalMonitorRunner:
             state_df,
         )
         merged_simple_df, merged_state_df = self._refresh_live_prices_from_ticks(
+            merged_simple_df,
+            merged_state_df,
+        )
+        merged_simple_df, merged_state_df = self._apply_buy_guardrails(
             merged_simple_df,
             merged_state_df,
         )
@@ -519,11 +538,68 @@ class SignalMonitorRunner:
         merged = pd.concat([previous, current], ignore_index=True)
         return merged
 
+    def _apply_buy_guardrails(
+        self,
+        simple_df: pd.DataFrame,
+        state_df: pd.DataFrame,
+    ) -> Tuple[pd.DataFrame, pd.DataFrame]:
+        """Downgrade buy-side actions when the linked live account is in risk-off mode."""
+        guardrails = LiveTradingGuardrails(
+            account_name=self.guardrail_account_name,
+            max_daily_loss_amount=self.guardrail_max_daily_loss_amount,
+            max_consecutive_losses=self.guardrail_max_consecutive_losses,
+        )
+        status = guardrails.evaluate()
+        self.last_guardrail_status = status
+        if not status.buy_paused:
+            return simple_df, state_df
+
+        pause_reason = "Risk-off: " + "; ".join(status.reasons)
+        updated_simple_df = simple_df.copy() if simple_df is not None else pd.DataFrame()
+        updated_state_df = state_df.copy() if state_df is not None else pd.DataFrame()
+
+        if not updated_simple_df.empty and "What To Do" in updated_simple_df.columns:
+            buy_mask = updated_simple_df["What To Do"].astype(str).isin(["Strong Buy Now", "Buy Now"])
+            if buy_mask.any():
+                updated_simple_df.loc[buy_mask, "What To Do"] = "Watch for Buy"
+                if "Suggested Qty" in updated_simple_df.columns:
+                    updated_simple_df.loc[buy_mask, "Suggested Qty"] = 0
+                if "Checks" in updated_simple_df.columns:
+                    updated_simple_df.loc[buy_mask, "Checks"] = updated_simple_df.loc[buy_mask, "Checks"].astype(str).apply(
+                        lambda value: f"{value}, buy paused" if value and value != "nan" else "buy paused"
+                    )
+                if "Why" in updated_simple_df.columns:
+                    updated_simple_df.loc[buy_mask, "Why"] = updated_simple_df.loc[buy_mask, "Why"].astype(str).apply(
+                        lambda value: f"{value} | {pause_reason}" if value and value != "nan" else pause_reason
+                    )
+
+        if not updated_state_df.empty and "NowAction" in updated_state_df.columns:
+            buy_mask = updated_state_df["NowAction"].astype(str).isin(["Strong Buy Now", "Buy Now"])
+            if buy_mask.any():
+                updated_state_df.loc[buy_mask, "NowAction"] = "Watch for Buy"
+                if "SuggestedQty" in updated_state_df.columns:
+                    updated_state_df.loc[buy_mask, "SuggestedQty"] = 0
+                if "Checks" in updated_state_df.columns:
+                    updated_state_df.loc[buy_mask, "Checks"] = updated_state_df.loc[buy_mask, "Checks"].astype(str).apply(
+                        lambda value: f"{value}, buy paused" if value and value != "nan" else "buy paused"
+                    )
+                if "Why" in updated_state_df.columns:
+                    updated_state_df.loc[buy_mask, "Why"] = updated_state_df.loc[buy_mask, "Why"].astype(str).apply(
+                        lambda value: f"{value} | {pause_reason}" if value and value != "nan" else pause_reason
+                    )
+
+        return updated_simple_df, updated_state_df
+
     def _build_summary_from_simple(self, simple_df: pd.DataFrame, scanned_symbols: int, alert_count: int) -> pd.DataFrame:
         """Create summary counts from the merged simple board."""
         what_to_do_counts = (
             simple_df["What To Do"].value_counts().to_dict()
             if simple_df is not None and not simple_df.empty and "What To Do" in simple_df.columns
+            else {}
+        )
+        momentum_counts = (
+            simple_df["Momentum Setup"].value_counts().to_dict()
+            if simple_df is not None and not simple_df.empty and "Momentum Setup" in simple_df.columns
             else {}
         )
         return pd.DataFrame(
@@ -533,6 +609,7 @@ class SignalMonitorRunner:
                     "ScannedSymbols": int(scanned_symbols),
                     "StrongBuyNowCount": int(what_to_do_counts.get("Strong Buy Now", 0)),
                     "BuyNowCount": int(what_to_do_counts.get("Buy Now", 0)),
+                    "MomentumBuyCount": int(momentum_counts.get("Momentum Buy", 0)),
                     "SellNowCount": int(what_to_do_counts.get("Sell / Exit", 0)),
                     "WatchForBuyCount": int(what_to_do_counts.get("Watch for Buy", 0)),
                     "WatchForSellCount": int(what_to_do_counts.get("Watch for Sell", 0)),
@@ -564,6 +641,36 @@ class SignalMonitorRunner:
                     else 0
                 ),
                 "SignalStrengthPct": simple_df["Signal Strength %"],
+                "VolumeRatio": (
+                    simple_df["Volume vs Avg"]
+                    if "Volume vs Avg" in simple_df.columns
+                    else 0.0
+                ),
+                "ChangePct": (
+                    simple_df["Change %"]
+                    if "Change %" in simple_df.columns
+                    else 0.0
+                ),
+                "EntryGapPct": (
+                    simple_df["Entry Gap %"]
+                    if "Entry Gap %" in simple_df.columns
+                    else 0.0
+                ),
+                "RSI": (
+                    simple_df["RSI"]
+                    if "RSI" in simple_df.columns
+                    else 50.0
+                ),
+                "CCI": (
+                    simple_df["CCI"]
+                    if "CCI" in simple_df.columns
+                    else 0.0
+                ),
+                "MFI": (
+                    simple_df["MFI"]
+                    if "MFI" in simple_df.columns
+                    else 50.0
+                ),
                 "Checks": simple_df["Checks"],
                 "Why": simple_df["Why"],
                 "CheckedAt": simple_df["Checked At"],
@@ -682,6 +789,8 @@ class SignalMonitorRunner:
             "signals_dated": self._dated_path("signals"),
             "signals_simple_latest": self._latest_path("signals_simple"),
             "signals_simple_dated": self._dated_path("signals_simple"),
+            "signals_momentum_latest": self._latest_path("signals_momentum"),
+            "signals_momentum_dated": self._dated_path("signals_momentum"),
             "actionable_latest": self._latest_path("actionable"),
             "actionable_dated": self._dated_path("actionable"),
             "summary_latest": self._latest_path("summary"),
@@ -703,6 +812,9 @@ class SignalMonitorRunner:
         report_to_save.to_csv(outputs["signals_dated"], index=False)
         simple_df.to_csv(outputs["signals_simple_latest"], index=False)
         simple_df.to_csv(outputs["signals_simple_dated"], index=False)
+        momentum_df = self._build_momentum_board(simple_df)
+        momentum_df.to_csv(outputs["signals_momentum_latest"], index=False)
+        momentum_df.to_csv(outputs["signals_momentum_dated"], index=False)
         actionable_to_save.to_csv(outputs["actionable_latest"], index=False)
         actionable_to_save.to_csv(outputs["actionable_dated"], index=False)
         summary_df.to_csv(outputs["summary_latest"], index=False)
@@ -721,6 +833,7 @@ class SignalMonitorRunner:
 
         OutputControls().printOutput(f"  [+] Saved monitor summary: {outputs['summary_latest']}")
         OutputControls().printOutput(f"  [+] Saved monitor board: {outputs['signals_simple_latest']}")
+        OutputControls().printOutput(f"  [+] Saved momentum board: {outputs['signals_momentum_latest']}")
         OutputControls().printOutput(f"  [+] Saved monitor alerts: {outputs['alerts_latest']}")
         OutputControls().printOutput(f"  [+] Saved monitor dashboard: {outputs['dashboard_latest']}")
 
@@ -732,6 +845,7 @@ class SignalMonitorRunner:
             f"Scanned {summary.get('ScannedSymbols', 0)} | "
             f"Strong Buy Now {summary.get('StrongBuyNowCount', 0)} | "
             f"Buy Now {summary.get('BuyNowCount', 0)} | "
+            f"Momentum Buy {summary.get('MomentumBuyCount', 0)} | "
             f"Sell Now {summary.get('SellNowCount', 0)} | "
             f"Fresh alerts {summary.get('FreshAlertsThisRun', 0)}"
         )
@@ -758,6 +872,11 @@ class SignalMonitorRunner:
                     enableMultipleLineOutput=True,
                 )
 
+        if self.last_guardrail_status is not None and self.last_guardrail_status.buy_paused:
+            OutputControls().printOutput(
+                "  [+] Buy-side guardrail active: " + "; ".join(self.last_guardrail_status.reasons)
+            )
+
         if scorecard_df is not None and not scorecard_df.empty:
             all_row = scorecard_df[scorecard_df["Segment"] == "ALL"]
             if not all_row.empty:
@@ -770,6 +889,24 @@ class SignalMonitorRunner:
                     f"Next-day win {float(metrics.get('WinRateNextDayPct', 0.0)):.1f}%"
                 )
 
+    def _build_momentum_board(self, simple_df: pd.DataFrame) -> pd.DataFrame:
+        """Return a ranked board of momentum promotions and near-promotions."""
+        if simple_df is None or simple_df.empty or "Momentum Setup" not in simple_df.columns:
+            return pd.DataFrame()
+        momentum_df = simple_df[
+            simple_df["Momentum Setup"].astype(str).isin(["Momentum Buy", "Momentum Watch"])
+        ].copy()
+        if momentum_df.empty:
+            return momentum_df
+        if "Momentum Score" in momentum_df.columns:
+            momentum_df["Momentum Score"] = pd.to_numeric(momentum_df["Momentum Score"], errors="coerce").fillna(0.0)
+        momentum_df.sort_values(
+            ["Momentum Setup", "Momentum Score", "Signal Strength %", "Stock"],
+            ascending=[True, False, False, True],
+            inplace=True,
+        )
+        return momentum_df.head(50).copy()
+
     def _send_alerts(self, alerts_df: pd.DataFrame, summary_df: pd.DataFrame) -> None:
         """Send desktop / Telegram / Discord alerts for fresh Buy Now / Sell Now changes."""
         if not self.alert_channels or alerts_df is None or alerts_df.empty:
@@ -777,6 +914,10 @@ class SignalMonitorRunner:
 
         summary = summary_df.iloc[0].to_dict() if summary_df is not None and not summary_df.empty else {}
         event_lines = self._build_plain_event_lines(alerts_df, max_alerts=8)
+        if self.last_guardrail_status is not None and self.last_guardrail_status.buy_paused:
+            event_lines = [
+                f"[Risk Off] buy-side alerts paused for {self.last_guardrail_status.account_name}"
+            ] + event_lines
 
         title = f"PKScreener {self.universe} monitor"
         message = "\n".join(
@@ -829,6 +970,11 @@ class SignalMonitorRunner:
                 f"Sell Now `{int(summary.get('SellNowCount', 0) or 0)}`"
             ),
         ]
+
+        if self.last_guardrail_status is not None and self.last_guardrail_status.buy_paused:
+            sections.append(
+                "Guardrail `" + "; ".join(self.last_guardrail_status.reasons) + "`"
+            )
 
         for _, row in alerts_df.head(max_alerts).iterrows():
             qty = int(float(row["SuggestedQty"])) if str(row["SuggestedQty"]).strip() else 0
@@ -1005,10 +1151,12 @@ class SignalMonitorRunner:
 
         strong_buy_df = pd.DataFrame()
         buy_now_df = pd.DataFrame()
+        momentum_df = pd.DataFrame()
         sell_now_df = pd.DataFrame()
         if simple_df is not None and not simple_df.empty:
             strong_buy_df = simple_df[simple_df["What To Do"] == "Strong Buy Now"].head(25).copy()
             buy_now_df = simple_df[simple_df["What To Do"] == "Buy Now"].head(25).copy()
+            momentum_df = self._build_momentum_board(simple_df).head(25).copy()
             sell_now_df = simple_df[simple_df["What To Do"] == "Sell / Exit"].head(25).copy()
 
         cards = [
@@ -1016,6 +1164,7 @@ class SignalMonitorRunner:
             ("Scanned", summary_row.get("ScannedSymbols", 0)),
             ("Strong Buy Now", summary_row.get("StrongBuyNowCount", 0)),
             ("Buy Now", summary_row.get("BuyNowCount", 0)),
+            ("Momentum Buy", summary_row.get("MomentumBuyCount", 0)),
             ("Sell Now", summary_row.get("SellNowCount", 0)),
             ("Fresh Alerts", summary_row.get("FreshAlertsThisRun", 0)),
         ]
@@ -1156,6 +1305,10 @@ class SignalMonitorRunner:
       <section class="panel">
         <h2>Buy Now Board</h2>
         {_table_html(buy_now_df, "No Buy Now signals right now.")}
+      </section>
+      <section class="panel">
+        <h2>Momentum Board</h2>
+        {_table_html(momentum_df, "No momentum promotions right now.")}
       </section>
       <section class="panel">
         <h2>Sell Now Board</h2>
