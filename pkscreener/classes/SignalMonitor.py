@@ -27,7 +27,7 @@ from pkscreener.classes.SignalPerformanceTracker import SignalPerformanceTracker
 class SignalMonitorRunner:
     """Continuously monitor a universe and alert on fresh Buy Now / Sell Now changes."""
 
-    FULL_REFRESH_EVERY_CYCLES = 10
+    FULL_REFRESH_EVERY_CYCLES = 20
     MEANINGFUL_PRICE_MOVE_PCT = 0.75
     TRIGGER_PROXIMITY_PCT = 1.0
     STREAM_BOOTSTRAP_MAX_SYMBOLS = 600
@@ -116,7 +116,7 @@ class SignalMonitorRunner:
         self.alert_channels = self._normalize_alert_channels(alert_channels)
         self.reset_state = bool(reset_state)
         self.strong_buy_only = bool(strong_buy_only)
-        self.streaming_mode = bool(streaming_mode)
+        self.streaming_mode = bool(streaming_mode) or bool(use_live_kite)
         self.guardrail_account_name = str(guardrail_account_name or "main").strip().lower().replace(" ", "_")
         self.guardrail_max_daily_loss_amount = max(0.0, float(guardrail_max_daily_loss_amount or 0.0))
         self.guardrail_max_consecutive_losses = max(0, int(guardrail_max_consecutive_losses or 0))

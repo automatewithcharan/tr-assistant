@@ -6,8 +6,10 @@ signal engine to produce a practical BUY / SELL / HOLD report with simple
 entry, stop-loss, and target levels.
 """
 
+import hashlib
 import os
 import threading
+import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Dict, List, Optional, Tuple
 
@@ -82,6 +84,9 @@ class ActionableReportRunner:
         self._prepared_cache: Dict[str, pd.DataFrame] = {}
         self._prepared_cache_lock = threading.Lock()
         self._prepared_cache_date = PKDateUtilities.currentDateTime().date()
+        self._analysis_cache: Dict[str, Tuple[float, Dict]] = {}  # symbol -> (timestamp, row)
+        self._analysis_cache_lock = threading.Lock()
+        self._analysis_cache_ttl = 45  # seconds – skip recompute if data fingerprint matches
         self.live_ticks: Dict[str, Dict] = {}
         self.kite_history_provider = KiteHistoricalDataProvider() if self.use_live_kite else None
 
@@ -285,6 +290,8 @@ class ActionableReportRunner:
         with self._prepared_cache_lock:
             self._prepared_cache.clear()
             self._prepared_cache_date = current_date
+        with self._analysis_cache_lock:
+            self._analysis_cache.clear()
 
     def _get_cached_prepared_data(self, symbol: str) -> Optional[pd.DataFrame]:
         """Return a copy of the in-memory prepared OHLCV data when available."""
@@ -411,7 +418,14 @@ class ActionableReportRunner:
                 data = self._apply_live_tick(symbol, data)
                 if data is None or len(data) < 60:
                     return None
-            return self.analyze_prepared_data(
+
+            # Fast-path: return cached analysis if data fingerprint unchanged
+            fingerprint = self._data_fingerprint(symbol, data)
+            cached_row = self._get_cached_analysis(symbol, fingerprint)
+            if cached_row is not None:
+                return cached_row
+
+            row = self.analyze_prepared_data(
                 symbol=symbol,
                 data=data,
                 signals=signals,
@@ -419,9 +433,37 @@ class ActionableReportRunner:
                     self.use_live_kite and str(symbol).strip().upper() in self.live_ticks
                 ),
             )
+            if row is not None:
+                self._store_cached_analysis(symbol, fingerprint, row)
+            return row
         except Exception as exc:
             default_logger().debug(f"Actionable analysis failed for {symbol}: {exc}", exc_info=True)
             return None
+
+    @staticmethod
+    def _data_fingerprint(symbol: str, data: pd.DataFrame) -> str:
+        """Quick hash of the last few rows to detect meaningful changes."""
+        tail = data.tail(3)
+        raw = f"{symbol}|{tail['close'].values.tobytes()}|{tail['volume'].values.tobytes()}"
+        return hashlib.md5(raw.encode(), usedforsecurity=False).hexdigest()
+
+    def _get_cached_analysis(self, symbol: str, fingerprint: str) -> Optional[Dict]:
+        norm = str(symbol).strip().upper()
+        with self._analysis_cache_lock:
+            entry = self._analysis_cache.get(norm)
+            if entry is None:
+                return None
+            ts, fp, row = entry
+            if fp != fingerprint:
+                return None
+            if time.time() - ts > self._analysis_cache_ttl:
+                return None
+            return dict(row)  # return a copy
+
+    def _store_cached_analysis(self, symbol: str, fingerprint: str, row: Dict) -> None:
+        norm = str(symbol).strip().upper()
+        with self._analysis_cache_lock:
+            self._analysis_cache[norm] = (time.time(), fingerprint, dict(row))
 
     def analyze_prepared_data(
         self,
