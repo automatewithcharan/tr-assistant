@@ -50,7 +50,7 @@ class AssistantLiveSettings:
     account_name: str = "main"
     budget_amount: float = 10000.0
     risk_percent: float = 1.0
-    min_confidence: float = 15.0
+    min_confidence: float = 40.0
     min_trade_value: float = 500000.0
     min_volume_ratio: float = 0.5
     max_workers: int = 6
@@ -73,7 +73,7 @@ class AssistantLiveSettings:
             account_name=str(self.account_name or "main").strip().lower().replace(" ", "_"),
             budget_amount=float(self.budget_amount or 10000.0),
             risk_percent=float(self.risk_percent or 1.0),
-            min_confidence=float(self.min_confidence or 15.0),
+            min_confidence=float(self.min_confidence or 40.0),
             min_trade_value=float(self.min_trade_value or 10000000.0),
             min_volume_ratio=float(self.min_volume_ratio or 1.0),
             max_workers=max(1, int(self.max_workers or 1)),

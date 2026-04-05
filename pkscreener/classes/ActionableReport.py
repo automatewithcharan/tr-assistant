@@ -73,8 +73,9 @@ class ActionableReportRunner:
         self.strong_buy_only = bool(strong_buy_only)
         self.buy_ready_max_gap_pct = 0.60
         self.strong_buy_max_gap_pct = 0.35
-        self.momentum_buy_min_score = 68.0
-        self.momentum_watch_min_score = 55.0
+        self.momentum_buy_min_score = 75.0
+        self.momentum_watch_min_score = 60.0
+        self.buy_now_min_volume_ratio = 0.5
         self.strong_buy_min_confidence = max(float(self.min_confidence) + 7.5, 22.5)
         self.strong_buy_min_volume_ratio = max(float(self.min_volume_ratio) + 0.35, 1.35)
         self.strong_buy_min_trade_value = max(float(self.min_trade_value) * 1.5, 15000000.0)
@@ -532,6 +533,7 @@ class ActionableReportRunner:
             not self.strong_buy_only
             and now_action == "Watch for Buy"
             and momentum_setup == "Momentum Buy"
+            and volume_ratio >= self.buy_now_min_volume_ratio
         ):
             now_action = "Buy Now"
             quality_checks = f"{quality_checks}, momentum promotion".strip(", ")
