@@ -1976,7 +1976,7 @@ def pkscreenercli():
                         if args.assistantminvolratio is not None
                         else (tuned_profile.get("min_volume_ratio") if tuned_profile is not None else 1.0)
                     ),
-                    max_workers=(args.assistantworkers if args.assistantworkers is not None else 3),
+                    max_workers=(args.assistantworkers if args.assistantworkers is not None else 8),
                     signal_interval=(args.assistantinterval if args.assistantinterval is not None else 30),
                     signal_limit=(args.assistantlimit if args.assistantlimit is not None else 0),
                     alert_channels=str(args.assistantalerts or "discord").strip().lower(),

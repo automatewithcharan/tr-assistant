@@ -28,10 +28,12 @@ class SignalMonitorRunner:
     """Continuously monitor a universe and alert on fresh Buy Now / Sell Now changes."""
 
     FULL_REFRESH_EVERY_CYCLES = 20
-    MEANINGFUL_PRICE_MOVE_PCT = 0.75
+    MEANINGFUL_PRICE_MOVE_PCT = 0.5   # Tick-to-tick price move threshold (lowered for faster pick-up)
     TRIGGER_PROXIMITY_PCT = 1.0
     STREAM_BOOTSTRAP_MAX_SYMBOLS = 600
-    HIGH_DAILY_CHANGE_PCT = 3.5  # Force full OHLCV rescan when live daily change exceeds this
+    HIGH_DAILY_CHANGE_PCT = 2.0        # Force full OHLCV rescan when live daily change exceeds this
+    ORDER_BOOK_IMBALANCE_RATIO = 2.5   # Pre-jump: buyers/sellers ratio threshold
+    VOLUME_BURST_FRACTION = 0.025      # Pre-jump: 2.5% of accumulated day vol traded in last 60s
 
     SUMMARY_COLUMNS = [
         "Universe",
@@ -281,7 +283,7 @@ class SignalMonitorRunner:
             return symbols
 
         previous_simple_map = self._simple_row_map(previous_simple_df)
-        changed_symbols: List[str] = []
+        changed_symbols: List[Tuple[float, str]] = []
         for symbol in symbols:
             normalized_symbol = str(symbol).strip().upper()
             current_tick = current_ticks.get(normalized_symbol)
@@ -289,7 +291,7 @@ class SignalMonitorRunner:
                 continue
             previous_tick = previous_ticks.get(normalized_symbol)
             if previous_tick is None:
-                changed_symbols.append(normalized_symbol)
+                changed_symbols.append((0.0, normalized_symbol))
                 continue
             current_marker = (
                 current_tick.get("last_price"),
@@ -311,9 +313,13 @@ class SignalMonitorRunner:
                 current_tick,
                 previous_simple_map.get(normalized_symbol),
             ):
-                changed_symbols.append(normalized_symbol)
+                priority = self._symbol_priority(current_tick, previous_tick)
+                changed_symbols.append((priority, normalized_symbol))
 
-        return changed_symbols or symbols
+        # Process highest-priority symbols first so that if the cycle is long,
+        # the most impactful stocks (big movers / strong order-book imbalance) are done first.
+        changed_symbols.sort(key=lambda item: -item[0])
+        return [sym for _, sym in changed_symbols] or symbols
 
     def _bootstrap_symbols_for_first_cycle(
         self,
@@ -393,7 +399,28 @@ class SignalMonitorRunner:
         if current_price <= 0:
             return False
 
-        # Always rescan stocks with a large live daily move (e.g. gap-ups/gap-downs)
+        # --- PRE-JUMP SIGNAL 1: Order book imbalance ---
+        # total_buy_quantity >> total_sell_quantity means buyers are overwhelming sellers
+        # BEFORE price has moved — strong indicator of an imminent spike.
+        total_buy = self._to_float(current_tick.get("total_buy_quantity"))
+        total_sell = self._to_float(current_tick.get("total_sell_quantity"))
+        if total_sell > 0 and total_buy / total_sell >= self.ORDER_BOOK_IMBALANCE_RATIO:
+            return True
+        # Inverse: heavy sell-side imbalance = potential dump
+        if total_buy > 0 and total_sell / total_buy >= self.ORDER_BOOK_IMBALANCE_RATIO:
+            return True
+
+        # --- PRE-JUMP SIGNAL 2: Volume burst ---
+        # A large chunk of the day's accumulated volume traded in the last 60s
+        # means institutional/large-hand accumulation even if price hasn't moved yet.
+        current_vol = self._to_float(current_tick.get("volume_traded"))
+        previous_vol = self._to_float(previous_tick.get("volume_traded"))
+        if previous_vol > 0 and current_vol > previous_vol:
+            delta_vol_fraction = (current_vol - previous_vol) / previous_vol
+            if delta_vol_fraction >= self.VOLUME_BURST_FRACTION:
+                return True
+
+        # --- SIGNAL 3: Large live daily move (gap-up/gap-down) ---
         # tick["change"] is the official Kite daily change% from previous session close
         live_daily_change = abs(self._to_float(current_tick.get("change")))
         if live_daily_change >= self.HIGH_DAILY_CHANGE_PCT:
@@ -438,6 +465,35 @@ class SignalMonitorRunner:
                 return True
 
         return False
+
+    def _symbol_priority(self, current_tick: Dict, previous_tick: Dict) -> float:
+        """Compute a sortable priority score for a flagged symbol.
+
+        Higher = process first in the cycle.  Components:
+          - abs daily change% (big movers go first)
+          - order book imbalance (strong buy pressure = early)
+          - volume burst in last 60s
+        """
+        score = 0.0
+        # Daily move component
+        daily_change = abs(self._to_float(current_tick.get("change")))
+        score += daily_change * 10.0
+
+        # Order book imbalance component
+        total_buy = self._to_float(current_tick.get("total_buy_quantity"))
+        total_sell = self._to_float(current_tick.get("total_sell_quantity"))
+        denom = max(total_sell, total_buy, 1.0)
+        imbalance = abs(total_buy - total_sell) / denom  # 0..1
+        score += imbalance * 50.0
+
+        # Volume burst component
+        current_vol = self._to_float(current_tick.get("volume_traded"))
+        previous_vol = self._to_float(previous_tick.get("volume_traded")) if previous_tick else 0.0
+        if previous_vol > 0 and current_vol > previous_vol:
+            burst = (current_vol - previous_vol) / previous_vol
+            score += burst * 100.0
+
+        return score
 
     def _crossed_level(self, previous_price: float, current_price: float, level: float) -> bool:
         """Return True when price crossed a relevant threshold between ticks."""
