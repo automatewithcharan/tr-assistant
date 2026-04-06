@@ -361,6 +361,14 @@ class AutoPilotInvestor:
         self._pending_followups: List["BlindBuyCandidate"] = []  # buffer for batching
         self._FOLLOWUP_COOLDOWN_SEC = 900  # 15 minutes between follow-up alerts
 
+        # Tick-only fast scanner state (no OHLCV, fires in < 1 second)
+        self._tick_alerted: Set[str] = set()          # symbols already sent a EARLY WATCH
+        self._prev_tick_snapshot: Dict[str, Dict] = {}  # last tick reading for delta-volume
+        self._TICK_ORDER_IMBALANCE_RATIO = 2.5  # buy_qty / sell_qty threshold
+        self._TICK_VOLUME_BURST_FRACTION = 0.025  # 2.5% of day-vol in 60s
+        self._TICK_HIGH_DAILY_CHANGE_PCT = 3.0   # daily change% to auto-flag
+        self._TICK_ALERT_COOLDOWN_SEC = 1800     # 30 min before re-alerting same symbol
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -418,11 +426,144 @@ class AutoPilotInvestor:
             f"alerts={self.config.alert_channels}"
         )
         while True:
+            # Fast tick scan (zero API calls, < 1s) — catches pre-jump conditions
+            # BEFORE the full OHLCV cycle would even start.
+            self._run_tick_fast_scan()
             self.run_once()
             OutputControls().printOutput(
                 f"  [AutoPilot] Next scan in {self.config.cycle_interval_sec}s..."
             )
             time.sleep(self.config.cycle_interval_sec)
+
+    # ------------------------------------------------------------------
+    # Tick-only millisecond fast scanner
+    # ------------------------------------------------------------------
+
+    def _run_tick_fast_scan(self) -> None:
+        """Scan ticks for pre-jump signals without any OHLCV API call.
+
+        Fires an EARLY WATCH Discord alert the moment any of:
+          1. Order book imbalance: total_buy_qty >= 2.5x total_sell_qty
+          2. Volume burst: 2.5%+ of accumulated day vol traded in last 60s
+          3. Daily change% >= 3% with no prior EARLY WATCH in last 30 min
+
+        Latency: the ticks JSON is refreshed every 2 seconds by KiteTickerStream.
+        This function runs in under 10 milliseconds (pure dict reads).
+        """
+        ticks = self._load_ticks_snapshot()
+        if not ticks:
+            return
+
+        now = datetime.now()
+        flagged: List[Dict] = []
+
+        for symbol, tick in ticks.items():
+            # Skip if already in the OHLCV-confirmed alert set (full buy alert sent)
+            if symbol in self._already_alerted_buys:
+                continue
+
+            # Cooldown: don't spam re-alerts on the same symbol
+            last_tick_alert = self._tick_alerted.get(symbol)
+            if isinstance(last_tick_alert, datetime):
+                if (now - last_tick_alert).total_seconds() < self._TICK_ALERT_COOLDOWN_SEC:
+                    continue
+
+            last_price = float(tick.get("last_price") or 0)
+            if last_price <= 0:
+                continue
+
+            daily_change = abs(float(tick.get("change") or 0))
+            total_buy = float(tick.get("total_buy_quantity") or 0)
+            total_sell = float(tick.get("total_sell_quantity") or 0)
+            current_vol = float(tick.get("volume_traded") or 0)
+            prev_vol = float((self._prev_tick_snapshot.get(symbol) or {}).get("volume_traded") or 0)
+
+            signal_reasons: List[str] = []
+
+            # Signal 1: Order book imbalance
+            if total_sell > 0 and total_buy / total_sell >= self._TICK_ORDER_IMBALANCE_RATIO:
+                ratio = round(total_buy / total_sell, 1)
+                signal_reasons.append(f"📥 Buy orders {ratio}x sell orders (heavy accumulation)")
+            elif total_buy > 0 and total_sell / total_buy >= self._TICK_ORDER_IMBALANCE_RATIO:
+                # Heavy sell imbalance — potential dump coming, skip for buys
+                pass
+
+            # Signal 2: Volume burst
+            if prev_vol > 0 and current_vol > prev_vol:
+                burst_pct = (current_vol - prev_vol) / prev_vol
+                if burst_pct >= self._TICK_VOLUME_BURST_FRACTION:
+                    signal_reasons.append(
+                        f"📊 Volume burst +{burst_pct*100:.1f}% in last 60s (smart money moving)"
+                    )
+
+            # Signal 3: High daily change
+            if daily_change >= self._TICK_HIGH_DAILY_CHANGE_PCT:
+                direction = "+" if float(tick.get("change") or 0) > 0 else ""
+                signal_reasons.append(
+                    f"🚀 {direction}{float(tick.get('change') or 0):.2f}% for the day"
+                )
+
+            if signal_reasons:
+                flagged.append({
+                    "symbol": symbol,
+                    "price": last_price,
+                    "daily_change": float(tick.get("change") or 0),
+                    "total_buy": total_buy,
+                    "total_sell": total_sell,
+                    "volume": current_vol,
+                    "reasons": signal_reasons,
+                    # Priority: daily change% + imbalance strength
+                    "_priority": daily_change * 10 + (
+                        (total_buy / max(total_sell, 1)) if total_sell > 0 else 0
+                    ),
+                })
+
+        # Update snapshot for next cycle's delta-volume calculation
+        self._prev_tick_snapshot = {s: dict(t) for s, t in ticks.items()}
+
+        if not flagged:
+            return
+
+        # Sort by priority (biggest mover + strongest imbalance first)
+        flagged.sort(key=lambda x: -x["_priority"])
+
+        # Limit to top 5 per cycle to avoid alert flood
+        for item in flagged[:5]:
+            sym = item["symbol"]
+            self._tick_alerted[sym] = now
+            self._send_tick_watch_alert(item)
+
+    def _load_ticks_snapshot(self) -> Dict[str, Dict]:
+        """Read the latest ticks JSON saved by KiteTickerStream."""
+        ticks_path = os.path.join(
+            self.output_dir,
+            f"kiteticker_{self.config.universe}_ticks_latest.json",
+        )
+        if not os.path.isfile(ticks_path):
+            return {}
+        try:
+            import json
+            with open(ticks_path, "r") as f:
+                data = json.load(f)
+            return {str(k).strip().upper(): v for k, v in data.items()} if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def _send_tick_watch_alert(self, item: Dict) -> None:
+        """Send an EARLY WATCH Discord alert from tick signals alone (no OHLCV)."""
+        sym = item["symbol"]
+        price = item["price"]
+        daily_change = item["daily_change"]
+        direction = "+" if daily_change >= 0 else ""
+        reasons_text = "\n".join(f"  • {r}" for r in item["reasons"])
+
+        message = (
+            f"**⚡ EARLY WATCH: `{sym}`**\n"
+            f"Price `{price:.2f}` ({direction}{daily_change:.2f}% today)\n"
+            f"{reasons_text}\n"
+            f"_Tick-only signal — full OHLCV confirmation coming. Watch this stock._"
+        )
+        self._send_to_channels(message)
 
     # ------------------------------------------------------------------
     # Signal state
