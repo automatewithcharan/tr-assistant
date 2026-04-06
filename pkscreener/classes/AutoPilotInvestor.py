@@ -312,7 +312,7 @@ class BlindBuyScorer:
                     reasons.append(f"price {gap_below}% below buy trigger - wait for confirmation")
             else:
                 score += 8
-                reasons.append("✅ price ABOVE buy trigger - breakout confirmed")
+                reasons.append("✅ price ABOVE buy trigger - entry confirmed")
 
         # -- Price vs stop loss --
         stop_loss = float(row.get("SellIfBelow", row.get("Sell If Below", row.get("StopLoss", 0))) or 0)
@@ -731,6 +731,10 @@ class AutoPilotInvestor:
             "BEARISH TREND - below all MAs": "⚠️ BEARISH — below all moving averages",
             "DEATH CROSS": "⚠️ Death cross warning",
             "downtrend pattern": "⚠️ Downtrend pattern",
+            "entry confirmed": "Price above buy level ✅",
+            "below buy trigger - NOT safe": "⛔ Price below buy level",
+            "below buy trigger - wait": "Price just below buy level",
+            "data shows green but price below trigger": "⚠️ Conflicting data — price below trigger",
         }
         parts = [p.strip() for p in reasons.split(",")]
         simple = []
