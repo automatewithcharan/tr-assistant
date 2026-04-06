@@ -288,6 +288,28 @@ class BlindBuyScorer:
             score -= 15
             reasons.append("downtrend pattern")
 
+        # -- CRITICAL: Price vs entry trigger --
+        # If current price is BELOW the Buy Above trigger, the breakout isn't confirmed
+        price_now = float(row.get("PriceNow", row.get("Price Now", row.get("LTP", 0))) or 0)
+        buy_above = float(row.get("BuyAbove", row.get("Buy Above", row.get("Entry", 0))) or 0)
+        if price_now > 0 and buy_above > 0:
+            if price_now < buy_above:
+                score -= 15
+                gap_below = round((buy_above - price_now) / buy_above * 100, 1)
+                reasons.append(f"price {gap_below}% BELOW buy trigger - not confirmed yet")
+            else:
+                score += 5
+                reasons.append("price ABOVE buy trigger - breakout confirmed")
+
+        # -- Validate change_pct with actual price data --
+        # If we have previous close info, recalculate change_pct from live price
+        stop_loss = float(row.get("SellIfBelow", row.get("Sell If Below", row.get("StopLoss", 0))) or 0)
+        if price_now > 0 and stop_loss > 0 and buy_above > 0:
+            # If price is near or below stop loss — this is dangerous
+            if price_now <= stop_loss * 1.01:
+                score -= 30
+                reasons.append("DANGER: price at stop loss level")
+
         score = round(max(0, min(score, 100)), 1)
         return score, ", ".join(reasons)
 
