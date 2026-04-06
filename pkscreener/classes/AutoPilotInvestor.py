@@ -175,6 +175,11 @@ class BlindBuyScorer:
         trigger_ready = str(row.get("TriggerReady", "")).strip().lower() == "true"
         reason_text = str(row.get("Why", row.get("Reason", ""))).lower()
 
+        # -- Early: detect if price is below buy trigger (stale change_pct guard) --
+        _price_now = float(row.get("PriceNow", row.get("Price Now", row.get("LTP", 0))) or 0)
+        _buy_above = float(row.get("BuyAbove", row.get("Buy Above", row.get("Entry", 0))) or 0)
+        _price_below_trigger = (_price_now > 0 and _buy_above > 0 and _price_now < _buy_above)
+
         # -- RSI (0-100, lower = more oversold = better for bounce) --
         if rsi < 30:
             score += 25
@@ -224,7 +229,12 @@ class BlindBuyScorer:
         # Don't penalize low volume — small caps may have naturally lower volume
 
         # -- Green candle / price action --
-        if change_pct >= 5.0:
+        # Guard: if live price is below buy trigger, the change_pct from
+        # historical candles may be stale — do NOT award breakout/green points.
+        if _price_below_trigger and change_pct > 0:
+            score -= 5
+            reasons.append("⚠️ data shows green but price below trigger — treated as suspect")
+        elif change_pct >= 5.0:
             score += 15
             reasons.append(f"breakout +{change_pct:.1f}%")
         elif change_pct >= 2.5:
@@ -291,11 +301,9 @@ class BlindBuyScorer:
 
         # -- CRITICAL: Price vs entry trigger --
         # If current price is BELOW the Buy Above trigger, the breakout isn't confirmed
-        price_now = float(row.get("PriceNow", row.get("Price Now", row.get("LTP", 0))) or 0)
-        buy_above = float(row.get("BuyAbove", row.get("Buy Above", row.get("Entry", 0))) or 0)
-        if price_now > 0 and buy_above > 0:
-            if price_now < buy_above:
-                gap_below = round((buy_above - price_now) / buy_above * 100, 1)
+        if _price_now > 0 and _buy_above > 0:
+            if _price_below_trigger:
+                gap_below = round((_buy_above - _price_now) / _buy_above * 100, 1)
                 if gap_below >= 1.0:
                     score -= 25
                     reasons.append(f"⛔ price {gap_below}% BELOW buy trigger - NOT safe to buy")
@@ -308,9 +316,9 @@ class BlindBuyScorer:
 
         # -- Price vs stop loss --
         stop_loss = float(row.get("SellIfBelow", row.get("Sell If Below", row.get("StopLoss", 0))) or 0)
-        if price_now > 0 and stop_loss > 0 and buy_above > 0:
+        if _price_now > 0 and stop_loss > 0 and _buy_above > 0:
             # If price is near or below stop loss — this is dangerous
-            if price_now <= stop_loss * 1.01:
+            if _price_now <= stop_loss * 1.01:
                 score -= 30
                 reasons.append("DANGER: price at stop loss level")
 
