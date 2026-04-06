@@ -504,7 +504,13 @@ class AutoPilotInvestor:
             blind_score, blind_reasons = BlindBuyScorer.score(row)
 
             # Check minimum score threshold
-            if blind_score < self.config.blind_buy_min_score:
+            # If price is below buy trigger, requiring a higher score (65+) to avoid
+            # sending actionable alerts on stocks that aren't ready to enter yet
+            _price_now = float(row.get("PriceNow", row.get("Price Now", row.get("LTP", 0))) or 0)
+            _buy_above = float(row.get("BuyAbove", row.get("Buy Above", row.get("Entry", 0))) or 0)
+            _price_below_trigger = _price_now > 0 and _buy_above > 0 and _price_now < _buy_above
+            effective_min = 65.0 if _price_below_trigger else self.config.blind_buy_min_score
+            if blind_score < effective_min:
                 continue
 
             # Check entry gap
