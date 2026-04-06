@@ -508,15 +508,8 @@ class SignalMonitorRunner:
                     refreshed_simple_df.loc[index, "Entry Gap %"] = entry_gap_pct
                 # Use tick's 'close' (Kite prev-close) to fill Change % on NaN rows
                 if "Change %" in refreshed_simple_df.columns:
-                    prev_close_simple = 0.0
-                    if not refreshed_state_df.empty and "PrevClose" in refreshed_state_df.columns:
-                        state_row = refreshed_state_df[
-                            refreshed_state_df["Symbol"].astype(str).str.strip().str.upper() == symbol
-                        ]
-                        if not state_row.empty:
-                            prev_close_simple = self._to_float(state_row.iloc[0].get("PrevClose"))
-                    if not (prev_close_simple > 0):
-                        prev_close_simple = self._to_float(tick.get("close"))
+                    tick_prev_close_s = self._to_float(tick.get("close"))
+                    prev_close_simple = tick_prev_close_s if tick_prev_close_s > 0 else 0.0
                     if prev_close_simple > 0:
                         refreshed_simple_df.loc[index, "Change %"] = round(
                             ((live_price - prev_close_simple) * 100 / prev_close_simple), 2
@@ -532,13 +525,15 @@ class SignalMonitorRunner:
                 if live_price <= 0:
                     continue
                 refreshed_state_df.loc[index, "PriceNow"] = round(live_price, 2)
-                # Use tick's 'close' field (Kite prev-close) to fill missing PrevClose
-                prev_close = self._to_float(refreshed_state_df.loc[index].get("PrevClose"))
-                if not (prev_close > 0):
-                    tick_prev_close = self._to_float(tick.get("close"))
-                    if tick_prev_close > 0 and "PrevClose" in refreshed_state_df.columns:
-                        refreshed_state_df.loc[index, "PrevClose"] = round(tick_prev_close, 2)
-                        prev_close = tick_prev_close
+                # Always use tick's 'close' as PrevClose — it is Kite's official
+                # previous-session close, which is more reliable than OHLCV iloc[-2]
+                # (which gives prev-minute close on intraday data, not prev-day close).
+                tick_prev_close = self._to_float(tick.get("close"))
+                if tick_prev_close > 0 and "PrevClose" in refreshed_state_df.columns:
+                    refreshed_state_df.loc[index, "PrevClose"] = round(tick_prev_close, 2)
+                    prev_close = tick_prev_close
+                else:
+                    prev_close = self._to_float(refreshed_state_df.loc[index].get("PrevClose"))
                 if prev_close > 0:
                     refreshed_state_df.loc[index, "ChangePct"] = round(
                         ((live_price - prev_close) * 100 / prev_close), 2
