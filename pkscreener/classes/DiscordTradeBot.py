@@ -552,13 +552,30 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
             message = f"⚠️ addcash failed: {exc}"
         await interaction.followup.send(message[:1900])
 
+    # Guard against duplicate /buy submissions (symbol -> last submit time)
+    _recent_buys: dict = {}
+
     @bot.tree.command(name="buy", description="Log a real buy trade into the live portfolio")
     @app_commands.describe(symbol="Stock symbol", qty="Quantity bought", price="Buy price per share")
     async def buy(interaction, symbol: str, qty: int, price: float):  # type: ignore
+        import time
         ok, reason = _authorize(interaction)
         if not ok:
             await _reply_unauthorized(interaction, reason)
             return
+
+        # Duplicate guard: reject same symbol within 60 seconds
+        sym_key = symbol.strip().upper()
+        now = time.monotonic()
+        last_time = _recent_buys.get(sym_key, 0)
+        if now - last_time < 60:
+            await interaction.response.send_message(
+                f"⚠️ Duplicate detected — `{sym_key}` was already submitted {int(now - last_time)}s ago. "
+                f"If this is intentional, wait 60 seconds and try again.",
+                ephemeral=True,
+            )
+            return
+        _recent_buys[sym_key] = now
 
         await interaction.response.defer(thinking=True)
         try:
