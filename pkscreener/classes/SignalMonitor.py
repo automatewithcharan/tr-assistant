@@ -50,6 +50,7 @@ class SignalMonitorRunner:
         "Symbol",
         "NowAction",
         "PriceNow",
+        "PrevClose",
         "BuyAbove",
         "SellIfBelow",
         "TakeProfit1",
@@ -505,6 +506,17 @@ class SignalMonitorRunner:
                 if buy_above > 0 and "Entry Gap %" in refreshed_simple_df.columns:
                     entry_gap_pct = round(((buy_above - live_price) * 100.0) / buy_above, 2)
                     refreshed_simple_df.loc[index, "Entry Gap %"] = entry_gap_pct
+                # Recalculate Change % from live price if we have PrevClose in state
+                if not refreshed_state_df.empty and "PrevClose" in refreshed_state_df.columns:
+                    state_row = refreshed_state_df[
+                        refreshed_state_df["Symbol"].astype(str).str.strip().str.upper() == symbol
+                    ]
+                    if not state_row.empty:
+                        prev_close = self._to_float(state_row.iloc[0].get("PrevClose"))
+                        if prev_close > 0 and "Change %" in refreshed_simple_df.columns:
+                            refreshed_simple_df.loc[index, "Change %"] = round(
+                                ((live_price - prev_close) * 100 / prev_close), 2
+                            )
 
         if not refreshed_state_df.empty and "Symbol" in refreshed_state_df.columns and "PriceNow" in refreshed_state_df.columns:
             symbol_series = refreshed_state_df["Symbol"].astype(str).str.strip().str.upper()
@@ -516,6 +528,12 @@ class SignalMonitorRunner:
                 if live_price <= 0:
                     continue
                 refreshed_state_df.loc[index, "PriceNow"] = round(live_price, 2)
+                # Recalculate ChangePct from live price vs previous close
+                prev_close = self._to_float(refreshed_state_df.loc[index].get("PrevClose"))
+                if prev_close > 0:
+                    refreshed_state_df.loc[index, "ChangePct"] = round(
+                        ((live_price - prev_close) * 100 / prev_close), 2
+                    )
 
         return refreshed_simple_df, refreshed_state_df
 
@@ -631,6 +649,11 @@ class SignalMonitorRunner:
                 "Symbol": simple_df["Stock"],
                 "NowAction": simple_df["What To Do"],
                 "PriceNow": simple_df["Price Now"],
+                "PrevClose": (
+                    simple_df["PrevClose"]
+                    if "PrevClose" in simple_df.columns
+                    else simple_df["Price Now"]
+                ),
                 "BuyAbove": simple_df["Buy Above"],
                 "SellIfBelow": simple_df["Sell If Below"],
                 "TakeProfit1": simple_df["Take Profit 1"],
