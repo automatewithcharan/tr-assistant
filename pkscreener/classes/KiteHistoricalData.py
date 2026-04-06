@@ -333,7 +333,9 @@ class KiteHistoricalDataProvider:
         try:
             modified_at = datetime.fromtimestamp(os.path.getmtime(path))
             if interval == "day":
-                return modified_at.date() >= datetime.now().date()
+                # Historical daily candles don't change — accept cache up to 7 days old.
+                # Live ticks supply today's price; we only need historical OHLCV for indicators.
+                return (datetime.now() - modified_at).total_seconds() <= 7 * 24 * 3600
             return (datetime.now() - modified_at).total_seconds() <= 1800
         except Exception:
             return False

@@ -87,7 +87,7 @@ class ActionableReportRunner:
         self._prepared_cache_date = PKDateUtilities.currentDateTime().date()
         self._analysis_cache: Dict[str, Tuple[float, Dict]] = {}  # symbol -> (timestamp, row)
         self._analysis_cache_lock = threading.Lock()
-        self._analysis_cache_ttl = 45  # seconds – skip recompute if data fingerprint matches
+        self._analysis_cache_ttl = 120  # seconds – skip recompute if data fingerprint unchanged (2x the ~66s cycle)
         self.live_ticks: Dict[str, Dict] = {}
         self.kite_history_provider = KiteHistoricalDataProvider() if self.use_live_kite else None
 
