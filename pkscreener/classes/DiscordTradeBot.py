@@ -459,6 +459,24 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
 
     bot = PKScreenerDiscordTradeBot()
 
+    @bot.tree.error
+    async def on_app_command_error(interaction: discord.Interaction, error) -> None:
+        """Global handler: any unhandled exception in a command shows an error instead of 'did not respond'."""
+        import traceback
+        err_str = str(error)
+        # Unwrap CommandInvokeError to get the original exception message
+        cause = getattr(error, "original", error)
+        err_str = f"{type(cause).__name__}: {cause}"
+        msg = f"⚠️ Command failed: {err_str}"[:1900]
+        OutputControls().printOutput(f"  [+] Discord command error: {traceback.format_exc()}")
+        try:
+            if interaction.response.is_done():
+                await interaction.followup.send(msg, ephemeral=True)
+            else:
+                await interaction.response.send_message(msg, ephemeral=True)
+        except Exception:
+            pass
+
     def _authorize(interaction) -> Tuple[bool, str]:
         if allowed_user_id and int(interaction.user.id) != int(allowed_user_id):
             return False, "⛔ You are not authorised to use this trading bot."
@@ -516,19 +534,22 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
             return
 
         await interaction.response.defer(thinking=True)
-        runner, _, positions_df, summary_df = await asyncio.to_thread(
-            _execute_live_portfolio_action,
-            config_manager,
-            account_name,
-            universe,
-            amount,
-            None,
-            None,
-        )
-        event_text = _format_event_lines("Cash:", runner.last_cash_events)
-        message = "\n\n".join(
-            part for part in [event_text, _format_summary_text(summary_df)] if part
-        )
+        try:
+            runner, _, positions_df, summary_df = await asyncio.to_thread(
+                _execute_live_portfolio_action,
+                config_manager,
+                account_name,
+                universe,
+                amount,
+                None,
+                None,
+            )
+            event_text = _format_event_lines("Cash:", runner.last_cash_events)
+            message = "\n\n".join(
+                part for part in [event_text, _format_summary_text(summary_df)] if part
+            ) or "Cash added."
+        except Exception as exc:
+            message = f"⚠️ addcash failed: {exc}"
         await interaction.followup.send(message[:1900])
 
     @bot.tree.command(name="buy", description="Log a real buy trade into the live portfolio")
@@ -540,31 +561,32 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
             return
 
         await interaction.response.defer(thinking=True)
-        runner, _, positions_df, summary_df = await asyncio.to_thread(
-            _execute_live_portfolio_action,
-            config_manager,
-            account_name,
-            universe,
-            0.0,
-            [{"symbol": symbol, "quantity": qty, "price": price}],
-            None,
-        )
-
-        # Tag this buy with blind-buy score for trade journal
-        journal_line = ""
         try:
-            journal_line = await asyncio.to_thread(
-                _tag_buy_with_blind_score, symbol, qty, price, account_name, universe
+            runner, _, positions_df, summary_df = await asyncio.to_thread(
+                _execute_live_portfolio_action,
+                config_manager,
+                account_name,
+                universe,
+                0.0,
+                [{"symbol": symbol, "quantity": qty, "price": price}],
+                None,
             )
-        except Exception:
-            pass
-
-        event_text = _format_event_lines("Buy:", runner.last_buy_events)
-        positions_text = _format_positions_text(runner, positions_df)
-        parts = [part for part in [event_text, _format_summary_text(summary_df), positions_text] if part]
-        if journal_line:
-            parts.append(journal_line)
-        message = "\n\n".join(parts)
+            # Tag this buy with blind-buy score for trade journal
+            journal_line = ""
+            try:
+                journal_line = await asyncio.to_thread(
+                    _tag_buy_with_blind_score, symbol, qty, price, account_name, universe
+                )
+            except Exception:
+                pass
+            event_text = _format_event_lines("Buy:", runner.last_buy_events)
+            positions_text = _format_positions_text(runner, positions_df)
+            parts = [part for part in [event_text, _format_summary_text(summary_df), positions_text] if part]
+            if journal_line:
+                parts.append(journal_line)
+            message = "\n\n".join(parts) or f"Logged BUY {symbol} x{qty} @ {price}"
+        except Exception as exc:
+            message = f"⚠️ buy failed: {exc}"
         await interaction.followup.send(message[:1900])
 
     @bot.tree.command(name="sell", description="Log a real sell trade into the live portfolio")
@@ -576,31 +598,32 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
             return
 
         await interaction.response.defer(thinking=True)
-        runner, _, positions_df, summary_df = await asyncio.to_thread(
-            _execute_live_portfolio_action,
-            config_manager,
-            account_name,
-            universe,
-            0.0,
-            None,
-            [{"symbol": symbol, "quantity": qty, "price": price}],
-        )
-
-        # Log sell to trade journal with P&L
-        journal_line = ""
         try:
-            journal_line = await asyncio.to_thread(
-                _tag_sell_in_journal, symbol, qty, price, account_name
+            runner, _, positions_df, summary_df = await asyncio.to_thread(
+                _execute_live_portfolio_action,
+                config_manager,
+                account_name,
+                universe,
+                0.0,
+                None,
+                [{"symbol": symbol, "quantity": qty, "price": price}],
             )
-        except Exception:
-            pass
-
-        event_text = _format_event_lines("Sell:", runner.last_sell_events)
-        positions_text = _format_positions_text(runner, positions_df)
-        parts = [part for part in [event_text, _format_summary_text(summary_df), positions_text] if part]
-        if journal_line:
-            parts.append(journal_line)
-        message = "\n\n".join(parts)
+            # Log sell to trade journal with P&L
+            journal_line = ""
+            try:
+                journal_line = await asyncio.to_thread(
+                    _tag_sell_in_journal, symbol, qty, price, account_name
+                )
+            except Exception:
+                pass
+            event_text = _format_event_lines("Sell:", runner.last_sell_events)
+            positions_text = _format_positions_text(runner, positions_df)
+            parts = [part for part in [event_text, _format_summary_text(summary_df), positions_text] if part]
+            if journal_line:
+                parts.append(journal_line)
+            message = "\n\n".join(parts) or f"Logged SELL {symbol} x{qty} @ {price}"
+        except Exception as exc:
+            message = f"⚠️ sell failed: {exc}"
         await interaction.followup.send(message[:1900])
 
     @bot.tree.command(name="portfolio", description="Show the current live portfolio summary")
@@ -611,17 +634,20 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
             return
 
         await interaction.response.defer(thinking=True)
-        runner, _, positions_df, summary_df = await asyncio.to_thread(
-            _execute_live_portfolio_action,
-            config_manager,
-            account_name,
-            universe,
-            0.0,
-            None,
-            None,
-        )
-        positions_text = _format_positions_text(runner, positions_df)
-        message = "\n\n".join([_format_summary_text(summary_df), positions_text])
+        try:
+            runner, _, positions_df, summary_df = await asyncio.to_thread(
+                _execute_live_portfolio_action,
+                config_manager,
+                account_name,
+                universe,
+                0.0,
+                None,
+                None,
+            )
+            positions_text = _format_positions_text(runner, positions_df)
+            message = "\n\n".join([_format_summary_text(summary_df), positions_text]) or "No portfolio data."
+        except Exception as exc:
+            message = f"⚠️ portfolio failed: {exc}"
         await interaction.followup.send(message[:1900])
 
     @bot.tree.command(name="pnl", description="Show booked, running, and total profit/loss")
@@ -632,21 +658,24 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
             return
 
         await interaction.response.defer(thinking=True)
-        runner, trades_df, positions_df, summary_df = await asyncio.to_thread(
-            _execute_live_portfolio_action,
-            config_manager,
-            account_name,
-            universe,
-            0.0,
-            None,
-            None,
-        )
-        message = "\n\n".join(
-            [
-                _format_pnl_text(summary_df),
-                _format_positions_text(runner, positions_df, limit=6),
-            ]
-        )
+        try:
+            runner, trades_df, positions_df, summary_df = await asyncio.to_thread(
+                _execute_live_portfolio_action,
+                config_manager,
+                account_name,
+                universe,
+                0.0,
+                None,
+                None,
+            )
+            message = "\n\n".join(
+                [
+                    _format_pnl_text(summary_df),
+                    _format_positions_text(runner, positions_df, limit=6),
+                ]
+            ) or "No P&L data."
+        except Exception as exc:
+            message = f"⚠️ pnl failed: {exc}"
         await interaction.followup.send(message[:1900])
 
     @bot.tree.command(name="history", description="Show recent live buys and sells")
@@ -658,18 +687,21 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
             return
 
         await interaction.response.defer(thinking=True)
-        _, trades_df, _, summary_df = await asyncio.to_thread(
-            _execute_live_portfolio_action,
-            config_manager,
-            account_name,
-            universe,
-            0.0,
-            None,
-            None,
-        )
-        header = _format_pnl_text(summary_df)
-        history_text = _format_trade_history_text(trades_df, limit=limit or 8)
-        message = "\n\n".join(part for part in [header, history_text] if part)
+        try:
+            _, trades_df, _, summary_df = await asyncio.to_thread(
+                _execute_live_portfolio_action,
+                config_manager,
+                account_name,
+                universe,
+                0.0,
+                None,
+                None,
+            )
+            header = _format_pnl_text(summary_df)
+            history_text = _format_trade_history_text(trades_df, limit=limit or 8)
+            message = "\n\n".join(part for part in [header, history_text] if part) or "No trade history."
+        except Exception as exc:
+            message = f"⚠️ history failed: {exc}"
         await interaction.followup.send(message[:1900])
 
     @bot.tree.command(name="buynow", description="Show the latest Strong Buy Now and Buy Now names from the signal monitor board")
@@ -712,18 +744,21 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
             return
 
         await interaction.response.defer(thinking=True)
-        runner, _, positions_df, summary_df = await asyncio.to_thread(
-            _execute_live_portfolio_action,
-            config_manager,
-            account_name,
-            universe,
-            0.0,
-            None,
-            None,
-        )
-        positions_text = _format_positions_text(runner, positions_df, limit=12)
-        header = f"Cash Left: {_format_money(summary_df.iloc[0].get('Cash', 0.0))}" if summary_df is not None and not summary_df.empty else ""
-        message = "\n\n".join(part for part in [header, positions_text] if part)
+        try:
+            runner, _, positions_df, summary_df = await asyncio.to_thread(
+                _execute_live_portfolio_action,
+                config_manager,
+                account_name,
+                universe,
+                0.0,
+                None,
+                None,
+            )
+            positions_text = _format_positions_text(runner, positions_df, limit=12)
+            header = f"Cash Left: {_format_money(summary_df.iloc[0].get('Cash', 0.0))}" if summary_df is not None and not summary_df.empty else ""
+            message = "\n\n".join(part for part in [header, positions_text] if part) or "No open positions."
+        except Exception as exc:
+            message = f"⚠️ positions failed: {exc}"
         await interaction.followup.send(message[:1900])
 
     @bot.tree.command(name="refresh", description="Refresh prices and signal guidance for open live positions")
@@ -734,16 +769,19 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
             return
 
         await interaction.response.defer(thinking=True)
-        runner, _, positions_df, summary_df = await asyncio.to_thread(
-            _execute_live_portfolio_action,
-            config_manager,
-            account_name,
-            universe,
-            0.0,
-            None,
-            None,
-        )
-        message = "\n\n".join([_format_summary_text(summary_df), _format_positions_text(runner, positions_df)])
+        try:
+            runner, _, positions_df, summary_df = await asyncio.to_thread(
+                _execute_live_portfolio_action,
+                config_manager,
+                account_name,
+                universe,
+                0.0,
+                None,
+                None,
+            )
+            message = "\n\n".join([_format_summary_text(summary_df), _format_positions_text(runner, positions_df)]) or "No positions to refresh."
+        except Exception as exc:
+            message = f"⚠️ refresh failed: {exc}"
         await interaction.followup.send(message[:1900])
 
     @bot.tree.command(name="autopilot", description="Scan for blind-buy opportunities and check portfolio for sell alerts")
@@ -767,38 +805,42 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
 
         result = await asyncio.to_thread(_run_autopilot)
 
-        parts = ["**Blind-Buy Scan Results**"]
+        try:
+            parts = ["**Blind-Buy Scan Results**"]
 
-        if result.buy_candidates:
-            parts.append(f"Found **{len(result.buy_candidates)}** opportunity{'s' if len(result.buy_candidates) != 1 else ''}:")
-            for c in result.buy_candidates[:5]:
-                pct = f"+{c.change_pct:.1f}%" if c.change_pct > 0 else f"{c.change_pct:.1f}%"
-                parts.append(
-                    f"**BUY `{c.symbol}`** (Score: {c.blind_score:.0f}/100)\n"
-                    f"Price `{c.price:.2f}` ({pct}) | Buy Above `{c.buy_above:.2f}`\n"
-                    f"Stop `{c.stop_loss:.2f}` | T1 `{c.target1:.2f}` | T2 `{c.target2:.2f}`\n"
-                    f"Why: {c.reasons}"
-                )
-        else:
-            parts.append("No blind-buy opportunities right now.")
+            if result.buy_candidates:
+                parts.append(f"Found **{len(result.buy_candidates)}** opportunity{'s' if len(result.buy_candidates) != 1 else ''}:")
+                for c in result.buy_candidates[:5]:
+                    pct = f"+{c.change_pct:.1f}%" if c.change_pct > 0 else f"{c.change_pct:.1f}%"
+                    parts.append(
+                        f"**BUY `{c.symbol}`** (Score: {c.blind_score:.0f}/100)\n"
+                        f"Price `{c.price:.2f}` ({pct}) | Buy Above `{c.buy_above:.2f}`\n"
+                        f"Stop `{c.stop_loss:.2f}` | T1 `{c.target1:.2f}` | T2 `{c.target2:.2f}`\n"
+                        f"Why: {c.reasons}"
+                    )
+            else:
+                parts.append("No blind-buy opportunities right now.")
 
-        if result.sell_alerts:
-            parts.append(f"\n**SELL ALERTS ({len(result.sell_alerts)}):**")
-            for a in result.sell_alerts[:5]:
-                emoji = "+" if a.pnl_pct >= 0 else ""
-                parts.append(
-                    f"**SELL `{a.symbol}`** x{a.quantity} @ `{a.current_price:.2f}` "
-                    f"({emoji}{a.pnl_pct:.1f}%) — {a.reason}"
-                )
+            if result.sell_alerts:
+                parts.append(f"\n**SELL ALERTS ({len(result.sell_alerts)}):**")
+                for a in result.sell_alerts[:5]:
+                    emoji = "+" if a.pnl_pct >= 0 else ""
+                    parts.append(
+                        f"**SELL `{a.symbol}`** x{a.quantity} @ `{a.current_price:.2f}` "
+                        f"({emoji}{a.pnl_pct:.1f}%) — {a.reason}"
+                    )
 
-        if result.buy_paused:
-            parts.append(f"\nBuy paused: {'; '.join(result.pause_reasons)}")
-        if result.error:
-            parts.append(f"\nError: {result.error}")
+            if result.buy_paused:
+                parts.append(f"\nBuy paused: {'; '.join(result.pause_reasons)}")
+            if result.error:
+                parts.append(f"\nError: {result.error}")
 
-        parts.append(f"\nPositions monitored: {result.open_positions}")
+            parts.append(f"\nPositions monitored: {result.open_positions}")
+            message = "\n\n".join(parts)
+        except Exception as exc:
+            message = f"⚠️ autopilot failed: {exc}"
 
-        await interaction.followup.send("\n\n".join(parts)[:1900])
+        await interaction.followup.send(message[:1900])
 
     try:
         await bot.start(token)
