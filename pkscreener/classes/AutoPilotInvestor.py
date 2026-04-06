@@ -49,7 +49,7 @@ class AutoPilotConfig:
     min_trade_value: float = 0.0        # no liquidity floor — small caps welcome
     min_volume_ratio: float = 0.0       # don't gate on volume ratio
     max_entry_gap_pct: float = 5.0      # wider trigger window (backtest shows 1.5 blocks good picks)
-    blind_buy_min_score: float = 35.0   # optimized via backtest: catches 92% of top gainers at 100% win rate
+    blind_buy_min_score: float = 50.0   # raised: only show high-conviction picks (score 50+/100)
 
     # Sell monitoring
     auto_exit_on_sell: bool = True
@@ -64,7 +64,7 @@ class AutoPilotConfig:
     max_workers: int = 3
     alert_channels: str = "discord"
     cycle_interval_sec: int = 60
-    max_buy_alerts_per_cycle: int = 5
+    max_buy_alerts_per_cycle: int = 3
 
     def normalized(self) -> "AutoPilotConfig":
         return AutoPilotConfig(
@@ -624,8 +624,8 @@ class AutoPilotInvestor:
             return
 
         sections = [
-            "**BLIND BUY ALERT**",
-            f"Found **{len(candidates)}** high-conviction opportunity{'s' if len(candidates) != 1 else ''}:",
+            "**🟢 BUY ALERT**",
+            f"Top **{len(candidates)}** pick{'s' if len(candidates) != 1 else ''} right now (score 50+/100):",
         ]
 
         for c in candidates:
@@ -633,16 +633,29 @@ class AutoPilotInvestor:
             risk_reward = ""
             if c.stop_loss > 0 and c.target2 > 0 and c.price > 0:
                 risk = abs(c.price - c.stop_loss)
-                reward = abs(c.target2 - c.price)
-                rr = round(reward / risk, 1) if risk > 0 else 0
-                risk_reward = f" | R:R `1:{rr}`"
+                reward1 = abs(c.target1 - c.price) if c.target1 > 0 else 0
+                reward2 = abs(c.target2 - c.price)
+                rr1 = round(reward1 / risk, 1) if risk > 0 else 0
+                rr2 = round(reward2 / risk, 1) if risk > 0 else 0
+                risk_reward = f" | R:R `1:{rr1}` / `1:{rr2}`"
+
+            # Score emoji
+            if c.blind_score >= 70:
+                score_label = f"🔥 **{c.blind_score:.0f}/100** (Excellent)"
+            elif c.blind_score >= 55:
+                score_label = f"✅ **{c.blind_score:.0f}/100** (Good)"
+            else:
+                score_label = f"**{c.blind_score:.0f}/100** (OK)"
+
+            # Simplify reasons to plain English
+            simple_reasons = self._simplify_blind_reasons(c.reasons)
 
             block = [
-                f"**BUY `{c.symbol}`** (Score: {c.blind_score:.0f}/100)",
+                f"**BUY `{c.symbol}`** — Score {score_label}",
                 f"Price `{c.price:.2f}` ({pct}) | Buy Above `{c.buy_above:.2f}`",
                 f"Stop Loss `{c.stop_loss:.2f}` | Target 1 `{c.target1:.2f}` | Target 2 `{c.target2:.2f}`{risk_reward}",
-                f"Signal `{c.confidence:.0f}%` | Vol `{c.volume_ratio:.1f}x`",
-                f"Why: {c.reasons}",
+                f"Volume `{c.volume_ratio:.1f}x avg`",
+                f"Why: {simple_reasons}",
             ]
             if c.suggested_qty > 0:
                 block.append(f"Suggested Qty: `{c.suggested_qty}`")
@@ -653,6 +666,50 @@ class AutoPilotInvestor:
         sections.append("_Open Groww → Buy → then use `/buy SYMBOL QTY PRICE` to record_")
         message = "\n\n".join(sections)
         self._send_to_channels(message)
+
+    @staticmethod
+    def _simplify_blind_reasons(reasons: str) -> str:
+        """Translate scorer reason codes to plain English."""
+        translations = {
+            "RSI oversold": "Stock is very cheap (oversold)",
+            "RSI near oversold": "Stock is getting cheap",
+            "RSI mid": "Stock at fair price",
+            "RSI overbought": "Stock is expensive (risky)",
+            "CCI oversold": "Momentum says undervalued",
+            "CCI low": "Momentum low",
+            "MFI oversold": "Selling exhaustion — buyers coming",
+            "volume surge": "Big volume spike — strong interest",
+            "strong volume": "Higher than usual volume",
+            "good volume": "Decent volume",
+            "adequate volume": "OK volume",
+            "breakout": "Strong breakout move",
+            "strong day": "Big green day",
+            "green": "Stock moving up",
+            "green candle": "Positive day",
+            "flat day": "Sideways",
+            "red day": "Stock is down today",
+            "above ATR stop": "Uptrend intact",
+            "MACD cross up": "Trend turning bullish",
+            "trigger ready": "Buy trigger price reached",
+            "very near trigger": "Almost at buy trigger",
+            "near trigger": "Close to buy trigger",
+            "high confidence": "Multiple indicators agree — buy",
+            "BEARISH TREND - below all MAs": "⚠️ BEARISH — below all moving averages",
+            "DEATH CROSS": "⚠️ Death cross warning",
+            "downtrend pattern": "⚠️ Downtrend pattern",
+        }
+        parts = [p.strip() for p in reasons.split(",")]
+        simple = []
+        for p in parts:
+            matched = False
+            for key, val in translations.items():
+                if key.lower() in p.lower():
+                    simple.append(val)
+                    matched = True
+                    break
+            if not matched:
+                simple.append(p)
+        return " | ".join(simple)
 
     def _push_sell_alerts(self, alerts: List[SellAlert]) -> None:
         """Push sell alerts to Discord."""
