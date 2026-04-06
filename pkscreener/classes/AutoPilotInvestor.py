@@ -362,12 +362,12 @@ class AutoPilotInvestor:
         self._FOLLOWUP_COOLDOWN_SEC = 900  # 15 minutes between follow-up alerts
 
         # Tick-only fast scanner state (no OHLCV, fires in < 1 second)
-        self._tick_alerted: Set[str] = set()          # symbols already sent a EARLY WATCH
+        self._tick_alerted: Dict[str, datetime] = {}  # symbol -> time of last tick-triggered scan
         self._prev_tick_snapshot: Dict[str, Dict] = {}  # last tick reading for delta-volume
         self._TICK_ORDER_IMBALANCE_RATIO = 2.5  # buy_qty / sell_qty threshold
         self._TICK_VOLUME_BURST_FRACTION = 0.025  # 2.5% of day-vol in 60s
         self._TICK_HIGH_DAILY_CHANGE_PCT = 3.0   # daily change% to auto-flag
-        self._TICK_ALERT_COOLDOWN_SEC = 1800     # 30 min before re-alerting same symbol
+        self._TICK_ALERT_COOLDOWN_SEC = 1800     # 30 min before re-triggering same symbol
 
     # ------------------------------------------------------------------
     # Public API
@@ -527,11 +527,112 @@ class AutoPilotInvestor:
         # Sort by priority (biggest mover + strongest imbalance first)
         flagged.sort(key=lambda x: -x["_priority"])
 
-        # Limit to top 5 per cycle to avoid alert flood
+        # Limit to top 5 per cycle to avoid flooding threads
+        import threading
         for item in flagged[:5]:
             sym = item["symbol"]
             self._tick_alerted[sym] = now
-            self._send_tick_watch_alert(item)
+            # Immediately spin up a targeted single-symbol OHLCV scan in background.
+            # One stock = one API call = ~1-2 seconds. No waiting for the full queue.
+            t = threading.Thread(
+                target=self._confirm_tick_signal_with_ohlcv,
+                args=(item,),
+                daemon=True,
+            )
+            t.start()
+
+    def _confirm_tick_signal_with_ohlcv(self, item: Dict) -> None:
+        """Confirm or reject a tick signal with a single-symbol OHLCV scan.
+
+        Runs in a background thread, takes ~1-2 seconds (one Kite API call),
+        then sends either:
+          - 🟢 BUY ALERT  — tick + OHLCV both confirm, full targets/stop-loss included
+          - ⚠️ WATCH note — tick fired but OHLCV score is too low to act, with reason why
+
+        This replaces the old "EARLY WATCH — wait 45 min for full scan" pattern.
+        """
+        sym = item["symbol"]
+        price = item["price"]
+        daily_change = item["daily_change"]
+        direction = "+" if daily_change >= 0 else ""
+        reasons_text = "\n".join(f"  \u2022 {r}" for r in item["reasons"])
+
+        try:
+            from pkscreener.classes.ActionableReport import ActionableReportRunner
+            runner = ActionableReportRunner(
+                config_manager=self._get_config_manager(),
+                universe=self.config.universe,
+                min_confidence=self.config.min_confidence,
+                min_trade_value=0.0,
+                min_volume_ratio=0.0,
+                max_workers=1,
+                use_live_kite=True,
+                strong_buy_only=False,
+            )
+            report_df, _ = runner.build_report(symbols=[sym], show_progress=False)
+        except Exception as exc:
+            self._log(f"Tick OHLCV confirm failed for {sym}: {exc}")
+            report_df = None
+
+        # If OHLCV fails, still send the raw tick alert so user can act manually
+        if report_df is None or report_df.empty:
+            message = (
+                f"**\u26a1 EARLY WATCH: `{sym}`** _(OHLCV unavailable — act on your own judgement)_\n"
+                f"Price `{price:.2f}` ({direction}{daily_change:.2f}% today)\n"
+                f"{reasons_text}\n"
+                f"_Could not fetch candle data. Check chart manually before entering._"
+            )
+            self._send_to_channels(message)
+            return
+
+        row = report_df.iloc[0]
+        blind_score, blind_reasons = BlindBuyScorer.score(row)
+
+        _price_now = float(row.get("PriceNow", row.get("Price Now", price)) or price)
+        _buy_above = float(row.get("BuyAbove", row.get("Buy Above", 0)) or 0)
+        _price_below_trigger = _price_now > 0 and _buy_above > 0 and _price_now < _buy_above
+        effective_min = 65.0 if _price_below_trigger else self.config.blind_buy_min_score
+
+        if blind_score >= effective_min and sym not in self._already_alerted_buys:
+            # CONFIRMED — send a proper BUY ALERT immediately
+            stop_loss = float(row.get("SellIfBelow", row.get("Sell If Below", 0)) or 0)
+            target1 = float(row.get("TakeProfit1", row.get("Take Profit 1", 0)) or 0)
+            target2 = float(row.get("TakeProfit2", row.get("Take Profit 2", 0)) or 0)
+            suggested_qty = int(float(row.get("SuggestedQty", row.get("Suggested Qty", 0)) or 0))
+            confidence = float(row.get("ConfidencePct", row.get("Signal Strength %", 0)) or 0)
+            volume_ratio = float(row.get("VolumeRatio", row.get("Volume Ratio", 0)) or 0)
+
+            score_label = f"\U0001f525 **{blind_score:.0f}/100**" if blind_score >= 70 else f"\u2705 **{blind_score:.0f}/100**"
+            risk_reward = ""
+            if stop_loss > 0 and target2 > 0 and _price_now > 0:
+                risk = abs(_price_now - stop_loss)
+                rr2 = round(abs(target2 - _price_now) / risk, 1) if risk > 0 else 0
+                risk_reward = f" | R:R `1:{rr2}`"
+
+            qty_line = f"\nSuggested Qty: `{suggested_qty}`" if suggested_qty > 0 else ""
+            message = (
+                f"**\U0001f7e2 BUY `{sym}`** (tick-confirmed in ~2s) \u2014 Score {score_label}\n"
+                f"Price `{_price_now:.2f}` ({direction}{daily_change:.2f}%) | Buy Above `{_buy_above:.2f}`\n"
+                f"Stop Loss `{stop_loss:.2f}` | Target 1 `{target1:.2f}` | Target 2 `{target2:.2f}`{risk_reward}\n"
+                f"Volume `{volume_ratio:.1f}x avg` | Confidence `{confidence:.0f}%`\n"
+                f"Tick signals:\n{reasons_text}\n"
+                f"OHLCV confirms: {self._simplify_blind_reasons(blind_reasons)}"
+                f"{qty_line}\n"
+                f"_Open Groww \u2192 Buy \u2192 then use `/buy {sym} QTY PRICE` to record_"
+            )
+            self._already_alerted_buys.add(sym)
+            self._send_to_channels(message)
+        else:
+            # REJECTED — brief note so user knows why we didn't fire a full buy alert
+            reject_reason = self._simplify_blind_reasons(blind_reasons)
+            message = (
+                f"**\u26a0\ufe0f WATCH `{sym}`** \u2014 Tick signal fired but OHLCV score too low ({blind_score:.0f}/100)\n"
+                f"Price `{price:.2f}` ({direction}{daily_change:.2f}% today)\n"
+                f"Tick signals:\n{reasons_text}\n"
+                f"Why not a buy yet: {reject_reason}\n"
+                f"_Monitor manually \u2014 conditions may improve_"
+            )
+            self._send_to_channels(message)
 
     def _load_ticks_snapshot(self) -> Dict[str, Dict]:
         """Read the latest ticks JSON saved by KiteTickerStream."""
@@ -548,22 +649,6 @@ class AutoPilotInvestor:
             return {str(k).strip().upper(): v for k, v in data.items()} if isinstance(data, dict) else {}
         except Exception:
             return {}
-
-    def _send_tick_watch_alert(self, item: Dict) -> None:
-        """Send an EARLY WATCH Discord alert from tick signals alone (no OHLCV)."""
-        sym = item["symbol"]
-        price = item["price"]
-        daily_change = item["daily_change"]
-        direction = "+" if daily_change >= 0 else ""
-        reasons_text = "\n".join(f"  • {r}" for r in item["reasons"])
-
-        message = (
-            f"**⚡ EARLY WATCH: `{sym}`**\n"
-            f"Price `{price:.2f}` ({direction}{daily_change:.2f}% today)\n"
-            f"{reasons_text}\n"
-            f"_Tick-only signal — full OHLCV confirmation coming. Watch this stock._"
-        )
-        self._send_to_channels(message)
 
     # ------------------------------------------------------------------
     # Signal state
