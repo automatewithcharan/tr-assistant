@@ -278,9 +278,9 @@ class SignalMonitorRunner:
             for symbol, tick in current_ticks.items()
         }
         if not previous_ticks:
-            return symbols
+            return self._sort_symbols_by_change(symbols, current_ticks)
         if self._cycle_number % self.FULL_REFRESH_EVERY_CYCLES == 0:
-            return symbols
+            return self._sort_symbols_by_change(symbols, current_ticks)
 
         previous_simple_map = self._simple_row_map(previous_simple_df)
         changed_symbols: List[Tuple[float, str]] = []
@@ -291,7 +291,15 @@ class SignalMonitorRunner:
                 continue
             previous_tick = previous_ticks.get(normalized_symbol)
             if previous_tick is None:
-                changed_symbols.append((0.0, normalized_symbol))
+                # New symbol — prioritize by current daily change% so big movers
+                # aren't stuck behind alphabetically-first stocks on first encounter.
+                try:
+                    close = float(current_tick.get("close", 0) or 0)
+                    ltp = float(current_tick.get("last_price", 0) or 0)
+                    init_priority = abs((ltp - close) / close * 100.0) if close > 0 else 0.0
+                except Exception:
+                    init_priority = 0.0
+                changed_symbols.append((init_priority, normalized_symbol))
                 continue
             current_marker = (
                 current_tick.get("last_price"),
@@ -465,6 +473,25 @@ class SignalMonitorRunner:
                 return True
 
         return False
+
+    def _sort_symbols_by_change(self, symbols: List[str], current_ticks: Dict) -> List[str]:
+        """Return symbols sorted by abs daily change% descending so big movers are seen first."""
+        scored = []
+        for sym in symbols:
+            normalized = str(sym).strip().upper()
+            tick = current_ticks.get(normalized)
+            if tick:
+                try:
+                    close = float(tick.get("close", 0) or 0)
+                    ltp = float(tick.get("last_price", 0) or 0)
+                    pct = abs((ltp - close) / close * 100.0) if close > 0 else 0.0
+                except Exception:
+                    pct = 0.0
+            else:
+                pct = 0.0
+            scored.append((-pct, normalized))
+        scored.sort()
+        return [sym for _, sym in scored]
 
     def _symbol_priority(self, current_tick: Dict, previous_tick: Dict) -> float:
         """Compute a sortable priority score for a flagged symbol.
