@@ -489,6 +489,51 @@ class LivePortfolioRunner(PaperTradingRunner):
             legacy_csv_path=legacy_path,
         )
 
+    def _load_ticks_market_map(self, symbols: List[str]) -> Dict[str, pd.Series]:
+        """Build a fast market map from the saved ticks JSON file (no API call)."""
+        import json
+        ticks_path = os.path.join(self._portfolio_output_dir, "kiteticker_allstocks_ticks_latest.csv")
+        json_path = os.path.join(self._portfolio_output_dir, "kiteticker_allstocks_ticks_latest.json")
+        ticks: Dict = {}
+        if os.path.isfile(json_path):
+            try:
+                with open(json_path, "r") as fh:
+                    ticks = json.load(fh)
+            except Exception:
+                pass
+        if not ticks and os.path.isfile(ticks_path):
+            try:
+                tdf = pd.read_csv(ticks_path)
+                for _, row in tdf.iterrows():
+                    sym = str(row.get("symbol", "")).strip().upper()
+                    if sym:
+                        ticks[sym] = row.to_dict()
+            except Exception:
+                pass
+
+        market_map: Dict[str, pd.Series] = {}
+        for sym in symbols:
+            tick = ticks.get(sym.strip().upper())
+            if not tick:
+                continue
+            ltp = float(tick.get("last_price", tick.get("LTP", 0)) or 0)
+            if ltp <= 0:
+                continue
+            market_map[sym.strip().upper()] = pd.Series({
+                "Symbol": sym,
+                "LTP": ltp,
+                "Action": "",
+                "NowAction": "",
+                "Signal": "",
+                "ConfidencePct": 0.0,
+                "Entry": 0.0,
+                "StopLoss": 0.0,
+                "Target1": 0.0,
+                "Target2": 0.0,
+                "Reason": "",
+            })
+        return market_map
+
     def run(self) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[pd.DataFrame]]:
         """Refresh the live portfolio, apply manual changes, and persist results."""
         trades_df = self._load_trades()
@@ -496,30 +541,17 @@ class LivePortfolioRunner(PaperTradingRunner):
         cashflows_df, cashflow_events = self._apply_cash_adjustment(cashflows_df)
         symbols_to_scan = self._build_scan_symbols(trades_df)
 
-        if symbols_to_scan:
-            report_df, _ = self.actionable_runner.build_report(symbols=symbols_to_scan)
-        else:
-            report_df = pd.DataFrame(
-                columns=[
-                    "Symbol",
-                    "Action",
-                    "NowAction",
-                    "Signal",
-                    "ConfidencePct",
-                    "LTP",
-                    "Entry",
-                    "StopLoss",
-                    "Target1",
-                    "Target2",
-                    "Reason",
-                    "RunAt",
-                ]
-            )
+        # Fast path: read live prices directly from saved ticks file (no API call, no hang)
+        market_map = self._load_ticks_market_map(symbols_to_scan)
 
-        market_map = {
-            str(row["Symbol"]).strip().upper(): row
-            for _, row in report_df.iterrows()
-        } if report_df is not None and not report_df.empty else {}
+        # Fall back to full OHLCV scan only for new manual buys where ticks are missing
+        missing = [s for s in symbols_to_scan if s not in market_map]
+        if missing:
+            report_df, _ = self.actionable_runner.build_report(symbols=missing)
+            if report_df is not None and not report_df.empty:
+                for _, row in report_df.iterrows():
+                    sym = str(row["Symbol"]).strip().upper()
+                    market_map[sym] = row
 
         trades_df = self._refresh_open_positions(trades_df, market_map)
         trades_df, manual_sell_events = self._apply_manual_sells(trades_df)
@@ -528,7 +560,9 @@ class LivePortfolioRunner(PaperTradingRunner):
 
         positions_df = self._build_positions_snapshot(trades_df)
         summary_df = self._build_summary(trades_df, cashflows_df)
-        self._save_state(report_df, trades_df, cashflows_df, positions_df, summary_df)
+        # build a minimal report_df from market_map for _save_state
+        _report_for_save = pd.DataFrame(list(market_map.values())) if market_map else pd.DataFrame()
+        self._save_state(_report_for_save, trades_df, cashflows_df, positions_df, summary_df)
 
         all_events = cashflow_events + manual_buy_events + manual_sell_events
         self.last_cash_events = cashflow_events
@@ -770,7 +804,7 @@ class LivePortfolioRunner(PaperTradingRunner):
 
         report_df.drop(columns=["ActionRank"], inplace=True, errors="ignore")
         report_df.drop(columns=["NowActionRank"], inplace=True, errors="ignore")
-        simple_signals_df = self.actionable_runner.build_simple_view(report_df)
+        simple_signals_df = self.actionable_runner.build_simple_view(report_df) if not report_df.empty else pd.DataFrame()
         simple_positions_df = self._build_positions_simple_view(positions_df)
         simple_summary_df = self._build_summary_simple_view(summary_df)
 
