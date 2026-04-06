@@ -657,10 +657,18 @@ class AutoPilotInvestor:
         if not candidates:
             return
 
-        sections = [
-            "**🟢 BUY ALERT**",
-            f"Top **{len(candidates)}** pick{'s' if len(candidates) != 1 else ''} right now (score 50+/100):",
-        ]
+        # Distinguish first alert batch vs follow-up discoveries
+        is_followup = len(self._already_alerted_buys) > 0
+        if is_followup:
+            sections = [
+                "**🟢 NEW PICK FOUND**",
+                f"**{len(candidates)}** new stock{'s' if len(candidates) != 1 else ''} just crossed score 50+/100:",
+            ]
+        else:
+            sections = [
+                "**🟢 BUY ALERT**",
+                f"Top **{len(candidates)}** pick{'s' if len(candidates) != 1 else ''} right now (score 50+/100):",
+            ]
 
         for c in candidates:
             pct = f"+{c.change_pct:.1f}%" if c.change_pct > 0 else f"{c.change_pct:.1f}%"

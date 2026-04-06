@@ -458,7 +458,9 @@ class AssistantLiveSupervisor:
             self.settings.universe,
             "--signalmonitorlivekite",
             "--signalmonitoralerts",
-            self.settings.alert_channels,
+            # When autopilot is active, it handles Discord alerts with scoring.
+            # Don't let the raw signal monitor also push to Discord (duplicates).
+            "none" if self.settings.autopilot_enabled else self.settings.alert_channels,
             "--signalmonitorbudget",
             str(self.settings.budget_amount),
             "--signalmonitorriskpct",
