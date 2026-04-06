@@ -357,6 +357,9 @@ class AutoPilotInvestor:
         self._cycle_count = 0
         self._already_alerted_buys: Set[str] = set()  # avoid repeat buy alerts
         self._already_alerted_sells: Set[str] = set()  # avoid repeat sell alerts
+        self._last_buy_alert_time: Optional[datetime] = None  # cooldown tracking
+        self._pending_followups: List["BlindBuyCandidate"] = []  # buffer for batching
+        self._FOLLOWUP_COOLDOWN_SEC = 900  # 15 minutes between follow-up alerts
 
     # ------------------------------------------------------------------
     # Public API
@@ -653,16 +656,51 @@ class AutoPilotInvestor:
     # ------------------------------------------------------------------
 
     def _push_buy_alerts(self, candidates: List[BlindBuyCandidate]) -> None:
-        """Push blind-buy alerts to Discord."""
+        """Push blind-buy alerts to Discord.
+
+        First batch (no prior alerts) sends immediately.
+        Follow-up discoveries are buffered and sent at most once every 15 minutes.
+        """
         if not candidates:
+            # Even with no new candidates, check if buffered follow-ups are ready
+            self._flush_pending_followups()
             return
 
-        # Distinguish first alert batch vs follow-up discoveries
-        is_followup = len(self._already_alerted_buys) > 0
+        is_first_batch = len(self._already_alerted_buys) == 0
+
+        if is_first_batch:
+            # Send immediately — this is the opening alert
+            self._do_send_buy_alert(candidates, is_followup=False)
+            self._last_buy_alert_time = datetime.now()
+        else:
+            # Buffer follow-up picks
+            self._pending_followups.extend(candidates)
+            # Mark as alerted immediately so they don't re-queue next cycle
+            for c in candidates:
+                self._already_alerted_buys.add(c.symbol)
+            self._flush_pending_followups()
+
+    def _flush_pending_followups(self) -> None:
+        """Send buffered follow-up picks if cooldown has elapsed."""
+        if not self._pending_followups:
+            return
+        if self._last_buy_alert_time is not None:
+            elapsed = (datetime.now() - self._last_buy_alert_time).total_seconds()
+            if elapsed < self._FOLLOWUP_COOLDOWN_SEC:
+                return  # Not yet — keep buffering
+        # Cooldown elapsed — send all buffered picks as one message
+        # Sort buffered by score descending
+        self._pending_followups.sort(key=lambda c: c.blind_score, reverse=True)
+        self._do_send_buy_alert(self._pending_followups, is_followup=True)
+        self._last_buy_alert_time = datetime.now()
+        self._pending_followups = []
+
+    def _do_send_buy_alert(self, candidates: List[BlindBuyCandidate], is_followup: bool) -> None:
+        """Format and send a buy alert message to Discord."""
         if is_followup:
             sections = [
-                "**🟢 NEW PICK FOUND**",
-                f"**{len(candidates)}** new stock{'s' if len(candidates) != 1 else ''} just crossed score 50+/100:",
+                "**🟢 NEW PICKS FOUND**",
+                f"**{len(candidates)}** new stock{'s' if len(candidates) != 1 else ''} scored 50+/100 in the last 15 min:",
             ]
         else:
             sections = [
