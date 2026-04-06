@@ -995,6 +995,7 @@ class ActionableReportRunner:
         entry_gap_series = df["EntryGapPct"] if "EntryGapPct" in df.columns else pd.Series([0.0] * len(df))
         momentum_score_series = df["MomentumScore"] if "MomentumScore" in df.columns else pd.Series([0.0] * len(df))
         momentum_setup_series = df["MomentumSetup"] if "MomentumSetup" in df.columns else pd.Series([""] * len(df))
+        change_pct_series = df["ChangePct"] if "ChangePct" in df.columns else pd.Series([0.0] * len(df))
         what_to_do = [
             self._human_action_label(action, price_now, buy_above)
             for action, price_now, buy_above in zip(df["NowAction"], df["LTP"], df["Entry"])
@@ -1008,7 +1009,7 @@ class ActionableReportRunner:
                 "Momentum Setup": momentum_setup_series,
                 "Price Now": df["LTP"],
                 "PrevClose": df["PrevClose"] if "PrevClose" in df.columns else df["LTP"],
-                "Change %": df["ChangePct"],
+                "Change %": change_pct_series,
                 "Buy Above": df["Entry"],
                 "Entry Gap %": entry_gap_series,
                 "Sell If Below": df["StopLoss"],
