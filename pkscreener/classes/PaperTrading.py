@@ -103,6 +103,7 @@ class PaperTradingRunner:
         min_trade_value: float = 10000000.0,
         min_volume_ratio: float = 1.0,
         max_workers: int = 3,
+        use_live_kite: bool = False,
     ):
         self.config_manager = config_manager
         self.universe = universe
@@ -141,6 +142,7 @@ class PaperTradingRunner:
             min_trade_value=min_trade_value,
             min_volume_ratio=min_volume_ratio,
             max_workers=max_workers,
+            use_live_kite=use_live_kite,
         )
         self.initial_capital = self._load_initial_capital(default=self.initial_capital)
 

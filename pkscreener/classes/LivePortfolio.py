@@ -441,6 +441,7 @@ class LivePortfolioRunner(PaperTradingRunner):
             min_trade_value=min_trade_value,
             min_volume_ratio=min_volume_ratio,
             max_workers=max_workers,
+            use_live_kite=True,
         )
 
     def _load_initial_capital(self, default: float) -> float:
