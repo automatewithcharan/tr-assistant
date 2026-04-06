@@ -31,6 +31,7 @@ class SignalMonitorRunner:
     MEANINGFUL_PRICE_MOVE_PCT = 0.75
     TRIGGER_PROXIMITY_PCT = 1.0
     STREAM_BOOTSTRAP_MAX_SYMBOLS = 600
+    HIGH_DAILY_CHANGE_PCT = 3.5  # Force full OHLCV rescan when live daily change exceeds this
 
     SUMMARY_COLUMNS = [
         "Universe",
@@ -391,6 +392,12 @@ class SignalMonitorRunner:
         previous_price = self._to_float(previous_tick.get("last_price"))
         if current_price <= 0:
             return False
+
+        # Always rescan stocks with a large live daily move (e.g. gap-ups/gap-downs)
+        # tick["change"] is the official Kite daily change% from previous session close
+        live_daily_change = abs(self._to_float(current_tick.get("change")))
+        if live_daily_change >= self.HIGH_DAILY_CHANGE_PCT:
+            return True
 
         if previous_price <= 0:
             return True
