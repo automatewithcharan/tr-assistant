@@ -251,7 +251,11 @@ def _format_signal_rows_text(rows_df: pd.DataFrame, empty_text: str) -> str:
 
     lines = []
     for _, row in rows_df.iterrows():
-        qty = int(float(row.get("Suggested Qty", 0) or 0))
+        _qty_raw = row.get("Suggested Qty", 0)
+        try:
+            qty = int(float(_qty_raw)) if _qty_raw == _qty_raw else 0  # NaN check
+        except (TypeError, ValueError):
+            qty = 0
         lines.extend(
             [
                 f"{row['What To Do']} `{row['Stock']}`",
