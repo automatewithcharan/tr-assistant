@@ -955,6 +955,137 @@ class SignalMonitorRunner:
             )
         return event_lines
 
+    @staticmethod
+    def _simplify_checks_text(checks: str) -> str:
+        """Convert internal check flags to a readable quality summary."""
+        cl = checks.lower()
+        positives = []
+        if "strong confidence" in cl:
+            positives.append("high confidence")
+        elif "confidence ok" in cl:
+            positives.append("good confidence")
+        if "strong volume" in cl:
+            positives.append("strong volume")
+        elif "volume ok" in cl:
+            positives.append("good volume")
+        if "strong liquidity" in cl:
+            positives.append("very liquid")
+        elif "liquidity ok" in cl:
+            positives.append("liquid")
+        if "near trigger" in cl:
+            positives.append("near buy price")
+        if not positives:
+            return checks  # fallback to original
+        return ", ".join(positives)
+
+    @staticmethod
+    def _simplify_why_text(why: str) -> str:
+        """Translate technical indicator jargon into plain English."""
+        import re
+        parts = [p.strip() for p in why.split("|")]
+        simple = []
+        for p in parts:
+            pl = p.lower().strip()
+            if not pl:
+                continue
+            # RSI
+            m = re.search(r"rsi oversold \((\d+\.?\d*)\)", pl)
+            if m:
+                simple.append(f"Stock is heavily oversold (RSI {m.group(1)}) — bounce likely")
+                continue
+            m = re.search(r"rsi (?:approaching|near) oversold \((\d+\.?\d*)\)", pl)
+            if m:
+                simple.append(f"Stock is getting cheap (RSI {m.group(1)})")
+                continue
+            m = re.search(r"rsi overbought \((\d+\.?\d*)\)", pl)
+            if m:
+                simple.append(f"Stock is overheated (RSI {m.group(1)}) — may pull back")
+                continue
+            m = re.search(r"rsi (?:approaching|near) overbought \((\d+\.?\d*)\)", pl)
+            if m:
+                simple.append(f"Stock is gaining momentum (RSI {m.group(1)})")
+                continue
+            # ATR trailing stop
+            if "price above atr trailing stop" in pl:
+                simple.append("Uptrend intact — price holding above safety level")
+                continue
+            if "price below atr trailing stop" in pl:
+                simple.append("Uptrend broken — price fell below safety level")
+                continue
+            # Volume
+            m = re.search(r"volume surge \((\d+\.?\d*)x\) with price increase", pl)
+            if m:
+                simple.append(f"Big buyers stepping in ({m.group(1)}x normal volume)")
+                continue
+            m = re.search(r"above average volume \((\d+\.?\d*)x\) with gain", pl)
+            if m:
+                simple.append(f"More buyers than usual ({m.group(1)}x volume) pushing price up")
+                continue
+            m = re.search(r"volume surge \((\d+\.?\d*)x\) with price decrease", pl)
+            if m:
+                simple.append(f"Heavy selling pressure ({m.group(1)}x volume)")
+                continue
+            m = re.search(r"above average volume \((\d+\.?\d*)x\) with loss", pl)
+            if m:
+                simple.append(f"More sellers than usual ({m.group(1)}x volume)")
+                continue
+            # CCI / MFI
+            if "cci oversold" in pl:
+                simple.append("Momentum indicator says stock is undervalued")
+                continue
+            if "cci overbought" in pl:
+                simple.append("Momentum indicator says stock is overvalued")
+                continue
+            if "mfi oversold" in pl:
+                simple.append("Money flow shows heavy selling exhaustion")
+                continue
+            if "mfi overbought" in pl:
+                simple.append("Money flow shows buying frenzy")
+                continue
+            # MACD
+            if "macd bullish crossover" in pl:
+                simple.append("Trend just turned bullish")
+                continue
+            if "macd bearish crossover" in pl:
+                simple.append("Trend just turned bearish")
+                continue
+            if "macd histogram increasing" in pl:
+                simple.append("Bullish momentum building")
+                continue
+            if "macd histogram decreasing" in pl:
+                simple.append("Bearish momentum building")
+                continue
+            # MA alignment
+            if "bullish alignment" in pl:
+                simple.append("Strong uptrend — price above all key averages")
+                continue
+            if "bearish alignment" in pl:
+                simple.append("Strong downtrend — price below all key averages")
+                continue
+            # Golden/Death cross
+            if "golden cross" in pl:
+                simple.append("Bullish crossover signal — short-term trend beating long-term")
+                continue
+            if "death cross" in pl:
+                simple.append("Bearish crossover — short-term trend falling behind")
+                continue
+            # Price action
+            if "higher highs and higher lows" in pl:
+                simple.append("Healthy uptrend — making new highs")
+                continue
+            if "lower highs and lower lows" in pl:
+                simple.append("Downtrend — making new lows")
+                continue
+            if "higher lows" in pl:
+                simple.append("Buyers defending at higher prices — possible reversal")
+                continue
+            if "lower highs" in pl:
+                simple.append("Sellers capping gains — momentum weakening")
+                continue
+            # Fallback: pass through as-is (for any new indicators)
+            simple.append(p.strip())
+        return " | ".join(simple) if simple else why
+
     def _build_discord_monitor_message(self, alerts_df: pd.DataFrame, summary: Dict, max_alerts: int = 3) -> str:
         """Build a phone-friendly Discord webhook message."""
         sections = [
@@ -981,16 +1112,38 @@ class SignalMonitorRunner:
             strength = f"{float(row['SignalStrengthPct']):.1f}%"
             checks = str(row["Checks"]).strip()
             why = str(row["Why"]).strip()
+            # Calculate risk:reward for clarity
+            try:
+                price_now = float(row["PriceNow"])
+                stop = float(row["SellIfBelow"])
+                t1 = float(row["TakeProfit1"])
+                t2 = float(row["TakeProfit2"])
+                risk = price_now - stop
+                reward1 = t1 - price_now
+                reward2 = t2 - price_now
+                rr1 = f"{reward1/risk:.1f}" if risk > 0 else "?"
+                rr2 = f"{reward2/risk:.1f}" if risk > 0 else "?"
+                rr_text = f" | R:R `1:{rr1}` / `1:{rr2}`"
+            except (ValueError, ZeroDivisionError):
+                rr_text = ""
+            # Simplify action label
+            action = str(row["NowAction"])
+            if action == "Strong Buy Now":
+                action_emoji = "🟢🟢"
+            elif action == "Buy Now":
+                action_emoji = "🟢"
+            else:
+                action_emoji = "🔴"
             block_lines = [
-                f"**{row['NowAction']}** `{row['Symbol']}`",
+                f"{action_emoji} **{action}** `{row['Symbol']}` — Strength `{strength}`",
                 f"Price `{self._fmt_price(row['PriceNow'])}` | Buy Above `{self._fmt_price(row['BuyAbove'])}`",
-                f"Stop `{self._fmt_price(row['SellIfBelow'])}` | Target 1 `{self._fmt_price(row['TakeProfit1'])}` | Target 2 `{self._fmt_price(row['TakeProfit2'])}`",
-                f"Qty `{qty}` | Strength `{strength}`",
+                f"Stop Loss `{self._fmt_price(row['SellIfBelow'])}` | Target 1 `{self._fmt_price(row['TakeProfit1'])}` | Target 2 `{self._fmt_price(row['TakeProfit2'])}`{rr_text}",
+                f"Qty `{qty}`",
             ]
             if checks:
-                block_lines.append(f"Checks: `{checks}`")
+                block_lines.append(f"Quality: `{self._simplify_checks_text(checks)}`")
             if why:
-                block_lines.append(f"Why: {why}")
+                block_lines.append(f"Why: {self._simplify_why_text(why)}")
             sections.append("\n".join(block_lines))
 
         return "\n\n".join(sections)[:1900]
