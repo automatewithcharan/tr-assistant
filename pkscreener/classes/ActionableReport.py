@@ -996,6 +996,10 @@ class ActionableReportRunner:
         momentum_score_series = df["MomentumScore"] if "MomentumScore" in df.columns else pd.Series([0.0] * len(df))
         momentum_setup_series = df["MomentumSetup"] if "MomentumSetup" in df.columns else pd.Series([""] * len(df))
         change_pct_series = df["ChangePct"] if "ChangePct" in df.columns else pd.Series([0.0] * len(df))
+        risk_pct_series = df["RiskPct"] if "RiskPct" in df.columns else pd.Series([0.0] * len(df))
+        volume_ratio_series = df["VolumeRatio"] if "VolumeRatio" in df.columns else pd.Series([0.0] * len(df))
+        avg_trade_value_series = df["AvgTradeValue20"] if "AvgTradeValue20" in df.columns else pd.Series([0.0] * len(df))
+        reason_series = df["Reason"] if "Reason" in df.columns else pd.Series([""] * len(df))
         what_to_do = [
             self._human_action_label(action, price_now, buy_above)
             for action, price_now, buy_above in zip(df["NowAction"], df["LTP"], df["Entry"])
@@ -1015,23 +1019,26 @@ class ActionableReportRunner:
                 "Sell If Below": df["StopLoss"],
                 "Take Profit 1": df["Target1"],
                 "Take Profit 2": df["Target2"],
-                "Risk %": df["RiskPct"],
-                "Volume vs Avg": df["VolumeRatio"],
-                "Avg Daily Value": df["AvgTradeValue20"].apply(self._format_rupee_amount),
+                "Risk %": risk_pct_series,
+                "Volume vs Avg": volume_ratio_series,
+                "Avg Daily Value": avg_trade_value_series.apply(self._format_rupee_amount),
                 "RSI": df["RSI"] if "RSI" in df.columns else 50.0,
                 "CCI": df["CCI"] if "CCI" in df.columns else 0.0,
                 "MFI": df["MFI"] if "MFI" in df.columns else 50.0,
                 "Checks": quality_checks_series,
-                "Why": df["Reason"],
+                "Why": reason_series,
                 "Checked At": run_at_series,
             }
         )
         if self.budget_amount is not None and self.budget_amount > 0:
             risk_capital = round(self.budget_amount * self.risk_percent / 100.0, 2)
-            risk_qty = df.apply(
-                lambda row: int(risk_capital // float(row["RiskPerShare"])) if float(row["RiskPerShare"]) > 0 else 0,
-                axis=1,
-            )
+            if "RiskPerShare" in df.columns:
+                risk_qty = df.apply(
+                    lambda row: int(risk_capital // float(row["RiskPerShare"])) if float(row["RiskPerShare"]) > 0 else 0,
+                    axis=1,
+                )
+            else:
+                risk_qty = pd.Series([0] * len(df))
             qty_series = df["Entry"].apply(
                 lambda value: int(self.budget_amount // float(value)) if float(value) > 0 else 0
             )
