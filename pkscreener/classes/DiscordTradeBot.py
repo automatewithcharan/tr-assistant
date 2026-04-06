@@ -438,14 +438,33 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
             OutputControls().printOutput(
                 f"  [+] Discord trade bot is online as {self.user}."
             )
+            # Broadcast a startup message to the configured channel so the user
+            # knows the bot is online and remembers where to type commands.
+            if allowed_channel_id:
+                try:
+                    channel = self.get_channel(int(allowed_channel_id))
+                    if channel is None:
+                        channel = await self.fetch_channel(int(allowed_channel_id))
+                    if channel:
+                        await channel.send(
+                            f"**\U0001f7e2 Trade bot online** (`{self.user}`)"
+                            f"\n• `/buy symbol:RELIANCE qty:2 price:1450` — log a buy"
+                            f"\n• `/sell symbol:RELIANCE qty:2 price:1480` — log a sell"
+                            f"\n• `/portfolio` — see all positions + P&L"
+                            f"\n• `/buynow` — latest buy signals"
+                            f"\n• `/helptrade` — full command list"
+                        )
+                except Exception as exc:
+                    OutputControls().printOutput(f"  [+] Could not send startup message: {exc}")
 
     bot = PKScreenerDiscordTradeBot()
 
     def _authorize(interaction) -> Tuple[bool, str]:
         if allowed_user_id and int(interaction.user.id) != int(allowed_user_id):
-            return False, "You are not allowed to use this trading bot."
+            return False, "⛔ You are not authorised to use this trading bot."
         if allowed_channel_id and int(interaction.channel_id) != int(allowed_channel_id):
-            return False, "Use the configured trade channel for these commands."
+            channel_mention = f"<#{allowed_channel_id}>" if allowed_channel_id else "the configured trade channel"
+            return False, f"⛔ Trade commands only work in {channel_mention}. Please go there and try again."
         return True, ""
 
     async def _reply_unauthorized(interaction, reason: str):
@@ -469,17 +488,21 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
     async def helptrade(interaction):  # type: ignore
         text = "\n".join(
             [
-                "/addcash amount:5000",
-                "/buy symbol:AXISBANK qty:2 price:1160",
-                "/buynow",
-                "/history",
-                "/pnl",
-                "/sell symbol:AXISBANK qty:1 price:1175",
-                "/sellnow",
-                "/portfolio",
-                "/positions",
-                "/refresh",
-                "/whoami",
+                "**Trade Bot Commands:**",
+                "`/buy symbol:RELIANCE qty:2 price:1450` — log a buy",
+                "`/sell symbol:RELIANCE qty:2 price:1480` — log a sell",
+                "`/addcash amount:5000` — add cash to account",
+                "`/portfolio` — all positions + P&L summary",
+                "`/positions` — open positions only",
+                "`/pnl` — booked + running P&L",
+                "`/buynow` — latest Buy Now signals",
+                "`/sellnow` — latest Sell signals",
+                "`/history` — recent trade log",
+                "`/refresh` — refresh prices for open positions",
+                "`/autopilot` — run a blind-buy scan now",
+                "`/whoami` — show your user/channel IDs",
+                "",
+                "_Commands only work in the configured trade channel._",
             ]
         )
         await interaction.response.send_message(text, ephemeral=True)
