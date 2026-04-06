@@ -367,6 +367,7 @@ class AutoPilotInvestor:
         self._TICK_ORDER_IMBALANCE_RATIO = 2.5  # buy_qty / sell_qty threshold
         self._TICK_VOLUME_BURST_FRACTION = 0.025  # 2.5% of day-vol in 60s
         self._TICK_HIGH_DAILY_CHANGE_PCT = 3.0   # daily change% to auto-flag
+        self._TICK_ALREADY_MOVED_PCT = 8.0       # above this % the move is over — skip silently
         self._TICK_ALERT_COOLDOWN_SEC = 1800     # 30 min before re-triggering same symbol
 
     # ------------------------------------------------------------------
@@ -473,6 +474,12 @@ class AutoPilotInvestor:
                 continue
 
             daily_change = abs(float(tick.get("change") or 0))
+
+            # Skip if stock already moved too much — train has left the station.
+            # Above 8% daily, entry risk > reward at current price. Suppress silently.
+            if daily_change >= self._TICK_ALREADY_MOVED_PCT:
+                continue
+
             total_buy = float(tick.get("total_buy_quantity") or 0)
             total_sell = float(tick.get("total_sell_quantity") or 0)
             current_vol = float(tick.get("volume_traded") or 0)
@@ -574,13 +581,17 @@ class AutoPilotInvestor:
             self._log(f"Tick OHLCV confirm failed for {sym}: {exc}")
             report_df = None
 
-        # If OHLCV fails, still send the raw tick alert so user can act manually
+        # If OHLCV fails, suppress entirely for stocks already moved big (no targets = useless).
+        # For modest moves still in early stage, send a minimal manual-check note.
         if report_df is None or report_df.empty:
+            if abs(daily_change) >= self._TICK_ALREADY_MOVED_PCT:
+                self._log(f"Tick OHLCV unavailable for {sym} (+{daily_change:.1f}% already) — suppressed")
+                return
             message = (
-                f"**\u26a1 EARLY WATCH: `{sym}`** _(OHLCV unavailable — act on your own judgement)_\n"
+                f"**\u26a1 WATCH `{sym}`** _(no candle history in Kite)_\n"
                 f"Price `{price:.2f}` ({direction}{daily_change:.2f}% today)\n"
                 f"{reasons_text}\n"
-                f"_Could not fetch candle data. Check chart manually before entering._"
+                f"_This stock has no OHLCV data. Check chart manually before acting._"
             )
             self._send_to_channels(message)
             return
