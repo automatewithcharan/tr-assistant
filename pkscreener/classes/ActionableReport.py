@@ -21,6 +21,7 @@ from PKDevTools.classes.PKDateUtilities import PKDateUtilities
 from PKDevTools.classes.log import default_logger
 
 from pkscreener.classes.Fetcher import screenerStockDataFetcher
+from pkscreener.classes.IncrementalIndicators import IncrementalStateRegistry
 from pkscreener.classes.KiteHistoricalData import KiteHistoricalDataProvider
 from pkscreener.classes.KiteTickerStream import load_latest_live_ticks
 from pkscreener.classes.Pktalib import pktalib
@@ -88,6 +89,7 @@ class ActionableReportRunner:
         self._analysis_cache: Dict[str, Tuple[float, Dict]] = {}  # symbol -> (timestamp, row)
         self._analysis_cache_lock = threading.Lock()
         self._analysis_cache_ttl = 120  # seconds – skip recompute if data fingerprint unchanged (2x the ~66s cycle)
+        self._incr_registry = IncrementalStateRegistry()  # per-symbol incremental indicator state
         self.live_ticks: Dict[str, Dict] = {}
         self.kite_history_provider = KiteHistoricalDataProvider() if self.use_live_kite else None
 
@@ -426,6 +428,9 @@ class ActionableReportRunner:
             if cached_row is not None:
                 return cached_row
 
+            # Incremental indicator state: warm up once, update O(1) on each tick
+            incr_indicators = self._get_incremental_indicators(symbol, data)
+
             row = self.analyze_prepared_data(
                 symbol=symbol,
                 data=data,
@@ -433,12 +438,38 @@ class ActionableReportRunner:
                 live_tick_used=bool(
                     self.use_live_kite and str(symbol).strip().upper() in self.live_ticks
                 ),
+                incr_indicators=incr_indicators,
             )
             if row is not None:
                 self._store_cached_analysis(symbol, fingerprint, row)
             return row
         except Exception as exc:
             default_logger().debug(f"Actionable analysis failed for {symbol}: {exc}", exc_info=True)
+            return None
+
+    def _get_incremental_indicators(self, symbol: str, data: pd.DataFrame) -> Optional[Dict]:
+        """Return pre-computed indicator values from incremental state, or None on first call."""
+        try:
+            state = self._incr_registry.get_or_create(symbol)
+            n = len(data)
+            if not state._warmed_up:
+                # First time: warm up from full history — O(n), but only once per session
+                state.warm_up(data)
+                return state.get_indicators() if state.is_ready else None
+            elif state.candles_processed < n:
+                # New candle(s) since last cycle — update incrementally O(1) per new row
+                new_rows = n - state.candles_processed
+                for i in range(new_rows):
+                    row = data.iloc[-(new_rows - i)]
+                    state.update(
+                        float(row["close"]),
+                        float(row["high"]),
+                        float(row["low"]),
+                        float(row.get("volume") or 0.0),
+                    )
+            return state.get_indicators() if state.is_ready else None
+        except Exception as exc:
+            default_logger().debug(f"Incremental state update failed for {symbol}: {exc}", exc_info=True)
             return None
 
     @staticmethod
@@ -473,13 +504,14 @@ class ActionableReportRunner:
         signals=None,
         run_at_text: Optional[str] = None,
         live_tick_used: bool = False,
+        incr_indicators: Optional[Dict] = None,
     ) -> Optional[Dict]:
         """Analyze an already prepared OHLCV frame using the same live-signal logic."""
         if data is None or len(data) < 30:
             return None
 
         signals = signals or self.signals
-        result = signals.analyze(data)
+        result = signals.analyze(data, incr_indicators=incr_indicators)
         close = float(data["close"].iloc[-1])
         prev_close = float(data["close"].iloc[-2]) if len(data) >= 2 else close
         volume = float(data["volume"].iloc[-1]) if "volume" in data.columns else 0.0
