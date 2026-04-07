@@ -367,7 +367,7 @@ class AutoPilotInvestor:
         self._TICK_ORDER_IMBALANCE_RATIO = 2.5  # buy_qty / sell_qty threshold
         self._TICK_VOLUME_BURST_FRACTION = 0.025  # 2.5% of day-vol in 60s
         self._TICK_HIGH_DAILY_CHANGE_PCT = 3.0   # daily change% to auto-flag
-        self._TICK_ALREADY_MOVED_PCT = 7.5       # above this % the move is over — skip silently
+        self._TICK_ALREADY_MOVED_PCT = 20.0      # above this % the move is likely at circuit — skip silently
         self._TICK_ALERT_COOLDOWN_SEC = 1800     # 30 min before re-triggering same symbol
         # NSE market hours (IST): 9:15 AM open, 3:30 PM close
         self._MARKET_OPEN_HOUR_IST = 9
