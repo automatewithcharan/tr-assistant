@@ -1273,15 +1273,30 @@ class AutoPilotInvestor:
                 continue
 
             price = float(row.get("LTP", row.get("PriceNow", row.get("Price Now", 0))) or 0)
+            stop_loss = float(row.get("StopLoss", row.get("SellIfBelow", row.get("Sell If Below", 0))) or 0)
+            target2   = float(row.get("Target2", row.get("TakeProfit2", row.get("Take Profit 2", 0))) or 0)
+            vol_ratio = float(row.get("VolumeRatio", row.get("Volume Ratio", 0)) or 0)
+
+            # Volume must be >= 1.0x average — below average means weak conviction
+            if vol_ratio > 0 and vol_ratio < 1.0:
+                continue
+
+            # R:R must be >= 1.5 — risking more than you gain is a losing strategy
+            if stop_loss > 0 and target2 > 0 and price > stop_loss:
+                risk = price - stop_loss
+                rr2 = (target2 - price) / risk if risk > 0 else 0
+                if rr2 < 1.5:
+                    continue
+
             candidates.append(BlindBuyCandidate(
                 symbol=symbol,
                 price=price,
                 buy_above=float(row.get("Entry", row.get("BuyAbove", row.get("Buy Above", 0))) or 0),
-                stop_loss=float(row.get("StopLoss", row.get("SellIfBelow", row.get("Sell If Below", 0))) or 0),
+                stop_loss=stop_loss,
                 target1=float(row.get("Target1", row.get("TakeProfit1", row.get("Take Profit 1", 0))) or 0),
-                target2=float(row.get("Target2", row.get("TakeProfit2", row.get("Take Profit 2", 0))) or 0),
+                target2=target2,
                 confidence=confidence,
-                volume_ratio=float(row.get("VolumeRatio", row.get("Volume Ratio", 0)) or 0),
+                volume_ratio=vol_ratio,
                 change_pct=float(row.get("ChangePct", row.get("Change %", 0)) or 0),
                 blind_score=blind_score,
                 original_action=now_action,
