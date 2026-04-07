@@ -671,15 +671,7 @@ class AutoPilotInvestor:
             # Gate 1: volume must be ≥ 1.0x average (not below-average volume move)
             # 0.5x volume on a 5% move = thin penny stock, not real institutional buying.
             if volume_ratio > 0 and volume_ratio < 1.0:
-                reject_reason = self._simplify_blind_reasons(blind_reasons)
-                message = (
-                    f"**\u26a0\ufe0f WATCH `{sym}`** \u2014 Low volume ({volume_ratio:.1f}x avg) — not enough conviction\n"
-                    f"Price `{_price_now:.2f}` ({direction}{daily_change:.2f}% today)\n"
-                    f"Tick signals:\n{reasons_text}\n"
-                    f"Why not a buy: Volume too low ({volume_ratio:.1f}x) \u2014 wait for \u22651.5x\n"
-                    f"_Monitor manually \u2014 conditions may improve_"
-                )
-                self._send_to_channels(message)
+                self._log(f"Suppressed {sym}: volume {volume_ratio:.1f}x < 1.0x avg")
                 return
 
             score_label = f"\U0001f525 **{blind_score:.0f}/100**" if blind_score >= 70 else f"\u2705 **{blind_score:.0f}/100**"
@@ -693,15 +685,7 @@ class AutoPilotInvestor:
             # Gate 2: R:R must be at least 1:1.5 — risking more than you gain is a losing strategy
             min_rr = 1.5
             if rr2 > 0 and rr2 < min_rr:
-                reject_reason = self._simplify_blind_reasons(blind_reasons)
-                message = (
-                    f"**\u26a0\ufe0f WATCH `{sym}`** \u2014 Poor R:R (1:{rr2}) \u2014 target too close to entry\n"
-                    f"Price `{_price_now:.2f}` ({direction}{daily_change:.2f}% today)\n"
-                    f"Stop `{stop_loss:.2f}` | T1 `{target1:.2f}` | T2 `{target2:.2f}`\n"
-                    f"Why not a buy: Need R:R \u22651:{min_rr}, got 1:{rr2}\n"
-                    f"_Not worth the risk at this entry_"
-                )
-                self._send_to_channels(message)
+                self._log(f"Suppressed {sym}: R:R 1:{rr2} < 1:{min_rr} minimum")
                 return
 
             qty_line = f"\nSuggested Qty: `{suggested_qty}`" if suggested_qty > 0 else ""
@@ -722,16 +706,23 @@ class AutoPilotInvestor:
             self._already_alerted_buys.add(sym)
             self._send_to_channels(message)
         else:
-            # REJECTED — brief note so user knows why we didn't fire a full buy alert
-            reject_reason = self._simplify_blind_reasons(blind_reasons)
-            message = (
-                f"**\u26a0\ufe0f WATCH `{sym}`** \u2014 Tick signal fired but OHLCV score too low ({blind_score:.0f}/100)\n"
-                f"Price `{price:.2f}` ({direction}{daily_change:.2f}% today)\n"
-                f"Tick signals:\n{reasons_text}\n"
-                f"Why not a buy yet: {reject_reason}\n"
-                f"_Monitor manually \u2014 conditions may improve_"
-            )
-            self._send_to_channels(message)
+            # REJECTED — only send WATCH if this could still become actionable:
+            # - Early mover (stock at 0-2%): worth watching, may break out soon
+            # - Score ≥ 45 and stock below 4%: close miss, conditions may improve
+            # Stocks already at 4%+ that failed: not worth chasing, suppress silently.
+            watch_worthy = is_early_mover or (blind_score >= 45 and daily_change < 4.0)
+            if watch_worthy:
+                reject_reason = self._simplify_blind_reasons(blind_reasons)
+                message = (
+                    f"**\u26a0\ufe0f WATCH `{sym}`** \u2014 Close but not yet ({blind_score:.0f}/100)\n"
+                    f"Price `{price:.2f}` (+{daily_change:.2f}% today)\n"
+                    f"Tick signals:\n{reasons_text}\n"
+                    f"Why not a buy yet: {reject_reason}\n"
+                    f"_Conditions improving \u2014 may trigger soon_"
+                )
+                self._send_to_channels(message)
+            else:
+                self._log(f"Suppressed WATCH {sym}: score={blind_score:.0f}, change={daily_change:.2f}% (not actionable)")
 
     def _load_ticks_snapshot(self) -> Dict[str, Dict]:
         """Read the latest ticks JSON saved by KiteTickerStream."""
