@@ -369,6 +369,11 @@ class AutoPilotInvestor:
         self._TICK_HIGH_DAILY_CHANGE_PCT = 3.0   # daily change% to auto-flag
         self._TICK_ALREADY_MOVED_PCT = 7.5       # above this % the move is over — skip silently
         self._TICK_ALERT_COOLDOWN_SEC = 1800     # 30 min before re-triggering same symbol
+        # NSE market hours (IST): 9:15 AM open, 3:30 PM close
+        self._MARKET_OPEN_HOUR_IST = 9
+        self._MARKET_OPEN_MIN_IST = 15
+        self._MARKET_CLOSE_HOUR_IST = 15
+        self._MARKET_CLOSE_MIN_IST = 30
 
     # ------------------------------------------------------------------
     # Public API
@@ -451,6 +456,9 @@ class AutoPilotInvestor:
         Latency: the ticks JSON is refreshed every 2 seconds by KiteTickerStream.
         This function runs in under 10 milliseconds (pure dict reads).
         """
+        if not self._is_market_open():
+            return  # NSE not open yet — skip tick scanning
+
         ticks = self._load_ticks_snapshot()
         if not ticks:
             return
@@ -890,12 +898,31 @@ class AutoPilotInvestor:
     # Discord push alerts
     # ------------------------------------------------------------------
 
+    def _is_market_open(self) -> bool:
+        """Return True only during NSE market hours (9:15 AM – 3:30 PM IST)."""
+        try:
+            import pytz
+            ist = pytz.timezone("Asia/Kolkata")
+            now_ist = datetime.now(ist)
+        except Exception:
+            # pytz not available — fall back to UTC+5:30 offset
+            from datetime import timezone, timedelta
+            ist_offset = timezone(timedelta(hours=5, minutes=30))
+            now_ist = datetime.now(ist_offset)
+        open_minutes = self._MARKET_OPEN_HOUR_IST * 60 + self._MARKET_OPEN_MIN_IST
+        close_minutes = self._MARKET_CLOSE_HOUR_IST * 60 + self._MARKET_CLOSE_MIN_IST
+        now_minutes = now_ist.hour * 60 + now_ist.minute
+        return open_minutes <= now_minutes <= close_minutes
+
     def _push_buy_alerts(self, candidates: List[BlindBuyCandidate]) -> None:
         """Push blind-buy alerts to Discord.
 
         First batch (no prior alerts) sends immediately.
         Follow-up discoveries are buffered and sent at most once every 15 minutes.
         """
+        if not self._is_market_open():
+            return  # NSE not yet open — suppress all buy alerts
+
         if not candidates:
             # Even with no new candidates, check if buffered follow-ups are ready
             self._flush_pending_followups()
@@ -1125,9 +1152,9 @@ class AutoPilotInvestor:
     # ------------------------------------------------------------------
 
     def _get_config_manager(self):
-        from pkscreener.classes.ConfigManager import tools as ConfigManager
+        from pkscreener.classes.ConfigManager import tools as ConfigManager, parser
         config_manager = ConfigManager()
-        config_manager.getConfig(config_manager.parser)
+        config_manager.getConfig(parser)
         return config_manager
 
     # ------------------------------------------------------------------
