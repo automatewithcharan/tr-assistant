@@ -1785,6 +1785,23 @@ class AutoPilotInvestor:
         now_minutes = now_ist.hour * 60 + now_ist.minute
         return open_minutes <= now_minutes <= close_minutes
 
+    def _is_post_market_window(self) -> bool:
+        """Return True during post-market window (3:30 PM – 6:00 PM IST).
+        Used to allow post-market OHLCV scan results to be sent as next-day previews.
+        """
+        try:
+            import pytz
+            ist = pytz.timezone("Asia/Kolkata")
+            now_ist = datetime.now(ist)
+        except Exception:
+            from datetime import timezone, timedelta
+            ist_offset = timezone(timedelta(hours=5, minutes=30))
+            now_ist = datetime.now(ist_offset)
+        now_minutes = now_ist.hour * 60 + now_ist.minute
+        close_minutes = self._MARKET_CLOSE_HOUR_IST * 60 + self._MARKET_CLOSE_MIN_IST
+        post_market_end = 18 * 60  # 6:00 PM IST
+        return close_minutes < now_minutes <= post_market_end
+
     def _check_nifty_crash(self, signal_df: pd.DataFrame) -> bool:
         """Return True if the broad market is crashing (Nifty/index down >2%).
 
@@ -1830,9 +1847,11 @@ class AutoPilotInvestor:
 
         First batch (no prior alerts) sends immediately.
         Follow-up discoveries are buffered and sent at most once every 15 minutes.
+        Post-market window (3:30–6:00 PM IST): send once as next-day previews.
         """
-        if not self._is_market_open():
-            return  # NSE not yet open — suppress all buy alerts
+        is_post_market = self._is_post_market_window()
+        if not self._is_market_open() and not is_post_market:
+            return  # Outside trading hours and post-market window — suppress alerts
 
         # Nifty crash guard: if Nifty/Sensex is down >2% in first 60 min, suppress OHLCV buys.
         # Individual stocks can still look good on yesterday's setup, but the broader crash means
@@ -1845,12 +1864,21 @@ class AutoPilotInvestor:
 
         if not candidates:
             # Even with no new candidates, check if buffered follow-ups are ready
-            self._flush_pending_followups()
+            if not is_post_market:
+                self._flush_pending_followups()
             return
 
         is_first_batch = len(self._already_alerted_buys) == 0
 
-        if is_first_batch:
+        if is_post_market:
+            # Post-market: send once (all candidates not yet alerted today), then mark all alerted
+            new_candidates = [c for c in candidates if c.symbol not in self._already_alerted_buys]
+            if new_candidates:
+                self._do_send_buy_alert(new_candidates, is_followup=False)
+                for c in new_candidates:
+                    self._already_alerted_buys.add(c.symbol)
+                    self._save_daily_alerted(c.symbol)
+        elif is_first_batch:
             # Send immediately — this is the opening alert
             self._do_send_buy_alert(candidates, is_followup=False)
             self._last_buy_alert_time = datetime.now()
@@ -1891,7 +1919,15 @@ class AutoPilotInvestor:
         _now_min = _now_ist.hour * 60 + _now_ist.minute
         _is_late_session = _now_min >= 13 * 60  # after 1:00 PM IST
 
-        if is_followup:
+        is_post_market = self._is_post_market_window()
+
+        if is_post_market:
+            sections = [
+                "**📋 POST-MARKET PREVIEW — Tomorrow's Entry Candidates**",
+                f"**{len(candidates)}** stock{'s' if len(candidates) != 1 else ''} scored 60+/100 on today's closing data.",
+                "_Entry tomorrow at open if price holds above Buy Above level._",
+            ]
+        elif is_followup:
             sections = [
                 "**🟢 NEW PICKS FOUND**",
                 f"**{len(candidates)}** new stock{'s' if len(candidates) != 1 else ''} scored 60+/100 in the last 15 min:",
