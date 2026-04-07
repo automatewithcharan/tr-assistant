@@ -1294,7 +1294,7 @@ class AutoPilotInvestor:
                 from datetime import timezone, timedelta
                 _nist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
             _is_late = _nist.hour * 60 + _nist.minute >= 13 * 60
-            is_swing_only = _is_late and daily_change >= 5.0
+            is_swing_only = _is_late and daily_change >= 8.0
             swing_tag = f"\n⏰ **SWING ONLY** — already +{daily_change:.1f}%, too late for intraday. Hold 2-5 days for targets." if is_swing_only else ""
 
             if is_early_mover:
@@ -1734,8 +1734,9 @@ class AutoPilotInvestor:
             else:
                 score_label = f"**{c.blind_score:.0f}/100** (OK)"
 
-            # Time-of-day context: after 1 PM + already moved 5%+  = swing trade only
-            is_swing_only = _is_late_session and c.change_pct >= 5.0
+            # Time-of-day context: after 1 PM + already moved 8%+  = swing trade only
+            # Stocks at 2-7% after 1 PM can still make a meaningful intraday move by 3:30 PM.
+            is_swing_only = _is_late_session and c.change_pct >= 8.0
             if is_swing_only:
                 trade_tag = "\n⏰ **SWING ONLY** — already +{:.1f}%, too late for intraday. Hold 2-5 days for targets.".format(c.change_pct)
             else:
