@@ -1381,11 +1381,22 @@ class AutoPilotInvestor:
                 target1 = round(_price_now * (1.05 if is_early_mover else 1.02), 2)
             if target2 <= 0 and _price_now > 0:
                 target2 = round(_price_now * (1.10 if is_early_mover else 1.04), 2)
-            # Suggested qty: risk ₹2000 for early movers (better setup), ₹1000 for chasers
-            risk_budget = 2000 if is_early_mover else 1000
-            if suggested_qty <= 0 and stop_loss > 0 and _price_now > stop_loss:
-                risk_per_share = _price_now - stop_loss
-                suggested_qty = max(1, int(risk_budget / risk_per_share))
+            # Suggested qty: risk 1% of budget (₹1000) per trade.
+            # Cap position at 5% of budget = ₹5000 to avoid over-concentration.
+            _risk_amt = 1000  # ₹1000 max risk per trade (1% of ₹1L budget)
+            _max_position = 5000  # ₹5000 max investment per trade (5% of budget)
+            if suggested_qty <= 0 and _price_now > 0:
+                if stop_loss > 0 and _price_now > stop_loss:
+                    risk_per_share = _price_now - stop_loss
+                    suggested_qty = max(1, int(_risk_amt / risk_per_share))
+                else:
+                    # No stop loss available — default 3% stop rule
+                    suggested_qty = max(1, int(_risk_amt / (_price_now * 0.03)))
+            # Cap to max position size
+            if _price_now > 0:
+                max_shares = max(1, int(_max_position / _price_now))
+                suggested_qty = min(suggested_qty, max_shares)
+            _invest_amt = round(suggested_qty * _price_now, 0) if _price_now > 0 else 0
 
             # Gate 1: volume must be ≥ 1.0x average (not below-average volume move)
             # 0.5x volume on a 5% move = thin penny stock, not real institutional buying.
@@ -1407,7 +1418,7 @@ class AutoPilotInvestor:
                 self._log(f"Suppressed {sym}: R:R 1:{rr2} < 1:{min_rr} minimum")
                 return
 
-            qty_line = f"\nSuggested Qty: `{suggested_qty}`" if suggested_qty > 0 else ""
+            qty_line = f"\nSuggested: Buy **`{suggested_qty}` shares** (≈ ₹{_invest_amt:,.0f})"
 
             # Time-of-day context: after 1 PM + already moved 5%+ = swing trade only
             try:
@@ -1845,7 +1856,8 @@ class AutoPilotInvestor:
                 f"Why: {simple_reasons}",
             ]
             if c.suggested_qty > 0:
-                block.append(f"Suggested Qty: `{c.suggested_qty}`")
+                _invest = round(c.suggested_qty * c.price, 0)
+                block.append(f"Suggested: Buy **`{c.suggested_qty}` shares** (≈ ₹{_invest:,.0f})")
             sections.append("\n".join(block))
 
             self._already_alerted_buys.add(c.symbol)
