@@ -498,10 +498,19 @@ class AutoPilotInvestor:
             # BEFORE the full OHLCV cycle would even start.
             self._run_tick_fast_scan()
             self.run_once()
-            OutputControls().printOutput(
-                f"  [AutoPilot] Next scan in {self.config.cycle_interval_sec}s..."
-            )
-            time.sleep(self.config.cycle_interval_sec)
+
+            # During the 60s wait, run tick scans every 5s.
+            # KiteTickerStream refreshes the tick snapshot every 2s — so we get
+            # near-real-time price detection (5s latency) without any API calls.
+            # Full OHLCV scan still runs every 60s (Kite rate-limit safe).
+            _tick_poll_interval = 5
+            _remaining = self.config.cycle_interval_sec
+            while _remaining > _tick_poll_interval:
+                time.sleep(_tick_poll_interval)
+                _remaining -= _tick_poll_interval
+                self._run_tick_fast_scan()
+            if _remaining > 0:
+                time.sleep(_remaining)
 
     # ------------------------------------------------------------------
     # Pre-market watchlist (9:05 AM IST, once per day)
