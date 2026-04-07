@@ -49,7 +49,7 @@ class AutoPilotConfig:
     min_trade_value: float = 0.0        # no liquidity floor — small caps welcome
     min_volume_ratio: float = 0.0       # don't gate on volume ratio
     max_entry_gap_pct: float = 5.0      # wider trigger window (backtest shows 1.5 blocks good picks)
-    blind_buy_min_score: float = 50.0   # raised: only show high-conviction picks (score 50+/100)
+    blind_buy_min_score: float = 60.0   # raised: only show good+ picks (score 60+/100)
 
     # Sell monitoring
     auto_exit_on_sell: bool = True
@@ -1284,10 +1284,23 @@ class AutoPilotInvestor:
                 return
 
             qty_line = f"\nSuggested Qty: `{suggested_qty}`" if suggested_qty > 0 else ""
+
+            # Time-of-day context: after 1 PM + already moved 5%+ = swing trade only
+            try:
+                import pytz
+                _ist = pytz.timezone("Asia/Kolkata")
+                _nist = datetime.now(_ist)
+            except Exception:
+                from datetime import timezone, timedelta
+                _nist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+            _is_late = _nist.hour * 60 + _nist.minute >= 13 * 60
+            is_swing_only = _is_late and daily_change >= 5.0
+            swing_tag = f"\n⏰ **SWING ONLY** — already +{daily_change:.1f}%, too late for intraday. Hold 2-5 days for targets." if is_swing_only else ""
+
             if is_early_mover:
                 alert_header = f"**\U0001f331 EARLY MOVER `{sym}`** (accumulation detected, low % — target 5-10%) \u2014 Score {score_label}"
             else:
-                alert_header = f"**\U0001f7e2 BUY `{sym}`** (tick-confirmed in ~2s) \u2014 Score {score_label}"
+                alert_header = f"**\U0001f7e2 BUY `{sym}`** (tick-confirmed in ~2s) \u2014 Score {score_label}{swing_tag}"
             message = (
                 f"{alert_header}\n"
                 f"Price `{_price_now:.2f}` ({direction}{daily_change:.2f}%) | Buy Above `{_buy_above_display:.2f}`\n"
@@ -1680,15 +1693,26 @@ class AutoPilotInvestor:
 
     def _do_send_buy_alert(self, candidates: List[BlindBuyCandidate], is_followup: bool) -> None:
         """Format and send a buy alert message to Discord."""
+        # Determine market context for time-of-day labeling
+        try:
+            import pytz
+            ist = pytz.timezone("Asia/Kolkata")
+            _now_ist = datetime.now(ist)
+        except Exception:
+            from datetime import timezone, timedelta
+            _now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+        _now_min = _now_ist.hour * 60 + _now_ist.minute
+        _is_late_session = _now_min >= 13 * 60  # after 1:00 PM IST
+
         if is_followup:
             sections = [
                 "**🟢 NEW PICKS FOUND**",
-                f"**{len(candidates)}** new stock{'s' if len(candidates) != 1 else ''} scored 50+/100 in the last 15 min:",
+                f"**{len(candidates)}** new stock{'s' if len(candidates) != 1 else ''} scored 60+/100 in the last 15 min:",
             ]
         else:
             sections = [
                 "**🟢 BUY ALERT**",
-                f"Top **{len(candidates)}** pick{'s' if len(candidates) != 1 else ''} right now (score 50+/100):",
+                f"Top **{len(candidates)}** pick{'s' if len(candidates) != 1 else ''} right now (score 60+/100):",
             ]
 
         for c in candidates:
@@ -1705,16 +1729,23 @@ class AutoPilotInvestor:
             # Score emoji
             if c.blind_score >= 70:
                 score_label = f"🔥 **{c.blind_score:.0f}/100** (Excellent)"
-            elif c.blind_score >= 55:
+            elif c.blind_score >= 60:
                 score_label = f"✅ **{c.blind_score:.0f}/100** (Good)"
             else:
                 score_label = f"**{c.blind_score:.0f}/100** (OK)"
+
+            # Time-of-day context: after 1 PM + already moved 5%+  = swing trade only
+            is_swing_only = _is_late_session and c.change_pct >= 5.0
+            if is_swing_only:
+                trade_tag = "\n⏰ **SWING ONLY** — already +{:.1f}%, too late for intraday. Hold 2-5 days for targets.".format(c.change_pct)
+            else:
+                trade_tag = ""
 
             # Simplify reasons to plain English
             simple_reasons = self._simplify_blind_reasons(c.reasons)
 
             block = [
-                f"**BUY `{c.symbol}`** — Score {score_label}",
+                f"**BUY `{c.symbol}`** — Score {score_label}{trade_tag}",
                 f"Price `{c.price:.2f}` ({pct}) | Buy Above `{c.buy_above:.2f}`",
                 f"Stop Loss `{c.stop_loss:.2f}` | Target 1 `{c.target1:.2f}` | Target 2 `{c.target2:.2f}`{risk_reward}",
                 f"Volume `{c.volume_ratio:.1f}x avg`",
