@@ -364,8 +364,11 @@ class AutoPilotInvestor:
         # Tick-only fast scanner state (no OHLCV, fires in < 1 second)
         self._tick_alerted: Dict[str, datetime] = {}  # symbol -> time of last tick-triggered scan
         self._prev_tick_snapshot: Dict[str, Dict] = {}  # last tick reading for delta-volume
-        self._TICK_ORDER_IMBALANCE_RATIO = 2.5  # buy_qty / sell_qty threshold
+        self._TICK_ORDER_IMBALANCE_RATIO = 2.5  # buy_qty / sell_qty threshold (in-motion stocks 1.5-7.5%)
+        self._TICK_ORDER_IMBALANCE_EARLY_RATIO = 5.0  # much stricter for pre-breakout (0.1-1.5%) to avoid noise
         self._TICK_VOLUME_BURST_FRACTION = 0.025  # 2.5% of day-vol in 60s
+        self._TICK_EARLY_BREAKOUT_MAX_PCT = 1.5  # stocks below this % are "pre-breakout" candidates
+        self._TICK_EARLY_BREAKOUT_MIN_PCT = 0.1  # ignore flat stocks (0% change = no signal at all)
         self._TICK_HIGH_DAILY_CHANGE_PCT = 2.0   # daily change% to auto-flag (catch moves early, at 2% not 3%)
         self._TICK_ALREADY_MOVED_PCT = 7.5       # above this % the move is over — don't chase
         self._TICK_ALERT_COOLDOWN_SEC = 1800     # 30 min before re-triggering same symbol
@@ -495,16 +498,22 @@ class AutoPilotInvestor:
 
             signal_reasons: List[str] = []
 
-            # Signal 1: Order book imbalance — only valid if stock is also moving (min 0.5%)
-            # Pure imbalance on penny/thin stocks with near-zero volume is noise.
-            if total_sell > 0 and total_buy / total_sell >= self._TICK_ORDER_IMBALANCE_RATIO and daily_change >= 0.5:
-                ratio = round(total_buy / total_sell, 1)
-                signal_reasons.append(f"📥 Buy orders {ratio}x sell orders (heavy accumulation)")
-            elif total_buy > 0 and total_sell / total_buy >= self._TICK_ORDER_IMBALANCE_RATIO:
+            # Signal 1: Order book imbalance
+            # Pre-breakout (0.1–1.5% daily): require 5x imbalance to avoid thin-book noise.
+            # In-motion (1.5–7.5%): normal 2.5x threshold is fine.
+            if total_sell > 0 and total_buy > 0:
+                imbalance_ratio = total_buy / total_sell
+                is_pre_breakout = (self._TICK_EARLY_BREAKOUT_MIN_PCT <= daily_change <= self._TICK_EARLY_BREAKOUT_MAX_PCT)
+                required_ratio = self._TICK_ORDER_IMBALANCE_EARLY_RATIO if is_pre_breakout else self._TICK_ORDER_IMBALANCE_RATIO
+                if imbalance_ratio >= required_ratio:
+                    ratio = round(imbalance_ratio, 1)
+                    tag = " 🔍 Pre-breakout accumulation" if is_pre_breakout else " (heavy accumulation)"
+                    signal_reasons.append(f"📥 Buy orders {ratio}x sell orders{tag}")
+            elif total_buy > 0 and total_sell > 0 and total_sell / total_buy >= self._TICK_ORDER_IMBALANCE_RATIO:
                 # Heavy sell imbalance — potential dump coming, skip for buys
                 pass
 
-            # Signal 2: Volume burst — only valid if stock is also moving (min 0.5%)
+            # Signal 2: Volume burst — only valid if stock is also moving (min 0.5% to filter flat penny stocks)
             if prev_vol > 0 and current_vol > prev_vol and daily_change >= 0.5:
                 burst_pct = (current_vol - prev_vol) / prev_vol
                 if burst_pct >= self._TICK_VOLUME_BURST_FRACTION:
@@ -640,9 +649,12 @@ class AutoPilotInvestor:
                 risk_reward = f" | R:R `1:{rr2}`"
 
             qty_line = f"\nSuggested Qty: `{suggested_qty}`" if suggested_qty > 0 else ""
+            # Buy Above = 0 means signal engine gave no breakout trigger (HOLD-rated).
+            # Show current price so user knows the actual entry level.
+            buy_above_display = _buy_above if _buy_above > 0 else _price_now
             message = (
                 f"**\U0001f7e2 BUY `{sym}`** (tick-confirmed in ~2s) \u2014 Score {score_label}\n"
-                f"Price `{_price_now:.2f}` ({direction}{daily_change:.2f}%) | Buy Above `{_buy_above:.2f}`\n"
+                f"Price `{_price_now:.2f}` ({direction}{daily_change:.2f}%) | Buy Above `{buy_above_display:.2f}`\n"
                 f"Stop Loss `{stop_loss:.2f}` | Target 1 `{target1:.2f}` | Target 2 `{target2:.2f}`{risk_reward}\n"
                 f"Volume `{volume_ratio:.1f}x avg` | Confidence `{confidence:.0f}%`\n"
                 f"Tick signals:\n{reasons_text}\n"
