@@ -614,6 +614,24 @@ class AutoPilotInvestor:
             confidence = float(row.get("ConfidencePct", row.get("Signal Strength %", 0)) or 0)
             volume_ratio = float(row.get("VolumeRatio", row.get("Volume Ratio", 0)) or 0)
 
+            # Fallback: signal engine marks HOLD (already-moving stocks) and skips stop/target.
+            # Compute from ATR + price directly so the alert is always actionable.
+            if stop_loss <= 0 and _price_now > 0:
+                atr = float(row.get("ATR", 0) or 0)
+                if atr > 0:
+                    stop_loss = round(_price_now - 1.5 * atr, 2)
+                else:
+                    # No ATR: use 5% hard stop (conservative for high-momentum stocks)
+                    stop_loss = round(_price_now * 0.95, 2)
+            if target1 <= 0 and _price_now > 0:
+                target1 = round(_price_now * 1.02, 2)   # +2% first target
+            if target2 <= 0 and _price_now > 0:
+                target2 = round(_price_now * 1.04, 2)   # +4% second target
+            # Suggested qty: risk ₹1000 per trade at computed stop
+            if suggested_qty <= 0 and stop_loss > 0 and _price_now > stop_loss:
+                risk_per_share = _price_now - stop_loss
+                suggested_qty = max(1, int(1000 / risk_per_share))
+
             score_label = f"\U0001f525 **{blind_score:.0f}/100**" if blind_score >= 70 else f"\u2705 **{blind_score:.0f}/100**"
             risk_reward = ""
             if stop_loss > 0 and target2 > 0 and _price_now > 0:
