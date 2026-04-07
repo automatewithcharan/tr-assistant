@@ -1310,20 +1310,46 @@ class AutoPilotInvestor:
             # REJECTED — only send WATCH if this could still become actionable:
             # - Early mover (stock at 0-2%): worth watching, may break out soon
             # - Score ≥ 45 and stock below 4%: close miss, conditions may improve
-            # Stocks already at 4%+ that failed: not worth chasing, suppress silently.
-            watch_worthy = is_early_mover or (blind_score >= 45 and daily_change < 4.0)
+            # Stocks with DO NOT BUY / BEARISH / at stop loss — never send WATCH, pure noise.
+            reasons_lower = blind_reasons.lower()
+            has_hard_blocker = (
+                "do not buy" in reasons_lower
+                or "bearish" in reasons_lower
+                or "stop loss level" in reasons_lower
+            )
+            watch_worthy = (
+                not has_hard_blocker
+                and (is_early_mover or (blind_score >= 45 and daily_change < 4.0))
+            )
             if watch_worthy:
-                reject_reason = self._simplify_blind_reasons(blind_reasons)
+                # Split reasons into positives and blockers for readable formatting
+                reason_parts = [r.strip() for r in blind_reasons.split(",") if r.strip()]
+                _pos_keywords = ["trigger", "volume", "breakout", "green", "above", "oversold", "momentum", "bullish", "cross up"]
+                _neg_keywords = ["below", "bearish", "danger", "stop", "do not", "overbought", "red", "weak", "low volume"]
+                positives = []
+                blockers = []
+                for rp in reason_parts:
+                    rp_low = rp.lower()
+                    if any(k in rp_low for k in _neg_keywords):
+                        blockers.append(f"  ❌ {rp.strip()}")
+                    elif any(k in rp_low for k in _pos_keywords):
+                        positives.append(f"  ✅ {rp.strip()}")
+                    # neutral/unknown: skip to reduce noise
+
+                pos_block = "\n".join(positives) if positives else "  (none)"
+                neg_block = "\n".join(blockers) if blockers else "  (none)"
+
                 message = (
-                    f"**\u26a0\ufe0f WATCH `{sym}`** \u2014 Close but not yet ({blind_score:.0f}/100)\n"
-                    f"Price `{price:.2f}` (+{daily_change:.2f}% today)\n"
-                    f"Tick signals:\n{reasons_text}\n"
-                    f"Why not a buy yet: {reject_reason}\n"
-                    f"_Conditions improving \u2014 may trigger soon_"
+                    f"**⚠️ WATCH `{sym}`** — Not a buy yet (score {blind_score:.0f}/100)\n"
+                    f"Price `{price:.2f}` | Up `+{daily_change:.2f}%` today\n"
+                    f"\n**Tick signal:**\n{reasons_text}\n"
+                    f"\n**Why it looks interesting:**\n{pos_block}\n"
+                    f"\n**Why NOT buying yet:**\n{neg_block}\n"
+                    f"\n_Will re-check every 60s. Alert will upgrade to BUY if blockers clear._"
                 )
                 self._send_to_channels(message)
             else:
-                self._log(f"Suppressed WATCH {sym}: score={blind_score:.0f}, change={daily_change:.2f}% (not actionable)")
+                self._log(f"Suppressed WATCH {sym}: score={blind_score:.0f}, change={daily_change:.2f}% (hard blocker or not actionable)")
 
     def _load_ticks_snapshot(self) -> Dict[str, Dict]:
         """Read the latest ticks JSON saved by KiteTickerStream."""
