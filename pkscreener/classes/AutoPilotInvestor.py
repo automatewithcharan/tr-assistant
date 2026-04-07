@@ -404,6 +404,7 @@ class AutoPilotInvestor:
 
         # Tick-only fast scanner state (no OHLCV, fires in < 1 second)
         self._tick_alerted: Dict[str, datetime] = {}  # symbol -> time of last tick-triggered scan
+        self._watch_alerted: Dict[str, str] = {}      # symbol -> date string of last WATCH alert (once per day per symbol)
         self._prev_tick_snapshot: Dict[str, Dict] = {}  # last tick reading for delta-volume
         self._TICK_ORDER_IMBALANCE_RATIO = 2.5  # buy_qty / sell_qty threshold
         self._TICK_VOLUME_BURST_FRACTION = 0.025  # 2.5% of day-vol in 60s
@@ -1299,13 +1300,31 @@ class AutoPilotInvestor:
         _price_below_trigger = _price_now > 0 and _buy_above > 0 and _price_now < _buy_above
         # For intraday momentum moves, don't raise the effective min score either
         _intraday_override = daily_change >= 3.0
+        _entry_confirmed = "entry confirmed" in blind_reasons.lower()
 
-        # For early movers, require stricter score AND confirmed high volume from OHLCV
+        # Effective minimum score:
+        # - Early mover (0-2%): need strong OHLCV volume confirmation (60+)
+        # - Intraday 3%+, no hard blockers: tick signal IS the confirmation, lower to 45
+        #   Rationale: SCILAL (54, MACD+volume+trigger), UNIDT (52, trigger+MACD),
+        #              IGPL (47, buy imbalance+volume+trigger) are all valid buys
+        # - Entry confirmed (price crossed BuyAbove): entry is live, lower to 50
+        # - Swing (price below trigger): need 65+ since entry not confirmed yet
+        _reasons_lower_check = blind_reasons.lower()
+        _no_hard_blockers = not (
+            "do not buy" in _reasons_lower_check
+            or "bearish" in _reasons_lower_check
+            or "stop loss level" in _reasons_lower_check
+        )
         if is_early_mover:
             volume_ratio_check = float(row.get("VolumeRatio", row.get("Volume Ratio", 0)) or 0)
             effective_min = 60.0 if volume_ratio_check >= self._TICK_EARLY_MOVER_VOL_RATIO else 999.0
+        elif _intraday_override and _no_hard_blockers:
+            # Live tick + 3%+ intraday move + no blockers: 45 is sufficient
+            effective_min = 45.0
+        elif _entry_confirmed and _no_hard_blockers:
+            # Price already crossed entry trigger: entry is confirmed, 50 is sufficient
+            effective_min = 50.0
         elif _intraday_override:
-            # Intraday momentum (3%+ move): stale trigger already cleared, use base threshold
             effective_min = self.config.blind_buy_min_score
         else:
             effective_min = 65.0 if _price_below_trigger else self.config.blind_buy_min_score
@@ -1412,6 +1431,17 @@ class AutoPilotInvestor:
                 and daily_change < self._TICK_ALREADY_MOVED_PCT  # don't WATCH if train left
             )
             if watch_worthy:
+                # Dedupe: only send WATCH once per symbol per day (avoid hourly spam)
+                try:
+                    import pytz as _ptz
+                    _today = datetime.now(_ptz.timezone("Asia/Kolkata")).strftime("%Y-%m-%d")
+                except Exception:
+                    _today = datetime.now().strftime("%Y-%m-%d")
+                if self._watch_alerted.get(sym) == _today:
+                    self._log(f"Suppressed duplicate WATCH {sym} (already sent today)")
+                    return
+                self._watch_alerted[sym] = _today
+
                 # Split reasons into positives and blockers for readable formatting
                 reason_parts = [r.strip() for r in blind_reasons.split(",") if r.strip()]
                 _pos_keywords = ["trigger", "volume", "breakout", "green", "above", "oversold", "momentum", "bullish", "cross up", "atr stop", "consolidation", "high confidence"]
@@ -1431,13 +1461,30 @@ class AutoPilotInvestor:
                 pos_block = "\n".join(positives) if positives else "  (none)"
                 neg_block = "\n".join(blockers) if blockers else "  (none)"
 
+                # Compute suggested quantity for WATCH — risk ₹1000 on ATR-based stop
+                _watch_stop = float(row.get("SellIfBelow", row.get("Sell If Below", 0)) or 0)
+                _watch_t1 = float(row.get("TakeProfit1", row.get("Take Profit 1", 0)) or 0)
+                _watch_t2 = float(row.get("TakeProfit2", row.get("Take Profit 2", 0)) or 0)
+                _watch_qty = 0
+                if _watch_stop > 0 and _price_now > _watch_stop:
+                    _risk_per_share = _price_now - _watch_stop
+                    _watch_qty = max(1, int(1000 / _risk_per_share))
+                _stop_str = f" | Stop `{_watch_stop:.2f}`" if _watch_stop > 0 else ""
+                _t1_str = f" | T1 `{_watch_t1:.2f}`" if _watch_t1 > 0 else ""
+                _t2_str = f" | T2 `{_watch_t2:.2f}`" if _watch_t2 > 0 else ""
+                _qty_str = f"\n**If it triggers → buy `{_watch_qty}` shares** (₹1000 risk)" if _watch_qty > 0 else ""
+
+                _score_gap = max(0, int(effective_min) - int(blind_score))
+                _upgrade_note = f"\n_Score {blind_score:.0f}/100 — needs {_score_gap} more pts to auto-upgrade to BUY_" if _score_gap > 0 else "\n_Score borderline — re-checking every 5s_"
+
                 message = (
                     f"**⚠️ WATCH `{sym}`** — Not a buy yet (score {blind_score:.0f}/100)\n"
-                    f"Price `{price:.2f}` | Up `+{daily_change:.2f}%` today\n"
+                    f"Price `{price:.2f}` | Up `+{daily_change:.2f}%` today{_stop_str}{_t1_str}{_t2_str}\n"
                     f"\n**Tick signal:**\n{reasons_text}\n"
                     f"\n**Why it looks interesting:**\n{pos_block}\n"
-                    f"\n**Why NOT buying yet:**\n{neg_block}\n"
-                    f"\n_Will re-check every 5s. Alert will upgrade to BUY if blockers clear._"
+                    f"\n**Why NOT buying yet:**\n{neg_block}"
+                    f"{_qty_str}"
+                    f"{_upgrade_note}"
                 )
                 self._send_to_channels(message)
             else:
