@@ -485,10 +485,16 @@ class AutoPilotInvestor:
             if last_price <= 0:
                 continue
 
-            daily_change = abs(float(tick.get("change") or 0))
+            signed_change = float(tick.get("change") or 0)
+            daily_change = abs(signed_change)
+
+            # Long-only: skip stocks that are falling (negative daily change)
+            # Falling stocks with volume bursts are DUMPS, not accumulation.
+            if signed_change < 0:
+                continue
 
             # Skip if stock already moved too much — train has left the station.
-            # Above 8% daily, entry risk > reward at current price. Suppress silently.
+            # Above 7.5% daily, entry risk > reward at current price. Suppress silently.
             if daily_change >= self._TICK_ALREADY_MOVED_PCT:
                 continue
 
@@ -518,9 +524,8 @@ class AutoPilotInvestor:
 
             # Signal 3: High daily change (2%+ now, was 3%) — catches moves earlier
             if daily_change >= self._TICK_HIGH_DAILY_CHANGE_PCT:
-                direction = "+" if float(tick.get("change") or 0) > 0 else ""
                 signal_reasons.append(
-                    f"🚀 {direction}{float(tick.get('change') or 0):.2f}% for the day"
+                    f"🚀 +{signed_change:.2f}% for the day"
                 )
 
             # Signal 4: Early Accumulation — stock barely moved but big buyers loading
@@ -534,9 +539,8 @@ class AutoPilotInvestor:
                 and total_buy / total_sell >= self._TICK_EARLY_MOVER_IMBALANCE
             ):
                 ratio = round(total_buy / total_sell, 1)
-                change_sign = "+" if float(tick.get("change") or 0) > 0 else ""
                 signal_reasons.append(
-                    f"🌱 Early accumulation: {ratio}x buy/sell at only {change_sign}{float(tick.get('change') or 0):.2f}% move — big players loading"
+                    f"🌱 Early accumulation: {ratio}x buy/sell at only +{signed_change:.2f}% move — big players loading"
                 )
                 early_mover = True
 
@@ -664,12 +668,41 @@ class AutoPilotInvestor:
                 risk_per_share = _price_now - stop_loss
                 suggested_qty = max(1, int(risk_budget / risk_per_share))
 
+            # Gate 1: volume must be ≥ 1.0x average (not below-average volume move)
+            # 0.5x volume on a 5% move = thin penny stock, not real institutional buying.
+            if volume_ratio > 0 and volume_ratio < 1.0:
+                reject_reason = self._simplify_blind_reasons(blind_reasons)
+                message = (
+                    f"**\u26a0\ufe0f WATCH `{sym}`** \u2014 Low volume ({volume_ratio:.1f}x avg) — not enough conviction\n"
+                    f"Price `{_price_now:.2f}` ({direction}{daily_change:.2f}% today)\n"
+                    f"Tick signals:\n{reasons_text}\n"
+                    f"Why not a buy: Volume too low ({volume_ratio:.1f}x) \u2014 wait for \u22651.5x\n"
+                    f"_Monitor manually \u2014 conditions may improve_"
+                )
+                self._send_to_channels(message)
+                return
+
             score_label = f"\U0001f525 **{blind_score:.0f}/100**" if blind_score >= 70 else f"\u2705 **{blind_score:.0f}/100**"
             risk_reward = ""
+            rr2 = 0.0
             if stop_loss > 0 and target2 > 0 and _price_now > 0:
                 risk = abs(_price_now - stop_loss)
                 rr2 = round(abs(target2 - _price_now) / risk, 1) if risk > 0 else 0
                 risk_reward = f" | R:R `1:{rr2}`"
+
+            # Gate 2: R:R must be at least 1:1.5 — risking more than you gain is a losing strategy
+            min_rr = 1.5
+            if rr2 > 0 and rr2 < min_rr:
+                reject_reason = self._simplify_blind_reasons(blind_reasons)
+                message = (
+                    f"**\u26a0\ufe0f WATCH `{sym}`** \u2014 Poor R:R (1:{rr2}) \u2014 target too close to entry\n"
+                    f"Price `{_price_now:.2f}` ({direction}{daily_change:.2f}% today)\n"
+                    f"Stop `{stop_loss:.2f}` | T1 `{target1:.2f}` | T2 `{target2:.2f}`\n"
+                    f"Why not a buy: Need R:R \u22651:{min_rr}, got 1:{rr2}\n"
+                    f"_Not worth the risk at this entry_"
+                )
+                self._send_to_channels(message)
+                return
 
             qty_line = f"\nSuggested Qty: `{suggested_qty}`" if suggested_qty > 0 else ""
             if is_early_mover:
