@@ -1264,7 +1264,23 @@ class AutoPilotInvestor:
             return
 
         row = report_df.iloc[0]
-        blind_score, blind_reasons = BlindBuyScorer.score(row)
+
+        # For intraday momentum moves (daily_change >= 3%), the signal state's BuyAbove
+        # was set from YESTERDAY's close as a swing breakout level. On an intraday move,
+        # the stock has already confirmed direction — the tick signal IS the trigger.
+        # Applying a 25-pt penalty + raised min-score because price hasn't hit a stale
+        # swing level would suppress valid intraday entries (e.g. HINDOILEXP up 5% with
+        # volume, BuyAbove set 15% above yesterday's close → penalty fires all day).
+        # Fix: for 3%+ intraday moves, zero out the stale BuyAbove so scorer skips it.
+        scoring_row = row.copy()
+        if daily_change >= 3.0:
+            scoring_row["PriceNow"] = price   # use live tick price as baseline
+            scoring_row["Price Now"] = price
+            scoring_row["BuyAbove"] = 0       # skip stale swing-level trigger penalty
+            scoring_row["Buy Above"] = 0
+            scoring_row["Entry"] = 0
+
+        blind_score, blind_reasons = BlindBuyScorer.score(scoring_row)
         is_early_mover = item.get("early_mover", False)
 
         _price_now = float(row.get("PriceNow", row.get("Price Now", price)) or price)
@@ -1272,11 +1288,16 @@ class AutoPilotInvestor:
         # Fix display: if no trigger price from signal engine, show current price as entry
         _buy_above_display = _buy_above if _buy_above > 0 else _price_now
         _price_below_trigger = _price_now > 0 and _buy_above > 0 and _price_now < _buy_above
+        # For intraday momentum moves, don't raise the effective min score either
+        _intraday_override = daily_change >= 3.0
 
         # For early movers, require stricter score AND confirmed high volume from OHLCV
         if is_early_mover:
             volume_ratio_check = float(row.get("VolumeRatio", row.get("Volume Ratio", 0)) or 0)
             effective_min = 60.0 if volume_ratio_check >= self._TICK_EARLY_MOVER_VOL_RATIO else 999.0
+        elif _intraday_override:
+            # Intraday momentum (3%+ move): stale trigger already cleared, use base threshold
+            effective_min = self.config.blind_buy_min_score
         else:
             effective_min = 65.0 if _price_below_trigger else self.config.blind_buy_min_score
 
