@@ -478,8 +478,8 @@ class AssistantLiveSupervisor:
             "-a",
             "Y",
         ]
-        if self.settings.signal_limit > 0:
-            command.extend(["--signalmonitorlimit", str(self.settings.signal_limit)])
+        # Always pass --signalmonitorlimit so 0 means "no limit" rather than defaulting to 50
+        command.extend(["--signalmonitorlimit", str(max(0, int(self.settings.signal_limit or 0)))])
         if self.settings.strong_buy_only:
             command.append("--signalmonitorstrongbuyonly")
         if self.settings.account_name:

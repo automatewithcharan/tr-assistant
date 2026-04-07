@@ -2420,7 +2420,7 @@ def pkscreenercli():
             from pkscreener.classes.SignalMonitor import SignalMonitorRunner
 
             signalmonitor_universe = str(args.signalmonitor).strip().lower()
-            signalmonitor_limit = args.signalmonitorlimit or 50
+            signalmonitor_limit = args.signalmonitorlimit if args.signalmonitorlimit is not None else 50
             signalmonitor_min_conf = (
                 args.signalmonitorminconfidence
                 if args.signalmonitorminconfidence is not None
