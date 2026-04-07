@@ -1249,7 +1249,6 @@ class AutoPilotInvestor:
         daily_change = item["daily_change"]
         direction = "+" if daily_change >= 0 else ""
         reasons_text = "\n".join(f"  \u2022 {r}" for r in item["reasons"])
-
         try:
             from pkscreener.classes.ActionableReport import ActionableReportRunner
             runner = ActionableReportRunner(
@@ -1296,6 +1295,16 @@ class AutoPilotInvestor:
 
         _price_now = float(row.get("PriceNow", row.get("Price Now", price)) or price)
         _buy_above = float(row.get("BuyAbove", row.get("Buy Above", 0)) or 0)
+
+        # Use OHLCV-based intraday change (from today's open) for display.
+        # Kite tick `change` = (last - prev_close) / prev_close × 100.
+        # If the stock gapped down at open and then rallied, tick change may show +0.8%
+        # while the intraday move from open is +4%. OHLCV ChangePct reflects today's candle.
+        _ohlcv_change = float(row.get("ChangePct", row.get("Change %", 0)) or 0)
+        if abs(_ohlcv_change) > abs(daily_change):
+            # OHLCV shows a bigger move (e.g. intraday from open) — use that for display
+            daily_change = _ohlcv_change
+            direction = "+" if daily_change >= 0 else ""
         # Fix display: if no trigger price from signal engine, show current price as entry
         _buy_above_display = _buy_above if _buy_above > 0 else _price_now
         _price_below_trigger = _price_now > 0 and _buy_above > 0 and _price_now < _buy_above
@@ -1417,87 +1426,14 @@ class AutoPilotInvestor:
                 "last_alert_time": datetime.now(),
             }
         else:
-            # REJECTED — only send WATCH if this could still become actionable:
-            # - Early mover (stock at 0-2%): worth watching, may break out soon
-            # - Score ≥ 45: close miss, may upgrade to BUY on next cycle
-            # - No daily_change cap: 10.2x buy imbalance at 3.85% is still actionable
-            # Stocks with DO NOT BUY / BEARISH / at stop loss — never send WATCH, pure noise.
-            reasons_lower = blind_reasons.lower()
-            has_hard_blocker = (
-                "do not buy" in reasons_lower
-                or "bearish" in reasons_lower
-                or "stop loss level" in reasons_lower
+            # REJECTED — log why, do NOT send any alert.
+            # WATCH alerts have been removed: they were noise the user couldn't act on.
+            # The scanner re-checks every 5s and auto-upgrades to BUY when score reaches
+            # effective_min. Users only see actionable BUY alerts, nothing else.
+            self._log(
+                f"Not a buy: {sym} score={blind_score:.0f} (need {effective_min:.0f}) | "
+                f"change={daily_change:.2f}% | reasons={blind_reasons[:80]}"
             )
-            watch_worthy = (
-                not has_hard_blocker
-                and (is_early_mover or blind_score >= 45)
-                and daily_change < self._TICK_ALREADY_MOVED_PCT  # don't WATCH if train left
-            )
-            if watch_worthy:
-                # Dedupe: only send WATCH once per symbol per day (avoid hourly spam)
-                try:
-                    import pytz as _ptz
-                    _today = datetime.now(_ptz.timezone("Asia/Kolkata")).strftime("%Y-%m-%d")
-                except Exception:
-                    _today = datetime.now().strftime("%Y-%m-%d")
-                if self._watch_alerted.get(sym) == _today:
-                    self._log(f"Suppressed duplicate WATCH {sym} (already sent today)")
-                    return
-                # Cap: max 5 WATCH alerts per day total — prevents flooding Discord.
-                # With per-symbol dedup already in place, this caps total daily noise.
-                _watch_today_count = sum(1 for v in self._watch_alerted.values() if v == _today)
-                if _watch_today_count >= 5:
-                    self._log(f"Suppressed WATCH {sym}: daily WATCH cap (5/day) reached — score={blind_score:.0f}")
-                    return
-                self._watch_alerted[sym] = _today
-
-                # Split reasons into positives and blockers for readable formatting
-                reason_parts = [r.strip() for r in blind_reasons.split(",") if r.strip()]
-                _pos_keywords = ["trigger", "volume", "breakout", "green", "above", "oversold", "momentum", "bullish", "cross up", "atr stop", "consolidation", "high confidence"]
-                # "above ATR stop" contains "stop" but is bullish — check positives FIRST,
-                # then only fall through to neg check if not already matched as positive.
-                _neg_keywords = ["below", "bearish", "danger", "do not", "overbought", "red day", "weak", "low volume", "below trigger", "below buy"]
-                positives = []
-                blockers = []
-                for rp in reason_parts:
-                    rp_low = rp.lower()
-                    if any(k in rp_low for k in _pos_keywords):
-                        positives.append(f"  ✅ {rp.strip()}")
-                    elif any(k in rp_low for k in _neg_keywords):
-                        blockers.append(f"  ❌ {rp.strip()}")
-                    # neutral/unknown: skip to reduce noise
-
-                pos_block = "\n".join(positives) if positives else "  (none)"
-                neg_block = "\n".join(blockers) if blockers else "  (none)"
-
-                # Compute suggested quantity for WATCH — risk ₹1000 on ATR-based stop
-                _watch_stop = float(row.get("SellIfBelow", row.get("Sell If Below", 0)) or 0)
-                _watch_t1 = float(row.get("TakeProfit1", row.get("Take Profit 1", 0)) or 0)
-                _watch_t2 = float(row.get("TakeProfit2", row.get("Take Profit 2", 0)) or 0)
-                _watch_qty = 0
-                if _watch_stop > 0 and _price_now > _watch_stop:
-                    _risk_per_share = _price_now - _watch_stop
-                    _watch_qty = max(1, int(1000 / _risk_per_share))
-                _stop_str = f" | Stop `{_watch_stop:.2f}`" if _watch_stop > 0 else ""
-                _t1_str = f" | T1 `{_watch_t1:.2f}`" if _watch_t1 > 0 else ""
-                _t2_str = f" | T2 `{_watch_t2:.2f}`" if _watch_t2 > 0 else ""
-                _qty_str = f"\n**If it triggers → buy `{_watch_qty}` shares** (₹1000 risk)" if _watch_qty > 0 else ""
-
-                _score_gap = max(0, int(effective_min) - int(blind_score))
-                _upgrade_note = f"\n_Score {blind_score:.0f}/100 — needs {_score_gap} more pts to auto-upgrade to BUY_" if _score_gap > 0 else "\n_Score borderline — re-checking every 5s_"
-
-                message = (
-                    f"**⚠️ WATCH `{sym}`** — Not a buy yet (score {blind_score:.0f}/100)\n"
-                    f"Price `{price:.2f}` | Up `+{daily_change:.2f}%` today{_stop_str}{_t1_str}{_t2_str}\n"
-                    f"\n**Tick signal:**\n{reasons_text}\n"
-                    f"\n**Why it looks interesting:**\n{pos_block}\n"
-                    f"\n**Why NOT buying yet:**\n{neg_block}"
-                    f"{_qty_str}"
-                    f"{_upgrade_note}"
-                )
-                self._send_to_channels(message)
-            else:
-                self._log(f"Suppressed WATCH {sym}: score={blind_score:.0f}, change={daily_change:.2f}% (hard blocker or not actionable)")
 
     def _load_ticks_snapshot(self) -> Dict[str, Dict]:
         """Read the latest ticks JSON saved by KiteTickerStream."""
