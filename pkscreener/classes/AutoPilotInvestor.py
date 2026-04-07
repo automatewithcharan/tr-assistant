@@ -378,6 +378,8 @@ class AutoPilotInvestor:
         self._MARKET_OPEN_MIN_IST = 15
         self._MARKET_CLOSE_HOUR_IST = 15
         self._MARKET_CLOSE_MIN_IST = 30
+        # Pre-market watchlist state
+        self._premarket_sent_date: Optional[str] = None  # date string — send once per day
 
     # ------------------------------------------------------------------
     # Public API
@@ -436,6 +438,8 @@ class AutoPilotInvestor:
             f"alerts={self.config.alert_channels}"
         )
         while True:
+            # Pre-market watchlist: fires once per day at 9:05 AM IST
+            self._run_premarket_watchlist()
             # Fast tick scan (zero API calls, < 1s) — catches pre-jump conditions
             # BEFORE the full OHLCV cycle would even start.
             self._run_tick_fast_scan()
@@ -444,6 +448,139 @@ class AutoPilotInvestor:
                 f"  [AutoPilot] Next scan in {self.config.cycle_interval_sec}s..."
             )
             time.sleep(self.config.cycle_interval_sec)
+
+    # ------------------------------------------------------------------
+    # Pre-market watchlist (9:05 AM IST, once per day)
+    # ------------------------------------------------------------------
+
+    def _run_premarket_watchlist(self) -> None:
+        """Send a pre-market watchlist at 9:05 AM IST every trading day.
+
+        Uses the previous day's signal state (already scanned by the signal monitor)
+        to identify the top setups BEFORE the market opens, so you're ready to act
+        the moment prices move at 9:15 AM.
+
+        Selects stocks with:
+        - Score >= 55 (strong technical setup from yesterday's close)
+        - Volume ratio >= 1.5x (above-average volume recently)
+        - BuyAbove price available (clear entry trigger)
+        - Not bearish (no DO NOT BUY flags)
+        """
+        try:
+            import pytz
+            ist = pytz.timezone("Asia/Kolkata")
+            now_ist = datetime.now(ist)
+        except Exception:
+            from datetime import timezone, timedelta
+            ist_offset = timezone(timedelta(hours=5, minutes=30))
+            now_ist = datetime.now(ist_offset)
+
+        today_str = now_ist.strftime("%Y-%m-%d")
+        now_min = now_ist.hour * 60 + now_ist.minute
+
+        # Fire between 9:05 AM and 9:14 AM IST (before market opens), once per day
+        _PREMARKET_START = 9 * 60 + 5
+        _PREMARKET_END   = 9 * 60 + 14
+
+        if not (_PREMARKET_START <= now_min <= _PREMARKET_END):
+            return
+        if self._premarket_sent_date == today_str:
+            return  # Already sent today
+
+        self._premarket_sent_date = today_str  # Mark as sent before doing work
+
+        self._log("Pre-market watchlist: preparing...")
+
+        # Load yesterday's signal state
+        signal_state = self._load_signal_state()
+        if signal_state is None or signal_state.empty:
+            signal_state = self._run_fresh_scan()
+        if signal_state is None or signal_state.empty:
+            self._log("Pre-market watchlist: no signal data available, skipping.")
+            return
+
+        picks = []
+        for _, row in signal_state.iterrows():
+            symbol = str(row.get("Symbol", "")).strip().upper()
+            if not symbol:
+                continue
+
+            blind_score, blind_reasons = BlindBuyScorer.score(row)
+            if blind_score < 55:
+                continue
+
+            # Skip bearish / dangerous signals
+            reasons_lower = blind_reasons.lower()
+            if "do not buy" in reasons_lower or "bearish" in reasons_lower:
+                continue
+
+            vol_ratio = float(row.get("VolumeRatio", row.get("Volume Ratio", 0)) or 0)
+            buy_above = float(row.get("BuyAbove", row.get("Buy Above", row.get("Entry", 0))) or 0)
+            stop_loss = float(row.get("SellIfBelow", row.get("Sell If Below", 0)) or 0)
+            target1   = float(row.get("TakeProfit1", row.get("Take Profit 1", 0)) or 0)
+            target2   = float(row.get("TakeProfit2", row.get("Take Profit 2", 0)) or 0)
+            price     = float(row.get("PriceNow", row.get("Price Now", row.get("LTP", 0))) or 0)
+            confidence = float(row.get("ConfidencePct", row.get("Signal Strength %", 0)) or 0)
+
+            if buy_above <= 0 or price <= 0:
+                continue
+
+            rr2 = 0.0
+            if stop_loss > 0 and target2 > 0 and price > stop_loss:
+                risk = price - stop_loss
+                rr2 = round((target2 - price) / risk, 1) if risk > 0 else 0
+
+            if rr2 < 1.5:
+                continue  # Not worth the risk
+
+            picks.append({
+                "symbol": symbol,
+                "score": blind_score,
+                "vol_ratio": vol_ratio,
+                "buy_above": buy_above,
+                "stop_loss": stop_loss,
+                "target1": target1,
+                "target2": target2,
+                "price": price,
+                "confidence": confidence,
+                "rr2": rr2,
+                "reasons": blind_reasons,
+            })
+
+        if not picks:
+            self._log("Pre-market watchlist: no qualifying setups today.")
+            # Still send a brief message so user knows the system is alive
+            self._send_to_channels(
+                f"**📋 PRE-MARKET WATCHLIST — {now_ist.strftime('%d %b %Y')}**\n"
+                f"No strong setups found from yesterday's scan. Market may be quiet.\n"
+                f"_Tick scanner is active — alerts will fire if anything develops after 9:15 AM_"
+            )
+            return
+
+        # Sort: score desc, then R:R desc
+        picks.sort(key=lambda x: (-x["score"], -x["rr2"]))
+        top = picks[:8]  # max 8 picks to avoid wall of text
+
+        score_emoji = lambda s: "🔥" if s >= 70 else "✅"
+        lines = [
+            f"**📋 PRE-MARKET WATCHLIST — {now_ist.strftime('%d %b %Y')}**",
+            f"Top **{len(top)}** setup{'s' if len(top) != 1 else ''} from yesterday's close. Be ready at 9:15 AM.\n",
+        ]
+        for p in top:
+            rr_str = f" | R:R 1:{p['rr2']}" if p['rr2'] > 0 else ""
+            vol_str = f" | Vol {p['vol_ratio']:.1f}x" if p['vol_ratio'] > 0 else ""
+            conf_str = f" | Conf {p['confidence']:.0f}%" if p['confidence'] > 0 else ""
+            lines.append(
+                f"{score_emoji(p['score'])} **{p['symbol']}** — Score {p['score']:.0f}/100{rr_str}{vol_str}{conf_str}\n"
+                f"   Buy above `{p['buy_above']:.2f}` | Stop `{p['stop_loss']:.2f}` | T1 `{p['target1']:.2f}` | T2 `{p['target2']:.2f}`"
+            )
+
+        lines.append(
+            "\n_These are setups to act on IF price breaks above 'Buy above' level with volume in the first 15 minutes._\n"
+            "_Tick scanner is live — BUY alerts will fire automatically when entry conditions are met._"
+        )
+        self._send_to_channels("\n".join(lines))
+        self._log(f"Pre-market watchlist sent: {len(top)} picks.")
 
     # ------------------------------------------------------------------
     # Tick-only millisecond fast scanner
