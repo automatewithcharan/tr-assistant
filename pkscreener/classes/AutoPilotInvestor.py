@@ -180,6 +180,14 @@ class BlindBuyScorer:
         _buy_above = float(row.get("BuyAbove", row.get("Buy Above", row.get("Entry", 0))) or 0)
         _price_below_trigger = (_price_now > 0 and _buy_above > 0 and _price_now < _buy_above)
 
+        # -- HARD BLOCK 0: Minimum price filter ₹10 --
+        # Sub-₹10 stocks are penny/SME stocks — illiquid, spike to upper circuit
+        # instantly, impossible to exit safely. ACCURACY at ₹4 is a good example.
+        if _price_now > 0 and _price_now < 10.0:
+            score = 0
+            reasons.append(f"⛔ PENNY STOCK ₹{_price_now:.2f} — price below ₹10, skip")
+            return round(score, 1), ", ".join(reasons)
+
         # -- RSI (0-100, lower = more oversold = better for bounce) --
         if rsi < 30:
             score += 25
@@ -214,13 +222,30 @@ class BlindBuyScorer:
             score -= 5
 
         # -- Volume (higher = better confirmation) --
-        if vol_ratio >= 2.5:
+        # Time-adjust volume: early in the day, even 1.5x is strong because
+        # most of the day's volume hasn't traded yet. Weight it by time elapsed.
+        # 9:15-10:00 AM = day is 0-10% complete → 1.5x vol is exceptional
+        # 1:00-3:30 PM  = day is 70%+ complete   → need higher ratio to be meaningful
+        try:
+            import pytz as _pytz
+            _ist = _pytz.timezone("Asia/Kolkata")
+            _now = __import__('datetime').datetime.now(_ist)
+            _min_since_open = max(0, (_now.hour * 60 + _now.minute) - (9 * 60 + 15))
+            _day_pct = min(1.0, _min_since_open / 375.0)  # 375 min = full trading day
+        except Exception:
+            _day_pct = 0.5  # assume midday if timezone fails
+        # Effective volume: early-morning volume counts more
+        # e.g. at 9:30 AM (day 4% done), 2x vol is equivalent to ~5x vol at 2PM
+        _vol_adjusted = vol_ratio / max(0.1, _day_pct) if _day_pct < 0.3 else vol_ratio
+        _vol_score_base = _vol_adjusted if _day_pct < 0.3 else vol_ratio
+
+        if _vol_score_base >= 2.5:
             score += 20
             reasons.append(f"volume surge {vol_ratio:.1f}x")
-        elif vol_ratio >= 1.5:
+        elif _vol_score_base >= 1.5:
             score += 15
             reasons.append(f"strong volume {vol_ratio:.1f}x")
-        elif vol_ratio >= 1.0:
+        elif _vol_score_base >= 1.0:
             score += 10
             reasons.append(f"good volume {vol_ratio:.1f}x")
         elif vol_ratio >= 0.7:
@@ -286,6 +311,22 @@ class BlindBuyScorer:
             reasons.append(f"high confidence {confidence:.0f}%")
         elif confidence >= 15:
             score += 5
+
+        # -- Consolidation bonus: stock has been in tight range before this breakout --
+        # Detected by: stop and target are BOTH relatively close to current price
+        # (narrow stop = low recent volatility = stock was coiling before move)
+        # and today it has a green candle breaking out of that range.
+        _stop = float(row.get("SellIfBelow", row.get("Sell If Below", 0)) or 0)
+        _t2 = float(row.get("TakeProfit2", row.get("Take Profit 2", 0)) or 0)
+        if _price_now > 0 and _stop > 0 and _t2 > 0 and change_pct >= 1.0:
+            _range_pct = (_t2 - _stop) / _price_now * 100
+            # Tight range = target-to-stop spread < 20% of price → coiling setup
+            if _range_pct < 15:
+                score += 12
+                reasons.append(f"consolidation breakout (tight range {_range_pct:.1f}%)")
+            elif _range_pct < 25:
+                score += 6
+                reasons.append(f"range breakout ({_range_pct:.1f}%)")
 
         # -- Penalties for bearish conditions --
         # HARD BLOCK: If stock is below all MAs, do NOT recommend buying
@@ -1086,6 +1127,10 @@ class AutoPilotInvestor:
             # Long-only: skip stocks that are falling (negative daily change)
             # Falling stocks with volume bursts are DUMPS, not accumulation.
             if signed_change < 0:
+                continue
+
+            # Skip penny stocks (<₹10) — illiquid, hit upper circuit instantly, can't exit
+            if last_price < 10.0:
                 continue
 
             # Skip if stock already moved too much — train has left the station.
