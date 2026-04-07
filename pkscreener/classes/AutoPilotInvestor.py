@@ -1282,12 +1282,13 @@ class AutoPilotInvestor:
         #
         # Additional fix for BIOFILCHEM-type stocks:
         # Signal state may say "bearish alignment / below all MAs" from a STALE scan
-        # (days ago). If the stock is up 5%+ today with 2x+ volume, it has empirically
+        # (days ago). If the stock is up 3%+ today with 1.5x+ volume, it has empirically
         # broken out of that bearish alignment — the live move IS the confirmation.
         # Strip the stale bearish reason text so scorer doesn't apply the -50 penalty.
+        # (Threshold lowered from 5%/2x → 3%/1.5x so we catch moves at 9:30 AM onset)
         scoring_row = row.copy()
         vol_ratio_live = float(row.get("VolumeRatio", row.get("Volume Ratio", 0)) or 0)
-        _strong_intraday = daily_change >= 5.0 and vol_ratio_live >= 2.0
+        _strong_intraday = daily_change >= 3.0 and vol_ratio_live >= 1.5
         if daily_change >= 3.0:
             scoring_row["PriceNow"] = price   # use live tick price as baseline
             scoring_row["Price Now"] = price
