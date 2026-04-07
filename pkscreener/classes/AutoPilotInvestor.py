@@ -380,6 +380,8 @@ class AutoPilotInvestor:
         self._MARKET_CLOSE_MIN_IST = 30
         # Pre-market watchlist state
         self._premarket_sent_date: Optional[str] = None  # date string — send once per day
+        self._midday_sent_date: Optional[str] = None     # mid-day scanner — once per day
+        self._powerhour_sent_date: Optional[str] = None  # power hour alert — once per day
 
     # ------------------------------------------------------------------
     # Public API
@@ -440,6 +442,10 @@ class AutoPilotInvestor:
         while True:
             # Pre-market watchlist: fires once per day at 9:05 AM IST
             self._run_premarket_watchlist()
+            # Mid-day scanner: fires once per day at 11:00 AM IST
+            self._run_midday_scanner()
+            # Power hour alert: fires once per day at 2:00 PM IST
+            self._run_powerhour_alert()
             # Fast tick scan (zero API calls, < 1s) — catches pre-jump conditions
             # BEFORE the full OHLCV cycle would even start.
             self._run_tick_fast_scan()
@@ -581,6 +587,293 @@ class AutoPilotInvestor:
         )
         self._send_to_channels("\n".join(lines))
         self._log(f"Pre-market watchlist sent: {len(top)} picks.")
+
+    # ------------------------------------------------------------------
+    # Mid-day consolidation scanner (11:00 AM IST, once per day)
+    # ------------------------------------------------------------------
+
+    def _run_midday_scanner(self) -> None:
+        """Scan for consolidation breakout setups at 11:00 AM IST.
+
+        By 11 AM, the opening frenzy has settled. Stocks that opened strong
+        and are now consolidating (tight range, volume dropping) are coiling
+        for a second leg up. This scan finds them before the breakout.
+
+        Criteria:
+        - Score >= 60 (strong technicals)
+        - Daily change 1-7% (moved this morning but not over-extended)
+        - Volume ratio >= 1.5x (above average — still has fuel)
+        - R:R >= 1.5 (worthwhile entry)
+        - No bearish flags
+        """
+        try:
+            import pytz
+            ist = pytz.timezone("Asia/Kolkata")
+            now_ist = datetime.now(ist)
+        except Exception:
+            from datetime import timezone, timedelta
+            ist_offset = timezone(timedelta(hours=5, minutes=30))
+            now_ist = datetime.now(ist_offset)
+
+        today_str = now_ist.strftime("%Y-%m-%d")
+        now_min = now_ist.hour * 60 + now_ist.minute
+
+        # Fire between 11:00 AM and 11:09 AM IST, once per day
+        _START = 11 * 60 + 0
+        _END   = 11 * 60 + 9
+
+        if not (_START <= now_min <= _END):
+            return
+        if self._midday_sent_date == today_str:
+            return
+
+        self._midday_sent_date = today_str
+        self._log("Mid-day scanner: preparing...")
+
+        signal_state = self._load_signal_state()
+        if signal_state is None or signal_state.empty:
+            signal_state = self._run_fresh_scan()
+        if signal_state is None or signal_state.empty:
+            self._log("Mid-day scanner: no signal data, skipping.")
+            return
+
+        # Also load ticks for live daily_change data
+        ticks = self._load_ticks_snapshot()
+
+        picks = []
+        for _, row in signal_state.iterrows():
+            symbol = str(row.get("Symbol", "")).strip().upper()
+            if not symbol or symbol in self._already_alerted_buys:
+                continue
+
+            blind_score, blind_reasons = BlindBuyScorer.score(row)
+            if blind_score < 60:
+                continue
+
+            reasons_lower = blind_reasons.lower()
+            if "do not buy" in reasons_lower or "bearish" in reasons_lower:
+                continue
+
+            # Use live tick price/change if available, else fall back to signal state
+            tick = ticks.get(symbol, {})
+            daily_change = float(tick.get("change") or row.get("Change %", row.get("% Change", 0)) or 0)
+            price = float(tick.get("last_price") or row.get("PriceNow", row.get("Price Now", row.get("LTP", 0))) or 0)
+
+            # Long-only: skip falling stocks
+            if daily_change < 0:
+                continue
+            # Must have moved (otherwise it's just a stale setup) but not over-extended
+            if not (1.0 <= daily_change <= 7.0):
+                continue
+
+            vol_ratio  = float(row.get("VolumeRatio", row.get("Volume Ratio", 0)) or 0)
+            if vol_ratio > 0 and vol_ratio < 1.5:
+                continue
+
+            buy_above  = float(row.get("BuyAbove", row.get("Buy Above", row.get("Entry", 0))) or 0)
+            stop_loss  = float(row.get("SellIfBelow", row.get("Sell If Below", 0)) or 0)
+            target1    = float(row.get("TakeProfit1", row.get("Take Profit 1", 0)) or 0)
+            target2    = float(row.get("TakeProfit2", row.get("Take Profit 2", 0)) or 0)
+            confidence = float(row.get("ConfidencePct", row.get("Signal Strength %", 0)) or 0)
+
+            if price <= 0:
+                continue
+
+            # Compute R:R
+            rr2 = 0.0
+            if stop_loss > 0 and target2 > 0 and price > stop_loss:
+                risk = price - stop_loss
+                rr2 = round((target2 - price) / risk, 1) if risk > 0 else 0
+            if rr2 < 1.5:
+                continue
+
+            entry_display = buy_above if buy_above > 0 else price
+            picks.append({
+                "symbol": symbol,
+                "score": blind_score,
+                "vol_ratio": vol_ratio,
+                "entry": entry_display,
+                "stop_loss": stop_loss,
+                "target1": target1,
+                "target2": target2,
+                "price": price,
+                "change": daily_change,
+                "confidence": confidence,
+                "rr2": rr2,
+            })
+
+        picks.sort(key=lambda x: (-x["score"], -x["rr2"]))
+        top = picks[:6]
+
+        score_emoji = lambda s: "🔥" if s >= 70 else "✅"
+        if not top:
+            self._send_to_channels(
+                f"**📊 MID-DAY SCAN (11 AM) — {now_ist.strftime('%d %b %Y')}**\n"
+                f"No consolidation breakout setups found right now.\n"
+                f"_Tick scanner remains active for any new signals_"
+            )
+            return
+
+        lines = [
+            f"**📊 MID-DAY SCAN (11 AM) — {now_ist.strftime('%d %b %Y')}**",
+            f"**{len(top)}** stock{'s' if len(top) != 1 else ''} consolidating after morning move — potential second leg up:\n",
+        ]
+        for p in top:
+            vol_str  = f" | Vol {p['vol_ratio']:.1f}x" if p['vol_ratio'] > 0 else ""
+            conf_str = f" | Conf {p['confidence']:.0f}%" if p['confidence'] > 0 else ""
+            lines.append(
+                f"{score_emoji(p['score'])} **{p['symbol']}** (+{p['change']:.1f}% so far) — Score {p['score']:.0f}/100 | R:R 1:{p['rr2']}{vol_str}{conf_str}\n"
+                f"   Entry `{p['entry']:.2f}` | Stop `{p['stop_loss']:.2f}` | T1 `{p['target1']:.2f}` | T2 `{p['target2']:.2f}`"
+            )
+        lines.append(
+            "\n_Buy on breakout above entry price with volume. These stocks have already shown strength today._\n"
+            "_Tick scanner is live — BUY alerts fire automatically if conditions confirm._"
+        )
+        self._send_to_channels("\n".join(lines))
+        self._log(f"Mid-day scanner sent: {len(top)} picks.")
+
+    # ------------------------------------------------------------------
+    # Power hour alert (2:00 PM IST, once per day)
+    # ------------------------------------------------------------------
+
+    def _run_powerhour_alert(self) -> None:
+        """Alert for power hour setups at 2:00 PM IST.
+
+        2–3:15 PM is when institutions do end-of-day positioning. Stocks that
+        have been trending up all day with increasing volume often make a final
+        push. Risk is lower because direction is confirmed by the full day's action.
+
+        Criteria:
+        - Score >= 58
+        - Daily change 2-12% (has momentum but room left before circuit)
+        - Volume ratio >= 2.0x (strong conviction — needed as late-day entry)
+        - R:R >= 1.5
+        - Confidence >= 20% (historically reliable setup)
+        - No bearish flags
+        """
+        try:
+            import pytz
+            ist = pytz.timezone("Asia/Kolkata")
+            now_ist = datetime.now(ist)
+        except Exception:
+            from datetime import timezone, timedelta
+            ist_offset = timezone(timedelta(hours=5, minutes=30))
+            now_ist = datetime.now(ist_offset)
+
+        today_str = now_ist.strftime("%Y-%m-%d")
+        now_min = now_ist.hour * 60 + now_ist.minute
+
+        # Fire between 2:00 PM and 2:09 PM IST, once per day
+        _START = 14 * 60 + 0
+        _END   = 14 * 60 + 9
+
+        if not (_START <= now_min <= _END):
+            return
+        if self._powerhour_sent_date == today_str:
+            return
+
+        self._powerhour_sent_date = today_str
+        self._log("Power hour alert: preparing...")
+
+        signal_state = self._load_signal_state()
+        if signal_state is None or signal_state.empty:
+            signal_state = self._run_fresh_scan()
+        if signal_state is None or signal_state.empty:
+            self._log("Power hour alert: no signal data, skipping.")
+            return
+
+        ticks = self._load_ticks_snapshot()
+
+        picks = []
+        for _, row in signal_state.iterrows():
+            symbol = str(row.get("Symbol", "")).strip().upper()
+            if not symbol or symbol in self._already_alerted_buys:
+                continue
+
+            blind_score, blind_reasons = BlindBuyScorer.score(row)
+            if blind_score < 58:
+                continue
+
+            reasons_lower = blind_reasons.lower()
+            if "do not buy" in reasons_lower or "bearish" in reasons_lower:
+                continue
+
+            tick = ticks.get(symbol, {})
+            daily_change = float(tick.get("change") or row.get("Change %", row.get("% Change", 0)) or 0)
+            price = float(tick.get("last_price") or row.get("PriceNow", row.get("Price Now", row.get("LTP", 0))) or 0)
+
+            if daily_change < 0:
+                continue
+            if not (2.0 <= daily_change <= 12.0):
+                continue
+
+            vol_ratio  = float(row.get("VolumeRatio", row.get("Volume Ratio", 0)) or 0)
+            if vol_ratio > 0 and vol_ratio < 2.0:
+                continue  # Power hour needs stronger volume confirmation
+
+            confidence = float(row.get("ConfidencePct", row.get("Signal Strength %", 0)) or 0)
+            if confidence > 0 and confidence < 20:
+                continue
+
+            buy_above  = float(row.get("BuyAbove", row.get("Buy Above", row.get("Entry", 0))) or 0)
+            stop_loss  = float(row.get("SellIfBelow", row.get("Sell If Below", 0)) or 0)
+            target1    = float(row.get("TakeProfit1", row.get("Take Profit 1", 0)) or 0)
+            target2    = float(row.get("TakeProfit2", row.get("Take Profit 2", 0)) or 0)
+
+            if price <= 0:
+                continue
+
+            rr2 = 0.0
+            if stop_loss > 0 and target2 > 0 and price > stop_loss:
+                risk = price - stop_loss
+                rr2 = round((target2 - price) / risk, 1) if risk > 0 else 0
+            if rr2 < 1.5:
+                continue
+
+            entry_display = buy_above if buy_above > 0 else price
+            picks.append({
+                "symbol": symbol,
+                "score": blind_score,
+                "vol_ratio": vol_ratio,
+                "entry": entry_display,
+                "stop_loss": stop_loss,
+                "target1": target1,
+                "target2": target2,
+                "price": price,
+                "change": daily_change,
+                "confidence": confidence,
+                "rr2": rr2,
+            })
+
+        picks.sort(key=lambda x: (-x["score"], -x["rr2"]))
+        top = picks[:5]
+
+        score_emoji = lambda s: "🔥" if s >= 70 else "✅"
+        if not top:
+            self._send_to_channels(
+                f"**⚡ POWER HOUR (2 PM) — {now_ist.strftime('%d %b %Y')}**\n"
+                f"No high-conviction setups for the final push today.\n"
+                f"_Consider holding existing positions but avoid new entries without strong signals_"
+            )
+            return
+
+        lines = [
+            f"**⚡ POWER HOUR (2 PM) — {now_ist.strftime('%d %b %Y')}**",
+            f"**{len(top)}** stock{'s' if len(top) != 1 else ''} with momentum + high volume for the final 1.5 hour push:\n",
+        ]
+        for p in top:
+            vol_str  = f" | Vol {p['vol_ratio']:.1f}x" if p['vol_ratio'] > 0 else ""
+            conf_str = f" | Conf {p['confidence']:.0f}%" if p['confidence'] > 0 else ""
+            lines.append(
+                f"{score_emoji(p['score'])} **{p['symbol']}** (+{p['change']:.1f}% today) — Score {p['score']:.0f}/100 | R:R 1:{p['rr2']}{vol_str}{conf_str}\n"
+                f"   Entry `{p['entry']:.2f}` | Stop `{p['stop_loss']:.2f}` | T1 `{p['target1']:.2f}` | T2 `{p['target2']:.2f}`"
+            )
+        lines.append(
+            "\n_These have trended up all day. Entry here targets the close-of-day push._\n"
+            "_⚠️ Exit before 3:15 PM — avoid holding intraday trades overnight._"
+        )
+        self._send_to_channels("\n".join(lines))
+        self._log(f"Power hour alert sent: {len(top)} picks.")
 
     # ------------------------------------------------------------------
     # Tick-only millisecond fast scanner
