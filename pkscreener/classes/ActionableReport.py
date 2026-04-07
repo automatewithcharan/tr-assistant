@@ -804,6 +804,15 @@ class ActionableReportRunner:
         except Exception:
             tick_timestamp = pd.Timestamp.now()
 
+        # Align tick_timestamp timezone to match the DataFrame index to avoid
+        # TypeError: "Cannot compare tz-naive and tz-aware timestamps" during sort_index()
+        if isinstance(df.index, pd.DatetimeIndex) and len(df.index) > 0:
+            df_tz = df.index.tzinfo
+            if df_tz is not None and tick_timestamp.tzinfo is None:
+                tick_timestamp = tick_timestamp.tz_localize(df_tz)
+            elif df_tz is None and tick_timestamp.tzinfo is not None:
+                tick_timestamp = tick_timestamp.tz_localize(None)
+
         updated_row = df.iloc[-1].copy()
         updated_row["open"] = open_price
         updated_row["high"] = max(high_price, last_price, open_price)
