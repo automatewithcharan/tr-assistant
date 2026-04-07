@@ -225,6 +225,76 @@ def _load_signal_rows(universe: str, action, limit: int = 5) -> pd.DataFrame:
     return filtered.head(max(1, int(limit or 5)))
 
 
+def _load_buynow_rows(universe: str, limit: int = 5) -> pd.DataFrame:
+    """Load /buynow picks with the same quality gates as AutoPilot Discord alerts.
+
+    Filters applied (same as _find_blind_buys + tick path):
+    - BlindBuyScore >= 50
+    - Volume ratio >= 1.0x (above average)
+    - R:R >= 1.5 on Target 2
+    - No bearish / DO NOT BUY flags
+    - Not already overbought (RSI < 78)
+    """
+    path = _latest_signalmonitor_path(universe)
+    if not os.path.exists(path):
+        return pd.DataFrame()
+    try:
+        df = pd.read_csv(path)
+    except Exception:
+        return pd.DataFrame()
+
+    if "What To Do" not in df.columns:
+        return pd.DataFrame()
+
+    buy_actions = {"Strong Buy Now", "Buy Now"}
+    candidates = df[df["What To Do"].astype(str).str.strip().isin(buy_actions)].copy()
+    if candidates.empty:
+        return candidates
+
+    try:
+        from pkscreener.classes.AutoPilotInvestor import BlindBuyScorer
+    except Exception:
+        # If scorer unavailable, fall back to unfiltered
+        return _load_signal_rows(universe, list(buy_actions), limit)
+
+    results = []
+    for _, row in candidates.iterrows():
+        blind_score, blind_reasons = BlindBuyScorer.score(row)
+        if blind_score < 50:
+            continue
+
+        reasons_lower = blind_reasons.lower()
+        if "do not buy" in reasons_lower or "bearish" in reasons_lower:
+            continue
+
+        vol_ratio = float(row.get("Volume Ratio", row.get("VolumeRatio", 0)) or 0)
+        if vol_ratio > 0 and vol_ratio < 1.0:
+            continue
+
+        price     = float(row.get("Price Now", row.get("PriceNow", 0)) or 0)
+        stop_loss = float(row.get("Sell If Below", row.get("SellIfBelow", 0)) or 0)
+        target2   = float(row.get("Take Profit 2", row.get("TakeProfit2", 0)) or 0)
+
+        if stop_loss > 0 and target2 > 0 and price > stop_loss:
+            risk = price - stop_loss
+            rr2 = (target2 - price) / risk if risk > 0 else 0
+            if rr2 < 1.5:
+                continue
+
+        row = row.copy()
+        row["__blind_score"] = blind_score
+        row["What To Do"] = "Buy Now" if blind_score < 70 else "Strong Buy Now"
+        results.append(row)
+
+    if not results:
+        return pd.DataFrame()
+
+    out = pd.DataFrame(results)
+    out.sort_values("__blind_score", ascending=False, inplace=True)
+    out.drop(columns=["__blind_score"], inplace=True, errors="ignore")
+    return out.head(max(1, int(limit or 5)))
+
+
 def _guardrail_text(account_name: str) -> str:
     """Return a short buy-side guardrail status line for Discord replies."""
     max_daily_loss = _get_float_secret("ASSISTANT_MAX_DAILY_LOSS", 0.0)
@@ -733,11 +803,11 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
             await _reply_unauthorized(interaction, reason)
             return
 
-        rows_df = await asyncio.to_thread(_load_signal_rows, universe, ["Strong Buy Now", "Buy Now"], limit or 5)
+        rows_df = await asyncio.to_thread(_load_buynow_rows, universe, limit or 5)
         guardrail_text = _guardrail_text(account_name)
         signal_text = _format_signal_rows_text(
             rows_df,
-            f"No `Strong Buy Now` or `Buy Now` names are available in the latest `{universe}` monitor board yet.",
+            f"No qualifying buy signals right now (all filtered: score<50, vol<1x, R:R<1.5, or bearish).",
         )
         message = "\n\n".join(part for part in [guardrail_text, signal_text] if part)
         await interaction.response.send_message(message[:1900], ephemeral=True)
