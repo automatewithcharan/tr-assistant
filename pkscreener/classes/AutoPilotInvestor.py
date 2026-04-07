@@ -1278,17 +1278,34 @@ class AutoPilotInvestor:
         # For intraday momentum moves (daily_change >= 3%), the signal state's BuyAbove
         # was set from YESTERDAY's close as a swing breakout level. On an intraday move,
         # the stock has already confirmed direction — the tick signal IS the trigger.
-        # Applying a 25-pt penalty + raised min-score because price hasn't hit a stale
-        # swing level would suppress valid intraday entries (e.g. HINDOILEXP up 5% with
-        # volume, BuyAbove set 15% above yesterday's close → penalty fires all day).
         # Fix: for 3%+ intraday moves, zero out the stale BuyAbove so scorer skips it.
+        #
+        # Additional fix for BIOFILCHEM-type stocks:
+        # Signal state may say "bearish alignment / below all MAs" from a STALE scan
+        # (days ago). If the stock is up 5%+ today with 2x+ volume, it has empirically
+        # broken out of that bearish alignment — the live move IS the confirmation.
+        # Strip the stale bearish reason text so scorer doesn't apply the -50 penalty.
         scoring_row = row.copy()
+        vol_ratio_live = float(row.get("VolumeRatio", row.get("Volume Ratio", 0)) or 0)
+        _strong_intraday = daily_change >= 5.0 and vol_ratio_live >= 2.0
         if daily_change >= 3.0:
             scoring_row["PriceNow"] = price   # use live tick price as baseline
             scoring_row["Price Now"] = price
             scoring_row["BuyAbove"] = 0       # skip stale swing-level trigger penalty
             scoring_row["Buy Above"] = 0
             scoring_row["Entry"] = 0
+        if _strong_intraday:
+            # Strip stale bearish labels from the Why/Reason column so scorer skips them.
+            # The 5%+ live move with volume is stronger evidence than a stale text label.
+            _why = str(scoring_row.get("Why", scoring_row.get("Reason", "")) or "")
+            _why_cleaned = " | ".join(
+                part for part in _why.split("|")
+                if "below all major ma" not in part.lower()
+                and "bearish alignment" not in part.lower()
+                and "death cross" not in part.lower()
+            )
+            scoring_row["Why"] = _why_cleaned
+            scoring_row["Reason"] = _why_cleaned
 
         blind_score, blind_reasons = BlindBuyScorer.score(scoring_row)
         is_early_mover = item.get("early_mover", False)
