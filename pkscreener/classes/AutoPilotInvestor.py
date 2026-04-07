@@ -261,13 +261,14 @@ class BlindBuyScorer:
             reasons.append("⚠️ data shows green but price below trigger — treated as suspect")
         elif change_pct >= 5.0:
             score += 15
-            reasons.append(f"breakout +{change_pct:.1f}%")
+            # "hist signal" = change% from signal engine's OHLCV scan (not today's tick move)
+            reasons.append(f"hist signal +{change_pct:.1f}%")
         elif change_pct >= 2.5:
             score += 12
-            reasons.append(f"strong day +{change_pct:.1f}%")
+            reasons.append(f"hist signal +{change_pct:.1f}%")
         elif change_pct >= 1.0:
             score += 10
-            reasons.append(f"green +{change_pct:.1f}%")
+            reasons.append(f"hist signal +{change_pct:.1f}%")
         elif change_pct > 0:
             score += 6
             reasons.append("green candle")
@@ -1319,8 +1320,10 @@ class AutoPilotInvestor:
             volume_ratio_check = float(row.get("VolumeRatio", row.get("Volume Ratio", 0)) or 0)
             effective_min = 60.0 if volume_ratio_check >= self._TICK_EARLY_MOVER_VOL_RATIO else 999.0
         elif _intraday_override and _no_hard_blockers:
-            # Live tick + 3%+ intraday move + no blockers: 45 is sufficient
-            effective_min = 45.0
+            # Live tick + 3%+ intraday move + no blockers.
+            # 55 keeps signal quality high — score 45-54 are WATCH-worthy but not
+            # actionable enough to risk capital on (too many fire at once).
+            effective_min = 55.0
         elif _entry_confirmed and _no_hard_blockers:
             # Price already crossed entry trigger: entry is confirmed, 50 is sufficient
             effective_min = 50.0
@@ -1439,6 +1442,12 @@ class AutoPilotInvestor:
                     _today = datetime.now().strftime("%Y-%m-%d")
                 if self._watch_alerted.get(sym) == _today:
                     self._log(f"Suppressed duplicate WATCH {sym} (already sent today)")
+                    return
+                # Cap: max 5 WATCH alerts per day total — prevents flooding Discord.
+                # With per-symbol dedup already in place, this caps total daily noise.
+                _watch_today_count = sum(1 for v in self._watch_alerted.values() if v == _today)
+                if _watch_today_count >= 5:
+                    self._log(f"Suppressed WATCH {sym}: daily WATCH cap (5/day) reached — score={blind_score:.0f}")
                     return
                 self._watch_alerted[sym] = _today
 
