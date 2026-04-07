@@ -410,7 +410,7 @@ class AutoPilotInvestor:
         self._TICK_ORDER_IMBALANCE_RATIO = 2.5  # buy_qty / sell_qty threshold
         self._TICK_VOLUME_BURST_FRACTION = 0.025  # 2.5% of day-vol in 60s
         self._TICK_HIGH_DAILY_CHANGE_PCT = 2.0   # daily change% to auto-flag (catch moves early, at 2% not 3%)
-        self._TICK_ALREADY_MOVED_PCT = 15.0      # above this % the move is over — don't chase (raised from 7.5 to catch full intraday moves)
+        self._TICK_ALREADY_MOVED_PCT = 10.0      # above this % skip — too late to enter intraday (risk > reward)
         self._TICK_ALERT_COOLDOWN_SEC = 1800     # 30 min before re-triggering same symbol
         # Early Mover: catch stocks at 0.3-2% with heavy accumulation (volume moves before price)
         self._TICK_EARLY_MOVER_IMBALANCE = 3.0   # stricter imbalance ratio for early, unconfirmed moves
@@ -1400,8 +1400,11 @@ class AutoPilotInvestor:
                 from datetime import timezone, timedelta
                 _nist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
             _is_late = _nist.hour * 60 + _nist.minute >= 13 * 60
-            is_swing_only = _is_late and daily_change >= 8.0
-            swing_tag = f"\n⏰ **SWING ONLY** — already +{daily_change:.1f}%, too late for intraday. Hold 2-5 days for targets." if is_swing_only else ""
+            # SWING ONLY: stock already moved 8%+ any time of day.
+            # At 8%+ intraday, entry risk > remaining reward for same-day exit.
+            # Still alert with SWING tag so user can decide to hold overnight.
+            is_swing_only = daily_change >= 8.0
+            swing_tag = f"\n⏰ **SWING ONLY** — already +{daily_change:.1f}% today. Do NOT enter for intraday — swing trade only (hold 2-5 days)." if is_swing_only else ""
 
             if is_early_mover:
                 alert_header = f"**\U0001f331 EARLY MOVER `{sym}`** (accumulation detected, low % — target 5-10%) \u2014 Score {score_label}"
@@ -1807,7 +1810,7 @@ class AutoPilotInvestor:
 
             # Time-of-day context: after 1 PM + already moved 8%+  = swing trade only
             # Stocks at 2-7% after 1 PM can still make a meaningful intraday move by 3:30 PM.
-            is_swing_only = _is_late_session and c.change_pct >= 8.0
+            is_swing_only = c.change_pct >= 8.0
             if is_swing_only:
                 trade_tag = "\n⏰ **SWING ONLY** — already +{:.1f}%, too late for intraday. Hold 2-5 days for targets.".format(c.change_pct)
             else:
