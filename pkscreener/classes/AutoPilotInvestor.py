@@ -366,8 +366,8 @@ class AutoPilotInvestor:
         self._prev_tick_snapshot: Dict[str, Dict] = {}  # last tick reading for delta-volume
         self._TICK_ORDER_IMBALANCE_RATIO = 2.5  # buy_qty / sell_qty threshold
         self._TICK_VOLUME_BURST_FRACTION = 0.025  # 2.5% of day-vol in 60s
-        self._TICK_HIGH_DAILY_CHANGE_PCT = 3.0   # daily change% to auto-flag
-        self._TICK_ALREADY_MOVED_PCT = 20.0      # above this % the move is likely at circuit — skip silently
+        self._TICK_HIGH_DAILY_CHANGE_PCT = 2.0   # daily change% to auto-flag (catch moves early, at 2% not 3%)
+        self._TICK_ALREADY_MOVED_PCT = 7.5       # above this % the move is over — don't chase
         self._TICK_ALERT_COOLDOWN_SEC = 1800     # 30 min before re-triggering same symbol
         # NSE market hours (IST): 9:15 AM open, 3:30 PM close
         self._MARKET_OPEN_HOUR_IST = 9
@@ -495,23 +495,24 @@ class AutoPilotInvestor:
 
             signal_reasons: List[str] = []
 
-            # Signal 1: Order book imbalance
-            if total_sell > 0 and total_buy / total_sell >= self._TICK_ORDER_IMBALANCE_RATIO:
+            # Signal 1: Order book imbalance — only valid if stock is also moving (min 0.5%)
+            # Pure imbalance on penny/thin stocks with near-zero volume is noise.
+            if total_sell > 0 and total_buy / total_sell >= self._TICK_ORDER_IMBALANCE_RATIO and daily_change >= 0.5:
                 ratio = round(total_buy / total_sell, 1)
                 signal_reasons.append(f"📥 Buy orders {ratio}x sell orders (heavy accumulation)")
             elif total_buy > 0 and total_sell / total_buy >= self._TICK_ORDER_IMBALANCE_RATIO:
                 # Heavy sell imbalance — potential dump coming, skip for buys
                 pass
 
-            # Signal 2: Volume burst
-            if prev_vol > 0 and current_vol > prev_vol:
+            # Signal 2: Volume burst — only valid if stock is also moving (min 0.5%)
+            if prev_vol > 0 and current_vol > prev_vol and daily_change >= 0.5:
                 burst_pct = (current_vol - prev_vol) / prev_vol
                 if burst_pct >= self._TICK_VOLUME_BURST_FRACTION:
                     signal_reasons.append(
                         f"📊 Volume burst +{burst_pct*100:.1f}% in last 60s (smart money moving)"
                     )
 
-            # Signal 3: High daily change
+            # Signal 3: High daily change (2%+ now, was 3%) — catches moves earlier
             if daily_change >= self._TICK_HIGH_DAILY_CHANGE_PCT:
                 direction = "+" if float(tick.get("change") or 0) > 0 else ""
                 signal_reasons.append(
