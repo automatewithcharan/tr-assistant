@@ -364,14 +364,15 @@ class AutoPilotInvestor:
         # Tick-only fast scanner state (no OHLCV, fires in < 1 second)
         self._tick_alerted: Dict[str, datetime] = {}  # symbol -> time of last tick-triggered scan
         self._prev_tick_snapshot: Dict[str, Dict] = {}  # last tick reading for delta-volume
-        self._TICK_ORDER_IMBALANCE_RATIO = 2.5  # buy_qty / sell_qty threshold (in-motion stocks 1.5-7.5%)
-        self._TICK_ORDER_IMBALANCE_EARLY_RATIO = 5.0  # much stricter for pre-breakout (0.1-1.5%) to avoid noise
+        self._TICK_ORDER_IMBALANCE_RATIO = 2.5  # buy_qty / sell_qty threshold
         self._TICK_VOLUME_BURST_FRACTION = 0.025  # 2.5% of day-vol in 60s
-        self._TICK_EARLY_BREAKOUT_MAX_PCT = 1.5  # stocks below this % are "pre-breakout" candidates
-        self._TICK_EARLY_BREAKOUT_MIN_PCT = 0.1  # ignore flat stocks (0% change = no signal at all)
         self._TICK_HIGH_DAILY_CHANGE_PCT = 2.0   # daily change% to auto-flag (catch moves early, at 2% not 3%)
         self._TICK_ALREADY_MOVED_PCT = 7.5       # above this % the move is over — don't chase
         self._TICK_ALERT_COOLDOWN_SEC = 1800     # 30 min before re-triggering same symbol
+        # Early Mover: catch stocks at 0.3-2% with heavy accumulation (volume moves before price)
+        self._TICK_EARLY_MOVER_IMBALANCE = 3.0   # stricter imbalance ratio for early, unconfirmed moves
+        self._TICK_EARLY_MOVER_MIN_PCT = 0.3     # minimum daily change% to consider as early mover
+        self._TICK_EARLY_MOVER_VOL_RATIO = 3.0   # OHLCV volume ratio required to confirm early mover
         # NSE market hours (IST): 9:15 AM open, 3:30 PM close
         self._MARKET_OPEN_HOUR_IST = 9
         self._MARKET_OPEN_MIN_IST = 15
@@ -498,22 +499,16 @@ class AutoPilotInvestor:
 
             signal_reasons: List[str] = []
 
-            # Signal 1: Order book imbalance
-            # Pre-breakout (0.1–1.5% daily): require 5x imbalance to avoid thin-book noise.
-            # In-motion (1.5–7.5%): normal 2.5x threshold is fine.
-            if total_sell > 0 and total_buy > 0:
-                imbalance_ratio = total_buy / total_sell
-                is_pre_breakout = (self._TICK_EARLY_BREAKOUT_MIN_PCT <= daily_change <= self._TICK_EARLY_BREAKOUT_MAX_PCT)
-                required_ratio = self._TICK_ORDER_IMBALANCE_EARLY_RATIO if is_pre_breakout else self._TICK_ORDER_IMBALANCE_RATIO
-                if imbalance_ratio >= required_ratio:
-                    ratio = round(imbalance_ratio, 1)
-                    tag = " 🔍 Pre-breakout accumulation" if is_pre_breakout else " (heavy accumulation)"
-                    signal_reasons.append(f"📥 Buy orders {ratio}x sell orders{tag}")
-            elif total_buy > 0 and total_sell > 0 and total_sell / total_buy >= self._TICK_ORDER_IMBALANCE_RATIO:
+            # Signal 1: Order book imbalance — only valid if stock is also moving (min 0.5%)
+            # Pure imbalance on penny/thin stocks with near-zero volume is noise.
+            if total_sell > 0 and total_buy / total_sell >= self._TICK_ORDER_IMBALANCE_RATIO and daily_change >= 0.5:
+                ratio = round(total_buy / total_sell, 1)
+                signal_reasons.append(f"📥 Buy orders {ratio}x sell orders (heavy accumulation)")
+            elif total_buy > 0 and total_sell / total_buy >= self._TICK_ORDER_IMBALANCE_RATIO:
                 # Heavy sell imbalance — potential dump coming, skip for buys
                 pass
 
-            # Signal 2: Volume burst — only valid if stock is also moving (min 0.5% to filter flat penny stocks)
+            # Signal 2: Volume burst — only valid if stock is also moving (min 0.5%)
             if prev_vol > 0 and current_vol > prev_vol and daily_change >= 0.5:
                 burst_pct = (current_vol - prev_vol) / prev_vol
                 if burst_pct >= self._TICK_VOLUME_BURST_FRACTION:
@@ -528,6 +523,23 @@ class AutoPilotInvestor:
                     f"🚀 {direction}{float(tick.get('change') or 0):.2f}% for the day"
                 )
 
+            # Signal 4: Early Accumulation — stock barely moved but big buyers loading
+            # Volume moves before price. This is the highest-quality early entry signal.
+            # Requires stricter imbalance (3:1) since there is no price confirmation yet.
+            early_mover = False
+            if (
+                not signal_reasons
+                and self._TICK_EARLY_MOVER_MIN_PCT <= daily_change < self._TICK_HIGH_DAILY_CHANGE_PCT
+                and total_sell > 0
+                and total_buy / total_sell >= self._TICK_EARLY_MOVER_IMBALANCE
+            ):
+                ratio = round(total_buy / total_sell, 1)
+                change_sign = "+" if float(tick.get("change") or 0) > 0 else ""
+                signal_reasons.append(
+                    f"🌱 Early accumulation: {ratio}x buy/sell at only {change_sign}{float(tick.get('change') or 0):.2f}% move — big players loading"
+                )
+                early_mover = True
+
             if signal_reasons:
                 flagged.append({
                     "symbol": symbol,
@@ -537,6 +549,7 @@ class AutoPilotInvestor:
                     "total_sell": total_sell,
                     "volume": current_vol,
                     "reasons": signal_reasons,
+                    "early_mover": early_mover,
                     # Priority: daily change% + imbalance strength
                     "_priority": daily_change * 10 + (
                         (total_buy / max(total_sell, 1)) if total_sell > 0 else 0
@@ -608,11 +621,20 @@ class AutoPilotInvestor:
 
         row = report_df.iloc[0]
         blind_score, blind_reasons = BlindBuyScorer.score(row)
+        is_early_mover = item.get("early_mover", False)
 
         _price_now = float(row.get("PriceNow", row.get("Price Now", price)) or price)
         _buy_above = float(row.get("BuyAbove", row.get("Buy Above", 0)) or 0)
+        # Fix display: if no trigger price from signal engine, show current price as entry
+        _buy_above_display = _buy_above if _buy_above > 0 else _price_now
         _price_below_trigger = _price_now > 0 and _buy_above > 0 and _price_now < _buy_above
-        effective_min = 65.0 if _price_below_trigger else self.config.blind_buy_min_score
+
+        # For early movers, require stricter score AND confirmed high volume from OHLCV
+        if is_early_mover:
+            volume_ratio_check = float(row.get("VolumeRatio", row.get("Volume Ratio", 0)) or 0)
+            effective_min = 60.0 if volume_ratio_check >= self._TICK_EARLY_MOVER_VOL_RATIO else 999.0
+        else:
+            effective_min = 65.0 if _price_below_trigger else self.config.blind_buy_min_score
 
         if blind_score >= effective_min and sym not in self._already_alerted_buys:
             # CONFIRMED — send a proper BUY ALERT immediately
@@ -622,24 +644,25 @@ class AutoPilotInvestor:
             suggested_qty = int(float(row.get("SuggestedQty", row.get("Suggested Qty", 0)) or 0))
             confidence = float(row.get("ConfidencePct", row.get("Signal Strength %", 0)) or 0)
             volume_ratio = float(row.get("VolumeRatio", row.get("Volume Ratio", 0)) or 0)
+            atr = float(row.get("ATR", 0) or 0)
 
-            # Fallback: signal engine marks HOLD (already-moving stocks) and skips stop/target.
-            # Compute from ATR + price directly so the alert is always actionable.
+            # Fallback stop/target computation.
+            # Early movers: use wider targets (5%/10%) to capture the full expected move.
+            # Regular (HOLD-rated) stocks already running: conservative 2%/4%.
             if stop_loss <= 0 and _price_now > 0:
-                atr = float(row.get("ATR", 0) or 0)
                 if atr > 0:
-                    stop_loss = round(_price_now - 1.5 * atr, 2)
+                    stop_loss = round(_price_now - (2.0 if is_early_mover else 1.5) * atr, 2)
                 else:
-                    # No ATR: use 5% hard stop (conservative for high-momentum stocks)
-                    stop_loss = round(_price_now * 0.95, 2)
+                    stop_loss = round(_price_now * (0.96 if is_early_mover else 0.95), 2)
             if target1 <= 0 and _price_now > 0:
-                target1 = round(_price_now * 1.02, 2)   # +2% first target
+                target1 = round(_price_now * (1.05 if is_early_mover else 1.02), 2)
             if target2 <= 0 and _price_now > 0:
-                target2 = round(_price_now * 1.04, 2)   # +4% second target
-            # Suggested qty: risk ₹1000 per trade at computed stop
+                target2 = round(_price_now * (1.10 if is_early_mover else 1.04), 2)
+            # Suggested qty: risk ₹2000 for early movers (better setup), ₹1000 for chasers
+            risk_budget = 2000 if is_early_mover else 1000
             if suggested_qty <= 0 and stop_loss > 0 and _price_now > stop_loss:
                 risk_per_share = _price_now - stop_loss
-                suggested_qty = max(1, int(1000 / risk_per_share))
+                suggested_qty = max(1, int(risk_budget / risk_per_share))
 
             score_label = f"\U0001f525 **{blind_score:.0f}/100**" if blind_score >= 70 else f"\u2705 **{blind_score:.0f}/100**"
             risk_reward = ""
@@ -649,12 +672,13 @@ class AutoPilotInvestor:
                 risk_reward = f" | R:R `1:{rr2}`"
 
             qty_line = f"\nSuggested Qty: `{suggested_qty}`" if suggested_qty > 0 else ""
-            # Buy Above = 0 means signal engine gave no breakout trigger (HOLD-rated).
-            # Show current price so user knows the actual entry level.
-            buy_above_display = _buy_above if _buy_above > 0 else _price_now
+            if is_early_mover:
+                alert_header = f"**\U0001f331 EARLY MOVER `{sym}`** (accumulation detected, low % — target 5-10%) \u2014 Score {score_label}"
+            else:
+                alert_header = f"**\U0001f7e2 BUY `{sym}`** (tick-confirmed in ~2s) \u2014 Score {score_label}"
             message = (
-                f"**\U0001f7e2 BUY `{sym}`** (tick-confirmed in ~2s) \u2014 Score {score_label}\n"
-                f"Price `{_price_now:.2f}` ({direction}{daily_change:.2f}%) | Buy Above `{buy_above_display:.2f}`\n"
+                f"{alert_header}\n"
+                f"Price `{_price_now:.2f}` ({direction}{daily_change:.2f}%) | Buy Above `{_buy_above_display:.2f}`\n"
                 f"Stop Loss `{stop_loss:.2f}` | Target 1 `{target1:.2f}` | Target 2 `{target2:.2f}`{risk_reward}\n"
                 f"Volume `{volume_ratio:.1f}x avg` | Confidence `{confidence:.0f}%`\n"
                 f"Tick signals:\n{reasons_text}\n"
