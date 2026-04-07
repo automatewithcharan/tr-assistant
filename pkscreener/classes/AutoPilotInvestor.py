@@ -1397,7 +1397,8 @@ class AutoPilotInvestor:
         else:
             # REJECTED — only send WATCH if this could still become actionable:
             # - Early mover (stock at 0-2%): worth watching, may break out soon
-            # - Score ≥ 45 and stock below 4%: close miss, conditions may improve
+            # - Score ≥ 45: close miss, may upgrade to BUY on next cycle
+            # - No daily_change cap: 10.2x buy imbalance at 3.85% is still actionable
             # Stocks with DO NOT BUY / BEARISH / at stop loss — never send WATCH, pure noise.
             reasons_lower = blind_reasons.lower()
             has_hard_blocker = (
@@ -1407,21 +1408,24 @@ class AutoPilotInvestor:
             )
             watch_worthy = (
                 not has_hard_blocker
-                and (is_early_mover or (blind_score >= 45 and daily_change < 4.0))
+                and (is_early_mover or blind_score >= 45)
+                and daily_change < self._TICK_ALREADY_MOVED_PCT  # don't WATCH if train left
             )
             if watch_worthy:
                 # Split reasons into positives and blockers for readable formatting
                 reason_parts = [r.strip() for r in blind_reasons.split(",") if r.strip()]
-                _pos_keywords = ["trigger", "volume", "breakout", "green", "above", "oversold", "momentum", "bullish", "cross up"]
-                _neg_keywords = ["below", "bearish", "danger", "stop", "do not", "overbought", "red", "weak", "low volume"]
+                _pos_keywords = ["trigger", "volume", "breakout", "green", "above", "oversold", "momentum", "bullish", "cross up", "atr stop", "consolidation", "high confidence"]
+                # "above ATR stop" contains "stop" but is bullish — check positives FIRST,
+                # then only fall through to neg check if not already matched as positive.
+                _neg_keywords = ["below", "bearish", "danger", "do not", "overbought", "red day", "weak", "low volume", "below trigger", "below buy"]
                 positives = []
                 blockers = []
                 for rp in reason_parts:
                     rp_low = rp.lower()
-                    if any(k in rp_low for k in _neg_keywords):
-                        blockers.append(f"  ❌ {rp.strip()}")
-                    elif any(k in rp_low for k in _pos_keywords):
+                    if any(k in rp_low for k in _pos_keywords):
                         positives.append(f"  ✅ {rp.strip()}")
+                    elif any(k in rp_low for k in _neg_keywords):
+                        blockers.append(f"  ❌ {rp.strip()}")
                     # neutral/unknown: skip to reduce noise
 
                 pos_block = "\n".join(positives) if positives else "  (none)"
@@ -1433,7 +1437,7 @@ class AutoPilotInvestor:
                     f"\n**Tick signal:**\n{reasons_text}\n"
                     f"\n**Why it looks interesting:**\n{pos_block}\n"
                     f"\n**Why NOT buying yet:**\n{neg_block}\n"
-                    f"\n_Will re-check every 60s. Alert will upgrade to BUY if blockers clear._"
+                    f"\n_Will re-check every 5s. Alert will upgrade to BUY if blockers clear._"
                 )
                 self._send_to_channels(message)
             else:
