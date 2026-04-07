@@ -367,7 +367,7 @@ class AutoPilotInvestor:
         self._TICK_ORDER_IMBALANCE_RATIO = 2.5  # buy_qty / sell_qty threshold
         self._TICK_VOLUME_BURST_FRACTION = 0.025  # 2.5% of day-vol in 60s
         self._TICK_HIGH_DAILY_CHANGE_PCT = 2.0   # daily change% to auto-flag (catch moves early, at 2% not 3%)
-        self._TICK_ALREADY_MOVED_PCT = 7.5       # above this % the move is over — don't chase
+        self._TICK_ALREADY_MOVED_PCT = 15.0      # above this % the move is over — don't chase (raised from 7.5 to catch full intraday moves)
         self._TICK_ALERT_COOLDOWN_SEC = 1800     # 30 min before re-triggering same symbol
         # Early Mover: catch stocks at 0.3-2% with heavy accumulation (volume moves before price)
         self._TICK_EARLY_MOVER_IMBALANCE = 3.0   # stricter imbalance ratio for early, unconfirmed moves
@@ -382,6 +382,9 @@ class AutoPilotInvestor:
         self._premarket_sent_date: Optional[str] = None  # date string — send once per day
         self._midday_sent_date: Optional[str] = None     # mid-day scanner — once per day
         self._powerhour_sent_date: Optional[str] = None  # power hour alert — once per day
+        self._eod_exit_sent_date: Optional[str] = None   # end-of-day exit reminder — once per day
+        # Momentum continuation tracking: symbol -> {alert_time, alert_pct, entry_price}
+        self._momentum_tracked: Dict[str, Dict] = {}  # stocks we alerted — track for continuation
 
     # ------------------------------------------------------------------
     # Public API
@@ -446,6 +449,10 @@ class AutoPilotInvestor:
             self._run_midday_scanner()
             # Power hour alert: fires once per day at 2:00 PM IST
             self._run_powerhour_alert()
+            # Momentum continuation: re-alerts on alerted stocks still running strongly
+            self._run_momentum_continuation()
+            # End-of-day exit reminder: fires once per day at 3:10 PM IST
+            self._run_eod_exit_alert()
             # Fast tick scan (zero API calls, < 1s) — catches pre-jump conditions
             # BEFORE the full OHLCV cycle would even start.
             self._run_tick_fast_scan()
@@ -876,6 +883,164 @@ class AutoPilotInvestor:
         self._log(f"Power hour alert sent: {len(top)} picks.")
 
     # ------------------------------------------------------------------
+    # Momentum continuation (every cycle, re-checks alerted stocks)
+    # ------------------------------------------------------------------
+
+    def _run_momentum_continuation(self) -> None:
+        """Re-alert on stocks we already flagged if momentum is still running.
+
+        After an initial BUY alert fires at e.g. +3%, this method checks every
+        cycle (60s). If the stock has moved another 3%+ from the last alert level
+        AND volume is still ≥1.5x average, it sends a 🚀 MOMENTUM RUNNING update
+        so the user knows to trail their stop, not sell yet.
+
+        Cooldown: 15 minutes between momentum continuation alerts per symbol.
+        Auto-expires: after 3:10 PM IST, no new continuation alerts (too close to close).
+        """
+        if not self._momentum_tracked:
+            return
+        if not self._is_market_open():
+            return
+
+        try:
+            import pytz
+            ist = pytz.timezone("Asia/Kolkata")
+            now_ist = datetime.now(ist)
+        except Exception:
+            from datetime import timezone, timedelta
+            ist_offset = timezone(timedelta(hours=5, minutes=30))
+            now_ist = datetime.now(ist_offset)
+
+        # Stop sending continuation alerts after 3:10 PM — too close to market close
+        if now_ist.hour * 60 + now_ist.minute >= 15 * 60 + 10:
+            return
+
+        ticks = self._load_ticks_snapshot()
+        if not ticks:
+            return
+
+        now = datetime.now()
+        _CONTINUATION_COOLDOWN_SEC = 900  # 15 min between re-alerts per symbol
+        _CONTINUATION_MIN_MOVE_PCT = 3.0  # must have moved 3%+ since last alert level
+        _CONTINUATION_MIN_VOL = 1.5       # volume must still be strong
+
+        for sym, tracked in list(self._momentum_tracked.items()):
+            last_alert_time = tracked.get("last_alert_time")
+            if isinstance(last_alert_time, datetime):
+                if (now - last_alert_time).total_seconds() < _CONTINUATION_COOLDOWN_SEC:
+                    continue
+
+            tick = ticks.get(sym, {})
+            current_price = float(tick.get("last_price") or 0)
+            current_change = float(tick.get("change") or 0)
+            if current_price <= 0 or current_change <= 0:
+                continue
+
+            last_alert_pct = tracked.get("last_alert_pct", 0)
+            entry_price = tracked.get("entry_price", 0)
+
+            # Check if moved 3%+ since last alert
+            move_since_alert = current_change - last_alert_pct
+            if move_since_alert < _CONTINUATION_MIN_MOVE_PCT:
+                continue
+
+            # Check volume from signal state
+            signal_state = self._load_signal_state()
+            vol_ratio = 0.0
+            if signal_state is not None and not signal_state.empty:
+                rows = signal_state[signal_state["Symbol"].str.upper() == sym]
+                if not rows.empty:
+                    vol_ratio = float(rows.iloc[0].get("VolumeRatio", 0) or 0)
+
+            if vol_ratio > 0 and vol_ratio < _CONTINUATION_MIN_VOL:
+                continue
+
+            # Compute profit from original entry
+            profit_pct = 0.0
+            if entry_price > 0:
+                profit_pct = round((current_price - entry_price) / entry_price * 100, 1)
+
+            vol_str = f" | Vol `{vol_ratio:.1f}x`" if vol_ratio > 0 else ""
+            profit_str = f" | From entry: `+{profit_pct:.1f}%`" if profit_pct > 0 else ""
+            # Trailing stop suggestion: 4% below current price
+            trail_stop = round(current_price * 0.96, 2)
+
+            message = (
+                f"**\U0001f680 MOMENTUM RUNNING `{sym}`** — still pushing! "
+                f"Now `+{current_change:.1f}%` (was `+{last_alert_pct:.1f}%` when alerted){profit_str}\n"
+                f"Price `{current_price:.2f}`{vol_str}\n"
+                f"Trail stop → `{trail_stop:.2f}` (4% below current)\n"
+                f"_Don't sell yet — let it run. Move stop up to protect profits._"
+            )
+            self._send_to_channels(message)
+            self._log(f"Momentum continuation alert: {sym} now +{current_change:.1f}% (was +{last_alert_pct:.1f}%)")
+
+            # Update tracking
+            self._momentum_tracked[sym]["last_alert_time"] = now
+            self._momentum_tracked[sym]["last_alert_pct"] = current_change
+
+    # ------------------------------------------------------------------
+    # End-of-day exit reminder (3:10 PM IST, once per day)
+    # ------------------------------------------------------------------
+
+    def _run_eod_exit_alert(self) -> None:
+        """Send a hard exit reminder at 3:10 PM IST.
+
+        Intraday positions MUST be squared off before 3:20 PM to avoid
+        delivery charges or auto-square-off by broker at unfavorable prices.
+        This alert fires once per day with the current P&L of tracked stocks.
+        """
+        try:
+            import pytz
+            ist = pytz.timezone("Asia/Kolkata")
+            now_ist = datetime.now(ist)
+        except Exception:
+            from datetime import timezone, timedelta
+            ist_offset = timezone(timedelta(hours=5, minutes=30))
+            now_ist = datetime.now(ist_offset)
+
+        today_str = now_ist.strftime("%Y-%m-%d")
+        now_min = now_ist.hour * 60 + now_ist.minute
+
+        # Fire between 3:10 PM and 3:19 PM IST, once per day
+        _START = 15 * 60 + 10
+        _END   = 15 * 60 + 19
+
+        if not (_START <= now_min <= _END):
+            return
+        if self._eod_exit_sent_date == today_str:
+            return
+
+        self._eod_exit_sent_date = today_str
+        self._log("EOD exit alert: preparing...")
+
+        ticks = self._load_ticks_snapshot()
+
+        lines = [
+            f"**\U0001f4e2 MARKET CLOSING IN 20 MIN — {now_ist.strftime('%d %b %Y')}**",
+            f"Exit all intraday positions NOW before 3:20 PM to avoid broker auto-square-off.\n",
+        ]
+
+        if self._momentum_tracked:
+            lines.append("**Your alerted stocks today:**")
+            for sym, tracked in self._momentum_tracked.items():
+                tick = ticks.get(sym, {})
+                current_price = float(tick.get("last_price") or 0)
+                entry_price = tracked.get("entry_price", 0)
+                change = float(tick.get("change") or 0)
+                if current_price > 0 and entry_price > 0:
+                    profit_pct = round((current_price - entry_price) / entry_price * 100, 1)
+                    emoji = "\U0001f7e2" if profit_pct > 0 else "\U0001f534"
+                    lines.append(f"  {emoji} **{sym}** | Entry `{entry_price:.2f}` → Now `{current_price:.2f}` | `{'+' if profit_pct >= 0 else ''}{profit_pct:.1f}%` | Daily `+{change:.1f}%`")
+                elif current_price > 0:
+                    lines.append(f"  **{sym}** | Now `{current_price:.2f}` | Daily `+{change:.1f}%`")
+            lines.append("")
+
+        lines.append("_Go to Groww → Portfolio → Sell all intraday positions. Do it NOW._")
+        self._send_to_channels("\n".join(lines))
+        self._log("EOD exit alert sent.")
+
+    # ------------------------------------------------------------------
     # Tick-only millisecond fast scanner
     # ------------------------------------------------------------------
 
@@ -1135,6 +1300,12 @@ class AutoPilotInvestor:
             )
             self._already_alerted_buys.add(sym)
             self._send_to_channels(message)
+            # Track for momentum continuation re-alerts
+            self._momentum_tracked[sym] = {
+                "entry_price": _price_now,
+                "last_alert_pct": daily_change,
+                "last_alert_time": datetime.now(),
+            }
         else:
             # REJECTED — only send WATCH if this could still become actionable:
             # - Early mover (stock at 0-2%): worth watching, may break out soon
@@ -1528,6 +1699,12 @@ class AutoPilotInvestor:
             sections.append("\n".join(block))
 
             self._already_alerted_buys.add(c.symbol)
+            # Track for momentum continuation re-alerts
+            self._momentum_tracked[c.symbol] = {
+                "entry_price": c.price,
+                "last_alert_pct": c.change_pct,
+                "last_alert_time": datetime.now(),
+            }
 
         sections.append("_Open Groww → Buy → then use `/buy SYMBOL QTY PRICE` to record_")
         message = "\n\n".join(sections)
