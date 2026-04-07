@@ -397,7 +397,7 @@ class AutoPilotInvestor:
             max_consecutive_losses=self.config.max_consecutive_losses,
         )
         self._cycle_count = 0
-        self._already_alerted_buys: Set[str] = set()  # avoid repeat buy alerts
+        self._already_alerted_buys: Set[str] = self._load_daily_alerted_set()  # persist across restarts
         self._already_alerted_sells: Set[str] = set()  # avoid repeat sell alerts
         self._last_buy_alert_time: Optional[datetime] = None  # cooldown tracking
         self._pending_followups: List["BlindBuyCandidate"] = []  # buffer for batching
@@ -428,6 +428,7 @@ class AutoPilotInvestor:
         self._eod_exit_sent_date: Optional[str] = None   # end-of-day exit reminder — once per day
         # Momentum continuation tracking: symbol -> {alert_time, alert_pct, entry_price}
         self._momentum_tracked: Dict[str, Dict] = {}  # stocks we alerted — track for continuation
+        self._nifty_crash_pause: bool = False  # True if Nifty down >2% in first 30 min of day
 
     # ------------------------------------------------------------------
     # Public API
@@ -454,6 +455,11 @@ class AutoPilotInvestor:
             if guardrail_status.buy_paused:
                 result.buy_paused = True
                 result.pause_reasons = guardrail_status.reasons
+
+            # 2b. Nifty crash guard — check if index is down >2% within first 60 min
+            # Only re-evaluate once per cycle during market hours
+            if self._is_market_open():
+                self._nifty_crash_pause = self._check_nifty_crash(signal_state)
 
             # 3. Find blind-buy candidates
             if not result.buy_paused:
@@ -1450,6 +1456,7 @@ class AutoPilotInvestor:
                 f"_Open Groww \u2192 Buy \u2192 then use `/buy {sym} QTY PRICE` to record_"
             )
             self._already_alerted_buys.add(sym)
+            self._save_daily_alerted(sym)
             self._send_to_channels(message)
             # Track for momentum continuation re-alerts
             self._momentum_tracked[sym] = {
@@ -1732,6 +1739,33 @@ class AutoPilotInvestor:
             return None
 
     # ------------------------------------------------------------------
+    # Daily alert deduplication (persist across session restarts)
+    # ------------------------------------------------------------------
+
+    def _daily_alerted_path(self) -> str:
+        today = datetime.now().strftime("%Y-%m-%d")
+        return os.path.join(self.output_dir, f"alerted_buys_{today}.txt")
+
+    def _load_daily_alerted_set(self) -> Set[str]:
+        """Load today's already-alerted symbols so restarts don't re-fire same-day alerts."""
+        path = self._daily_alerted_path()
+        if not os.path.isfile(path):
+            return set()
+        try:
+            with open(path, "r") as f:
+                return {line.strip().upper() for line in f if line.strip()}
+        except Exception:
+            return set()
+
+    def _save_daily_alerted(self, symbol: str) -> None:
+        """Append a symbol to today's alerted file."""
+        try:
+            with open(self._daily_alerted_path(), "a") as f:
+                f.write(symbol.upper() + "\n")
+        except Exception:
+            pass
+
+    # ------------------------------------------------------------------
     # Discord push alerts
     # ------------------------------------------------------------------
 
@@ -1751,6 +1785,46 @@ class AutoPilotInvestor:
         now_minutes = now_ist.hour * 60 + now_ist.minute
         return open_minutes <= now_minutes <= close_minutes
 
+    def _check_nifty_crash(self, signal_df: pd.DataFrame) -> bool:
+        """Return True if the broad market is crashing (Nifty/index down >2%).
+
+        Checks the ^NSEI row in the Kite tick snapshot if available,
+        falling back to median ChangePct of all signal stocks as a proxy.
+        OHLCV-based buy alerts are paused when this returns True.
+        Tick-confirmed alerts (real intraday moves) bypass this guard.
+        """
+        # Try to get Nifty change from tick data
+        try:
+            tick_path = os.path.join(self.output_dir, "kite_tick_latest.json")
+            if os.path.isfile(tick_path):
+                import json
+                with open(tick_path, "r") as f:
+                    ticks = json.load(f)
+                for key in ("NIFTY 50", "NSEI", "^NSEI", "NIFTY50"):
+                    if key in ticks:
+                        nifty_chg = float(ticks[key].get("change", 0) or 0)
+                        if nifty_chg <= -2.0:
+                            self._log(f"Nifty crash guard: Nifty {nifty_chg:.1f}% — pausing OHLCV buy alerts")
+                            return True
+                        return False
+        except Exception:
+            pass
+
+        # Fallback: use median ChangePct of all stocks as market proxy.
+        # If the typical stock is down >1.5%, treat as market crash.
+        try:
+            col = "ChangePct" if "ChangePct" in signal_df.columns else "Change %"
+            if col in signal_df.columns:
+                changes = pd.to_numeric(signal_df[col], errors="coerce").dropna()
+                if len(changes) > 50:
+                    median_chg = float(changes.median())
+                    if median_chg <= -1.5:
+                        self._log(f"Nifty crash guard: median stock change {median_chg:.1f}% — pausing OHLCV buy alerts")
+                        return True
+        except Exception:
+            pass
+        return False
+
     def _push_buy_alerts(self, candidates: List[BlindBuyCandidate]) -> None:
         """Push blind-buy alerts to Discord.
 
@@ -1759,6 +1833,15 @@ class AutoPilotInvestor:
         """
         if not self._is_market_open():
             return  # NSE not yet open — suppress all buy alerts
+
+        # Nifty crash guard: if Nifty/Sensex is down >2% in first 60 min, suppress OHLCV buys.
+        # Individual stocks can still look good on yesterday's setup, but the broader crash means
+        # entry risk is very high — gap-downs, lower circuits, no buyers.
+        # Tick-confirmed alerts (3%+ intraday move with volume) bypass this — those ARE moving up
+        # against the market direction, which is a stronger signal.
+        if self._nifty_crash_pause:
+            self._log("OHLCV buy alerts paused: Nifty/index down >2% today (crash mode)")
+            return
 
         if not candidates:
             # Even with no new candidates, check if buffered follow-ups are ready
@@ -1777,6 +1860,7 @@ class AutoPilotInvestor:
             # Mark as alerted immediately so they don't re-queue next cycle
             for c in candidates:
                 self._already_alerted_buys.add(c.symbol)
+                self._save_daily_alerted(c.symbol)
             self._flush_pending_followups()
 
     def _flush_pending_followups(self) -> None:
@@ -1861,6 +1945,7 @@ class AutoPilotInvestor:
             sections.append("\n".join(block))
 
             self._already_alerted_buys.add(c.symbol)
+            self._save_daily_alerted(c.symbol)
             # Track for momentum continuation re-alerts
             self._momentum_tracked[c.symbol] = {
                 "entry_price": c.price,
