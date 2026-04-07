@@ -291,7 +291,7 @@ def _load_buynow_rows(universe: str, limit: int = 5) -> pd.DataFrame:
 
     out = pd.DataFrame(results)
     out.sort_values("__blind_score", ascending=False, inplace=True)
-    out.drop(columns=["__blind_score"], inplace=True, errors="ignore")
+    # Keep __blind_score for formatting — dropped in _format_signal_rows_text after use
     return out.head(max(1, int(limit or 5)))
 
 
@@ -315,28 +315,61 @@ def _guardrail_text(account_name: str) -> str:
 
 
 def _format_signal_rows_text(rows_df: pd.DataFrame, empty_text: str) -> str:
-    """Format live signal rows for Discord-friendly reading on mobile."""
+    """Format /buynow signal rows in the same style as auto-BUY alerts."""
     if rows_df is None or rows_df.empty:
         return empty_text
 
     lines = []
     for _, row in rows_df.iterrows():
+        sym = str(row.get("Stock", row.get("Symbol", ""))).strip().upper()
+        price = float(row.get("Price Now", row.get("PriceNow", 0)) or 0)
+        buy_above = float(row.get("Buy Above", row.get("BuyAbove", 0)) or 0)
+        stop_loss = float(row.get("Sell If Below", row.get("SellIfBelow", 0)) or 0)
+        target1 = float(row.get("Take Profit 1", row.get("TakeProfit1", 0)) or 0)
+        target2 = float(row.get("Take Profit 2", row.get("TakeProfit2", 0)) or 0)
+        change_pct = float(row.get("Change %", row.get("ChangePct", row.get("% Change", 0))) or 0)
+        blind_score = float(row.get("__blind_score", 0) or 0)
+
+        # Score label matching auto-alert style
+        if blind_score >= 70:
+            score_label = f"\U0001f525 **{blind_score:.0f}/100**"
+        elif blind_score >= 55:
+            score_label = f"\u2705 **{blind_score:.0f}/100**"
+        else:
+            score_label = f"**{blind_score:.0f}/100**"
+
+        # Quantity and investment amount
         _qty_raw = row.get("Suggested Qty", 0)
         try:
-            qty = int(float(_qty_raw)) if _qty_raw == _qty_raw else 0  # NaN check
+            qty = int(float(_qty_raw)) if _qty_raw == _qty_raw else 0
         except (TypeError, ValueError):
             qty = 0
-        lines.extend(
-            [
-                f"{row['What To Do']} `{row['Stock']}`",
-                f"Price `{_format_money(row.get('Price Now', 0))}` | Buy Above `{_format_money(row.get('Buy Above', 0))}`",
-                f"Stop `{_format_money(row.get('Sell If Below', 0))}` | Target 1 `{_format_money(row.get('Take Profit 1', 0))}` | Target 2 `{_format_money(row.get('Take Profit 2', 0))}`",
-                f"Qty `{qty}` | Strength `{float(row.get('Signal Strength %', 0) or 0):.1f}%`",
-                f"Checks: `{str(row.get('Checks', '')).strip()}`",
-                f"Why: {str(row.get('Why', '')).strip()}",
-                "",
-            ]
-        )
+        if qty <= 0 and price > 0 and stop_loss > 0 and price > stop_loss:
+            qty = max(1, int(1000 / (price - stop_loss)))
+        elif qty <= 0 and price > 0:
+            qty = max(1, int(1000 / (price * 0.03)))
+        if price > 0:
+            qty = min(qty, max(1, int(5000 / price)))
+        invest_amt = round(qty * price, 0) if price > 0 else 0
+
+        # R:R
+        rr_text = ""
+        if stop_loss > 0 and target2 > 0 and price > stop_loss:
+            risk = price - stop_loss
+            rr2 = round((target2 - price) / risk, 1) if risk > 0 else 0
+            rr_text = f" | R:R `1:{rr2}`"
+
+        direction = "+" if change_pct >= 0 else ""
+        why = str(row.get("Why", "") or "").strip()
+
+        lines.extend([
+            f"**\U0001f7e2 BUY `{sym}`** (OHLCV signal, not yet tick-confirmed) \u2014 Score {score_label}",
+            f"Price `{price:.2f}` ({direction}{change_pct:.2f}% today) | Buy Above `{buy_above:.2f}`",
+            f"Stop Loss `{stop_loss:.2f}` | Target 1 `{target1:.2f}` | Target 2 `{target2:.2f}`{rr_text}",
+            f"Suggested: Buy **`{qty}` shares** (\u20b9{invest_amt:,.0f})",
+            f"Why: {why}",
+            "",
+        ])
     return "\n".join(lines).strip()
 
 
