@@ -51,7 +51,7 @@ class AssistantLiveSettings:
     budget_amount: float = 10000.0
     risk_percent: float = 1.0
     min_confidence: float = 40.0
-    min_trade_value: float = 5000000.0
+    min_trade_value: float = 1000000.0
     min_volume_ratio: float = 0.5
     max_workers: int = 6
     signal_interval: int = 30
@@ -74,7 +74,7 @@ class AssistantLiveSettings:
             budget_amount=float(self.budget_amount or 10000.0),
             risk_percent=float(self.risk_percent or 1.0),
             min_confidence=float(self.min_confidence or 40.0),
-            min_trade_value=float(self.min_trade_value or 5000000.0),
+            min_trade_value=float(self.min_trade_value or 1000000.0),
             min_volume_ratio=float(self.min_volume_ratio or 1.0),
             max_workers=max(1, int(self.max_workers or 1)),
             signal_interval=max(10, int(self.signal_interval or 30)),
