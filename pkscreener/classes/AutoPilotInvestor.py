@@ -49,7 +49,7 @@ class AutoPilotConfig:
     min_trade_value: float = 0.0        # no liquidity floor — small caps welcome
     min_volume_ratio: float = 0.0       # don't gate on volume ratio
     max_entry_gap_pct: float = 5.0      # wider trigger window (backtest shows 1.5 blocks good picks)
-    blind_buy_min_score: float = 22.0   # min score to alert; time-of-day volume gate handles early morning
+    blind_buy_min_score: float = 40.0   # min score to alert; time-of-day volume gate handles early morning
 
     # Sell monitoring
     auto_exit_on_sell: bool = True
@@ -1299,7 +1299,10 @@ class AutoPilotInvestor:
         # (Threshold lowered from 5%/2x → 3%/1.5x so we catch moves at 9:30 AM onset)
         scoring_row = row.copy()
         vol_ratio_live = float(row.get("VolumeRatio", row.get("Volume Ratio", 0)) or 0)
-        _strong_intraday = daily_change >= 3.0 and vol_ratio_live >= 1.5
+        # Strip bearish labels if stock is up 5%+ (move IS the breakout confirmation)
+        # OR up 3%+ with decent early-morning volume (1.5x is unreachable before 11 AM).
+        # Previously required vol >= 1.5x which was impossible at 9:30-11 AM IST.
+        _strong_intraday = daily_change >= 5.0 or (daily_change >= 3.0 and vol_ratio_live >= 0.8)
         if daily_change >= 3.0:
             scoring_row["PriceNow"] = price   # use live tick price as baseline
             scoring_row["Price Now"] = price
