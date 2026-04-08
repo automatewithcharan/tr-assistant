@@ -1610,15 +1610,51 @@ class AutoPilotInvestor:
                 alert_header = f"**\U0001f331 EARLY MOVER `{sym}`** (accumulation detected, low % — target 5-10%) \u2014 Score {score_label}"
             else:
                 alert_header = f"**\U0001f7e2 BUY `{sym}`** (tick-confirmed in ~2s) \u2014 Score {score_label}{swing_tag}"
+
+            # ── Re-validate price with LATEST tick before sending ──────────
+            # The tick price was captured 2-10s ago (before OHLCV scan).
+            # On volatile stocks, the price may have moved significantly.
+            # Re-read the latest tick to get the most current price & change%.
+            _fresh_ticks = self._load_ticks_snapshot()
+            _fresh_tick = _fresh_ticks.get(sym, {})
+            _fresh_price = float(_fresh_tick.get("last_price") or 0)
+            _fresh_change = float(_fresh_tick.get("change") or 0)
+            if _fresh_price > 0:
+                # Use freshest data for display
+                _price_now = _fresh_price
+                daily_change = _fresh_change
+                direction = "+" if daily_change >= 0 else ""
+                # Also check: did the stock reverse since tick capture?
+                # If it dropped below the original alert threshold (3%), suppress.
+                if daily_change < 2.0:
+                    self._log(
+                        f"Suppressed {sym}: price reversed from +{item['daily_change']:.1f}% "
+                        f"to +{daily_change:.1f}% between tick capture and alert — stale signal"
+                    )
+                    return
+                # Recalculate targets from fresh price
+                _buy_above_display = _buy_above if _buy_above > 0 else _price_now
+                is_swing_only = daily_change >= 8.0
+                swing_tag = f"\n⏰ **SWING ONLY** — already +{daily_change:.1f}% today. Do NOT enter for intraday — swing trade only (hold 2-5 days)." if is_swing_only else ""
+                if is_early_mover:
+                    alert_header = f"**\U0001f331 EARLY MOVER `{sym}`** (accumulation detected, low % — target 5-10%) \u2014 Score {score_label}"
+                else:
+                    alert_header = f"**\U0001f7e2 BUY `{sym}`** (tick-confirmed in ~2s) \u2014 Score {score_label}{swing_tag}"
+
             message = (
                 f"{alert_header}\n"
-                f"Price `{_price_now:.2f}` ({direction}{daily_change:.2f}%) | Buy Above `{_buy_above_display:.2f}`\n"
+                f"Price `{_price_now:.2f}` ({direction}{daily_change:.2f}% from prev close) | Buy Above `{_buy_above_display:.2f}`\n"
                 f"Stop Loss `{stop_loss:.2f}` | Target 1 `{target1:.2f}` | Target 2 `{target2:.2f}`{risk_reward}\n"
                 f"Volume `{volume_ratio:.1f}x avg` | Confidence `{confidence:.0f}%`\n"
                 f"Tick signals:\n{reasons_text}\n"
                 f"OHLCV confirms: {self._simplify_blind_reasons(blind_reasons)}"
                 f"{qty_line}\n"
                 f"_Open Groww \u2192 Buy \u2192 then use `/buy {sym} QTY PRICE` to record_"
+            )
+            self._log(
+                f"🟢 BUY ALERT SENT: {sym} at ₹{_price_now:.2f} ({direction}{daily_change:.2f}%) "
+                f"score={blind_score:.0f}/{effective_min:.0f} vol={volume_ratio:.1f}x "
+                f"reasons={blind_reasons[:80]}"
             )
             self._already_alerted_buys.add(sym)
             self._save_daily_alerted(sym)
