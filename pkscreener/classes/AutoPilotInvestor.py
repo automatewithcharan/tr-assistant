@@ -1365,20 +1365,41 @@ class AutoPilotInvestor:
             or "bearish" in _reasons_lower_check
             or "stop loss level" in _reasons_lower_check
         )
+        # Volume available at this point of the day (for already-ran gate)
+        _vol_ratio_live = float(row.get("VolumeRatio", row.get("Volume Ratio", 0)) or 0)
+
         if is_early_mover:
             volume_ratio_check = float(row.get("VolumeRatio", row.get("Volume Ratio", 0)) or 0)
             effective_min = 60.0 if volume_ratio_check >= self._TICK_EARLY_MOVER_VOL_RATIO else 999.0
         elif _intraday_override and _no_hard_blockers:
-            # Live tick + 3%+ intraday move + no blockers.
-            # Use configured min score - 5, floored at 35 (not 40).
-            # Stocks up 4-5% on a broad market up-day score 34-37 without MACD;
-            # a 35 floor catches those while still filtering noise.
-            effective_min = max(35.0, self.config.blind_buy_min_score - 5)
+            # Stock has already moved 3%+.  Goal: only alert when there is a real
+            # chance of continuing to 10-20% (the user's daily target).
+            # That requires BOTH strong volume (buyers piling in, not thin spike)
+            # AND a high-conviction score.
+            #
+            # Tuning rationale:
+            # - SILLYMONKS: +6.67%, vol 1.1x, score 47 → should NOT fire (thin move)
+            # - RML:        +4.05%, vol 0.8x, score 49 → should NOT fire (below-avg vol)
+            # - A genuine runner (TITAN +8%, vol 2x, score 72) → should fire
+            #
+            # Thresholds:
+            #   volume  >= 1.3x  → confirmed accumulation behind the move
+            #   score   >= 58    → strong multi-indicator conviction
+            # Without volume confirmation the move is noise / thin stock spike.
+            if _vol_ratio_live < 1.3:
+                # Volume is too weak for an already-ran stock — suppress entirely.
+                # Log this explicitly so we can tune if needed.
+                self._log(
+                    f"Suppressed {sym}: already ran {daily_change:.1f}% but "
+                    f"vol {_vol_ratio_live:.2f}x < 1.3x (weak-volume runner, no continuation expected)"
+                )
+                return
+            # Volume is strong enough — require higher score to confirm conviction.
+            effective_min = max(58.0, self.config.blind_buy_min_score)
         elif _entry_confirmed and _no_hard_blockers:
-            # Price already crossed entry trigger: entry is confirmed, 35 is sufficient.
-            # Lowered from 40→35 because on broad up-market days, stocks at trigger score
-            # 36-39 (lack MACD confirmation) but are still valid entries.
-            effective_min = max(35.0, self.config.blind_buy_min_score - 5)
+            # Price just crossed entry trigger (fresh breakout, stock hasn't run much yet).
+            # Standard threshold is fine here.
+            effective_min = max(40.0, self.config.blind_buy_min_score - 5)
         elif _intraday_override:
             effective_min = self.config.blind_buy_min_score
         else:

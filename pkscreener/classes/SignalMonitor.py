@@ -860,29 +860,31 @@ class SignalMonitorRunner:
                 continue
 
             # Smart "already ran" filter for buy alerts:
-            # Suppress ONLY when the stock has moved significantly AND is already PAST
-            # its entry trigger (the entry opportunity window has closed).
+            # Suppress regular Buy Now when the stock has moved >= 3% today AND
+            # is already AT or PAST its entry trigger (the breakout window has closed).
             # KEEP the alert when the stock is still approaching its trigger even if
-            # it is up 3%+ today — that is still a valid first-time breakout approach.
+            # it is up 3%+ today — e.g. TITAN +4.45% but still 0.29% BELOW BuyAbove
+            # is a valid first-time approach alert.
+            #
+            # Stocks at/past trigger + 3%+ daily gain will instead be caught by the
+            # dedicated _build_momentum_alerts() path (requires vol >= 1.3x + score >= 75).
             if now_action in allowed_buy_actions:
                 change_pct = self._to_float(row.get("ChangePct"))
                 if change_pct >= self.MAX_BUY_DAILY_CHANGE_PCT:
-                    buy_above = self._to_float(row.get("BuyAbove"))
-                    price_now = self._to_float(row.get("PriceNow"))
                     entry_gap_pct = self._to_float(row.get("EntryGapPct"))
-                    # entry_gap_pct > 0 means price is still BELOW BuyAbove — do NOT suppress
-                    # (stock is approaching its trigger for the first time).
-                    # Only suppress when price has already crossed trigger AND moved > 1% past it
-                    # (the breakout window is closed, entry chasing would be risky).
-                    pct_past_trigger = (
-                        (price_now - buy_above) / buy_above * 100.0
-                        if buy_above > 0 and price_now > buy_above
-                        else 0.0
-                    )
-                    already_extended = entry_gap_pct <= 0.0 and pct_past_trigger >= 1.0
-                    if already_extended:
+                    # entry_gap_pct > 0  → price is BELOW BuyAbove → still approaching → ALLOW
+                    # entry_gap_pct <= 0 → price is AT or PAST BuyAbove → window closed → SUPPRESS
+                    already_at_or_past_trigger = entry_gap_pct <= 0.0
+                    if already_at_or_past_trigger:
+                        buy_above = self._to_float(row.get("BuyAbove"))
+                        price_now = self._to_float(row.get("PriceNow"))
+                        pct_past = (
+                            (price_now - buy_above) / buy_above * 100.0
+                            if buy_above > 0 and price_now >= buy_above
+                            else 0.0
+                        )
                         skipped_already_ran.append(
-                            f"{symbol} ({change_pct:+.1f}% day, {pct_past_trigger:.1f}% past entry)"
+                            f"{symbol} ({change_pct:+.1f}% day, {pct_past:.1f}% past entry)"
                         )
                         continue
 
