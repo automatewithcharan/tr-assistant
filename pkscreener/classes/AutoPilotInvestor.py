@@ -49,7 +49,7 @@ class AutoPilotConfig:
     min_trade_value: float = 0.0        # no liquidity floor — small caps welcome
     min_volume_ratio: float = 0.0       # don't gate on volume ratio
     max_entry_gap_pct: float = 5.0      # wider trigger window (backtest shows 1.5 blocks good picks)
-    blind_buy_min_score: float = 35.0   # min score to alert; time-of-day volume gate handles early morning
+    blind_buy_min_score: float = 30.0   # min score to alert; time-of-day volume gate handles early morning
 
     # Sell monitoring
     auto_exit_on_sell: bool = True
