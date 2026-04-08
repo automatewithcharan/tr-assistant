@@ -448,6 +448,7 @@ class AutoPilotInvestor:
         self._eod_exit_sent_date: Optional[str] = None   # end-of-day exit reminder — once per day
         # Momentum continuation tracking: symbol -> {alert_time, alert_pct, entry_price}
         self._momentum_tracked: Dict[str, Dict] = {}  # stocks we alerted — track for continuation
+        self._momentum_tracked_date: Optional[str] = None  # date when momentum dict was last populated
         self._nifty_crash_pause: bool = False  # True if Nifty down >2% in first 30 min of day
 
     # ------------------------------------------------------------------
@@ -512,6 +513,13 @@ class AutoPilotInvestor:
             f"alerts={self.config.alert_channels}"
         )
         while True:
+            # Daily state reset — clear stale momentum tracking from previous day
+            today_str = datetime.now().strftime("%Y-%m-%d")
+            if self._momentum_tracked_date and self._momentum_tracked_date != today_str:
+                self._log(f"New trading day {today_str}: clearing {len(self._momentum_tracked)} stale momentum entries from {self._momentum_tracked_date}")
+                self._momentum_tracked.clear()
+                self._nifty_crash_pause = False
+            self._momentum_tracked_date = today_str
             # Pre-market watchlist: fires once per day at 9:05 AM IST
             self._run_premarket_watchlist()
             # Mid-day scanner: fires once per day at 11:00 AM IST
@@ -1002,6 +1010,9 @@ class AutoPilotInvestor:
         _CONTINUATION_MIN_MOVE_PCT = 3.0  # must have moved 3%+ since last alert level
         _CONTINUATION_MIN_VOL = 1.5       # volume must still be strong
 
+        # Load signal state once for the whole loop (avoid re-reading CSV per symbol)
+        _signal_state = self._load_signal_state()
+
         for sym, tracked in list(self._momentum_tracked.items()):
             last_alert_time = tracked.get("last_alert_time")
             if isinstance(last_alert_time, datetime):
@@ -1022,11 +1033,10 @@ class AutoPilotInvestor:
             if move_since_alert < _CONTINUATION_MIN_MOVE_PCT:
                 continue
 
-            # Check volume from signal state
-            signal_state = self._load_signal_state()
+            # Check volume from signal state (loaded once above loop)
             vol_ratio = 0.0
-            if signal_state is not None and not signal_state.empty:
-                rows = signal_state[signal_state["Symbol"].str.upper() == sym]
+            if _signal_state is not None and not _signal_state.empty:
+                rows = _signal_state[_signal_state["Symbol"].str.upper() == sym]
                 if not rows.empty:
                     vol_ratio = float(rows.iloc[0].get("VolumeRatio", 0) or 0)
 
@@ -1254,11 +1264,18 @@ class AutoPilotInvestor:
             # Immediately spin up a targeted single-symbol OHLCV scan in background.
             # One stock = one API call = ~1-2 seconds. No waiting for the full queue.
             t = threading.Thread(
-                target=self._confirm_tick_signal_with_ohlcv,
-                args=(item,),
+                target=self._safe_thread_wrapper,
+                args=(self._confirm_tick_signal_with_ohlcv, item),
                 daemon=True,
             )
             t.start()
+
+    def _safe_thread_wrapper(self, target_func, *args, **kwargs):
+        """Wrap a background thread target so exceptions are logged, not silently lost."""
+        try:
+            target_func(*args, **kwargs)
+        except Exception as exc:
+            self._log(f"Background thread {target_func.__name__} crashed: {exc}")
 
     def _confirm_tick_signal_with_ohlcv(self, item: Dict) -> None:
         """Confirm or reject a tick signal with a single-symbol OHLCV scan.
@@ -1425,20 +1442,35 @@ class AutoPilotInvestor:
             # - RML:        +4.05%, vol 0.8x, score 49 → should NOT fire (below-avg vol)
             # - A genuine runner (TITAN +8%, vol 2x, score 72) → should fire
             #
-            # Thresholds:
-            #   volume  >= 1.3x  → confirmed accumulation behind the move
-            #   score   >= 58    → strong multi-indicator conviction
-            # Without volume confirmation the move is noise / thin stock spike.
-            if _vol_ratio_live < 1.3:
-                # Volume is too weak for an already-ran stock — suppress entirely.
-                # Log this explicitly so we can tune if needed.
+            # Broad-market adaptation:
+            # On strong Nifty days (+2%+), everything is up 3-5% just from the tide.
+            # The volume gate and score min are relaxed slightly because:
+            #   - individual stock volume may be diluted across the whole market
+            #   - the signal is RELATIVE outperformance (stock >> Nifty), not absolute
+            # A stock up 8% on a +3% Nifty day with 1.0x vol is genuine outperformance,
+            # while the same stock on a flat Nifty day would need 1.3x vol to confirm.
+            _nifty_chg = self._get_nifty_change()
+            _is_broad_rally = _nifty_chg >= 2.0
+            _relative_outperformance = daily_change - _nifty_chg if _nifty_chg > 0 else daily_change
+
+            # Volume gate: 1.3x on normal days, 0.8x on broad rally days
+            _vol_gate = 0.8 if _is_broad_rally else 1.3
+            if _vol_ratio_live < _vol_gate:
                 self._log(
                     f"Suppressed {sym}: already ran {daily_change:.1f}% but "
-                    f"vol {_vol_ratio_live:.2f}x < 1.3x (weak-volume runner, no continuation expected)"
+                    f"vol {_vol_ratio_live:.2f}x < {_vol_gate:.1f}x "
+                    f"(weak-volume runner{', broad rally +' + f'{_nifty_chg:.1f}%' if _is_broad_rally else ''})"
                 )
                 return
-            # Volume is strong enough — require higher score to confirm conviction.
-            effective_min = max(58.0, self.config.blind_buy_min_score)
+            # Score gate: 58 on normal days, 50 on broad rally if outperforming by 5%+
+            if _is_broad_rally and _relative_outperformance >= 5.0:
+                effective_min = max(50.0, self.config.blind_buy_min_score)
+                self._log(
+                    f"Broad rally mode: {sym} +{daily_change:.1f}% vs Nifty +{_nifty_chg:.1f}% "
+                    f"(outperform +{_relative_outperformance:.1f}%), effective_min={effective_min:.0f}"
+                )
+            else:
+                effective_min = max(58.0, self.config.blind_buy_min_score)
         elif _entry_confirmed and _no_hard_blockers:
             # Price just crossed entry trigger (fresh breakout, stock hasn't run much yet).
             # Standard threshold is fine here.
@@ -1627,8 +1659,16 @@ class AutoPilotInvestor:
     # Signal state
     # ------------------------------------------------------------------
 
+    # Max age (seconds) for signal state file to be considered fresh.
+    # If the file was last modified more than this many seconds ago, warn.
+    _SIGNAL_STATE_MAX_AGE_SEC = 300  # 5 minutes
+
     def _load_signal_state(self) -> Optional[pd.DataFrame]:
-        """Load the latest signal monitor state CSV."""
+        """Load the latest signal monitor state CSV.
+        
+        Validates file freshness: if the file hasn't been updated in 5 minutes
+        during market hours, logs a warning (signal monitor may have crashed).
+        """
         # Try the full actionable report first (has all columns we need)
         for name in ["state", "signals", "actionable"]:
             path = os.path.join(
@@ -1637,6 +1677,15 @@ class AutoPilotInvestor:
             )
             if os.path.isfile(path):
                 try:
+                    # Check file freshness during market hours
+                    if self._is_market_open():
+                        file_age = time.time() - os.path.getmtime(path)
+                        if file_age > self._SIGNAL_STATE_MAX_AGE_SEC:
+                            self._log(
+                                f"⚠️ Signal state '{name}' is {file_age:.0f}s old "
+                                f"(>{self._SIGNAL_STATE_MAX_AGE_SEC}s). "
+                                f"Signal monitor may have crashed — data could be stale."
+                            )
                     df = pd.read_csv(path)
                     if not df.empty and "Symbol" in df.columns:
                         return df
@@ -1986,6 +2035,21 @@ class AutoPilotInvestor:
             pass
         return False
 
+    def _get_nifty_change(self) -> float:
+        """Return today's Nifty50 change% from tick data, or 0.0 if unavailable."""
+        try:
+            tick_path = os.path.join(self.output_dir, "kite_tick_latest.json")
+            if os.path.isfile(tick_path):
+                import json
+                with open(tick_path, "r") as f:
+                    ticks = json.load(f)
+                for key in ("NIFTY 50", "NSEI", "^NSEI", "NIFTY50"):
+                    if key in ticks:
+                        return float(ticks[key].get("change", 0) or 0)
+        except Exception:
+            pass
+        return 0.0
+
     def _push_buy_alerts(self, candidates: List[BlindBuyCandidate]) -> None:
         """Push blind-buy alerts to Discord.
 
@@ -2229,16 +2293,32 @@ class AutoPilotInvestor:
             except Exception:
                 pass
         if not webhook_url:
+            self._log("Discord send skipped: no webhook URL configured")
             return
-        try:
-            import requests
-            requests.post(
-                webhook_url,
-                json={"content": message[:1900]},
-                timeout=10,
-            )
-        except Exception:
-            pass
+        import requests
+        for attempt in range(3):
+            try:
+                resp = requests.post(
+                    webhook_url,
+                    json={"content": message[:1900]},
+                    timeout=10,
+                )
+                if resp.status_code in (200, 204):
+                    return
+                if resp.status_code == 429:  # rate-limited
+                    retry_after = float(resp.json().get("retry_after", 2))
+                    time.sleep(min(retry_after, 5))
+                    continue
+                self._log(f"Discord send failed: HTTP {resp.status_code}")
+                return
+            except requests.exceptions.Timeout:
+                if attempt < 2:
+                    time.sleep(2)
+                    continue
+                self._log("Discord send failed: timeout after 3 attempts")
+            except Exception as exc:
+                self._log(f"Discord send failed: {exc}")
+                return
 
     def _send_telegram(self, message: str) -> None:
         token = os.environ.get("TELEGRAM_BOT_TOKEN", "").strip()

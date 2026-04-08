@@ -603,23 +603,32 @@ class AssistantLiveSupervisor:
             return None
 
     def _check_for_code_update(self) -> None:
-        """Restart all child processes when a new git commit is detected."""
+        """Restart all child processes when a new git commit is detected.
+
+        Also re-execs the supervisor itself so it picks up the new code too.
+        This solves the chicken-and-egg problem: the old supervisor can't run
+        new-code features until it restarts itself.
+        """
         current = self._read_git_head()
         if current and current != self._code_commit:
+            prev_short = self._code_commit[:7] if self._code_commit else "unknown"
             self.store.add_event(
                 self.session_id,
                 "info",
                 "supervisor",
-                f"Code updated ({self._code_commit[:7]} → {current[:7]}). Restarting all workers.",
+                f"Code updated ({prev_short} → {current[:7]}). Restarting all workers + supervisor.",
             )
-            self._code_commit = current
-            for name, metadata in list(self.processes.items()):
-                process = metadata["process"]
-                if process.poll() is None:
-                    try:
-                        process.terminate()
-                    except Exception:
-                        pass
+            # Stop all children gracefully first
+            self._stop_children()
+            # Re-exec the supervisor process itself with the same arguments.
+            # os.execv replaces this process in-place — the PID changes but
+            # systemd/watchdog won't notice because it's a clean exec.
+            try:
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+            except Exception:
+                # Fallback: just restart children with new code
+                self._code_commit = current
+                self._start_required_processes()
 
     def _restart_dead_processes(self) -> None:
         for name, metadata in list(self.processes.items()):
