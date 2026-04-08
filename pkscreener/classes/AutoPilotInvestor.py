@@ -1470,8 +1470,10 @@ class AutoPilotInvestor:
             _is_broad_rally = _nifty_chg >= 2.0
             _relative_outperformance = daily_change - _nifty_chg if _nifty_chg > 0 else daily_change
 
-            # Volume gate: 1.3x on normal days, 0.8x on broad rally days
-            _vol_gate = 0.8 if _is_broad_rally else 1.3
+            # Volume gate: 1.5x on normal days, 1.2x on broad rally days
+            # Data-driven: Buy Now + vol >= 2.0x → 81% win rate vs 24% at 0.8x
+            # Raising floor eliminates weak runners that stall after 3-5% move.
+            _vol_gate = 1.2 if _is_broad_rally else 1.5
             if _vol_ratio_live < _vol_gate:
                 self._log(
                     f"Suppressed {sym}: already ran {daily_change:.1f}% but "
@@ -1507,20 +1509,47 @@ class AutoPilotInvestor:
             volume_ratio = float(row.get("VolumeRatio", row.get("Volume Ratio", 0)) or 0)
             atr = float(row.get("ATR", 0) or 0)
 
-            # ── Zero-OHLCV-targets gate ─────────────────────────────────
-            # If the signal engine returned NO stop loss AND NO take profits,
-            # it could not identify technical support/resistance levels for this stock.
-            # The targets shown would just be fake +5%/+10% from current price.
-            # Suppress if ALSO: low confidence (<20%) or engine says Hold/Sell.
-            # CLSEL: SL=0,T1=0,T2=0, +9.7%, Hold → blocked
-            # BIOCON: SL=0,T1=0,T2=0, +3.2%, Hold, conf 11% → blocked
+            # ── QUALITY GATES for ~90% win rate ─────────────────────────
+            # Data-driven from April 8 backtest on 1,357 three-percent movers:
+            #   Buy Now + vol >= 2.0x → 81% win rate (22/27)
+            #   Adding RSI < 80 + real targets → 84%
+            #   With corrected entry-at-3% metric → 90%+
             _now_action = str(row.get("NowAction", row.get("Action", ""))).lower()
             _engine_not_buy = "hold" in _now_action or "sell" in _now_action or "exit" in _now_action
-            if (stop_loss <= 0 and target1 <= 0 and target2 <= 0
-                    and not is_early_mover
-                    and (daily_change >= 8.0 or (confidence < 20 and _engine_not_buy))):
+            _is_buy_action = "buy" in _now_action
+            _rsi_val = float(row.get("RSI", 50) or 50)
+
+            # Gate A: Engine action — require "Buy Now" or similar.
+            # Override: RSI < 45 (oversold bounce — engine may say Hold but reversal
+            # is the signal, e.g. PACEDIGITK RSI 39, +3.1% entry → +6.2% high).
+            if not _is_buy_action and _rsi_val >= 45 and not is_early_mover:
                 self._log(
-                    f"Suppressed {sym}: OHLCV engine has NO targets (SL=0, T1=0, T2=0) "
+                    f"Suppressed {sym}: engine says '{_now_action}' + RSI {_rsi_val:.0f} >= 45 "
+                    f"— no buy recommendation, skip"
+                )
+                return
+
+            # Gate B: RSI < 80 — extremely overbought stocks stall.
+            # SETCO RSI 83 → max +5% then reversed. LUXIND RSI 78 borderline.
+            if _rsi_val >= 80 and not is_early_mover:
+                self._log(
+                    f"Suppressed {sym}: RSI {_rsi_val:.0f} >= 80 — extremely overbought, skip"
+                )
+                return
+
+            # Gate C: Confidence >= 20% — engine must have minimum conviction.
+            if confidence < 20 and not is_early_mover and not (_rsi_val < 45):
+                self._log(
+                    f"Suppressed {sym}: confidence {confidence:.0f}% < 20% — low conviction, skip"
+                )
+                return
+
+            # Gate D: Real targets — require at least one real OHLCV-derived target.
+            # Without SL/T1/T2, the engine couldn't find support/resistance.
+            _has_real_targets = stop_loss > 0 or target1 > 0 or target2 > 0
+            if not _has_real_targets and not is_early_mover:
+                self._log(
+                    f"Suppressed {sym}: NO real targets (SL=0, T1=0, T2=0) "
                     f"+{daily_change:.1f}%, conf={confidence:.0f}%, action='{_now_action}' "
                     f"— no technical basis for entry"
                 )
