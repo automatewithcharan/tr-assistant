@@ -549,8 +549,8 @@ class AutoPilotInvestor:
         today_str = now_ist.strftime("%Y-%m-%d")
         now_min = now_ist.hour * 60 + now_ist.minute
 
-        # Fire between 9:05 AM and 9:14 AM IST (before market opens), once per day
-        _PREMARKET_START = 9 * 60 + 5
+        # Fire between 8:45 AM and 9:14 AM IST (before market opens), once per day
+        _PREMARKET_START = 8 * 60 + 45
         _PREMARKET_END   = 9 * 60 + 14
 
         if not (_PREMARKET_START <= now_min <= _PREMARKET_END):
@@ -1407,7 +1407,8 @@ class AutoPilotInvestor:
 
                 # Step 2: Volatility-targeting cap (from Auto-Alpha-Forge position_sizer)
                 # Estimate annualised asset vol from ATR proxy: vol ≈ (ATR / price) × sqrt(252)
-                _atr_val = c.atr if hasattr(c, "atr") and c.atr and c.atr > 0 else (_price_now * 0.02)
+                # Note: BlindBuyCandidate has no .atr field — use 2% daily price proxy
+                _atr_val = _price_now * 0.02
                 _asset_vol = (_atr_val / _price_now) * (252 ** 0.5)
                 _asset_vol = max(_asset_vol, 0.05)  # floor at 5% annualised
                 _vol_position_value = (_target_vol / _asset_vol) * _portfolio
