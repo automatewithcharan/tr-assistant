@@ -1456,7 +1456,21 @@ class AutoPilotInvestor:
                 risk_reward = f" | R:R `1:{rr2}`"
 
             # Gate 2: R:R must be at least 1:1.5 — risking more than you gain is a losing strategy
+            # Exception: for intraday movers (3%+) the signal-state stop/target were set from
+            # yesterday's close and give a stale (misleadingly low) R:R because the stock has
+            # already moved. Recompute fresh targets from current price (5% stop / 10% target)
+            # so R:R reflects the actual intraday trade, not a stale swing setup.
             min_rr = 1.5
+            if rr2 > 0 and rr2 < min_rr and _intraday_override:
+                _fresh_stop = round(_price_now * 0.95, 2)
+                _fresh_t2 = round(_price_now * 1.10, 2)
+                _fresh_rr = round((_fresh_t2 - _price_now) / max(_price_now - _fresh_stop, 0.01), 1)
+                if _fresh_rr >= min_rr:
+                    stop_loss = _fresh_stop
+                    target1 = round(_price_now * 1.05, 2)
+                    target2 = _fresh_t2
+                    rr2 = _fresh_rr
+                    risk_reward = f" | R:R `1:{rr2}` (fresh intraday targets)"
             if rr2 > 0 and rr2 < min_rr:
                 self._log(f"Suppressed {sym}: R:R 1:{rr2} < 1:{min_rr} minimum")
                 return
