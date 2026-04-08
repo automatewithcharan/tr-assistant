@@ -208,6 +208,11 @@ class BlindBuyScorer:
             # else: overbought on a strong-momentum day — no penalty, no mention
 
         # -- CCI (< -100 = oversold, > 100 = overbought) --
+        # Volume-confirmed momentum override: when vol >= 2.0x, CCI/MFI
+        # being "overbought" is confirmatory (big money pushing), not risky.
+        # Halve penalties so genuine runners (AGIIL +15%, STEELCAS +11%)
+        # aren't killed by momentum indicators doing their job.
+        _high_vol_momentum = vol_ratio >= 2.0
         if cci < -100:
             score += 12
             reasons.append(f"CCI oversold ({cci:.0f})")
@@ -215,11 +220,13 @@ class BlindBuyScorer:
             score += 6
             reasons.append(f"CCI low ({cci:.0f})")
         elif cci > 200:
-            score -= 15
-            reasons.append(f"CCI extremely overbought ({cci:.0f})")
+            _pen = 8 if _high_vol_momentum else 15
+            score -= _pen
+            reasons.append(f"CCI extremely overbought ({cci:.0f}){' [vol-halved]' if _high_vol_momentum else ''}")
         elif cci > 150:
-            score -= 8
-            reasons.append(f"CCI overbought ({cci:.0f})")
+            _pen = 4 if _high_vol_momentum else 8
+            score -= _pen
+            reasons.append(f"CCI overbought ({cci:.0f}){' [vol-halved]' if _high_vol_momentum else ''}")
 
         # -- MFI (0-100, same as RSI but volume-weighted) --
         if mfi < 20:
@@ -228,14 +235,16 @@ class BlindBuyScorer:
         elif mfi < 40:
             score += 5
         elif mfi > 80:
-            score -= 8
-            reasons.append(f"MFI overbought ({mfi:.0f})")
+            _pen = 4 if _high_vol_momentum else 8
+            score -= _pen
+            reasons.append(f"MFI overbought ({mfi:.0f}){' [vol-halved]' if _high_vol_momentum else ''}")
 
         # -- Approaching-overbought combo: MFI 70-80 AND CCI > 100 --
         # If BOTH oscillators are elevated, the stock is overextended.
         if 70 <= mfi <= 80 and cci > 100:
-            score -= 5
-            reasons.append(f"⚠️ overbought combo MFI {mfi:.0f} + CCI {cci:.0f}")
+            _pen = 3 if _high_vol_momentum else 5
+            score -= _pen
+            reasons.append(f"⚠️ overbought combo MFI {mfi:.0f} + CCI {cci:.0f}{' [vol-halved]' if _high_vol_momentum else ''}")
 
         # -- Volume (higher = better confirmation) --
         # Time-adjust volume: early in the day, even 1.5x is strong because
@@ -1481,12 +1490,23 @@ class AutoPilotInvestor:
                     f"(weak-volume runner{', broad rally +' + f'{_nifty_chg:.1f}%' if _is_broad_rally else ''})"
                 )
                 return
-            # Score gate: 58 on normal days, 50 on broad rally if outperforming by 5%+
+            # Score gate: 58 normally, 50 for broad-rally outperformers or
+            # high-volume Buy-Now stocks (vol >= 2.0x + engine says buy = double
+            # confirmation; 29/29 such stocks were winners on Apr 8 backtest).
+            _now_action_for_gate = str(row.get("NowAction", row.get("Action", ""))).lower()
+            _is_buy_for_gate = "buy" in _now_action_for_gate
+            _high_vol_buy = _is_buy_for_gate and _vol_ratio_live >= 2.0
             if _is_broad_rally and _relative_outperformance >= 5.0:
                 effective_min = max(50.0, self.config.blind_buy_min_score)
                 self._log(
                     f"Broad rally mode: {sym} +{daily_change:.1f}% vs Nifty +{_nifty_chg:.1f}% "
                     f"(outperform +{_relative_outperformance:.1f}%), effective_min={effective_min:.0f}"
+                )
+            elif _high_vol_buy:
+                effective_min = max(50.0, self.config.blind_buy_min_score)
+                self._log(
+                    f"High-vol Buy fast-track: {sym} vol {_vol_ratio_live:.1f}x + Buy Now "
+                    f"→ effective_min={effective_min:.0f}"
                 )
             else:
                 effective_min = max(58.0, self.config.blind_buy_min_score)
