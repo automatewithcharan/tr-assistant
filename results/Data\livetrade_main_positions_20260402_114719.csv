@@ -1,0 +1,1 @@
+TradeId,Universe,Symbol,Side,Status,EntryDate,EntryPrice,Quantity,InvestedAmount,StopLoss,Target1,Target2,EntrySignal,EntryConfidencePct,EntryReason,CurrentPrice,CurrentValue,UnrealizedPnL,UnrealizedReturnPct,LastAction,LastSignal,LastConfidencePct,LastReason,LastUpdatedAt,ExitDate,ExitPrice,ExitValue,ExitReason,RealizedPnL,RealizedReturnPct

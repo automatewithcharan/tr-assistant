@@ -214,8 +214,12 @@ class BlindBuyScorer:
         elif cci < -50:
             score += 6
             reasons.append(f"CCI low ({cci:.0f})")
+        elif cci > 200:
+            score -= 15
+            reasons.append(f"CCI extremely overbought ({cci:.0f})")
         elif cci > 150:
-            score -= 5
+            score -= 8
+            reasons.append(f"CCI overbought ({cci:.0f})")
 
         # -- MFI (0-100, same as RSI but volume-weighted) --
         if mfi < 20:
@@ -224,7 +228,14 @@ class BlindBuyScorer:
         elif mfi < 40:
             score += 5
         elif mfi > 80:
+            score -= 8
+            reasons.append(f"MFI overbought ({mfi:.0f})")
+
+        # -- Approaching-overbought combo: MFI 70-80 AND CCI > 100 --
+        # If BOTH oscillators are elevated, the stock is overextended.
+        if 70 <= mfi <= 80 and cci > 100:
             score -= 5
+            reasons.append(f"⚠️ overbought combo MFI {mfi:.0f} + CCI {cci:.0f}")
 
         # -- Volume (higher = better confirmation) --
         # Time-adjust volume: early in the day, even 1.5x is strong because
@@ -263,31 +274,37 @@ class BlindBuyScorer:
         # strong overnight demand. At market open, most technical indicators
         # (RSI, volume, MACD) are still cold — but the gap itself is information.
         # Award bonus points so that gap-up + trigger ready can reach viable scores.
+        _gap_bonus = 0
         _prev_close = float(row.get("PrevClose", row.get("Prev Close", 0)) or 0)
         if _prev_close > 0 and _price_now > 0:
             _gap_pct = (_price_now - _prev_close) / _prev_close * 100
             if _gap_pct >= 7.0:
-                score += 15
+                _gap_bonus = 15
+                score += _gap_bonus
                 reasons.append(f"strong gap-up +{_gap_pct:.1f}% from prev close")
             elif _gap_pct >= 4.0:
-                score += 10
+                _gap_bonus = 10
+                score += _gap_bonus
                 reasons.append(f"gap-up +{_gap_pct:.1f}% from prev close")
 
         # -- Green candle / price action --
         # Guard: if live price is below buy trigger, the change_pct from
         # historical candles may be stale — do NOT award breakout/green points.
+        # Cap: if gap-up bonus was already awarded, reduce change% bonus to avoid
+        # double-counting the same move (gap-up and change% measure the same fact).
+        _change_cap = 10 if _gap_bonus >= 10 else 15  # cap at +10 if gap bonus was given
         if _price_below_trigger and change_pct > 0:
             score -= 5
             reasons.append("⚠️ data shows green but price below trigger — treated as suspect")
         elif change_pct >= 5.0:
-            score += 15
+            score += _change_cap
             # "hist signal" = change% from signal engine's OHLCV scan (not today's tick move)
             reasons.append(f"hist signal +{change_pct:.1f}%")
         elif change_pct >= 2.5:
-            score += 12
+            score += min(12, _change_cap)
             reasons.append(f"hist signal +{change_pct:.1f}%")
         elif change_pct >= 1.0:
-            score += 10
+            score += min(10, _change_cap)
             reasons.append(f"hist signal +{change_pct:.1f}%")
         elif change_pct > 0:
             score += 6
@@ -1490,6 +1507,21 @@ class AutoPilotInvestor:
             volume_ratio = float(row.get("VolumeRatio", row.get("Volume Ratio", 0)) or 0)
             atr = float(row.get("ATR", 0) or 0)
 
+            # ── Zero-OHLCV-targets gate ─────────────────────────────────
+            # If the signal engine returned NO stop loss AND NO take profits,
+            # it could not identify technical support/resistance levels for this stock.
+            # For stocks already up 8%+, this means the engine sees no basis for
+            # further upside — the targets shown would just be fake +5%/+10% from
+            # current price. Suppress these to avoid misleading alerts.
+            # (CLSEL: TakeProfit1=0, TakeProfit2=0, SellIfBelow=0, NowAction="Hold")
+            if (stop_loss <= 0 and target1 <= 0 and target2 <= 0
+                    and daily_change >= 8.0 and not is_early_mover):
+                self._log(
+                    f"Suppressed {sym}: OHLCV engine has NO targets (SL=0, T1=0, T2=0) "
+                    f"for a stock already +{daily_change:.1f}% — no technical basis for entry"
+                )
+                return
+
             # Fallback stop/target computation.
             # Early movers: use wider targets (5%/10%) to capture the full expected move.
             # Regular (HOLD-rated) stocks already running: conservative 2%/4%.
@@ -1632,6 +1664,26 @@ class AutoPilotInvestor:
                         f"to +{daily_change:.1f}% between tick capture and alert — stale signal"
                     )
                     return
+
+                # ── Retreat-from-high gate ─────────────────────────────
+                # If the stock ran up (e.g. +15%) then pulled back to current (+9%),
+                # it gave back a significant chunk of its intraday range — momentum is
+                # exhausted. Buying at this point is chasing a retreating stock.
+                # CLSEL: high 275 (+15.6%), pulled back to 261 (+9.7%) = gave back 47%.
+                _tick_high = float(_fresh_tick.get("high") or _fresh_tick.get("ohlc", {}).get("high", 0))
+                _tick_low = float(_fresh_tick.get("low") or _fresh_tick.get("ohlc", {}).get("low", 0))
+                if _tick_high > 0 and _tick_low > 0 and _tick_high > _tick_low and _fresh_price > 0:
+                    _range = _tick_high - _tick_low
+                    _retreat = _tick_high - _fresh_price
+                    _retreat_frac = _retreat / _range  # fraction of range given back
+                    _pct_from_high = (_tick_high - _fresh_price) / _tick_high * 100
+                    if _retreat_frac >= 0.35 and _pct_from_high >= 4.0:
+                        self._log(
+                            f"Suppressed {sym}: retreated {_pct_from_high:.1f}% from day high ₹{_tick_high:.2f} "
+                            f"(gave back {_retreat_frac:.0%} of range ₹{_tick_low:.2f}-₹{_tick_high:.2f}) — momentum exhausted"
+                        )
+                        return
+
                 # Recalculate targets from fresh price
                 _buy_above_display = _buy_above if _buy_above > 0 else _price_now
                 is_swing_only = daily_change >= 8.0

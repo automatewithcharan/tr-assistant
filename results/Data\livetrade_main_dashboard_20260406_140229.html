@@ -1,0 +1,362 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta http-equiv="refresh" content="20">
+  <title>PKScreener Local Dashboard</title>
+  <style>
+    :root {
+      --bg: #f4f1ea;
+      --panel: #fffaf1;
+      --ink: #1f2933;
+      --muted: #5b6b7a;
+      --line: #d9cfbf;
+      --accent: #0f766e;
+      --good: #166534;
+      --bad: #b91c1c;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Georgia, "Segoe UI", serif;
+      background: radial-gradient(circle at top, #fff8eb 0%, var(--bg) 60%);
+      color: var(--ink);
+    }
+    .wrap {
+      max-width: 1280px;
+      margin: 0 auto;
+      padding: 24px;
+    }
+    .hero {
+      background: linear-gradient(135deg, #fffdf8 0%, #f3ead9 100%);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 22px;
+      box-shadow: 0 12px 40px rgba(0,0,0,0.05);
+      margin-bottom: 18px;
+    }
+    h1 {
+      margin: 0 0 8px 0;
+      font-size: 32px;
+      letter-spacing: 0.02em;
+    }
+    .sub {
+      color: var(--muted);
+      font-size: 15px;
+    }
+    .cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
+      gap: 12px;
+      margin: 18px 0 6px 0;
+    }
+    .card {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      padding: 14px;
+    }
+    .label {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.08em;
+      color: var(--muted);
+      margin-bottom: 8px;
+    }
+    .value {
+      font-size: 24px;
+      font-weight: 700;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: 16px;
+    }
+    .panel {
+      background: rgba(255,255,255,0.78);
+      border: 1px solid var(--line);
+      border-radius: 16px;
+      padding: 16px;
+      overflow: hidden;
+    }
+    .panel h2 {
+      margin: 0 0 12px 0;
+      font-size: 18px;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      padding: 10px 8px;
+      border-bottom: 1px solid #eadfce;
+      text-align: left;
+      vertical-align: top;
+    }
+    th {
+      background: #f8f2e6;
+      position: sticky;
+      top: 0;
+    }
+    .note {
+      color: var(--muted);
+      font-size: 13px;
+      margin-top: 8px;
+    }
+    @media (max-width: 720px) {
+      .wrap { padding: 12px; }
+      h1 { font-size: 24px; }
+      .value { font-size: 20px; }
+      table { font-size: 12px; }
+    }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <section class="hero">
+      <h1>PKScreener Local Dashboard</h1>
+      <div class="sub">Universe: allstocks | Updated: 2026-04-06 14:02:29 | Auto-refresh: 20 sec</div>
+      <div class="cards"><div class='card'><div class='label'>Total Money In</div><div class='value'>0.0</div></div><div class='card'><div class='label'>Cash Left</div><div class='value'>0.0</div></div><div class='card'><div class='label'>Account Value</div><div class='value'>19302.66</div></div><div class='card'><div class='label'>Total P/L</div><div class='value'>19302.66</div></div><div class='card'><div class='label'>Open Trades</div><div class='value'>3</div></div><div class='card'><div class='label'>Closed Trades</div><div class='value'>0</div></div></div>
+      <div class="note">"Watch for Buy" means the stock looks interesting, but price has not crossed the actual buy trigger yet. "Buy Now" appears only after trigger confirmation.</div>
+    </section>
+    <section class="grid">
+      <div class="panel">
+        <h2>Open Positions</h2>
+        <table class="dataframe data-table">
+  <thead>
+    <tr style="text-align: left;">
+      <th>Stock</th>
+      <th>Shares Held</th>
+      <th>Bought At</th>
+      <th>Price Now</th>
+      <th>Gross Profit/Loss</th>
+      <th>Est. Exit Charges</th>
+      <th>Profit/Loss Now</th>
+      <th>Return %</th>
+      <th>Sell If Below</th>
+      <th>Take Profit 1</th>
+      <th>Take Profit 2</th>
+      <th>What To Do Now</th>
+      <th>Signal Status</th>
+      <th>Why</th>
+      <th>Checked At</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>ABCAPITAL</td>
+      <td>10.0</td>
+      <td>303.2</td>
+      <td>308.85</td>
+      <td>56.50</td>
+      <td>3.21</td>
+      <td>49.71</td>
+      <td>1.64</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>Wait</td>
+      <td></td>
+      <td>|</td>
+      <td>2026-04-06 14:02:29</td>
+    </tr>
+    <tr>
+      <td>DIVISLAB</td>
+      <td>2.0</td>
+      <td>5835.0</td>
+      <td>5797.50</td>
+      <td>-75.00</td>
+      <td>12.06</td>
+      <td>-100.83</td>
+      <td>-0.86</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>Wait</td>
+      <td></td>
+      <td>|</td>
+      <td>2026-04-06 14:02:29</td>
+    </tr>
+    <tr>
+      <td>360ONE</td>
+      <td>5.0</td>
+      <td>930.0</td>
+      <td>927.85</td>
+      <td>-10.75</td>
+      <td>4.82</td>
+      <td>-21.06</td>
+      <td>-0.45</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>Wait</td>
+      <td></td>
+      <td>|</td>
+      <td>2026-04-06 14:02:29</td>
+    </tr>
+  </tbody>
+</table>
+      </div>
+      <div class="panel">
+        <h2>Buy / Sell Board</h2>
+        <table class="dataframe data-table">
+  <thead>
+    <tr style="text-align: left;">
+      <th>Stock</th>
+      <th>What To Do</th>
+      <th>Signal Strength %</th>
+      <th>Momentum Score</th>
+      <th>Momentum Setup</th>
+      <th>Price Now</th>
+      <th>PrevClose</th>
+      <th>Change %</th>
+      <th>Buy Above</th>
+      <th>Entry Gap %</th>
+      <th>Sell If Below</th>
+      <th>Take Profit 1</th>
+      <th>Take Profit 2</th>
+      <th>Risk %</th>
+      <th>Volume vs Avg</th>
+      <th>Avg Daily Value</th>
+      <th>RSI</th>
+      <th>CCI</th>
+      <th>MFI</th>
+      <th>Checks</th>
+      <th>Why</th>
+      <th>Checked At</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>DIVISLAB</td>
+      <td></td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td></td>
+      <td>5797.50</td>
+      <td>5797.50</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0</td>
+      <td>50.0</td>
+      <td>0.0</td>
+      <td>50.0</td>
+      <td></td>
+      <td></td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>ABCAPITAL</td>
+      <td></td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td></td>
+      <td>308.85</td>
+      <td>308.85</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0</td>
+      <td>50.0</td>
+      <td>0.0</td>
+      <td>50.0</td>
+      <td></td>
+      <td></td>
+      <td></td>
+    </tr>
+    <tr>
+      <td>360ONE</td>
+      <td></td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td></td>
+      <td>927.85</td>
+      <td>927.85</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>0</td>
+      <td>50.0</td>
+      <td>0.0</td>
+      <td>50.0</td>
+      <td></td>
+      <td></td>
+      <td></td>
+    </tr>
+  </tbody>
+</table>
+      </div>
+      <div class="panel">
+        <h2>Recent Trades</h2>
+        <table class="dataframe data-table">
+  <thead>
+    <tr style="text-align: left;">
+      <th>Trade</th>
+      <th>Stock</th>
+      <th>Status</th>
+      <th>Qty</th>
+      <th>Bought At</th>
+      <th>Sold At</th>
+      <th>Booked P/L</th>
+      <th>Updated</th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>5</td>
+      <td>360ONE</td>
+      <td>OPEN</td>
+      <td>5.0</td>
+      <td>930.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>2026-04-06 14:02:29</td>
+    </tr>
+    <tr>
+      <td>2</td>
+      <td>ABCAPITAL</td>
+      <td>OPEN</td>
+      <td>10.0</td>
+      <td>303.2</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>2026-04-06 14:02:29</td>
+    </tr>
+    <tr>
+      <td>1</td>
+      <td>DIVISLAB</td>
+      <td>OPEN</td>
+      <td>2.0</td>
+      <td>5835.0</td>
+      <td>0.0</td>
+      <td>0.0</td>
+      <td>2026-04-06 14:02:29</td>
+    </tr>
+  </tbody>
+</table>
+      </div>
+      <div class="panel">
+        <h2>Cash History</h2>
+        <div class='note'>No extra cash added yet.</div>
+      </div>
+    </section>
+  </div>
+</body>
+</html>

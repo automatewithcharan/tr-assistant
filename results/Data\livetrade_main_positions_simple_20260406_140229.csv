@@ -1,0 +1,4 @@
+Stock,Shares Held,Bought At,Price Now,Gross Profit/Loss,Est. Exit Charges,Profit/Loss Now,Return %,Sell If Below,Take Profit 1,Take Profit 2,What To Do Now,Signal Status,Why,Checked At
+ABCAPITAL,10.0,303.2,308.85,56.5,3.21,49.71,1.64,0.0,0.0,0.0,Wait,, | ,2026-04-06 14:02:29
+DIVISLAB,2.0,5835.0,5797.5,-75.0,12.06,-100.83,-0.86,0.0,0.0,0.0,Wait,, | ,2026-04-06 14:02:29
+360ONE,5.0,930.0,927.85,-10.75,4.82,-21.06,-0.45,0.0,0.0,0.0,Wait,, | ,2026-04-06 14:02:29

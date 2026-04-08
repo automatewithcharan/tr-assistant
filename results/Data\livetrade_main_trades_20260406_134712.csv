@@ -1,0 +1,10 @@
+TradeId,Universe,Symbol,Side,Status,EntryDate,EntryPrice,Quantity,InvestedAmount,StopLoss,Target1,Target2,EntrySignal,EntryConfidencePct,EntryReason,CurrentPrice,CurrentValue,UnrealizedPnL,UnrealizedReturnPct,LastAction,LastSignal,LastConfidencePct,LastReason,LastUpdatedAt,ExitDate,ExitPrice,ExitValue,ExitReason,RealizedPnL,RealizedReturnPct
+1,allstocks,DIVISLAB,LONG,OPEN,2026-04-02,5835.0,2.0,11670.0,0.0,0.0,0.0,WEAK BUY,12.0,Manual buy entry,5815.0,11630.0,-65.87,-0.56,,,0.0,,2026-04-06 13:47:12,,0.0,0.0,,0.0,0.0
+2,allstocks,ABCAPITAL,LONG,OPEN,2026-04-06,303.2,10.0,3032.0,0.0,0.0,0.0,WEAK BUY,33.5,Manual buy entry,308.4,3084.0,45.21,1.49,,,0.0,,2026-04-06 13:47:12,,0.0,0.0,,0.0,0.0
+3,allstocks,360ONE,LONG,OPEN,2026-04-06,929.4,5.0,4647.0,0.0,0.0,0.0,,0.0,Manual buy entry,927.95,4639.75,-17.56,-0.38,,,0.0,,2026-04-06 13:47:12,,0.0,0.0,,0.0,0.0
+4,allstocks,360ONE,LONG,OPEN,2026-04-06,929.5,5.0,4647.5,0.0,0.0,0.0,,0.0,Manual buy entry,927.95,4639.75,-18.06,-0.39,,,0.0,,2026-04-06 13:47:12,,0.0,0.0,,0.0,0.0
+5,allstocks,360ONE,LONG,OPEN,2026-04-06,930.0,5.0,4650.0,0.0,0.0,0.0,,0.0,Manual buy entry,927.95,4639.75,-20.57,-0.44,,,0.0,,2026-04-06 13:47:12,,0.0,0.0,,0.0,0.0
+6,allstocks,360ONE,LONG,OPEN,2026-04-06,930.0,5.0,4650.0,0.0,0.0,0.0,,0.0,Manual buy entry,927.95,4639.75,-20.57,-0.44,,,0.0,,2026-04-06 13:47:12,,0.0,0.0,,0.0,0.0
+7,allstocks,360ONE,LONG,OPEN,2026-04-06,930.0,5.0,4650.0,0.0,0.0,0.0,,0.0,Manual buy entry,927.95,4639.75,-20.57,-0.44,,,0.0,,2026-04-06 13:47:12,,0.0,0.0,,0.0,0.0
+8,allstocks,360ONE,LONG,OPEN,2026-04-06,930.0,5.0,4650.0,0.0,0.0,0.0,,0.0,Manual buy entry,927.95,4639.75,-20.57,-0.44,,,0.0,,2026-04-06 13:47:12,,0.0,0.0,,0.0,0.0
+9,allstocks,360ONE,LONG,OPEN,2026-04-06,930.0,5.0,4650.0,0.0,0.0,0.0,,0.0,Manual buy entry,927.95,4639.75,-20.57,-0.44,,,0.0,,2026-04-06 13:47:12,,0.0,0.0,,0.0,0.0
