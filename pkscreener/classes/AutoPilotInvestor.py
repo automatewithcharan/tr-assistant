@@ -199,8 +199,13 @@ class BlindBuyScorer:
             score += 10
             reasons.append(f"RSI mid ({rsi:.0f})")
         elif rsi > 70:
-            score -= 8
-            reasons.append(f"RSI overbought ({rsi:.0f})")
+            # On strong momentum (change >= 5%), RSI overbought is EXPECTED and not a risk signal.
+            # A stock up 5%+ intraday that is also "overbought" is showing momentum, not overextension.
+            # Only penalise overbought RSI for weak/early-stage moves where it signals chasing.
+            if change_pct < 5.0:
+                score -= 8
+                reasons.append(f"RSI overbought ({rsi:.0f})")
+            # else: overbought on a strong-momentum day — no penalty, no mention
 
         # -- CCI (< -100 = oversold, > 100 = overbought) --
         if cci < -100:
