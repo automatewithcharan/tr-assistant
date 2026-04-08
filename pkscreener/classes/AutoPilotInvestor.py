@@ -1510,15 +1510,19 @@ class AutoPilotInvestor:
             # ── Zero-OHLCV-targets gate ─────────────────────────────────
             # If the signal engine returned NO stop loss AND NO take profits,
             # it could not identify technical support/resistance levels for this stock.
-            # For stocks already up 8%+, this means the engine sees no basis for
-            # further upside — the targets shown would just be fake +5%/+10% from
-            # current price. Suppress these to avoid misleading alerts.
-            # (CLSEL: TakeProfit1=0, TakeProfit2=0, SellIfBelow=0, NowAction="Hold")
+            # The targets shown would just be fake +5%/+10% from current price.
+            # Suppress if ALSO: low confidence (<20%) or engine says Hold/Sell.
+            # CLSEL: SL=0,T1=0,T2=0, +9.7%, Hold → blocked
+            # BIOCON: SL=0,T1=0,T2=0, +3.2%, Hold, conf 11% → blocked
+            _now_action = str(row.get("NowAction", row.get("Action", ""))).lower()
+            _engine_not_buy = "hold" in _now_action or "sell" in _now_action or "exit" in _now_action
             if (stop_loss <= 0 and target1 <= 0 and target2 <= 0
-                    and daily_change >= 8.0 and not is_early_mover):
+                    and not is_early_mover
+                    and (daily_change >= 8.0 or (confidence < 20 and _engine_not_buy))):
                 self._log(
                     f"Suppressed {sym}: OHLCV engine has NO targets (SL=0, T1=0, T2=0) "
-                    f"for a stock already +{daily_change:.1f}% — no technical basis for entry"
+                    f"+{daily_change:.1f}%, conf={confidence:.0f}%, action='{_now_action}' "
+                    f"— no technical basis for entry"
                 )
                 return
 
