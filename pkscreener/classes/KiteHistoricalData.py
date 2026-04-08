@@ -333,9 +333,23 @@ class KiteHistoricalDataProvider:
         try:
             modified_at = datetime.fromtimestamp(os.path.getmtime(path))
             if interval == "day":
-                # Historical daily candles don't change — accept cache up to 7 days old.
-                # Live ticks supply today's price; we only need historical OHLCV for indicators.
-                return (datetime.now() - modified_at).total_seconds() <= 7 * 24 * 3600
+                # Daily cache is usable only if it was written today OR on the last
+                # trading day (i.e. the most recent weekday). A 7-day window was too
+                # generous — it caused the cache to go stale across trading days,
+                # missing new candles for April 3, 4, 7 etc.
+                now = datetime.now()
+                today = now.date()
+                modified_date = modified_at.date()
+                if modified_date >= today:
+                    return True  # Written today — fresh
+                # Accept yesterday only if today is Monday (weekend gap) or
+                # the file was written on the most recent trading weekday
+                days_old = (today - modified_date).days
+                if days_old == 1:
+                    return True  # Written yesterday — still good for pre-market
+                if days_old <= 3 and today.weekday() == 0 and modified_date.weekday() == 4:
+                    return True  # Written on Friday, today is Monday — weekend gap OK
+                return False  # Stale — needs re-fetch to pick up missed trading days
             return (datetime.now() - modified_at).total_seconds() <= 1800
         except Exception:
             return False
