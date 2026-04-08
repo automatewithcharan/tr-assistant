@@ -258,6 +258,21 @@ class BlindBuyScorer:
             reasons.append("adequate volume")
         # Don't penalize low volume — small caps may have naturally lower volume
 
+        # -- Gap-up from prev close bonus --
+        # A stock that opens 4%+ above prev close on a broad-up day is showing
+        # strong overnight demand. At market open, most technical indicators
+        # (RSI, volume, MACD) are still cold — but the gap itself is information.
+        # Award bonus points so that gap-up + trigger ready can reach viable scores.
+        _prev_close = float(row.get("PrevClose", row.get("Prev Close", 0)) or 0)
+        if _prev_close > 0 and _price_now > 0:
+            _gap_pct = (_price_now - _prev_close) / _prev_close * 100
+            if _gap_pct >= 7.0:
+                score += 15
+                reasons.append(f"strong gap-up +{_gap_pct:.1f}% from prev close")
+            elif _gap_pct >= 4.0:
+                score += 10
+                reasons.append(f"gap-up +{_gap_pct:.1f}% from prev close")
+
         # -- Green candle / price action --
         # Guard: if live price is below buy trigger, the change_pct from
         # historical candles may be stale — do NOT award breakout/green points.
@@ -1368,9 +1383,37 @@ class AutoPilotInvestor:
         # Volume available at this point of the day (for already-ran gate)
         _vol_ratio_live = float(row.get("VolumeRatio", row.get("Volume Ratio", 0)) or 0)
 
+        # Determine if we're in the early-market window (first 30 min after open).
+        # At 9:15–9:45 IST, volume ratios are physically low (day hasn't traded)
+        # and indicators are cold. A gap-up + trigger ready is the best signal
+        # available — demanding 1.3x vol or RSI confirmation is impossible.
+        try:
+            import pytz as _pytz_eff
+            _ist_eff = _pytz_eff.timezone("Asia/Kolkata")
+            _now_eff = datetime.now(_ist_eff)
+            _min_since_open_eff = (_now_eff.hour * 60 + _now_eff.minute) - (9 * 60 + 15)
+        except Exception:
+            _min_since_open_eff = 120  # assume mid-morning if tz fails
+        _is_opening_window = 0 <= _min_since_open_eff <= 30
+
         if is_early_mover:
             volume_ratio_check = float(row.get("VolumeRatio", row.get("Volume Ratio", 0)) or 0)
             effective_min = 60.0 if volume_ratio_check >= self._TICK_EARLY_MOVER_VOL_RATIO else 999.0
+        elif _intraday_override and _no_hard_blockers and _is_opening_window:
+            # EARLY-MARKET WINDOW (9:15–9:45 IST).
+            # Volume and indicators are physically cold. Gap-up from prev close
+            # IS the signal. Accept lower score but still require entry confirmation.
+            # Skip the volume gate entirely during this window.
+            #
+            # Tuning rationale (April 8 analysis):
+            #   JTLIND  open +6.6%, score 47 → would pass 42 ✓ (closed +20%)
+            #   PINELABS open +5.7%, score 32 → would NOT pass 42 (no indicator support)
+            #   SEPC     open +13.5%, score ~35 → would NOT pass 42 (but gap was huge)
+            effective_min = max(42.0, self.config.blind_buy_min_score - 5)
+            self._log(
+                f"Early-market window: {sym} +{daily_change:.1f}%, score {blind_score:.0f}, "
+                f"effective_min={effective_min:.0f} (opening 30-min rules)"
+            )
         elif _intraday_override and _no_hard_blockers:
             # Stock has already moved 3%+.  Goal: only alert when there is a real
             # chance of continuing to 10-20% (the user's daily target).
