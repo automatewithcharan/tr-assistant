@@ -2003,21 +2003,13 @@ class AutoPilotInvestor:
         OHLCV-based buy alerts are paused when this returns True.
         Tick-confirmed alerts (real intraday moves) bypass this guard.
         """
-        # Try to get Nifty change from tick data
-        try:
-            tick_path = os.path.join(self.output_dir, "kite_tick_latest.json")
-            if os.path.isfile(tick_path):
-                import json
-                with open(tick_path, "r") as f:
-                    ticks = json.load(f)
-                for key in ("NIFTY 50", "NSEI", "^NSEI", "NIFTY50"):
-                    if key in ticks:
-                        nifty_chg = float(ticks[key].get("change", 0) or 0)
-                        if nifty_chg <= -2.0:
-                            self._log(f"Nifty crash guard: Nifty {nifty_chg:.1f}% — pausing OHLCV buy alerts")
-                            return True
-                        return False
-        except Exception:
+        # Try to get Nifty change from tick data (via _load_ticks_snapshot)
+        nifty_chg = self._get_nifty_change()
+        if nifty_chg != 0.0:
+            if nifty_chg <= -2.0:
+                self._log(f"Nifty crash guard: Nifty {nifty_chg:.1f}% — pausing OHLCV buy alerts")
+                return True
+            return False
             pass
 
         # Fallback: use median ChangePct of all stocks as market proxy.
@@ -2036,18 +2028,31 @@ class AutoPilotInvestor:
         return False
 
     def _get_nifty_change(self) -> float:
-        """Return today's Nifty50 change% from tick data, or 0.0 if unavailable."""
-        try:
-            tick_path = os.path.join(self.output_dir, "kite_tick_latest.json")
-            if os.path.isfile(tick_path):
-                import json
-                with open(tick_path, "r") as f:
-                    ticks = json.load(f)
-                for key in ("NIFTY 50", "NSEI", "^NSEI", "NIFTY50"):
-                    if key in ticks:
-                        return float(ticks[key].get("change", 0) or 0)
-        except Exception:
-            pass
+        """Return today's broad market change% from tick data, or 0.0 if unavailable.
+        
+        Tries NIFTY 50 index from ticks first, then falls back to median change
+        of all stocks as a proxy for broad market direction.
+        """
+        ticks = self._load_ticks_snapshot()
+        if not ticks:
+            return 0.0
+        # Try index keys first
+        for key in ("NIFTY 50", "NSEI", "^NSEI", "NIFTY50"):
+            if key in ticks:
+                return float(ticks[key].get("change", 0) or 0)
+        # Fallback: median change of all stocks
+        changes = []
+        for sym, tick in ticks.items():
+            chg = tick.get("change")
+            if chg is not None:
+                try:
+                    changes.append(float(chg))
+                except (ValueError, TypeError):
+                    pass
+        if len(changes) > 50:
+            changes.sort()
+            mid = len(changes) // 2
+            return changes[mid]
         return 0.0
 
     def _push_buy_alerts(self, candidates: List[BlindBuyCandidate]) -> None:
