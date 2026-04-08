@@ -1299,10 +1299,10 @@ class AutoPilotInvestor:
         # (Threshold lowered from 5%/2x → 3%/1.5x so we catch moves at 9:30 AM onset)
         scoring_row = row.copy()
         vol_ratio_live = float(row.get("VolumeRatio", row.get("Volume Ratio", 0)) or 0)
-        # Strip bearish labels if stock is up 5%+ (move IS the breakout confirmation)
-        # OR up 3%+ with decent early-morning volume (1.5x is unreachable before 11 AM).
-        # Previously required vol >= 1.5x which was impossible at 9:30-11 AM IST.
-        _strong_intraday = daily_change >= 5.0 or (daily_change >= 3.0 and vol_ratio_live >= 0.8)
+        # Strip bearish labels if stock is up 4%+ (move IS the breakout confirmation).
+        # A 4%+ move on a stock that was "below MAs" means MAs have been reclaimed intraday.
+        # OR up 3%+ with decent early-morning volume (1.5x was unreachable before 11 AM IST).
+        _strong_intraday = daily_change >= 4.0 or (daily_change >= 3.0 and vol_ratio_live >= 0.8)
         if daily_change >= 3.0:
             scoring_row["PriceNow"] = price   # use live tick price as baseline
             scoring_row["Price Now"] = price
@@ -1370,9 +1370,10 @@ class AutoPilotInvestor:
             effective_min = 60.0 if volume_ratio_check >= self._TICK_EARLY_MOVER_VOL_RATIO else 999.0
         elif _intraday_override and _no_hard_blockers:
             # Live tick + 3%+ intraday move + no blockers.
-            # Use configured min score (default 45) — time-of-day volume gate already
-            # handles quality by requiring proportional volume for the time of day.
-            effective_min = self.config.blind_buy_min_score
+            # Use configured min score - 5, floored at 35 (not 40).
+            # Stocks up 4-5% on a broad market up-day score 34-37 without MACD;
+            # a 35 floor catches those while still filtering noise.
+            effective_min = max(35.0, self.config.blind_buy_min_score - 5)
         elif _entry_confirmed and _no_hard_blockers:
             # Price already crossed entry trigger: entry is confirmed, 45 is sufficient
             effective_min = max(40.0, self.config.blind_buy_min_score - 5)
