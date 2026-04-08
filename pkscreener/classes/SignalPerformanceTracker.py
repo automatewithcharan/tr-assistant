@@ -129,7 +129,7 @@ class SignalPerformanceTracker:
         new_rows = []
         for _, row in alerts_df.iterrows():
             action = str(row.get("NowAction", "")).strip()
-            if action not in ["Strong Buy Now", "Buy Now", "Sell / Exit", "Sell Now"]:
+            if action not in ["Strong Buy Now", "Buy Now", "Momentum Buy", "Sell / Exit", "Sell Now"]:
                 continue
 
             symbol = str(row.get("Symbol", "")).strip().upper()

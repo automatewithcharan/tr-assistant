@@ -34,6 +34,8 @@ class SignalMonitorRunner:
     HIGH_DAILY_CHANGE_PCT = 2.0        # Force full OHLCV rescan when live daily change exceeds this
     ORDER_BOOK_IMBALANCE_RATIO = 2.5   # Pre-jump: buyers/sellers ratio threshold
     VOLUME_BURST_FRACTION = 0.025      # Pre-jump: 2.5% of accumulated day vol traded in last 60s
+    MAX_BUY_DAILY_CHANGE_PCT = 3.0    # Skip buy alerts if stock already moved this much % today (already-ran filter)
+    MIN_MOMENTUM_EXTENSION_PCT = 3.0  # Minimum daily gain to qualify as a momentum extension alert (3% → 20% chaser)
 
     SUMMARY_COLUMNS = [
         "Universe",
@@ -243,6 +245,9 @@ class SignalMonitorRunner:
             merged_state_df,
         )
         alerts_df = self._build_alerts(previous_state_df, merged_state_df)
+        momentum_alerts_df = self._build_momentum_alerts(previous_simple_df, merged_simple_df)
+        if not momentum_alerts_df.empty:
+            alerts_df = pd.concat([alerts_df, momentum_alerts_df], ignore_index=True)
         summary_df = self._build_summary_from_simple(merged_simple_df, total, len(alerts_df))
         _, scorecard_df = self.performance_tracker.register_and_update(alerts_df)
 
@@ -810,6 +815,20 @@ class SignalMonitorRunner:
             default_logger().debug(f"Failed loading monitor state: {exc}", exc_info=True)
             return pd.DataFrame(columns=self.STATE_COLUMNS)
 
+        # Auto-reset if the state file is from a previous trading day.
+        # This prevents stale cross-day state (e.g. from another machine) from
+        # generating false alerts on stocks that already ran 3-9% since then.
+        if "CheckedAt" in state_df.columns:
+            today_str = self.run_at.strftime("%Y-%m-%d")
+            checked_dates = state_df["CheckedAt"].astype(str).str[:10]
+            if not checked_dates.empty and (checked_dates != today_str).all():
+                stale_date = checked_dates.max()
+                OutputControls().printOutput(
+                    f"  [!] State file for {self.universe} is from a previous day ({stale_date}) — "
+                    f"resetting to avoid stale alerts on stocks that already moved."
+                )
+                return pd.DataFrame(columns=self.STATE_COLUMNS)
+
         for column in self.STATE_COLUMNS:
             if column not in state_df.columns:
                 state_df[column] = ""
@@ -828,6 +847,7 @@ class SignalMonitorRunner:
             }
 
         alert_rows = []
+        skipped_already_ran = []
         allowed_buy_actions = ["Strong Buy Now"] if self.strong_buy_only else ["Strong Buy Now", "Buy Now"]
         for _, row in state_df.iterrows():
             symbol = str(row["Symbol"]).strip().upper()
@@ -838,6 +858,33 @@ class SignalMonitorRunner:
             previous_action = previous_map.get(symbol, "")
             if previous_action == now_action:
                 continue
+
+            # Smart "already ran" filter for buy alerts:
+            # Suppress ONLY when the stock has moved significantly AND is already PAST
+            # its entry trigger (the entry opportunity window has closed).
+            # KEEP the alert when the stock is still approaching its trigger even if
+            # it is up 3%+ today — that is still a valid first-time breakout approach.
+            if now_action in allowed_buy_actions:
+                change_pct = self._to_float(row.get("ChangePct"))
+                if change_pct >= self.MAX_BUY_DAILY_CHANGE_PCT:
+                    buy_above = self._to_float(row.get("BuyAbove"))
+                    price_now = self._to_float(row.get("PriceNow"))
+                    entry_gap_pct = self._to_float(row.get("EntryGapPct"))
+                    # entry_gap_pct > 0 means price is still BELOW BuyAbove — do NOT suppress
+                    # (stock is approaching its trigger for the first time).
+                    # Only suppress when price has already crossed trigger AND moved > 1% past it
+                    # (the breakout window is closed, entry chasing would be risky).
+                    pct_past_trigger = (
+                        (price_now - buy_above) / buy_above * 100.0
+                        if buy_above > 0 and price_now > buy_above
+                        else 0.0
+                    )
+                    already_extended = entry_gap_pct <= 0.0 and pct_past_trigger >= 1.0
+                    if already_extended:
+                        skipped_already_ran.append(
+                            f"{symbol} ({change_pct:+.1f}% day, {pct_past_trigger:.1f}% past entry)"
+                        )
+                        continue
 
             alert_rows.append(
                 {
@@ -857,6 +904,14 @@ class SignalMonitorRunner:
                 }
             )
 
+        if skipped_already_ran:
+            OutputControls().printOutput(
+                f"  [!] Suppressed {len(skipped_already_ran)} buy alert(s) — stocks already up "
+                f">={self.MAX_BUY_DAILY_CHANGE_PCT:.0f}% today (already ran): "
+                + ", ".join(skipped_already_ran[:10])
+                + (" ..." if len(skipped_already_ran) > 10 else "")
+            )
+
         alerts_df = pd.DataFrame(alert_rows, columns=self.ALERT_COLUMNS)
         if not alerts_df.empty:
             alerts_df.sort_values(
@@ -865,6 +920,92 @@ class SignalMonitorRunner:
                 inplace=True,
             )
         return alerts_df[self.ALERT_COLUMNS].copy()
+
+    def _build_momentum_alerts(
+        self,
+        previous_simple_df: pd.DataFrame,
+        current_simple_df: pd.DataFrame,
+    ) -> pd.DataFrame:
+        """Alert when a stock freshly enters Momentum Buy with a significant daily gain.
+
+        This catches the '3% to 20%' scenario: a stock that is already running hard
+        and NOW qualifies as a Momentum Buy (strong volume + trend + breakout day).
+        These alerts are labelled 'Momentum Buy' so they are visually distinct from
+        regular 'Buy Now' entry alerts.
+        """
+        if current_simple_df is None or current_simple_df.empty:
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+        if "Momentum Setup" not in current_simple_df.columns:
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+
+        # Previous momentum state: symbol -> previous setup value
+        prev_momentum_map: Dict[str, str] = {}
+        if (
+            previous_simple_df is not None
+            and not previous_simple_df.empty
+            and "Momentum Setup" in previous_simple_df.columns
+            and "Stock" in previous_simple_df.columns
+        ):
+            for _, row in previous_simple_df.iterrows():
+                sym = str(row.get("Stock", "")).strip().upper()
+                if sym:
+                    prev_momentum_map[sym] = str(row.get("Momentum Setup", "")).strip()
+
+        alert_rows = []
+        for _, row in current_simple_df.iterrows():
+            current_setup = str(row.get("Momentum Setup", "")).strip()
+            if current_setup != "Momentum Buy":
+                continue
+
+            sym = str(row.get("Stock", "")).strip().upper()
+            if not sym:
+                continue
+
+            prev_setup = prev_momentum_map.get(sym, "")
+            if prev_setup == "Momentum Buy":
+                continue  # Already was Momentum Buy — no transition, no alert
+
+            # Only fire when stock has meaningful intraday gain (it is already in motion)
+            change_pct = self._to_float(row.get("Change %"))
+            if change_pct < self.MIN_MOMENTUM_EXTENSION_PCT:
+                continue
+
+            alert_rows.append(
+                {
+                    "When": self.run_at_str,
+                    "Symbol": sym,
+                    "PreviousAction": prev_setup or "None",
+                    "NowAction": "Momentum Buy",
+                    "PriceNow": row.get("Price Now", ""),
+                    "BuyAbove": row.get("Buy Above", ""),
+                    "SellIfBelow": row.get("Sell If Below", ""),
+                    "TakeProfit1": row.get("Take Profit 1", ""),
+                    "TakeProfit2": row.get("Take Profit 2", ""),
+                    "SuggestedQty": row.get("Suggested Qty", 0),
+                    "SignalStrengthPct": row.get("Signal Strength %", 0),
+                    "Checks": row.get("Checks", ""),
+                    "Why": str(row.get("Why", "")) + f" | Momentum extension: day gain +{change_pct:.1f}%",
+                }
+            )
+
+        if not alert_rows:
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+
+        mom_df = pd.DataFrame(alert_rows, columns=self.ALERT_COLUMNS)
+        mom_df.sort_values(
+            by=["SignalStrengthPct", "Symbol"],
+            ascending=[False, True],
+            inplace=True,
+        )
+        if not mom_df.empty:
+            OutputControls().printOutput(
+                f"  [+] {len(mom_df)} momentum extension alert(s): "
+                + ", ".join(
+                    f"{r['Symbol']} (+{self._to_float(r.get('Why','').split('+')[-1].replace('%','').strip()) if '+' in str(r.get('Why','')) else '?'}%)"
+                    for _, r in mom_df.head(5).iterrows()
+                )
+            )
+        return mom_df[self.ALERT_COLUMNS].copy()
 
     def _build_summary(self, report_df: pd.DataFrame, scanned_symbols: int, alert_count: int) -> pd.DataFrame:
         """Create a compact monitor summary for CSV and dashboard use."""
@@ -1066,8 +1207,10 @@ class SignalMonitorRunner:
         for _, row in alerts_df.head(max_alerts).iterrows():
             qty = int(float(row["SuggestedQty"])) if str(row["SuggestedQty"]).strip() else 0
             qty_text = f" | qty {qty}" if qty > 0 else ""
+            action = str(row["NowAction"])
+            prefix = "🚀 " if action == "Momentum Buy" else ""
             event_lines.append(
-                f"[{row['NowAction']}] {row['Symbol']} @ {self._fmt_price(row['PriceNow'])} | "
+                f"{prefix}[{action}] {row['Symbol']} @ {self._fmt_price(row['PriceNow'])} | "
                 f"buy>{self._fmt_price(row['BuyAbove'])} | stop<{self._fmt_price(row['SellIfBelow'])}{qty_text}"
             )
         return event_lines
@@ -1249,6 +1392,8 @@ class SignalMonitorRunner:
                 action_emoji = "🟢🟢"
             elif action == "Buy Now":
                 action_emoji = "🟢"
+            elif action == "Momentum Buy":
+                action_emoji = "🚀"
             else:
                 action_emoji = "🔴"
             block_lines = [
