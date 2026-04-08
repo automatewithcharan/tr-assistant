@@ -1387,18 +1387,45 @@ class AutoPilotInvestor:
                 target1 = round(_price_now * (1.05 if is_early_mover else 1.02), 2)
             if target2 <= 0 and _price_now > 0:
                 target2 = round(_price_now * (1.10 if is_early_mover else 1.04), 2)
-            # Suggested qty: risk 1% of budget (₹1000) per trade.
-            # Cap position at 5% of budget = ₹5000 to avoid over-concentration.
-            _risk_amt = 1000  # ₹1000 max risk per trade (1% of ₹1L budget)
-            _max_position = 5000  # ₹5000 max investment per trade (5% of budget)
+            # ── Position Sizing (volatility-adjusted, score-scaled) ──────────
+            # Base: risk ₹1000 per trade (1% of ₹1L budget), stop defined by ATR/SL.
+            # Volatility cap: position value <= (target_vol% / asset_vol%) × portfolio.
+            # Score multiplier: high-conviction signals (score>=70) get up to 1.5x size.
+            # Hard cap: ₹5000 max per position (5% of ₹1L budget).
+            _risk_amt = 1000        # ₹1000 base risk per trade
+            _max_position = 5000    # ₹5000 hard cap per position
+            _portfolio = 100000     # assumed ₹1L trading budget
+            _target_vol = 0.15      # 15% target portfolio volatility contribution
+
             if suggested_qty <= 0 and _price_now > 0:
+                # Step 1: Risk-per-share sizing (primary method)
                 if stop_loss > 0 and _price_now > stop_loss:
                     risk_per_share = _price_now - stop_loss
-                    suggested_qty = max(1, int(_risk_amt / risk_per_share))
+                    _qty_risk = max(1, int(_risk_amt / risk_per_share))
                 else:
-                    # No stop loss available — default 3% stop rule
-                    suggested_qty = max(1, int(_risk_amt / (_price_now * 0.03)))
-            # Cap to max position size
+                    _qty_risk = max(1, int(_risk_amt / (_price_now * 0.03)))
+
+                # Step 2: Volatility-targeting cap (from Auto-Alpha-Forge position_sizer)
+                # Estimate annualised asset vol from ATR proxy: vol ≈ (ATR / price) × sqrt(252)
+                _atr_val = c.atr if hasattr(c, "atr") and c.atr and c.atr > 0 else (_price_now * 0.02)
+                _asset_vol = (_atr_val / _price_now) * (252 ** 0.5)
+                _asset_vol = max(_asset_vol, 0.05)  # floor at 5% annualised
+                _vol_position_value = (_target_vol / _asset_vol) * _portfolio
+                _qty_vol = max(1, int(min(_vol_position_value, _max_position) / _price_now))
+
+                # Step 3: Score confidence multiplier (0.8x to 1.5x)
+                # Low score (<=55): size down 20%; high score (>=70): size up 50%
+                if blind_score >= 70:
+                    _score_mult = 1.5
+                elif blind_score >= 60:
+                    _score_mult = 1.0
+                else:
+                    _score_mult = 0.8
+
+                # Take the more conservative of risk-based and vol-based, then apply score
+                suggested_qty = max(1, int(min(_qty_risk, _qty_vol) * _score_mult))
+
+            # Hard cap to max position value
             if _price_now > 0:
                 max_shares = max(1, int(_max_position / _price_now))
                 suggested_qty = min(suggested_qty, max_shares)
