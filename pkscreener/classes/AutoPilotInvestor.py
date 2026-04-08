@@ -49,7 +49,7 @@ class AutoPilotConfig:
     min_trade_value: float = 0.0        # no liquidity floor — small caps welcome
     min_volume_ratio: float = 0.0       # don't gate on volume ratio
     max_entry_gap_pct: float = 5.0      # wider trigger window (backtest shows 1.5 blocks good picks)
-    blind_buy_min_score: float = 30.0   # min score to alert; time-of-day volume gate handles early morning
+    blind_buy_min_score: float = 25.0   # min score to alert; time-of-day volume gate handles early morning
 
     # Sell monitoring
     auto_exit_on_sell: bool = True
@@ -1306,6 +1306,14 @@ class AutoPilotInvestor:
             scoring_row["BuyAbove"] = 0       # skip stale swing-level trigger penalty
             scoring_row["Buy Above"] = 0
             scoring_row["Entry"] = 0
+            # The OHLCV signal state "ChangePct" is from yesterday's pre-market scan
+            # and may reflect the signal's HISTORICAL change (e.g. 4.9%), not today's
+            # actual intraday gain (e.g. 9.3%). Fix: use today's actual gain so the scorer
+            # correctly rewards the intraday momentum (+15 for 5%+ vs +12 for 2.5-4.99%).
+            _ohlcv_chg = float(row.get("ChangePct", row.get("Change %", 0)) or 0)
+            if abs(daily_change) > abs(_ohlcv_chg):
+                scoring_row["ChangePct"] = daily_change
+                scoring_row["Change %"] = daily_change
         if _strong_intraday:
             # Strip stale bearish labels from the Why/Reason column so scorer skips them.
             # The 5%+ live move with volume is stronger evidence than a stale text label.
