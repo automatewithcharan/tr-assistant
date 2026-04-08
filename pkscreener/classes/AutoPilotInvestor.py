@@ -20,7 +20,7 @@ direction change, ATR trailing) more heavily than lagging ones.
 import os
 import time
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Set, Tuple
 
 import pandas as pd
@@ -49,7 +49,7 @@ class AutoPilotConfig:
     min_trade_value: float = 0.0        # no liquidity floor — small caps welcome
     min_volume_ratio: float = 0.0       # don't gate on volume ratio
     max_entry_gap_pct: float = 5.0      # wider trigger window (backtest shows 1.5 blocks good picks)
-    blind_buy_min_score: float = 60.0   # raised: only show good+ picks (score 60+/100)
+    blind_buy_min_score: float = 45.0   # min score to alert; time-of-day volume gate handles early morning
 
     # Sell monitoring
     auto_exit_on_sell: bool = True
@@ -1432,11 +1432,17 @@ class AutoPilotInvestor:
                 suggested_qty = min(suggested_qty, max_shares)
             _invest_amt = round(suggested_qty * _price_now, 0) if _price_now > 0 else 0
 
-            # Gate 1: volume must be ≥ 1.0x average (not below-average volume move)
-            # 0.5x volume on a 5% move = thin penny stock, not real institutional buying.
-            if volume_ratio > 0 and volume_ratio < 1.0:
-                self._log(f"Suppressed {sym}: volume {volume_ratio:.1f}x < 1.0x avg")
-                return
+            # Gate 1: time-weighted volume gate — early morning (9:15–10:30 AM) has naturally low
+            # cumulative volume vs full-day average. Require 80% of time-proportional pace, floor 0.15x.
+            if volume_ratio > 0:
+                _now_ist_g1 = datetime.now(timezone.utc).astimezone(tz=None)
+                _mkt_open_g1 = 9 * 60 + 15
+                _cur_min_g1 = _now_ist_g1.hour * 60 + _now_ist_g1.minute
+                _mins_traded_g1 = max(1, _cur_min_g1 - _mkt_open_g1)
+                _min_vol_g1 = max(0.15, (_mins_traded_g1 / 375.0) * 0.8)
+                if volume_ratio < _min_vol_g1:
+                    self._log(f"Suppressed {sym}: volume {volume_ratio:.2f}x < time-weighted min {_min_vol_g1:.2f}x")
+                    return
 
             score_label = f"\U0001f525 **{blind_score:.0f}/100**" if blind_score >= 70 else f"\u2705 **{blind_score:.0f}/100**"
             risk_reward = ""
@@ -1625,9 +1631,17 @@ class AutoPilotInvestor:
             target2   = float(row.get("Target2", row.get("TakeProfit2", row.get("Take Profit 2", 0))) or 0)
             vol_ratio = float(row.get("VolumeRatio", row.get("Volume Ratio", 0)) or 0)
 
-            # Volume must be >= 1.0x average — below average means weak conviction
-            if vol_ratio > 0 and vol_ratio < 1.0:
-                continue
+            # Volume gate: time-weighted minimum so early trading (9:15–10:30 AM) isn't unfairly penalised.
+            # At 9:20 AM only 5 min of volume has accumulated vs a full 375-min day, so 0.3x IS good volume.
+            # Formula: require vol >= (minutes_traded / 375) * 0.8 — i.e. 80% of time-proportional pace.
+            if vol_ratio > 0:
+                _now_ist = datetime.now(timezone.utc).astimezone(tz=None)
+                _market_open_min = 9 * 60 + 15
+                _cur_min = _now_ist.hour * 60 + _now_ist.minute
+                _minutes_traded = max(1, _cur_min - _market_open_min)
+                _min_vol = max(0.15, (_minutes_traded / 375.0) * 0.8)  # floor at 0.15x always
+                if vol_ratio < _min_vol:
+                    continue
 
             # R:R must be >= 1.5 — risking more than you gain is a losing strategy
             if stop_loss > 0 and target2 > 0 and price > stop_loss:
