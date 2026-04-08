@@ -49,7 +49,7 @@ class AutoPilotConfig:
     min_trade_value: float = 0.0        # no liquidity floor — small caps welcome
     min_volume_ratio: float = 0.0       # don't gate on volume ratio
     max_entry_gap_pct: float = 5.0      # wider trigger window (backtest shows 1.5 blocks good picks)
-    blind_buy_min_score: float = 40.0   # min score to alert; time-of-day volume gate handles early morning
+    blind_buy_min_score: float = 40.0   # min score to alert; intraday path uses max(34, config-6)
 
     # Sell monitoring
     auto_exit_on_sell: bool = True
@@ -1375,8 +1375,10 @@ class AutoPilotInvestor:
             # a 35 floor catches those while still filtering noise.
             effective_min = max(35.0, self.config.blind_buy_min_score - 5)
         elif _entry_confirmed and _no_hard_blockers:
-            # Price already crossed entry trigger: entry is confirmed, 45 is sufficient
-            effective_min = max(40.0, self.config.blind_buy_min_score - 5)
+            # Price already crossed entry trigger: entry is confirmed, 35 is sufficient.
+            # Lowered from 40→35 because on broad up-market days, stocks at trigger score
+            # 36-39 (lack MACD confirmation) but are still valid entries.
+            effective_min = max(35.0, self.config.blind_buy_min_score - 5)
         elif _intraday_override:
             effective_min = self.config.blind_buy_min_score
         else:
@@ -1472,12 +1474,11 @@ class AutoPilotInvestor:
                 rr2 = round(abs(target2 - _price_now) / risk, 1) if risk > 0 else 0
                 risk_reward = f" | R:R `1:{rr2}`"
 
-            # Gate 2: R:R must be at least 1:1.5 — risking more than you gain is a losing strategy
-            # Exception: for intraday movers (3%+) the signal-state stop/target were set from
-            # yesterday's close and give a stale (misleadingly low) R:R because the stock has
-            # already moved. Recompute fresh targets from current price (5% stop / 10% target)
-            # so R:R reflects the actual intraday trade, not a stale swing setup.
-            min_rr = 1.5
+            # Gate 2: R:R must be at least 1:1.0 — risking more than you gain is a losing strategy.
+            # 1:1 is the minimum for positive expected value; 1:1.5 was too strict and rejected
+            # valid setups on broad up-market days where prices had already moved 2-3%.
+            # Exception: for intraday movers (3%+) targets are recomputed fresh from current price.
+            min_rr = 1.0
             if rr2 > 0 and rr2 < min_rr and _intraday_override:
                 _fresh_stop = round(_price_now * 0.95, 2)
                 _fresh_t2 = round(_price_now * 1.10, 2)
