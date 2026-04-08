@@ -383,6 +383,8 @@ class AssistantLiveSupervisor:
         self.repo_root = Path(__file__).resolve().parents[2]
         self.processes: Dict[str, Dict] = {}
         self.stop_requested = False
+        self._code_commit: Optional[str] = self._read_git_head()
+        self._code_check_counter: int = 0
 
     def run(self) -> None:
         self.store.mark_session_running(self.session_id, os.getpid())
@@ -395,6 +397,10 @@ class AssistantLiveSupervisor:
             while not self.stop_requested:
                 self._heartbeat()
                 self._restart_dead_processes()
+                self._code_check_counter += 1
+                if self._code_check_counter >= 6:  # every ~30 s
+                    self._code_check_counter = 0
+                    self._check_for_code_update()
                 time.sleep(5)
         except KeyboardInterrupt:
             self.store.add_event(self.session_id, "warn", "supervisor", "Supervisor interrupted.")
@@ -581,6 +587,39 @@ class AssistantLiveSupervisor:
                 restart_count=metadata["restart_count"],
                 exit_code=process.poll(),
             )
+
+    def _read_git_head(self) -> Optional[str]:
+        """Return the current git HEAD commit hash, or None if not in a git repo."""
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(self.repo_root),
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+            return result.stdout.strip() if result.returncode == 0 else None
+        except Exception:
+            return None
+
+    def _check_for_code_update(self) -> None:
+        """Restart all child processes when a new git commit is detected."""
+        current = self._read_git_head()
+        if current and current != self._code_commit:
+            self.store.add_event(
+                self.session_id,
+                "info",
+                "supervisor",
+                f"Code updated ({self._code_commit[:7]} → {current[:7]}). Restarting all workers.",
+            )
+            self._code_commit = current
+            for name, metadata in list(self.processes.items()):
+                process = metadata["process"]
+                if process.poll() is None:
+                    try:
+                        process.terminate()
+                    except Exception:
+                        pass
 
     def _restart_dead_processes(self) -> None:
         for name, metadata in list(self.processes.items()):
