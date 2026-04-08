@@ -1354,12 +1354,12 @@ class AutoPilotInvestor:
             effective_min = 60.0 if volume_ratio_check >= self._TICK_EARLY_MOVER_VOL_RATIO else 999.0
         elif _intraday_override and _no_hard_blockers:
             # Live tick + 3%+ intraday move + no blockers.
-            # 55 keeps signal quality high — score 45-54 are WATCH-worthy but not
-            # actionable enough to risk capital on (too many fire at once).
-            effective_min = 55.0
+            # Use configured min score (default 45) — time-of-day volume gate already
+            # handles quality by requiring proportional volume for the time of day.
+            effective_min = self.config.blind_buy_min_score
         elif _entry_confirmed and _no_hard_blockers:
-            # Price already crossed entry trigger: entry is confirmed, 50 is sufficient
-            effective_min = 50.0
+            # Price already crossed entry trigger: entry is confirmed, 45 is sufficient
+            effective_min = max(40.0, self.config.blind_buy_min_score - 5)
         elif _intraday_override:
             effective_min = self.config.blind_buy_min_score
         else:
