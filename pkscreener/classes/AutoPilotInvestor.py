@@ -500,6 +500,22 @@ class AutoPilotInvestor:
         self._momentum_tracked: Dict[str, Dict] = {}  # stocks we alerted — track for continuation
         self._momentum_tracked_date: Optional[str] = None  # date when momentum dict was last populated
         self._nifty_crash_pause: bool = False  # True if Nifty down >2% in first 30 min of day
+        # Fade detector: tracks alerted stocks for reversal/exit signals
+        self._fade_alerted: Dict[str, datetime] = {}  # symbol -> time of last EXIT alert
+        self._FADE_CHECK_INTERVAL_SEC = 30    # check for fades every 30s (not every tick — too noisy)
+        self._FADE_DROP_FROM_ENTRY_PCT = 2.0  # price dropped 2%+ from entry → warning
+        self._FADE_DROP_FROM_HIGH_PCT = 4.0   # price dropped 4%+ from intraday high → EXIT
+        self._FADE_SELL_IMBALANCE = 1.5       # sell_qty / buy_qty >= 1.5x confirms selling pressure
+        self._FADE_COOLDOWN_SEC = 600         # 10 min between EXIT alerts for same stock
+        self._last_fade_check: float = 0.0    # timestamp of last fade check
+        # Opening alert quality cap: buffer alerts during opening 15-min window,
+        # flush as a ranked summary to avoid flooding with 30+ individual alerts.
+        self._MAX_OPENING_ALERTS = 10         # cap opening flush to top 10
+        self._opening_buffer: List[Dict] = [] # buffered alert dicts during opening window
+        self._opening_buffer_lock = __import__('threading').Lock()
+        self._last_opening_flush: float = 0.0
+        self._OPENING_FLUSH_INTERVAL_SEC = 30 # flush buffer every 30s during opening
+        self._opening_flush_done_date: Optional[str] = None  # date of last complete flush
 
     # ------------------------------------------------------------------
     # Public API
@@ -581,11 +597,15 @@ class AutoPilotInvestor:
             self._run_powerhour_alert()
             # Momentum continuation: re-alerts on alerted stocks still running strongly
             self._run_momentum_continuation()
+            # Fade detector: EXIT alerts on alerted stocks reversing
+            self._run_fade_detector()
             # End-of-day exit reminder: fires once per day at 3:10 PM IST
             self._run_eod_exit_alert()
             # Fast tick scan (zero API calls, < 1s) — catches pre-jump conditions
             # BEFORE the full OHLCV cycle would even start.
             self._run_tick_fast_scan()
+            # Flush opening buffer (ranked summary of buffered opening alerts)
+            self._flush_opening_buffer()
             # Re-scan signal monitor "Buy Now" stocks — catches stocks that improved
             # since initial rejection (low score early → strong later in the day).
             self._run_buynow_rescan()
@@ -604,6 +624,8 @@ class AutoPilotInvestor:
                 time.sleep(_tick_poll_interval)
                 _remaining -= _tick_poll_interval
                 self._run_tick_fast_scan()
+                # Flush opening buffer every cycle (self-throttles internally)
+                self._flush_opening_buffer()
                 # Check buynow rescan every ~30s within the tick loop
                 _buynow_counter += _tick_poll_interval
                 if _buynow_counter >= 30:
@@ -1409,6 +1431,123 @@ class AutoPilotInvestor:
             self._momentum_tracked[sym]["last_alert_pct"] = current_change
 
     # ------------------------------------------------------------------
+    # Fade Detector — EXIT alerts when alerted stocks reverse
+    # ------------------------------------------------------------------
+
+    def _run_fade_detector(self) -> None:
+        """Monitor alerted stocks for reversal and send EXIT warnings.
+
+        Checks every 30 seconds (not every tick — too noisy). Fires when:
+        1. Price dropped 2%+ from entry → WARNING (consider exiting)
+        2. Price dropped 4%+ from intraday high AND sell pressure → EXIT NOW
+        3. Price dropped below stop loss → STOP HIT
+
+        Only monitors stocks in _momentum_tracked (i.e. stocks we actually alerted).
+        """
+        if not self._momentum_tracked:
+            return
+        if not self._is_market_open():
+            return
+
+        import time as _time_mod
+        now_ts = _time_mod.time()
+        if now_ts - self._last_fade_check < self._FADE_CHECK_INTERVAL_SEC:
+            return
+        self._last_fade_check = now_ts
+
+        ticks = self._load_ticks_snapshot()
+        if not ticks:
+            return
+
+        now = datetime.now()
+
+        for sym, tracked in list(self._momentum_tracked.items()):
+            # Cooldown: don't spam EXIT alerts
+            last_fade_alert = self._fade_alerted.get(sym)
+            if isinstance(last_fade_alert, datetime):
+                if (now - last_fade_alert).total_seconds() < self._FADE_COOLDOWN_SEC:
+                    continue
+
+            tick = ticks.get(sym, {})
+            current_price = float(tick.get("last_price") or 0)
+            if current_price <= 0:
+                continue
+
+            entry_price = tracked.get("entry_price", 0)
+            stop_loss = tracked.get("stop_loss", 0)
+            if entry_price <= 0:
+                continue
+
+            # Calculate drops
+            drop_from_entry_pct = (entry_price - current_price) / entry_price * 100
+
+            # Get intraday high from tick
+            tick_high = float(tick.get("high") or tick.get("ohlc", {}).get("high", 0))
+            drop_from_high_pct = 0.0
+            if tick_high > 0:
+                drop_from_high_pct = (tick_high - current_price) / tick_high * 100
+
+            # Check sell pressure from order book
+            total_buy = float(tick.get("total_buy_quantity") or 0)
+            total_sell = float(tick.get("total_sell_quantity") or 0)
+            sell_pressure = (total_sell / total_buy) if total_buy > 0 else 0
+            sell_pressure_confirmed = sell_pressure >= self._FADE_SELL_IMBALANCE
+
+            daily_change = float(tick.get("change") or 0)
+
+            # Determine alert level
+            alert_level = None
+            if stop_loss > 0 and current_price <= stop_loss:
+                alert_level = "STOP_HIT"
+            elif drop_from_high_pct >= self._FADE_DROP_FROM_HIGH_PCT and sell_pressure_confirmed:
+                alert_level = "EXIT_NOW"
+            elif drop_from_entry_pct >= self._FADE_DROP_FROM_ENTRY_PCT:
+                alert_level = "WARNING"
+            elif drop_from_high_pct >= self._FADE_DROP_FROM_HIGH_PCT and drop_from_entry_pct >= 1.0:
+                # Large drop from high + underwater from entry = fading
+                alert_level = "WARNING"
+
+            if not alert_level:
+                continue
+
+            self._fade_alerted[sym] = now
+
+            # Format alert
+            sell_info = f" | Sell pressure `{sell_pressure:.1f}x`" if sell_pressure_confirmed else ""
+            entry_loss = round(entry_price - current_price, 2)
+            entry_loss_pct = round(drop_from_entry_pct, 1)
+
+            if alert_level == "STOP_HIT":
+                message = (
+                    f"**🚨 STOP HIT — EXIT `{sym}` NOW**\n"
+                    f"Price `₹{current_price:.2f}` hit your stop loss `₹{stop_loss:.2f}`\n"
+                    f"Entry was `₹{entry_price:.2f}` → Loss `₹{entry_loss:.2f}/share` (`-{entry_loss_pct:.1f}%`)\n"
+                    f"**Sell immediately. Do not hope for recovery.**"
+                )
+            elif alert_level == "EXIT_NOW":
+                message = (
+                    f"**🔴 EXIT `{sym}` — FADING from high**\n"
+                    f"Dropped `{drop_from_high_pct:.1f}%` from today's high `₹{tick_high:.2f}` → now `₹{current_price:.2f}`{sell_info}\n"
+                    f"Entry `₹{entry_price:.2f}` → {'Loss' if entry_loss > 0 else 'Gain'} `₹{abs(entry_loss):.2f}/share` (`{'+' if entry_loss <= 0 else '-'}{abs(entry_loss_pct):.1f}%`)\n"
+                    f"Sellers are dominating the order book. This gap-up is fading.\n"
+                    f"**Sell now to limit damage or lock remaining profit.**"
+                )
+            else:  # WARNING
+                message = (
+                    f"**⚠️ `{sym}` WEAKENING — watch closely**\n"
+                    f"{'Price dropped ' + f'{drop_from_entry_pct:.1f}% from your entry ₹{entry_price:.2f}' if drop_from_entry_pct >= self._FADE_DROP_FROM_ENTRY_PCT else f'Dropped {drop_from_high_pct:.1f}% from high ₹{tick_high:.2f}'}\n"
+                    f"Now `₹{current_price:.2f}` ({'+' if daily_change >= 0 else ''}{daily_change:.1f}% for the day){sell_info}\n"
+                    f"{'Move stop loss up or consider partial exit.' if drop_from_entry_pct < 1.5 else 'Consider exiting — momentum is dying.'}"
+                )
+
+            self._send_to_channels(message)
+            self._log(
+                f"Fade detector [{alert_level}]: {sym} entry=₹{entry_price:.2f} "
+                f"now=₹{current_price:.2f} drop_entry={drop_from_entry_pct:.1f}% "
+                f"drop_high={drop_from_high_pct:.1f}% sell_pressure={sell_pressure:.1f}x"
+            )
+
+    # ------------------------------------------------------------------
     # End-of-day exit reminder (3:10 PM IST, once per day)
     # ------------------------------------------------------------------
 
@@ -1718,6 +1857,7 @@ class AutoPilotInvestor:
             "entry_price": price,
             "last_alert_pct": daily_change,
             "last_alert_time": datetime.now(),
+            "stop_loss": round(price * 0.97, 2),  # 3% default for tick-only
         }
 
     # ------------------------------------------------------------------
@@ -2760,6 +2900,29 @@ class AutoPilotInvestor:
             # For re-alerts: only send if it's a DEFINITELY BUY upgrade
             if _is_re_alert and not _is_definitely_buy:
                 self._log(f"Skip re-alert for {sym}: already alerted, not a DEFINITELY BUY upgrade")
+            elif self._is_opening_window_active() and not _is_re_alert:
+                # During opening 15-min window: buffer alerts, don't send individually.
+                # They'll be flushed as a ranked summary every 30s.
+                with self._opening_buffer_lock:
+                    self._opening_buffer.append({
+                        "symbol": sym,
+                        "price": _price_now,
+                        "daily_change": daily_change,
+                        "blind_score": blind_score,
+                        "volume_ratio": volume_ratio,
+                        "confidence": confidence,
+                        "stop_loss": stop_loss,
+                        "target1": target1,
+                        "target2": target2,
+                        "suggested_qty": suggested_qty,
+                        "is_definitely_buy": _is_definitely_buy,
+                        "reasons": blind_reasons,
+                        "message": message,
+                    })
+                self._log(
+                    f"📦 BUFFERED (opening window): {sym} at ₹{_price_now:.2f} ({direction}{daily_change:.2f}%) "
+                    f"score={blind_score:.0f} vol={volume_ratio:.1f}x — will flush in ranked batch"
+                )
             else:
                 if _is_re_alert and _is_definitely_buy:
                     message = f"**⬆️ UPGRADED to DEFINITELY BUY**\n{message}"
@@ -2783,6 +2946,7 @@ class AutoPilotInvestor:
                 "entry_price": _price_now,
                 "last_alert_pct": daily_change,
                 "last_alert_time": datetime.now(),
+                "stop_loss": stop_loss,
             }
         else:
             # REJECTED — log why, do NOT send any alert.
@@ -3159,6 +3323,139 @@ class AutoPilotInvestor:
         now_minutes = now_ist.hour * 60 + now_ist.minute
         return open_minutes <= now_minutes <= close_minutes
 
+    def _is_opening_window_active(self) -> bool:
+        """Return True during the first 15 minutes after market open (9:15-9:30 IST).
+
+        During this window, tick-confirmed alerts are buffered and flushed
+        as a ranked summary instead of sending 30+ individual alerts.
+        """
+        try:
+            import pytz
+            ist = pytz.timezone("Asia/Kolkata")
+            now_ist = datetime.now(ist)
+        except Exception:
+            from datetime import timezone, timedelta
+            ist_offset = timezone(timedelta(hours=5, minutes=30))
+            now_ist = datetime.now(ist_offset)
+        now_min = now_ist.hour * 60 + now_ist.minute
+        return (9 * 60 + 15) <= now_min <= (9 * 60 + 30)
+
+    def _flush_opening_buffer(self) -> None:
+        """Flush buffered opening alerts as a ranked summary message.
+
+        Called from the main loop every 30 seconds. Takes the buffer,
+        ranks by a composite of score + volume + change, and sends
+        only the top MAX_OPENING_ALERTS as one consolidated message.
+        Remaining stocks are sent as a compact watchlist.
+        """
+        import time as _time_mod
+        now_ts = _time_mod.time()
+        if now_ts - self._last_opening_flush < self._OPENING_FLUSH_INTERVAL_SEC:
+            return
+        self._last_opening_flush = now_ts
+
+        with self._opening_buffer_lock:
+            if not self._opening_buffer:
+                return
+            batch = list(self._opening_buffer)
+            self._opening_buffer.clear()
+
+        # Rank: score primary, volume × change as tiebreaker
+        batch.sort(key=lambda x: (
+            -x.get("blind_score", 0),
+            -(x.get("volume_ratio", 0) * abs(x.get("daily_change", 0))),
+        ))
+
+        top_picks = batch[:self._MAX_OPENING_ALERTS]
+        overflow = batch[self._MAX_OPENING_ALERTS:]
+
+        if not top_picks:
+            return
+
+        # Build consolidated message
+        try:
+            import pytz
+            ist = pytz.timezone("Asia/Kolkata")
+            now_ist = datetime.now(ist)
+        except Exception:
+            from datetime import timezone, timedelta
+            now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+
+        # Count quality tiers
+        n_strong = sum(1 for p in top_picks if p.get("is_definitely_buy"))
+        n_total = len(top_picks)
+
+        header = f"**🟢 OPENING SCAN — {now_ist.strftime('%H:%M')} IST** | **{n_total}** top picks"
+        if n_strong:
+            header += f" ({n_strong} strong buy)"
+        header += f" from {n_total + len(overflow)} confirmed stocks\n"
+        header += "_Ranked by conviction score. Focus on top 3-5 picks._\n"
+
+        lines = [header]
+        for rank, pick in enumerate(top_picks, 1):
+            sym = pick["symbol"]
+            score = pick.get("blind_score", 0)
+            price = pick.get("price", 0)
+            change = pick.get("daily_change", 0)
+            vol = pick.get("volume_ratio", 0)
+            sl = pick.get("stop_loss", 0)
+            t1 = pick.get("target1", 0)
+            t2 = pick.get("target2", 0)
+            qty = pick.get("suggested_qty", 0)
+            is_def = pick.get("is_definitely_buy", False)
+
+            badge = "🔥" if is_def else ("⭐" if score >= 60 else "✅" if score >= 50 else "📝")
+            scope_t2 = round((t2 - price) / price * 100, 1) if t2 > 0 and price > 0 else 0
+
+            line = (
+                f"**{rank}. {badge} `{sym}`** Score **{score:.0f}**/100 | "
+                f"`₹{price:.2f}` (+{change:.1f}%) | Vol `{vol:.1f}x`"
+            )
+            if sl > 0 and t2 > 0:
+                line += f"\n   SL `₹{sl:.2f}` → T1 `₹{t1:.2f}` → T2 `₹{t2:.2f}` (+{scope_t2:.1f}%)"
+            if qty > 0:
+                line += f" | Buy **{qty} shares**"
+            lines.append(line)
+
+            # Mark as alerted and track
+            self._already_alerted_buys.add(sym)
+            self._save_daily_alerted(sym)
+            self._momentum_tracked[sym] = {
+                "entry_price": price,
+                "last_alert_pct": change,
+                "last_alert_time": datetime.now(),
+                "stop_loss": sl,
+            }
+
+        lines.append("\n_Open Groww → Buy your top picks_")
+        self._send_to_channels("\n\n".join(lines))
+        self._log(f"Opening buffer flushed: {n_total} picks sent (top {self._MAX_OPENING_ALERTS}), {len(overflow)} overflow")
+
+        # Send overflow as compact watchlist
+        if overflow:
+            overflow_lines = [f"**📝 WATCHLIST** — {len(overflow)} more confirmed stocks (lower conviction):"]
+            for pick in overflow:
+                sym = pick["symbol"]
+                score = pick.get("blind_score", 0)
+                price = pick.get("price", 0)
+                change = pick.get("daily_change", 0)
+                vol = pick.get("volume_ratio", 0)
+                sl = pick.get("stop_loss", 0)
+                t2 = pick.get("target2", 0)
+                overflow_lines.append(
+                    f"`{sym}` Score {score:.0f} | `₹{price:.2f}` (+{change:.1f}%) | "
+                    f"Vol `{vol:.1f}x` | SL `₹{sl:.2f}` → T2 `₹{t2:.2f}`"
+                )
+                self._already_alerted_buys.add(sym)
+                self._save_daily_alerted(sym)
+                self._momentum_tracked[sym] = {
+                    "entry_price": price,
+                    "last_alert_pct": change,
+                    "last_alert_time": datetime.now(),
+                    "stop_loss": sl,
+                }
+            self._send_to_channels("\n".join(overflow_lines))
+
     def _is_post_market_window(self) -> bool:
         """Return True during post-market window (3:30 PM – 6:00 PM IST).
         Used to allow post-market OHLCV scan results to be sent as next-day previews.
@@ -3502,6 +3799,7 @@ class AutoPilotInvestor:
             "entry_price": c.price,
             "last_alert_pct": c.change_pct,
             "last_alert_time": datetime.now(),
+            "stop_loss": c.stop_loss,
         }
 
     @staticmethod
