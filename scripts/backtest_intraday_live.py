@@ -207,10 +207,13 @@ class Trade:
 # Step 1: Scan daily OHLCV for candidates
 # ──────────────────────────────────────────────────────────────────────
 
-def scan_daily_candidates(target_dates: List[str], top_n: int = 50) -> Dict[str, List[dict]]:
+def scan_daily_candidates(target_dates: List[str], top_n: int = 0) -> Dict[str, List[dict]]:
     """
-    Scan daily OHLCV cache for stocks with 3%+ intraday high on target dates.
+    Scan daily OHLCV cache for stocks with 2%+ intraday high on target dates.
+    Uses 2% (not 3%) to capture ALL stocks the tick scanner would flag,
+    eliminating look-ahead / survivorship bias.
     Returns {date_str: [candidate_dicts]} sorted by high_change desc.
+    If top_n > 0, limits per day (for API budget); 0 = all candidates.
     """
     files = glob.glob(os.path.join(DATA_DIR, "*.csv"))
     candidates = defaultdict(list)
@@ -242,7 +245,10 @@ def scan_daily_candidates(target_dates: List[str], top_n: int = 50) -> Dict[str,
             high_chg = (h - o) / o * 100
             close_chg = (c - o) / o * 100
 
-            if high_chg < 3.0:
+            # Use TICK_ENTRY_PCT (2%) — the SAME threshold the live scanner uses.
+            # This eliminates look-ahead bias: we include every stock the scanner
+            # would have flagged, not just the ones that went on to 3%+.
+            if high_chg < TICK_ENTRY_PCT:
                 continue
             if high_chg > 25.0:
                 continue  # Circuit hits — not tradeable
@@ -277,10 +283,11 @@ def scan_daily_candidates(target_dates: List[str], top_n: int = 50) -> Dict[str,
                 "prev_close": prev_close,
             })
 
-    # Sort and limit per day
+    # Sort and optionally limit per day
     for dt in candidates:
         candidates[dt].sort(key=lambda x: -x["high_chg"])
-        candidates[dt] = candidates[dt][:top_n]
+        if top_n > 0:
+            candidates[dt] = candidates[dt][:top_n]
 
     return dict(candidates)
 
@@ -671,7 +678,7 @@ def main():
     parser = argparse.ArgumentParser(description="Intraday live-simulation backtest")
     parser.add_argument("--days", type=int, default=5, help="Number of recent trading days")
     parser.add_argument("--date", type=str, default=None, help="Specific date (YYYY-MM-DD)")
-    parser.add_argument("--top", type=int, default=30, help="Top N candidates per day")
+    parser.add_argument("--top", type=int, default=0, help="Top N candidates per day (0 = all, for honest test)")
     parser.add_argument("--no-api", action="store_true", help="Skip Kite API, use daily-only simulation")
     parser.add_argument("--export", type=str, default=None, help="Export trades to CSV file")
     args = parser.parse_args()
@@ -698,7 +705,7 @@ def main():
         n = len(candidates[dt])
         candidates_per_day[dt] = n
         total_cand += n
-        print(f"  {dt}: {n} candidates with 3%+ intraday high")
+        print(f"  {dt}: {n} candidates with 2%+ intraday high")
 
     if total_cand == 0:
         print("❌ No candidates found.")
