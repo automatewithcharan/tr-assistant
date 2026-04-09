@@ -325,6 +325,15 @@ class PaperTradeTracker:
             f"\n\n**Sources:** {dict(source_counts)}\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         )
+
+        # Auto-append Spearman validation if enough data
+        try:
+            spearman_report = self.validate_scorer_quality(days)
+            if "Need ≥10" not in spearman_report:
+                report += "\n\n" + spearman_report
+        except Exception:
+            pass  # Don't break report if validation fails
+
         return report
 
     def get_today_summary(self) -> str:
@@ -335,6 +344,105 @@ class PaperTradeTracker:
             open_count = sum(1 for t in self._trades.values() if not t.closed)
             closed_count = sum(1 for t in self._trades.values() if t.closed)
             return f"Paper trades today: {open_count} open, {closed_count} closed, {len(self._trades)} total"
+
+    # ------------------------------------------------------------------
+    # Spearman rank validation (Quantopian Ranking Universes lecture)
+    # ------------------------------------------------------------------
+
+    def validate_scorer_quality(self, days: int = 5) -> str:
+        """
+        Test if higher-scored alerts produce higher returns.
+
+        Uses Spearman rank correlation between BlindBuyScore and realized
+        P&L. If rho < 0.05, the scorer is noise — scores don't predict
+        returns. If rho > 0.10, there's a real edge.
+
+        This is the single most important diagnostic. Run it after >=5
+        trading days of paper trade data.
+
+        Returns a summary string suitable for Discord/console.
+        """
+        all_trades = self._load_recent_trades(days)
+        closed = [t for t in all_trades
+                   if t.get("pnl_pct") is not None and t.get("score") is not None]
+
+        if len(closed) < 10:
+            return (
+                f"Need ≥10 closed trades for Spearman validation "
+                f"(have {len(closed)}). Keep collecting."
+            )
+
+        scores = [float(t["score"]) for t in closed]
+        pnls = [float(t["pnl_pct"]) for t in closed]
+
+        # Compute Spearman rank correlation
+        try:
+            from scipy.stats import spearmanr
+            rho, p_value = spearmanr(scores, pnls)
+        except ImportError:
+            # Fallback: manual Spearman (no scipy dependency required)
+            n = len(scores)
+            # Rank arrays
+            def _rank(arr):
+                sorted_idx = sorted(range(n), key=lambda i: arr[i])
+                ranks = [0.0] * n
+                for rank_val, idx in enumerate(sorted_idx):
+                    ranks[idx] = rank_val + 1
+                return ranks
+
+            r_scores = _rank(scores)
+            r_pnls = _rank(pnls)
+            d_sq = sum((r_scores[i] - r_pnls[i]) ** 2 for i in range(n))
+            rho = 1 - (6 * d_sq) / (n * (n ** 2 - 1))
+            # Approximate p-value using t-distribution
+            if abs(rho) < 1.0:
+                t_stat = rho * math.sqrt((n - 2) / (1 - rho ** 2))
+                # Rough two-tailed p-value approximation
+                p_value = max(0.001, 2 * math.exp(-0.717 * abs(t_stat) - 0.416 * t_stat ** 2))
+            else:
+                p_value = 0.0
+
+        # Interpret
+        if rho >= 0.20:
+            verdict = "🟢 STRONG EDGE — scorer reliably predicts returns"
+        elif rho >= 0.10:
+            verdict = "🟡 WEAK EDGE — some predictive power, worth using"
+        elif rho >= 0.05:
+            verdict = "🟠 MARGINAL — barely better than random"
+        elif rho >= -0.05:
+            verdict = "🔴 NO EDGE — scorer is noise, scores don't predict returns"
+        else:
+            verdict = "⛔ ANTI-PREDICTIVE — high scores produce WORSE returns!"
+
+        # Per-factor Spearman (volume_ratio, change_at_entry)
+        factor_lines = []
+        for factor_name in ["volume_ratio", "change_at_entry"]:
+            vals = [float(t.get(factor_name, 0) or 0) for t in closed]
+            if any(v != 0 for v in vals):
+                try:
+                    from scipy.stats import spearmanr as _sp
+                    f_rho, f_p = _sp(vals, pnls)
+                except ImportError:
+                    r_f = _rank(vals)
+                    d2 = sum((r_f[i] - r_pnls[i]) ** 2 for i in range(n))
+                    f_rho = 1 - (6 * d2) / (n * (n ** 2 - 1))
+                    f_p = 0.05  # rough
+                factor_lines.append(
+                    f"  {factor_name:20s}: ρ = {f_rho:+.3f} (p={f_p:.3f})"
+                )
+
+        result = (
+            f"**🔬 SCORER VALIDATION — Spearman Rank Test**\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"Trades analyzed:  {len(closed)} (last {days} days)\n"
+            f"Score vs Return:  ρ = {rho:+.3f} (p = {p_value:.4f})\n"
+            f"Verdict:          {verdict}\n"
+        )
+        if factor_lines:
+            result += f"\n**Per-Factor Correlations:**\n" + "\n".join(factor_lines) + "\n"
+
+        result += f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        return result
 
     # ------------------------------------------------------------------
     # Private: persistence

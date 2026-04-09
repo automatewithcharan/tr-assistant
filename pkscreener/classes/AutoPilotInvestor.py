@@ -190,63 +190,52 @@ class BlindBuyScorer:
             reasons.append(f"⛔ PENNY STOCK ₹{_price_now:.2f} — price below ₹10, skip")
             return round(score, 1), ", ".join(reasons)
 
-        # -- RSI (0-100, lower = more oversold = better for bounce) --
-        if rsi < 30:
-            score += 25
-            reasons.append(f"RSI oversold ({rsi:.0f})")
-        elif rsi < 40:
-            score += 18
-            reasons.append(f"RSI near oversold ({rsi:.0f})")
-        elif rsi < 50:
-            score += 10
-            reasons.append(f"RSI mid ({rsi:.0f})")
-        elif rsi > 70:
-            # On strong momentum (change >= 5%), RSI overbought is EXPECTED and not a risk signal.
-            # A stock up 5%+ intraday that is also "overbought" is showing momentum, not overextension.
-            # Only penalise overbought RSI for weak/early-stage moves where it signals chasing.
-            if change_pct < 5.0:
-                score -= 8
-                reasons.append(f"RSI overbought ({rsi:.0f})")
-            # else: overbought on a strong-momentum day — no penalty, no mention
-
-        # -- CCI (< -100 = oversold, > 100 = overbought) --
-        # Volume-confirmed momentum override: when vol >= 2.0x, CCI/MFI
-        # being "overbought" is confirmatory (big money pushing), not risky.
-        # Halve penalties so genuine runners (AGIIL +15%, STEELCAS +11%)
-        # aren't killed by momentum indicators doing their job.
+        # -- MOMENTUM OSCILLATOR (consolidated RSI + CCI + MFI) --
+        # Quantopian Model Misspecification lecture: RSI, CCI, MFI are all
+        # momentum oscillators — they measure the same underlying signal
+        # (price momentum) with slight variations. Scoring them independently
+        # inflates confidence via double/triple-counting.
+        #
+        # Fix: compute a SINGLE momentum oscillator score from the best of
+        # the three, then apply one bonus/penalty. This reduces ~15 correlated
+        # factor interactions to ~5, cutting overfitting risk.
+        #
+        # Each indicator is normalized to 0-100 scale:
+        #   RSI: already 0-100
+        #   CCI: map [-200, +200] → [0, 100] (clamped)
+        #   MFI: already 0-100
+        # Lower = more oversold = better for bounce buying.
+        _cci_norm = max(0.0, min(100.0, (cci + 200) / 4.0))  # -200→0, 0→50, +200→100
         _high_vol_momentum = vol_ratio >= 2.0
-        if cci < -100:
-            score += 12
-            reasons.append(f"CCI oversold ({cci:.0f})")
-        elif cci < -50:
-            score += 6
-            reasons.append(f"CCI low ({cci:.0f})")
-        elif cci > 200:
-            _pen = 8 if _high_vol_momentum else 15
-            score -= _pen
-            reasons.append(f"CCI extremely overbought ({cci:.0f}){' [vol-halved]' if _high_vol_momentum else ''}")
-        elif cci > 150:
-            _pen = 4 if _high_vol_momentum else 8
-            score -= _pen
-            reasons.append(f"CCI overbought ({cci:.0f}){' [vol-halved]' if _high_vol_momentum else ''}")
 
-        # -- MFI (0-100, same as RSI but volume-weighted) --
-        if mfi < 20:
+        # Take the MEDIAN of the three — robust to one noisy indicator
+        _osc_values = sorted([rsi, _cci_norm, mfi])
+        _osc_median = _osc_values[1]  # median of 3
+
+        # Score based on median oscillator
+        if _osc_median < 25:
+            score += 25
+            reasons.append(f"oscillators oversold (RSI {rsi:.0f}, CCI {cci:.0f}, MFI {mfi:.0f})")
+        elif _osc_median < 35:
+            score += 18
+            reasons.append(f"oscillators near oversold (RSI {rsi:.0f}, CCI {cci:.0f}, MFI {mfi:.0f})")
+        elif _osc_median < 50:
             score += 10
-            reasons.append(f"MFI oversold ({mfi:.0f})")
-        elif mfi < 40:
-            score += 5
-        elif mfi > 80:
-            _pen = 4 if _high_vol_momentum else 8
-            score -= _pen
-            reasons.append(f"MFI overbought ({mfi:.0f}){' [vol-halved]' if _high_vol_momentum else ''}")
-
-        # -- Approaching-overbought combo: MFI 70-80 AND CCI > 100 --
-        # If BOTH oscillators are elevated, the stock is overextended.
-        if 70 <= mfi <= 80 and cci > 100:
-            _pen = 3 if _high_vol_momentum else 5
-            score -= _pen
-            reasons.append(f"⚠️ overbought combo MFI {mfi:.0f} + CCI {cci:.0f}{' [vol-halved]' if _high_vol_momentum else ''}")
+            reasons.append(f"oscillators mid (RSI {rsi:.0f}, CCI {cci:.0f}, MFI {mfi:.0f})")
+        elif _osc_median > 80:
+            # Overbought penalty — halved on strong momentum or high volume
+            if change_pct >= 5.0 or _high_vol_momentum:
+                _pen = 5
+                _tag = " [momentum-confirmed]" if _high_vol_momentum else ""
+                score -= _pen
+                reasons.append(f"oscillators elevated ({_osc_median:.0f}){_tag}")
+            else:
+                score -= 12
+                reasons.append(f"oscillators overbought (RSI {rsi:.0f}, CCI {cci:.0f}, MFI {mfi:.0f})")
+        elif _osc_median > 65:
+            if not (change_pct >= 5.0 or _high_vol_momentum):
+                score -= 5
+                reasons.append(f"oscillators warming ({_osc_median:.0f})")
 
         # -- Volume (higher = better confirmation) --
         # Time-adjust volume: early in the day, even 1.5x is strong because
@@ -2307,6 +2296,29 @@ class AutoPilotInvestor:
         _item_imbalance = (_item_total_buy / _item_total_sell) if _item_total_sell > 0 else 0.0
         _item_volume = float(item.get("volume", 0))
         _item_reasons = item.get("reasons", [])
+
+        # ── LIQUIDITY GATE (Quantopian Volume/Slippage lecture) ──────────
+        # Ensure stock has enough traded value today to absorb ₹50K orders
+        # without significant slippage. Same logic as tick-only gate.
+        _item_avg_px = float(item.get("average_traded_price", 0) or 0)
+        _item_turnover_cr = (_item_volume * (_item_avg_px if _item_avg_px > 0 else price)) / 1e7
+        try:
+            import pytz as _pytz_liq2
+            _ist_liq2 = _pytz_liq2.timezone("Asia/Kolkata")
+            _now_liq2 = datetime.now(_ist_liq2)
+            _min_open_liq2 = (_now_liq2.hour * 60 + _now_liq2.minute) - (9 * 60 + 15)
+        except Exception:
+            _min_open_liq2 = 120
+        _ohlcv_min_turnover = 0.5 if _min_open_liq2 <= 30 else 2.0
+        if _item_turnover_cr > 0 and _item_turnover_cr < _ohlcv_min_turnover:
+            self._log(
+                f"OHLCV liquidity skip {sym}: turnover ₹{_item_turnover_cr:.1f}Cr < ₹{_ohlcv_min_turnover:.0f}Cr"
+            )
+            self._add_to_demand_watchlist(
+                sym, price, daily_change, _item_imbalance, _item_volume,
+                _item_reasons, f"low turnover ₹{_item_turnover_cr:.1f}Cr"
+            )
+            return
         try:
             from pkscreener.classes.ActionableReport import ActionableReportRunner
             runner = ActionableReportRunner(
@@ -3108,6 +3120,9 @@ class AutoPilotInvestor:
         """Score all stocks and find blind-buy opportunities."""
         candidates = []
 
+        # Load tick snapshot for liquidity filtering
+        _ticks_for_liq = self._load_ticks_snapshot() or {}
+
         for _, row in signal_df.iterrows():
             symbol = str(row.get("Symbol", "")).strip().upper()
             if not symbol:
@@ -3118,6 +3133,29 @@ class AutoPilotInvestor:
 
             # Skip stocks already saying Sell or Hold
             if any(x in now_action.lower() for x in ["sell", "exit", "hold", "do nothing"]):
+                continue
+
+            # ── LIQUIDITY GATE (from Quantopian Volume/Slippage lecture) ──
+            # Stocks with < ₹2 Cr turnover today can't absorb even ₹50K orders
+            # without 0.3%+ slippage — profit is eaten by execution cost.
+            # Tick-only alerts already gate at ₹5 Cr; apply same principle to batch.
+            _tick_liq = _ticks_for_liq.get(symbol, {})
+            _liq_vol = float(_tick_liq.get("volume") or 0)
+            _liq_avg_px = float(_tick_liq.get("average_traded_price") or _tick_liq.get("last_price") or 0)
+            _liq_turnover_cr = (_liq_vol * _liq_avg_px) / 1e7 if _liq_avg_px > 0 else 0
+            # During opening 30 min, accept lower turnover (volume is still building)
+            try:
+                import pytz as _pytz_liq
+                _ist_liq = _pytz_liq.timezone("Asia/Kolkata")
+                _now_liq = datetime.now(_ist_liq)
+                _min_open_liq = (_now_liq.hour * 60 + _now_liq.minute) - (9 * 60 + 15)
+            except Exception:
+                _min_open_liq = 120
+            _min_turnover = 0.5 if _min_open_liq <= 30 else 2.0
+            if _liq_turnover_cr > 0 and _liq_turnover_cr < _min_turnover:
+                self._log(
+                    f"Batch liquidity skip {symbol}: turnover ₹{_liq_turnover_cr:.1f}Cr < ₹{_min_turnover:.0f}Cr"
+                )
                 continue
 
             # Score with our aggressive blind-buy scorer
