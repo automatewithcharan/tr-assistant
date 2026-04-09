@@ -21,6 +21,7 @@ from PKDevTools.classes.log import default_logger
 
 from pkscreener.classes.LivePortfolio import LivePortfolioRunner
 from pkscreener.classes.RiskGuardrails import LiveTradingGuardrails
+from pkscreener.classes.HealthMonitor import HealthMonitor
 
 
 def _get_secret(name: str, default: str = "") -> str:
@@ -545,6 +546,12 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
             OutputControls().printOutput(
                 f"  [+] Discord trade bot is online as {self.user}."
             )
+            
+            # Start periodic health check once (on first ready)
+            if not hasattr(self, '_health_check_started'):
+                self._health_check_started = True
+                self.loop.create_task(self.periodic_health_check())
+            
             # Broadcast a startup message to the configured channel so the user
             # knows the bot is online and remembers where to type commands.
             if allowed_channel_id:
@@ -563,8 +570,69 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
                         )
                 except Exception as exc:
                     OutputControls().printOutput(f"  [+] Could not send startup message: {exc}")
+            
+            async def _run_periodic_health_check():
+                """Background task: check system health every 5 minutes and alert on issues."""
+                await asyncio.sleep(15)  # Let bot fully connect to Discord first
+                last_issues = set()
+                
+                while True:
+                    try:
+                        await asyncio.sleep(300)  # Check every 5 minutes
+                        
+                        healthy, status_msg = self.health_monitor.check_all()
+                        
+                        # Extract issue descriptions (only ❌ and ⚠️ lines)
+                        current_issues = {
+                            line.strip() for line in status_msg.split('\n') 
+                            if line.strip() and ('❌' in line or '⚠️' in line)
+                        }
+                        
+                        if not healthy and current_issues != last_issues:
+                            # Issues detected and changed from last check - send alert
+                            alert_msg = f"⚠️ **Health Alert** — Issues detected:\n{status_msg}"
+                            if allowed_channel_id:
+                                try:
+                                    channel = self.get_channel(int(allowed_channel_id))
+                                    if channel:
+                                        await channel.send(alert_msg[:1900])
+                                except Exception as e:
+                                    OutputControls().printOutput(f"  [+] Could not send health alert: {e}")
+                            self.health_monitor.send_alert(alert_msg)
+                            last_issues = current_issues
+                            
+                        elif healthy and last_issues:
+                            # System recovered from previous issues
+                            recovery_msg = f"✅ **System Recovered** — All checks passing\n{status_msg}"
+                            if allowed_channel_id:
+                                try:
+                                    channel = self.get_channel(int(allowed_channel_id))
+                                    if channel:
+                                        await channel.send(recovery_msg[:1900])
+                                except Exception:
+                                    pass
+                            last_issues = set()
+                            
+                    except asyncio.CancelledError:
+                        break
+                    except Exception as e:
+                        OutputControls().printOutput(f"  [+] Health check error: {e}")
+            
+            # Store the health monitor for use in background task
+            self.health_monitor = getattr(self, 'health_monitor', None)
+            
+            # Create and store the periodic health check task
+            self.periodic_health_check = _run_periodic_health_check
 
     bot = PKScreenerDiscordTradeBot()
+
+    # Initialize health monitor
+    output_dir = Archiver.get_user_outputs_dir()
+    health_monitor = HealthMonitor(
+        session_id=_get_int_secret("SUPERVISOR_SESSION_ID") or 0,
+        output_dir=output_dir,
+        discord_webhook=_get_secret("DISCORD_WEBHOOK_URL", ""),
+    )
 
     @bot.tree.error
     async def on_app_command_error(interaction: discord.Interaction, error) -> None:
@@ -631,6 +699,13 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
             ]
         )
         await interaction.response.send_message(text, ephemeral=True)
+
+    @bot.tree.command(name="health", description="Check screener health status")
+    async def health(interaction):  # type: ignore
+        """Check system health: processes, logs, data freshness, Discord."""
+        ok, status_msg = health_monitor.check_all()
+        emoji = "✅" if ok else "⚠️"
+        await interaction.response.send_message(f"{emoji} **System Status**\n{status_msg}", ephemeral=True)
 
     @bot.tree.command(name="addcash", description="Add cash to the live portfolio")
     @app_commands.describe(amount="Amount of money added to the live account")
@@ -965,6 +1040,9 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
             message = f"⚠️ autopilot failed: {exc}"
 
         await interaction.followup.send(message[:1900])
+
+    # Assign health_monitor to bot instance before starting
+    bot.health_monitor = health_monitor
 
     try:
         await bot.start(token)

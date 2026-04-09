@@ -1,0 +1,2 @@
+Universe,InitialCapital,AddedCash,TotalMoneyAdded,Cash,InvestedAmount,MarketValue,GrossEquity,Equity,GrossRealizedPnL,GrossUnrealizedPnL,GrossTotalPnL,EntryChargesPaid,ExitChargesPaid,ChargesPaid,OpenExitChargesEstimate,EstimatedTotalCharges,RealizedPnL,UnrealizedPnL,TotalPnL,TotalReturnPct,OpenPositions,ClosedTrades,Wins,Losses,WinRatePct,LastRunAt
+all,0.0,0.0,0.0,0.0,27182.0,27140.2,27140.2,27111.98,377.0,-41.8,335.2,35.67,3.55,39.22,28.22,67.44,369.87,-102.11,27111.98,0.0,5,1,1,0,100.0,2026-04-09 11:48:07

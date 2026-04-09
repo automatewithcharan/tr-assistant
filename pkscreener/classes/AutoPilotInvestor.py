@@ -460,7 +460,9 @@ class AutoPilotInvestor:
         self._TICK_VOLUME_BURST_FRACTION = 0.025  # 2.5% of day-vol in 60s
         self._TICK_HIGH_DAILY_CHANGE_PCT = 2.0   # daily change% to auto-flag (catch moves early, at 2% not 3%)
         self._TICK_ALREADY_MOVED_PCT = 12.0      # above this % skip — too late to enter intraday (risk > reward)
-        self._TICK_ALERT_COOLDOWN_SEC = 900      # 15 min before re-triggering same symbol (catch late movers)
+        self._TICK_ALERT_COOLDOWN_SEC = 180      # 3 min before re-triggering same symbol (faster re-checks)
+        self._TICK_POLL_INTERVAL_SEC = 2         # match ticker save interval for lower detection latency
+        self._TICK_MAX_CONFIRM_PER_SCAN = 12     # confirm more candidates each scan to avoid missing runners
         # Early Mover: catch stocks at 0.3-2% with heavy accumulation (volume moves before price)
         self._TICK_EARLY_MOVER_IMBALANCE = 3.0   # stricter imbalance ratio for early, unconfirmed moves
         self._TICK_EARLY_MOVER_MIN_PCT = 0.3     # minimum daily change% to consider as early mover
@@ -586,16 +588,24 @@ class AutoPilotInvestor:
             self._run_buynow_rescan()
             self.run_once()
 
-            # During the 60s wait, run tick scans every 5s.
-            # KiteTickerStream refreshes the tick snapshot every 2s — so we get
-            # near-real-time price detection (5s latency) without any API calls.
+            # During the cycle wait, run tick scans every 2s.
+            # KiteTickerStream refreshes the tick snapshot every 2s, so matching
+            # this cadence minimizes detection delay without increasing API calls.
             # Full OHLCV scan still runs every 60s (Kite rate-limit safe).
-            _tick_poll_interval = 5
+            # Buynow rescan runs on its own 60s internal timer within this loop,
+            # so "Buy Now" stocks get auto-alerted without waiting for main cycle.
+            _tick_poll_interval = max(1, int(self._TICK_POLL_INTERVAL_SEC))
             _remaining = self.config.cycle_interval_sec
+            _buynow_counter = 0
             while _remaining > _tick_poll_interval:
                 time.sleep(_tick_poll_interval)
                 _remaining -= _tick_poll_interval
                 self._run_tick_fast_scan()
+                # Check buynow rescan every ~30s within the tick loop
+                _buynow_counter += _tick_poll_interval
+                if _buynow_counter >= 30:
+                    self._run_buynow_rescan()
+                    _buynow_counter = 0
             if _remaining > 0:
                 time.sleep(_remaining)
 
@@ -824,19 +834,19 @@ class AutoPilotInvestor:
     # ------------------------------------------------------------------
 
     def _run_buynow_rescan(self) -> None:
-        """Re-scan signal monitor 'Buy Now' stocks every 10 minutes.
+        """Re-scan signal monitor 'Buy Now' stocks every 3 minutes.
 
-        Catches stocks that scored low early but improved as:
-        - Volume increased (0.5x at open → 3x by 10 AM)
-        - Price confirmed (engine upgraded Hold → Buy Now)
-        - Indicators updated (RSI, CCI, MFI refreshed)
+        This is the PRIMARY path for stocks the engine says 'Buy Now' but
+        that the tick scanner missed (because they moved <2% or had no
+        order-book imbalance). Without this, /buynow shows stocks but
+        autopilot never alerts them.
 
-        Example: MEESHO scored 44 at 9:20 (+3.3%, vol 1.9x) → rejected.
-        By 10:09: score 58 (+9.7%, vol 10.1x) → /buynow shows it, autopilot missed it.
-        This rescan catches those upgrades.
+        Relaxed filters vs tick path: these stocks are already engine-confirmed
+        'Buy Now', so we trust the signal monitor's assessment and only add
+        basic safety gates (score, RSI, price > stop loss).
         """
         now_ts = time.time()
-        if now_ts - self._last_buynow_rescan < 600:  # every 10 minutes
+        if now_ts - self._last_buynow_rescan < 60:  # every 60 seconds — match signal monitor cadence
             return
         self._last_buynow_rescan = now_ts
 
@@ -871,8 +881,14 @@ class AutoPilotInvestor:
         if candidates.empty:
             return
 
+        # Log what the engine found vs what we've already alerted
+        _new_candidates = [str(r.get("Stock", "")).strip() for _, r in candidates.iterrows()
+                           if str(r.get("Stock", "")).strip() not in self._already_alerted_buys]
+        if _new_candidates:
+            self._log(f"BuyNow rescan: engine says Buy Now for {len(candidates)} stocks, {len(_new_candidates)} not yet alerted: {', '.join(_new_candidates[:10])}")
+
         _rescan_count = 0
-        _max_rescan_alerts = 3  # max 3 per rescan cycle to avoid flooding
+        _max_rescan_alerts = 6  # max 6 per rescan cycle (was 3 — too restrictive)
         ticks = self._load_ticks_snapshot()
 
         for _, row in candidates.iterrows():
@@ -886,21 +902,24 @@ class AutoPilotInvestor:
             if live_price <= 0:
                 continue
 
-            # Quality gates (same as DEFINITELY BUY)
-            if live_price < 100.0:
+            # Relaxed quality gates — engine already said "Buy Now",
+            # so we only add safety: no penny stocks, no bearish, not overbought.
+            if live_price < 20.0:
                 continue
 
             # Score with BlindBuyScorer
             blind_score, blind_reasons = BlindBuyScorer.score(row)
-            if blind_score < 50:
+            if blind_score < 40:  # relaxed from 50 — engine already confirmed Buy Now
                 continue
 
             reasons_lower = blind_reasons.lower()
-            if "do not buy" in reasons_lower:
+            if "do not buy" in reasons_lower or "bearish" in reasons_lower:
                 continue
 
             vol_ratio = float(row.get("Volume vs Avg", row.get("Volume Ratio", 0)) or 0)
-            if vol_ratio < 1.5:
+            # No strict volume gate — engine already checked volume.
+            # Just skip if volume is clearly dead (< 0.3x)
+            if vol_ratio > 0 and vol_ratio < 0.3:
                 continue
 
             confidence = float(row.get("Signal Strength %", 0) or 0)
@@ -916,10 +935,10 @@ class AutoPilotInvestor:
                 continue
 
             rr2 = (target2 - live_price) / (live_price - stop_loss)
-            if rr2 < 1.5:
+            if rr2 < 1.0:  # relaxed from 1.5 — 1:1 is breakeven, anything above is worth it
                 continue
 
-            # Check historical avg volume
+            # Skip truly illiquid stocks (avg < 10k shares/day)
             _hist_avg = 0
             try:
                 _hp = os.path.join("results", "Data", "kite_history_cache", "day", f"{sym}.csv")
@@ -928,7 +947,7 @@ class AutoPilotInvestor:
                     _hist_avg = _hdf["volume"].tail(10).mean()
             except Exception:
                 pass
-            if _hist_avg < 100000:
+            if _hist_avg > 0 and _hist_avg < 10000:  # relaxed from 100k — ETFs/mid-caps often < 100k
                 continue
 
             # Calculate live change
@@ -936,6 +955,22 @@ class AutoPilotInvestor:
             if prev_close <= 0:
                 prev_close = float(tick.get("ohlc", {}).get("close", 0))
             daily_change = ((live_price - prev_close) / prev_close * 100) if prev_close > 0 else 0
+
+            # HARD FILTER: Never buy a stock trending DOWN intraday
+            # A stock that opened strong but is now RED indicates reversal/profit-taking.
+            # The historical "Buy Now" signal is stale if the intraday trend has turned negative.
+            # Guard: -2% down = clear weakness. Skip it even if technical scores look good.
+            if daily_change < -2.0:
+                continue
+
+            # HARD FILTER 2: Watch for gap-up reversals
+            # If a stock gapped up +4% or more but is now BELOW prev close (negative daily_change),
+            # that's a major reversal — profit-taking/weak hands exiting. Too risky for blind buy.
+            _prev_close = prev_close  # already calculated above
+            _entry_gap_pct = float(row.get("EntryGapPct", row.get("Entry Gap %", 0)) or 0)
+            if _entry_gap_pct > 0 and daily_change < 0 and _entry_gap_pct >= 4.0:
+                # Stock gapped up 4%+ but reversed below yesterday's close — reversal signal
+                continue
 
             # Scope from entry
             scope_t1 = ((target1 - live_price) / live_price * 100) if target1 > 0 else 0
@@ -946,18 +981,26 @@ class AutoPilotInvestor:
             suggested_qty = max(1, int(4000 / live_price))
             approx_cost = suggested_qty * live_price
 
+            _risk_ps = round(live_price - stop_loss, 2) if stop_loss > 0 else 0
+            _reward_ps = round(target2 - live_price, 2) if target2 > 0 else 0
+            _expected_growth = round(((target2 - live_price) / live_price) * 100, 1) if target2 > 0 else 0
+            _scope_parts = []
+            if scope_t1 > 0:
+                _scope_parts.append(f"+{scope_t1:.1f}% to first target")
+            if scope_t2 > 0:
+                _scope_parts.append(f"+{scope_t2:.1f}% to max target")
+            _scope_str = f" | **Profit potential: {' | '.join(_scope_parts)}**" if _scope_parts else ""
             msg = (
-                f"**🔍 RESCAN CATCH — `{sym}`** — Score {score_label}\n"
-                f"Price `{live_price:.2f}` (+{daily_change:.1f}% today) | Engine says: `{row.get('What To Do', '?')}`\n"
-                f"Stop Loss `{stop_loss:.2f}` | Target 1 `{target1:.2f}` | Target 2 `{target2:.2f}` | R:R `1:{rr2:.1f}`"
-            )
-            if scope_t1 > 0 or scope_t2 > 0:
-                msg += f" | **Scope: +{scope_t1:.1f}% to T1 | +{scope_t2:.1f}% to T2**"
-            msg += (
-                f"\nVolume `{vol_ratio:.1f}x avg` | Confidence `{confidence:.0f}%`\n"
-                f"Why: {self._simplify_blind_reasons(blind_reasons)}\n"
-                f"Suggested: Buy **{suggested_qty} shares** (≈ ₹{approx_cost:,.0f})\n"
-                f"_Caught by periodic rescan — initially missed due to low early score._"
+                f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"**🔍 MISSED EARLIER, NOW STRONG — `{sym}`** — Quality {score_label}\n"
+                f"📈 **Expected to grow +{_expected_growth:.1f}% today** | Price now: `₹{live_price:.2f}` (+{daily_change:.1f}% so far){_scope_str}\n"
+                f"📊 Volume: `{vol_ratio:.1f}x` above normal | `{confidence:.0f}%` indicators agree\n\n"
+                f"**What to do:**\n"
+                f"Buy **{suggested_qty} shares** (≈ ₹{approx_cost:,.0f})\n"
+                f"🔴 EXIT if price drops to `₹{stop_loss:.2f}` (you lose ₹{_risk_ps:.0f}/share)\n"
+                f"🟢 SELL at `₹{target1:.2f}` (safe profit) or `₹{target2:.2f}` (max profit — ₹{_reward_ps:.0f}/share gain)\n\n"
+                f"**Why:** {self._simplify_blind_reasons(blind_reasons)}\n"
+                f"_Open Groww → Buy → then use `/buy {sym} {suggested_qty} {live_price:.0f}` to record_"
             )
 
             self._send_to_channels(msg)
@@ -1347,11 +1390,13 @@ class AutoPilotInvestor:
             trail_stop = round(current_price * 0.96, 2)
 
             message = (
-                f"**\U0001f680 MOMENTUM RUNNING `{sym}`** — still pushing! "
-                f"Now `+{current_change:.1f}%` (was `+{last_alert_pct:.1f}%` when alerted){profit_str}\n"
-                f"Price `{current_price:.2f}`{vol_str}\n"
-                f"Trail stop → `{trail_stop:.2f}` (4% below current)\n"
-                f"_Don't sell yet — let it run. Move stop up to protect profits._"
+                f"**🚀 `{sym}` STILL RUNNING — hold and trail your stop!**\n"
+                f"📈 Now `+{current_change:.1f}%` (was `+{last_alert_pct:.1f}%` when you entered){profit_str}\n"
+                f"Price `₹{current_price:.2f}`{vol_str}\n\n"
+                f"**What to do now:**\n"
+                f"✅ DON'T sell yet — momentum is still strong\n"
+                f"🔴 Move your stop-loss UP to `₹{trail_stop:.2f}` (locks in most of your profit)\n"
+                f"_If price drops to ₹{trail_stop:.2f}, sell immediately to keep your gains._"
             )
             self._send_to_channels(message)
             self._log(f"Momentum continuation alert: {sym} now +{current_change:.1f}% (was +{last_alert_pct:.1f}%)")
@@ -1627,17 +1672,26 @@ class AutoPilotInvestor:
             _rr = round((_target_price - price) / max(price - _sl_price, 0.01), 1)
             _age_min = item["age_sec"] / 60
 
+            # Plain-English grade descriptions
+            _grade_desc = {"A": "Strong — highest conviction, full size", "B": "Good — moderate conviction, reduced size", "C": "Weak — low conviction, smallest size"}[_demand_grade]
+            _verdict = "✅ BUY NOW" if _demand_grade in ("A", "B") else "⚠️ RISKY — only if you accept higher risk"
+            # Expected remaining growth: from current price to target
+            _expected_growth = round(((_target_price - price) / price) * 100, 1)
             msg = (
-                f"**🔮 DEMAND CONFIRMED ({_demand_grade}-GRADE) — {sym}**\n"
-                f"Detected at `₹{item['detect_price']:.0f}` "
-                f"→ Now `₹{price:.2f}`\n"
-                f"Rise since detection: `+{item['rise_from_detect']:.1f}%` in {_age_min:.0f}m\n"
-                f"📥 Buy imbalance: `{item['imbalance']:.1f}x` "
-                f"(was {item['detect_imbalance']:.1f}x at detection)\n"
-                f"📊 Live volume: `{item.get('live_vol_ratio', 0.0):.1f}x` vs 10-day avg\n\n"
-                f"SL: `₹{_sl_price:.0f}` (3%) | Target: `₹{_target_price:.0f}` (+{_scope_pct:.1f}%)\n"
-                f"R:R `1:{_rr}` | Size: `{_size_mult:.1f}x` | Suggested: **{_suggested_qty} shares** (≈ ₹{_approx_cost:,.0f})\n"
-                f"_Was rejected: {item['reject_reason']} — demand persisted, momentum confirmed._"
+                f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+                f"**🔮 {sym} — Buyers are pushing this stock up steadily**\n"
+                f"Quality: **{_demand_grade}-Grade** ({_grade_desc})\n"
+                f"📈 **Expected to grow +{_expected_growth:.1f}% more today** (already up +{item['rise_from_detect']:.1f}% in {_age_min:.0f} min)\n\n"
+                f"👥 Buyers vs sellers: `{item['imbalance']:.1f}x` more buyers than sellers (strong demand)\n"
+                f"📊 Trading volume: `{item.get('live_vol_ratio', 0.0):.1f}x` higher than normal (real interest, not fake)\n\n"
+                f"**What to do:**\n"
+                f"{_verdict}\n"
+                f"Buy **{_suggested_qty} shares** at ~`₹{price:.0f}` (costs ≈ ₹{_approx_cost:,.0f})\n"
+                f"🔴 EXIT if price drops to `₹{_sl_price:.0f}` (limits your loss to 3%)\n"
+                f"🟢 SELL at `₹{_target_price:.0f}` to book +{_scope_pct:.1f}% profit\n"
+                f"💰 You risk `₹{price - _sl_price:.0f}` per share to gain `₹{_target_price - price:.0f}` per share ({_rr:.1f}x reward vs risk)\n\n"
+                f"_Open Groww → Buy → then use `/buy {sym} {_suggested_qty} {price:.0f}` to record_\n"
+                f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             )
             self._send_to_channels(msg)
             self._already_alerted_buys.add(sym)
@@ -1780,9 +1834,10 @@ class AutoPilotInvestor:
         # Sort by priority (biggest mover + strongest imbalance first)
         flagged.sort(key=lambda x: -x["_priority"])
 
-        # Limit to top 5 per cycle to avoid flooding threads
+        # Confirm top candidates per scan; higher cap reduces missed moves on broad rallies.
         import threading
-        for item in flagged[:5]:
+        max_confirm = max(1, int(self._TICK_MAX_CONFIRM_PER_SCAN))
+        for item in flagged[:max_confirm]:
             sym = item["symbol"]
             self._tick_alerted[sym] = now
             # Immediately spin up a targeted single-symbol OHLCV scan in background.
@@ -1916,10 +1971,10 @@ class AutoPilotInvestor:
                     _tier = 2  # good — moderate move + demand, 0.5-2.5% scope
             _tick_only_ok = _tier > 0 and getattr(self, '_tick_only_alert_count', 0) < 8
             if _tick_only_ok:
-                tier_label = {1: "🟢 EARLY CATCH", 2: "🟡 BUILDING MOVE"}[_tier]
+                tier_label = {1: "🟢 EARLY — buy before the big move", 2: "🟡 BUILDING — stock gaining strength"}[_tier]
                 imb_str = ""
                 if has_imbalance:
-                    imb_str = f" | 📥 Buy orders {imbalance_ratio:.1f}x sell"
+                    imb_str = f" | 👥 {imbalance_ratio:.1f}x more buyers than sellers"
                 # Dynamic target based on imbalance strength:
                 # Stronger imbalance = bigger institutional demand = larger expected move
                 if imbalance_ratio >= 10.0:
@@ -1929,19 +1984,23 @@ class AutoPilotInvestor:
                 else:
                     _target_pct = 7.0   # moderate imbalance — conservative 7%
                 scope_pct = max(0, _target_pct - daily_change)
-                scope_str = f" | Scope: `~{scope_pct:.1f}%` to {_target_pct:.0f}%"
                 _sl_price = price * 0.98
                 _target_price = price * (1 + (_target_pct - daily_change) / 100)
                 # Suggest qty based on ₹4000 position size
                 _suggested_qty = max(1, int(4000 / price))
                 _approx_cost = _suggested_qty * price
+                _conviction = "high" if _tier == 1 else "medium"
                 msg = (
+                    f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                     f"**{tier_label} — {sym}**\n"
-                    f"Price: `₹{price:.2f}` | Up: `+{daily_change:.1f}%`{imb_str}{scope_str}\n"
-                    f"Tick signals:\n{reasons_text}\n\n"
-                    f"SL: `₹{_sl_price:.0f}` (2%) | Target: `₹{_target_price:.0f}` ({_target_pct - daily_change:.1f}% from here)\n"
-                    f"Suggested: Buy **{_suggested_qty} shares** (≈ ₹{_approx_cost:,.0f})\n"
-                    f"_Tier {_tier} — {'high' if _tier == 1 else 'medium'} conviction._"
+                    f"📈 Price: `₹{price:.2f}` | Up `+{daily_change:.1f}%` today{imb_str}\n"
+                    f"{reasons_text}\n\n"
+                    f"**What to do ({_conviction} conviction):**\n"
+                    f"Buy **{_suggested_qty} shares** (≈ ₹{_approx_cost:,.0f})\n"
+                    f"🔴 EXIT if price drops to `₹{_sl_price:.0f}` (limits loss to 2%)\n"
+                    f"🟢 SELL near `₹{_target_price:.0f}` (+{scope_pct:.1f}% profit from here)\n"
+                    f"_Open Groww → Buy → then use `/buy {sym} {_suggested_qty} {price:.0f}` to record_\n"
+                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
                 )
                 self._send_to_channels(msg)
                 self._already_alerted_buys.add(sym)
@@ -2370,14 +2429,14 @@ class AutoPilotInvestor:
             _has_all_targets = stop_loss > 0 and target1 > 0 and target2 > 0
             _rr2_val = ((target2 - _price_now) / (_price_now - stop_loss)) if (_price_now > stop_loss and stop_loss > 0) else 0
             _is_definitely_buy = (
-                blind_score >= 50
-                and confidence >= 30
-                and volume_ratio >= 2.0
-                and _price_now >= 100.0
-                and 2.0 <= daily_change <= 5.0
+                blind_score >= 45
+                and confidence >= 20
+                and volume_ratio >= 1.5
+                and _price_now >= 50.0
+                and 1.5 <= daily_change <= 7.0
                 and _has_all_targets
-                and _rr2_val >= 1.5
-                and _def_buy_hist_avg >= 100000
+                and _rr2_val >= 1.2
+                and _def_buy_hist_avg >= 25000
                 and not is_early_mover
             )
 
@@ -2397,11 +2456,11 @@ class AutoPilotInvestor:
             swing_tag = f"\n⏰ **SWING ONLY** — already +{daily_change:.1f}% today. Do NOT enter for intraday — swing trade only (hold 2-5 days)." if is_swing_only else ""
 
             if _is_definitely_buy:
-                alert_header = f"**\U0001f525 DEFINITELY BUY `{sym}`** \u2014 Score {score_label}\n\u2705 All quality checks passed: OHLCV \u2713 | Volume {volume_ratio:.1f}x \u2713 | Confidence {confidence:.0f}% \u2713 | R:R 1:{_rr2_val:.1f} \u2713"
+                alert_header = f"**🔥 STRONG BUY — `{sym}`** — Quality {score_label}\n✅ All checks passed: price ✓ | volume {volume_ratio:.1f}x above normal ✓ | {confidence:.0f}% indicators agree ✓"
             elif is_early_mover:
-                alert_header = f"**\U0001f331 EARLY MOVER `{sym}`** (accumulation detected, low % — target 5-10%) \u2014 Score {score_label}"
+                alert_header = f"**🌱 EARLY ENTRY — `{sym}`** (big buyers loading quietly, stock barely moved yet — could go +5-10%) — Quality {score_label}"
             else:
-                alert_header = f"**\U0001f7e2 BUY `{sym}`** (tick-confirmed in ~2s) \u2014 Score {score_label}{swing_tag}"
+                alert_header = f"**🟢 BUY — `{sym}`** — Quality {score_label}{swing_tag}"
 
             # ── Re-validate price with LATEST tick before sending ──────────
             # The tick price was captured 2-10s ago (before OHLCV scan).
@@ -2451,22 +2510,22 @@ class AutoPilotInvestor:
                 # Recalculate _is_definitely_buy with fresh data
                 _rr2_val = ((target2 - _price_now) / (_price_now - stop_loss)) if (_price_now > stop_loss and stop_loss > 0) else 0
                 _is_definitely_buy = (
-                    blind_score >= 50
-                    and confidence >= 30
-                    and volume_ratio >= 2.0
-                    and _price_now >= 100.0
-                    and 2.0 <= daily_change <= 5.0
+                    blind_score >= 45
+                    and confidence >= 20
+                    and volume_ratio >= 1.5
+                    and _price_now >= 50.0
+                    and 1.5 <= daily_change <= 7.0
                     and _has_all_targets
-                    and _rr2_val >= 1.5
-                    and _def_buy_hist_avg >= 100000
+                    and _rr2_val >= 1.2
+                    and _def_buy_hist_avg >= 25000
                     and not is_early_mover
                 )
                 if _is_definitely_buy:
-                    alert_header = f"**\U0001f525 DEFINITELY BUY `{sym}`** \u2014 Score {score_label}\n\u2705 All quality checks passed: OHLCV \u2713 | Volume {volume_ratio:.1f}x \u2713 | Confidence {confidence:.0f}% \u2713 | R:R 1:{_rr2_val:.1f} \u2713"
+                    alert_header = f"**🔥 STRONG BUY — `{sym}`** — Quality {score_label}\n✅ All checks passed: price ✓ | volume {volume_ratio:.1f}x above normal ✓ | {confidence:.0f}% indicators agree ✓"
                 elif is_early_mover:
-                    alert_header = f"**\U0001f331 EARLY MOVER `{sym}`** (accumulation detected, low % — target 5-10%) \u2014 Score {score_label}"
+                    alert_header = f"**🌱 EARLY ENTRY — `{sym}`** (big buyers loading quietly, stock barely moved yet — could go +5-10%) — Quality {score_label}"
                 else:
-                    alert_header = f"**\U0001f7e2 BUY `{sym}`** (tick-confirmed in ~2s) \u2014 Score {score_label}{swing_tag}"
+                    alert_header = f"**🟢 BUY — `{sym}`** — Quality {score_label}{swing_tag}"
 
             # Scope from entry price to targets
             _scope_t1 = ((target1 - _price_now) / _price_now * 100) if target1 > 0 and _price_now > 0 else 0
@@ -2475,10 +2534,10 @@ class AutoPilotInvestor:
             if _scope_t1 > 0 or _scope_t2 > 0:
                 parts = []
                 if _scope_t1 > 0:
-                    parts.append(f"+{_scope_t1:.1f}% to T1")
+                    parts.append(f"+{_scope_t1:.1f}% to first target")
                 if _scope_t2 > 0:
-                    parts.append(f"+{_scope_t2:.1f}% to T2")
-                _scope_line = f" | **Scope: {' | '.join(parts)}**"
+                    parts.append(f"+{_scope_t2:.1f}% to max target")
+                _scope_line = f" | **Profit potential: {' | '.join(parts)}**"
 
             _ohlcv_reasons_text = self._simplify_blind_reasons(blind_reasons)
             # BlindBuy reasons are computed before final stop/target normalization.
@@ -2491,15 +2550,21 @@ class AutoPilotInvestor:
                     "DANGER: price at stop loss level", ""
                 )
 
+            # Compute per-share risk/reward for plain-English display
+            _risk_per_share = round(_price_now - stop_loss, 2) if stop_loss > 0 else 0
+            _reward_per_share = round(target2 - _price_now, 2) if target2 > 0 else 0
+            _expected_growth_pct = round(((target2 - _price_now) / _price_now) * 100, 1) if target2 > 0 and _price_now > 0 else 0
             message = (
                 f"{alert_header}\n"
-                f"Price `{_price_now:.2f}` ({direction}{daily_change:.2f}% from prev close) | Buy Above `{_buy_above_display:.2f}`\n"
-                f"Stop Loss `{stop_loss:.2f}` | Target 1 `{target1:.2f}` | Target 2 `{target2:.2f}`{risk_reward}{_scope_line}\n"
-                f"Volume `{volume_ratio:.1f}x avg` | Confidence `{confidence:.0f}%`\n"
-                f"Tick signals:\n{reasons_text}\n"
-                f"OHLCV confirms: {_ohlcv_reasons_text}"
-                f"{qty_line}\n"
-                f"_Open Groww \u2192 Buy \u2192 then use `/buy {sym} QTY PRICE` to record_"
+                f"📈 **Expected to grow +{_expected_growth_pct:.1f}% today** | Price now: `₹{_price_now:.2f}` ({direction}{daily_change:.2f}% so far){_scope_line}\n"
+                f"📊 Volume: `{volume_ratio:.1f}x` above normal | `{confidence:.0f}%` indicators agree\n\n"
+                f"**What to do:**\n"
+                f"Buy {f'**{suggested_qty} shares** (≈ ₹{_invest_amt:,.0f})' if suggested_qty > 0 else 'at market price'}\n"
+                f"🔴 EXIT if price drops to `₹{stop_loss:.2f}` (you lose ₹{_risk_per_share:.0f}/share)\n"
+                f"🟢 SELL at `₹{target1:.2f}` (safe profit) or `₹{target2:.2f}` (max profit — ₹{_reward_per_share:.0f}/share gain){risk_reward}\n\n"
+                f"**Why this stock:**\n{reasons_text}\n"
+                f"{_ohlcv_reasons_text}\n\n"
+                f"_Open Groww → Buy → then use `/buy {sym} {suggested_qty} {_price_now:.0f}` to record_"
             )
             # For re-alerts: only send if it's a DEFINITELY BUY upgrade
             if _is_re_alert and not _is_definitely_buy:
