@@ -1681,14 +1681,15 @@ class AutoPilotInvestor:
                 f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"**🔮 {sym} — Buyers are pushing this stock up steadily**\n"
                 f"Quality: **{_demand_grade}-Grade** ({_grade_desc})\n"
-                f"📈 **Expected to grow +{_expected_growth:.1f}% more today** (already up +{item['rise_from_detect']:.1f}% in {_age_min:.0f} min)\n\n"
+                f"📈 **Demand-confirmed setup target: +{_expected_growth:.1f}% from alert price** "
+                f"(current day move: +{item['live_change']:.1f}% | moved +{item['rise_from_detect']:.1f}% from our detect price in {_age_min:.0f} min)\n\n"
                 f"👥 Buyers vs sellers: `{item['imbalance']:.1f}x` more buyers than sellers (strong demand)\n"
                 f"📊 Trading volume: `{item.get('live_vol_ratio', 0.0):.1f}x` higher than normal (real interest, not fake)\n\n"
                 f"**What to do:**\n"
                 f"{_verdict}\n"
                 f"Buy **{_suggested_qty} shares** at ~`₹{price:.0f}` (costs ≈ ₹{_approx_cost:,.0f})\n"
                 f"🔴 EXIT if price drops to `₹{_sl_price:.0f}` (limits your loss to 3%)\n"
-                f"🟢 SELL at `₹{_target_price:.0f}` to book +{_scope_pct:.1f}% profit\n"
+                f"🟢 SELL near `₹{_target_price:.0f}` if momentum continues (fixed demand-watch target: +{_scope_pct:.1f}% from alert price)\n"
                 f"💰 You risk `₹{price - _sl_price:.0f}` per share to gain `₹{_target_price - price:.0f}` per share ({_rr:.1f}x reward vs risk)\n\n"
                 f"_Open Groww → Buy → then use `/buy {sym} {_suggested_qty} {price:.0f}` to record_\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
@@ -3089,8 +3090,42 @@ class AutoPilotInvestor:
         self._last_buy_alert_time = datetime.now()
         self._pending_followups = []
 
+    @staticmethod
+    def _grade_candidate(c: 'BlindBuyCandidate') -> str:
+        """Assign a conviction grade (A+, A, B) based on score + volume + momentum.
+
+        Momentum intensity = volume_ratio × change_pct — measures real money flow.
+        High-momentum runners with extreme volume are A+ regardless of score,
+        because the score often penalizes overbought indicators that are
+        actually confirmatory on genuine breakouts.
+        """
+        momentum = c.volume_ratio * abs(c.change_pct) if c.change_pct > 0 else 0
+
+        # A+ = extreme volume-confirmed momentum (overrides score penalties)
+        if momentum >= 40 and c.volume_ratio >= 3.0:
+            return "A+"
+        if c.blind_score >= 65 and c.volume_ratio >= 2.0 and momentum >= 15:
+            return "A+"
+        if c.blind_score >= 70 and c.volume_ratio >= 1.5:
+            return "A+"
+        # A = strong volume or high score with momentum
+        if c.volume_ratio >= 5.0 and c.change_pct >= 3.0:
+            return "A"
+        if c.blind_score >= 55 and c.volume_ratio >= 2.0 and momentum >= 10:
+            return "A"
+        if c.blind_score >= 60 and c.volume_ratio >= 1.0:
+            return "A"
+        if c.blind_score >= 50 and momentum >= 20:
+            return "A"
+        # Everything else
+        return "B"
+
     def _do_send_buy_alert(self, candidates: List[BlindBuyCandidate], is_followup: bool) -> None:
-        """Format and send a buy alert message to Discord."""
+        """Format and send a buy alert message to Discord.
+
+        Grades candidates A+/A/B, highlights top picks, caps main alert
+        at 10 stocks, and sends the rest as a watchlist overflow.
+        """
         # Determine market context for time-of-day labeling
         try:
             import pytz
@@ -3104,6 +3139,25 @@ class AutoPilotInvestor:
 
         is_post_market = self._is_post_market_window()
 
+        # -- Grade and sort candidates by conviction --
+        graded = []
+        for c in candidates:
+            grade = self._grade_candidate(c)
+            momentum = c.volume_ratio * abs(c.change_pct) if c.change_pct > 0 else 0
+            graded.append((c, grade, momentum))
+        # Sort: A+ first, then A, then B; within tier by momentum desc
+        _grade_order = {"A+": 0, "A": 1, "B": 2}
+        graded.sort(key=lambda x: (_grade_order.get(x[1], 9), -x[2]))
+
+        # Split into main (top 10) and overflow
+        _MAX_MAIN = 10
+        main_picks = graded[:_MAX_MAIN]
+        overflow_picks = graded[_MAX_MAIN:]
+
+        # Count grades for header
+        n_aplus = sum(1 for _, g, _ in main_picks if g == "A+")
+        n_a = sum(1 for _, g, _ in main_picks if g == "A")
+
         if is_post_market:
             sections = [
                 "**📋 POST-MARKET PREVIEW — Tomorrow's Entry Candidates**",
@@ -3111,79 +3165,132 @@ class AutoPilotInvestor:
                 "_Entry tomorrow at open if price holds above Buy Above level._",
             ]
         elif is_followup:
+            grade_summary = ""
+            if n_aplus > 0:
+                grade_summary = f" ({n_aplus} A+, {n_a} A grade)"
             sections = [
                 "**🟢 NEW PICKS FOUND**",
-                f"**{len(candidates)}** new stock{'s' if len(candidates) != 1 else ''} scored 60+/100 in the last 15 min:",
+                f"**{len(main_picks)}** new stock{'s' if len(main_picks) != 1 else ''} ranked by conviction{grade_summary}:",
             ]
         else:
+            grade_summary = ""
+            if n_aplus > 0:
+                grade_summary = f" — **{n_aplus} strong conviction** (A+)"
             sections = [
                 "**🟢 BUY ALERT**",
-                f"Top **{len(candidates)}** pick{'s' if len(candidates) != 1 else ''} right now (score 60+/100):",
+                f"Top **{len(main_picks)}** of {len(candidates)} picks ranked by conviction{grade_summary}:",
             ]
 
-        for c in candidates:
-            pct = f"+{c.change_pct:.1f}%" if c.change_pct > 0 else f"{c.change_pct:.1f}%"
-            risk_reward = ""
-            if c.stop_loss > 0 and c.target2 > 0 and c.price > 0:
-                risk = abs(c.price - c.stop_loss)
-                reward1 = abs(c.target1 - c.price) if c.target1 > 0 else 0
-                reward2 = abs(c.target2 - c.price)
-                rr1 = round(reward1 / risk, 1) if risk > 0 else 0
-                rr2 = round(reward2 / risk, 1) if risk > 0 else 0
-                risk_reward = f" | R:R `1:{rr1}` / `1:{rr2}`"
-
-            # Score emoji
-            if c.blind_score >= 70:
-                score_label = f"🔥 **{c.blind_score:.0f}/100** (Excellent)"
-            elif c.blind_score >= 60:
-                score_label = f"✅ **{c.blind_score:.0f}/100** (Good)"
-            else:
-                score_label = f"**{c.blind_score:.0f}/100** (OK)"
-
-            # Time-of-day context: after 1 PM + already moved 8%+  = swing trade only
-            # Stocks at 2-7% after 1 PM can still make a meaningful intraday move by 3:30 PM.
-            is_swing_only = c.change_pct >= 8.0
-            if is_swing_only:
-                trade_tag = "\n⏰ **SWING ONLY** — already +{:.1f}%, too late for intraday. Hold 2-5 days for targets.".format(c.change_pct)
-            else:
-                trade_tag = ""
-
-            # Simplify reasons to plain English
-            simple_reasons = self._simplify_blind_reasons(c.reasons)
-
-            block = [
-                f"**BUY `{c.symbol}`** — Score {score_label}{trade_tag}",
-                f"Price `{c.price:.2f}` ({pct}) | Buy Above `{c.buy_above:.2f}`",
-                f"Stop Loss `{c.stop_loss:.2f}` | Target 1 `{c.target1:.2f}` | Target 2 `{c.target2:.2f}`{risk_reward}",
-                f"Volume `{c.volume_ratio:.1f}x avg`",
-                f"Why: {simple_reasons}",
-            ]
-            if c.suggested_qty > 0:
-                _invest = round(c.suggested_qty * c.price, 0)
-                block.append(f"Suggested: Buy **`{c.suggested_qty}` shares** (≈ ₹{_invest:,.0f})")
-            sections.append("\n".join(block))
-
-            self._already_alerted_buys.add(c.symbol)
-            self._save_daily_alerted(c.symbol)
-            # Track for momentum continuation re-alerts
-            self._momentum_tracked[c.symbol] = {
-                "entry_price": c.price,
-                "last_alert_pct": c.change_pct,
-                "last_alert_time": datetime.now(),
-            }
+        for rank, (c, grade, momentum) in enumerate(main_picks, 1):
+            self._format_candidate_block(sections, c, grade, momentum, rank, len(main_picks))
 
         sections.append("_Open Groww → Buy → then use `/buy SYMBOL QTY PRICE` to record_")
         message = "\n\n".join(sections)
         self._send_to_channels(message)
 
+        # Send overflow as a separate watchlist message
+        if overflow_picks:
+            overflow_sections = [
+                f"**📝 WATCHLIST** — {len(overflow_picks)} more picks (lower conviction):",
+            ]
+            for rank, (c, grade, momentum) in enumerate(overflow_picks, _MAX_MAIN + 1):
+                self._format_candidate_block(overflow_sections, c, grade, momentum, rank, len(candidates), compact=True)
+            overflow_msg = "\n\n".join(overflow_sections)
+            self._send_to_channels(overflow_msg)
+
+    def _format_candidate_block(self, sections: list, c: 'BlindBuyCandidate', grade: str,
+                                 momentum: float, rank: int, total: int,
+                                 compact: bool = False) -> None:
+        """Format a single candidate block and append to sections. Also records tracking."""
+        pct = f"+{c.change_pct:.1f}%" if c.change_pct > 0 else f"{c.change_pct:.1f}%"
+        risk_reward = ""
+        if c.stop_loss > 0 and c.target2 > 0 and c.price > 0:
+            risk = abs(c.price - c.stop_loss)
+            reward1 = abs(c.target1 - c.price) if c.target1 > 0 else 0
+            reward2 = abs(c.target2 - c.price)
+            rr1 = round(reward1 / risk, 1) if risk > 0 else 0
+            rr2 = round(reward2 / risk, 1) if risk > 0 else 0
+            risk_reward = f" | R:R `1:{rr1}` / `1:{rr2}`"
+
+        # Grade badge + score
+        if grade == "A+":
+            grade_badge = "⭐ **A+**"
+            score_label = f"🔥 **{c.blind_score:.0f}/100**"
+        elif grade == "A":
+            grade_badge = "**A**"
+            score_label = f"✅ **{c.blind_score:.0f}/100**"
+        else:
+            grade_badge = "B"
+            score_label = f"**{c.blind_score:.0f}/100**"
+
+        # Momentum intensity label
+        if momentum >= 25:
+            mom_label = f"🚀 Momentum `{momentum:.0f}`"
+        elif momentum >= 15:
+            mom_label = f"💪 Momentum `{momentum:.0f}`"
+        elif momentum >= 8:
+            mom_label = f"Momentum `{momentum:.0f}`"
+        else:
+            mom_label = ""
+
+        # Top pick marker for rank 1-3 in A+ or A grade
+        top_marker = ""
+        if rank <= 3 and grade in ("A+", "A"):
+            top_marker = " 🏆 **TOP PICK**" if rank == 1 else " ⭐ **TOP PICK**"
+
+        # Time-of-day context: swing only if already moved 8%+
+        is_swing_only = c.change_pct >= 8.0
+        trade_tag = ""
+        if is_swing_only:
+            trade_tag = "\n⏰ **SWING ONLY** — already +{:.1f}%, hold 2-5 days for targets.".format(c.change_pct)
+
+        # Simplify reasons to plain English
+        simple_reasons = self._simplify_blind_reasons(c.reasons)
+
+        if compact:
+            # Compact format for watchlist overflow
+            block = [
+                f"`{c.symbol}` [{grade_badge}] Score {c.blind_score:.0f} | `{c.price:.2f}` ({pct}) | Vol `{c.volume_ratio:.1f}x` | SL `{c.stop_loss:.2f}` → T1 `{c.target1:.2f}` T2 `{c.target2:.2f}`",
+            ]
+        else:
+            block = [
+                f"**BUY `{c.symbol}`** [{grade_badge}] Score {score_label}{top_marker}{trade_tag}",
+                f"Price `{c.price:.2f}` ({pct}) | Buy Above `{c.buy_above:.2f}` | Volume `{c.volume_ratio:.1f}x avg`{f' | {mom_label}' if mom_label else ''}",
+                f"Stop Loss `{c.stop_loss:.2f}` | Target 1 `{c.target1:.2f}` | Target 2 `{c.target2:.2f}`{risk_reward}",
+                f"Why: {simple_reasons}",
+            ]
+            if c.suggested_qty > 0:
+                _invest = round(c.suggested_qty * c.price, 0)
+                block.append(f"Suggested: Buy **`{c.suggested_qty}` shares** (≈ ₹{_invest:,.0f})")
+        sections.append("\n".join(block))
+
+        self._log(
+            f"{'🏆' if grade == 'A+' else '⭐' if grade == 'A' else '📝'} "
+            f"BUY ALERT [{grade}] #{rank}: {c.symbol} at ₹{c.price:.2f} "
+            f"({pct}) score={c.blind_score:.0f} vol={c.volume_ratio:.1f}x momentum={momentum:.0f}"
+        )
+
+        self._already_alerted_buys.add(c.symbol)
+        self._save_daily_alerted(c.symbol)
+        # Track for momentum continuation re-alerts
+        self._momentum_tracked[c.symbol] = {
+            "entry_price": c.price,
+            "last_alert_pct": c.change_pct,
+            "last_alert_time": datetime.now(),
+        }
+
     @staticmethod
     def _simplify_blind_reasons(reasons: str) -> str:
-        """Translate scorer reason codes to plain English."""
+        """Translate scorer reason codes to plain English.
+
+        For momentum runners (vol-halved tagged), overbought indicators are
+        CONFIRMATORY — big money is pushing. Strip scary language for those.
+        """
         translations = {
             "RSI oversold": "Stock is very cheap (oversold)",
             "RSI near oversold": "Stock is getting cheap",
             "RSI mid": "Stock at fair price",
-            "RSI overbought": "Stock is expensive (risky)",
+            "RSI overbought": "Stock is hot — strong demand",
             "CCI oversold": "Momentum says undervalued",
             "CCI low": "Momentum low",
             "MFI oversold": "Selling exhaustion — buyers coming",
@@ -3203,6 +3310,10 @@ class AutoPilotInvestor:
             "very near trigger": "Almost at buy trigger",
             "near trigger": "Close to buy trigger",
             "high confidence": "Multiple indicators agree — buy",
+            "consolidation breakout": "Coiled breakout — big potential",
+            "range breakout": "Range breakout setup",
+            "strong gap-up": "Strong gap-up at open — overnight demand",
+            "gap-up": "Gap-up at open — positive sentiment",
             "BEARISH TREND - below all MAs": "⚠️ BEARISH — below all moving averages",
             "DEATH CROSS": "⚠️ Death cross warning",
             "downtrend pattern": "⚠️ Downtrend pattern",
@@ -3214,9 +3325,24 @@ class AutoPilotInvestor:
         parts = [p.strip() for p in reasons.split(",")]
         simple = []
         for p in parts:
+            p_lower = p.lower()
+            # Skip vol-halved overbought warnings entirely — these are momentum
+            # confirmations, not risks. Showing "overbought" scares users away
+            # from the strongest runners.
+            if "[vol-halved]" in p_lower and ("overbought" in p_lower):
+                # Replace with momentum confirmation instead of dropping silently
+                if "extremely" in p_lower or "combo" in p_lower:
+                    simple.append("Strong institutional buying")
+                else:
+                    simple.append("Momentum confirmed by volume")
+                continue
+            # Also soften the overbought combo warning on vol-halved entries
+            if "overbought combo" in p_lower and "[vol-halved]" in p_lower:
+                simple.append("Multiple momentum indicators aligned")
+                continue
             matched = False
             for key, val in translations.items():
-                if key.lower() in p.lower():
+                if key.lower() in p_lower:
                     simple.append(val)
                     matched = True
                     break
