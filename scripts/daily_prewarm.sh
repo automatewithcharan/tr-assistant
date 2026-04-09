@@ -39,9 +39,10 @@ TERM=xterm $PYTHON -m pkscreener.pkscreenercli     --kiteprewarm bse_allstocks  
 
 # 3. Rebuild combined universe sorted by liquidity (for ticker subscription)
 TERM=xterm $PYTHON -c "
-import pandas as pd, os, csv
+import pandas as pd, os, csv, re
 cache_dir = 'results/Data/kite_history_cache/day'
 nse_syms = set(pd.read_csv('results/Indices/EQUITY_L.csv')['SYMBOL'].str.strip().str.upper())
+bse_tradeable = set(pd.read_csv('results/Indices/BSE_TRADEABLE.csv')['Symbol'].str.strip().str.upper())
 results = []
 for fname in os.listdir(cache_dir):
     if not fname.endswith('.csv'): continue
@@ -57,10 +58,19 @@ for fname in os.listdir(cache_dir):
     except: continue
 df = pd.DataFrame(results)
 nse_all = df[df['Exchange']=='NSE']
-bse_liquid = df[(df['Exchange']=='BSE') & (df['AvgTurnover'] >= 5_000_000)]
-combined = pd.concat([nse_all, bse_liquid]).sort_values('AvgTurnover', ascending=False)
+# Include ALL BSE tradeable equities (not just liquid ones) — tick-only scoring
+# filters by intraday turnover, so micro-caps won't generate false alerts.
+# Skip govt bonds/debentures (symbols starting with digits).
+is_equity = ~df['Symbol'].str.match(r'^\d')
+bse_in_cache = df[(df['Exchange']=='BSE') & is_equity]
+# Also add BSE_TRADEABLE stocks without cache (new listings etc.)
+bse_nocache = {s for s in bse_tradeable if s not in set(df['Symbol']) and not re.match(r'^\d', s)}
+bse_extra = pd.DataFrame([{'Symbol': s, 'AvgTurnover': 0, 'Exchange': 'BSE'} for s in bse_nocache])
+combined = pd.concat([nse_all, bse_in_cache, bse_extra]).drop_duplicates('Symbol')
+# Hard cap at 2990 to stay within 3000 WebSocket limit with buffer
+combined = combined.sort_values('AvgTurnover', ascending=False).head(2990)
 combined[['Symbol']].to_csv('results/Indices/NSE_BSE_COMBINED.csv', index=False)
-print(f'Combined universe: {len(combined)} symbols (NSE={len(nse_all)}, BSE-liquid={len(bse_liquid)})')
+print(f'Combined universe: {len(combined)} symbols (NSE={len(nse_all)}, BSE={len(combined)-len(nse_all)})')
 " >> $LOG 2>&1
 
 EXIT_CODE=$?
