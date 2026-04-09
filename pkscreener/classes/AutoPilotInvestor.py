@@ -454,15 +454,17 @@ class AutoPilotInvestor:
 
         # Tick-only fast scanner state (no OHLCV, fires in < 1 second)
         self._tick_alerted: Dict[str, datetime] = {}  # symbol -> time of last tick-triggered scan
+        self._tick_rejected: Set[str] = set()          # symbols rejected by OHLCV confirmation (use longer cooldown)
         self._watch_alerted: Dict[str, str] = {}      # symbol -> date string of last WATCH alert (once per day per symbol)
         self._prev_tick_snapshot: Dict[str, Dict] = {}  # last tick reading for delta-volume
         self._TICK_ORDER_IMBALANCE_RATIO = 2.5  # buy_qty / sell_qty threshold
         self._TICK_VOLUME_BURST_FRACTION = 0.025  # 2.5% of day-vol in 60s
         self._TICK_HIGH_DAILY_CHANGE_PCT = 2.0   # daily change% to auto-flag (catch moves early, at 2% not 3%)
-        self._TICK_ALREADY_MOVED_PCT = 12.0      # above this % skip — too late to enter intraday (risk > reward)
-        self._TICK_ALERT_COOLDOWN_SEC = 180      # 3 min before re-triggering same symbol (faster re-checks)
+        self._TICK_ALREADY_MOVED_PCT = 16.0      # above this % skip — too late to enter intraday (was 12%, raised to catch 12-15% runners)
+        self._TICK_ALERT_COOLDOWN_SEC = 180      # 3 min cooldown for ALERTING same symbol (re-check for continuation)
+        self._TICK_REJECT_COOLDOWN_SEC = 1800    # 30 min cooldown for REJECTED stocks — stops same losers hogging confirmation slots
         self._TICK_POLL_INTERVAL_SEC = 0.5       # sub-second polling — mtime cache avoids redundant parsing
-        self._TICK_MAX_CONFIRM_PER_SCAN = 12     # confirm more candidates each scan to avoid missing runners
+        self._TICK_MAX_CONFIRM_PER_SCAN = 30     # was 12 — each is a background thread (~1-2s), so 30 costs the same wall time
         # Early Mover: catch stocks at 0.3-2% with heavy accumulation (volume moves before price)
         self._TICK_EARLY_MOVER_IMBALANCE = 3.0   # stricter imbalance ratio for early, unconfirmed moves
         self._TICK_EARLY_MOVER_MIN_PCT = 0.3     # minimum daily change% to consider as early mover
@@ -1989,10 +1991,13 @@ class AutoPilotInvestor:
             if symbol in self._already_alerted_buys:
                 continue
 
-            # Cooldown: don't spam re-alerts on the same symbol
+            # Cooldown: don't spam re-alerts on the same symbol.
+            # Rejected stocks get 30-min cooldown (stop hogging confirmation slots);
+            # alerted stocks get 3-min cooldown (allow re-check for continuation).
             last_tick_alert = self._tick_alerted.get(symbol)
             if isinstance(last_tick_alert, datetime):
-                if (now - last_tick_alert).total_seconds() < self._TICK_ALERT_COOLDOWN_SEC:
+                cooldown = self._TICK_REJECT_COOLDOWN_SEC if symbol in self._tick_rejected else self._TICK_ALERT_COOLDOWN_SEC
+                if (now - last_tick_alert).total_seconds() < cooldown:
                     continue
 
             last_price = float(tick.get("last_price") or 0)
@@ -2080,9 +2085,15 @@ class AutoPilotInvestor:
                     "average_traded_price": float(tick.get("average_traded_price") or 0),
                     "best_bid": float(tick.get("best_bid") or 0),
                     "best_ask": float(tick.get("best_ask") or 0),
-                    # Priority: daily change% + imbalance strength
-                    "_priority": daily_change * 10 + (
-                        (total_buy / max(total_sell, 1)) if total_sell > 0 else 0
+                    # Priority: flat band for 2-6% (sweet spot), IMBALANCE breaks ties.
+                    # Above 6%: decreasing priority (late entry, train leaving).
+                    # This ensures early movers with strong demand (stock at +3% with
+                    # 5x buy/sell imbalance) get confirmed before late runners at +10%.
+                    "_priority": (
+                        30.0 if daily_change <= 6.0                                # sweet spot: all equal
+                        else max(5.0, 30.0 - (daily_change - 6.0) * 3)             # -3 per % above 6
+                    ) + (
+                        min(25.0, (total_buy / max(total_sell, 1)) * 4) if total_sell > 0 else 0  # imbalance tiebreaker
                     ),
                 })
 
@@ -2092,10 +2103,10 @@ class AutoPilotInvestor:
         if not flagged:
             return
 
-        # Sort by priority (biggest mover + strongest imbalance first)
+        # Sort by priority: early movers with strong imbalance first, late runners last.
         flagged.sort(key=lambda x: -x["_priority"])
 
-        # Confirm top candidates per scan; higher cap reduces missed moves on broad rallies.
+        # Confirm top candidates per scan; each runs in its own background thread (~1-2s).
         import threading
         max_confirm = max(1, int(self._TICK_MAX_CONFIRM_PER_SCAN))
         for item in flagged[:max_confirm]:
@@ -2331,11 +2342,12 @@ class AutoPilotInvestor:
             _is_broad_rally = _nifty_chg >= 2.0
             _relative_outperformance = daily_change - _nifty_chg if _nifty_chg > 0 else daily_change
 
-            # Volume gate: 1.5x on normal days, 1.2x on broad rally days
+            # Volume gate: 1.3x on normal days, 1.1x on broad rally days
             # Data-driven: Buy Now + vol >= 2.0x → 81% win rate vs 24% at 0.8x
-            # Raising floor eliminates weak runners that stall after 3-5% move.
-            _vol_gate = 1.2 if _is_broad_rally else 1.5
+            # Lowered from 1.5x/1.2x — THERMAX at 1.38x was real but got blocked.
+            _vol_gate = 1.1 if _is_broad_rally else 1.3
             if _vol_ratio_live < _vol_gate:
+                self._tick_rejected.add(sym)  # 30-min cooldown — stop re-checking losers
                 self._log(
                     f"Suppressed {sym}: already ran {daily_change:.1f}% but "
                     f"vol {_vol_ratio_live:.2f}x < {_vol_gate:.1f}x "
@@ -2346,26 +2358,25 @@ class AutoPilotInvestor:
                     _item_reasons, f"weak vol {_vol_ratio_live:.1f}x < {_vol_gate:.1f}x"
                 )
                 return
-            # Score gate: 58 normally, 50 for broad-rally outperformers or
-            # high-volume Buy-Now stocks (vol >= 2.0x + engine says buy = double
-            # confirmation; 29/29 such stocks were winners on Apr 8 backtest).
+            # Score gate: 52 normally (was 58 — HONASA at 53 was real),
+            # 48 for broad-rally outperformers or high-volume Buy-Now stocks.
             _now_action_for_gate = str(row.get("NowAction", row.get("Action", ""))).lower()
             _is_buy_for_gate = "buy" in _now_action_for_gate
             _high_vol_buy = _is_buy_for_gate and _vol_ratio_live >= 2.0
             if _is_broad_rally and _relative_outperformance >= 5.0:
-                effective_min = max(50.0, self.config.blind_buy_min_score)
+                effective_min = max(48.0, self.config.blind_buy_min_score)
                 self._log(
                     f"Broad rally mode: {sym} +{daily_change:.1f}% vs Nifty +{_nifty_chg:.1f}% "
                     f"(outperform +{_relative_outperformance:.1f}%), effective_min={effective_min:.0f}"
                 )
             elif _high_vol_buy:
-                effective_min = max(50.0, self.config.blind_buy_min_score)
+                effective_min = max(48.0, self.config.blind_buy_min_score)
                 self._log(
                     f"High-vol Buy fast-track: {sym} vol {_vol_ratio_live:.1f}x + Buy Now "
                     f"→ effective_min={effective_min:.0f}"
                 )
             else:
-                effective_min = max(58.0, self.config.blind_buy_min_score)
+                effective_min = max(52.0, self.config.blind_buy_min_score)
         elif _entry_confirmed and _no_hard_blockers:
             # Price just crossed entry trigger (fresh breakout, stock hasn't run much yet).
             # Standard threshold is fine here.
@@ -2425,6 +2436,7 @@ class AutoPilotInvestor:
             # engine says "Hold" for stocks that are NOW breaking out at market open.
             # A +3%+ gap-up with volume IS the buy signal, engine just hasn't re-scanned.
             if not _is_buy_action and _rsi_val >= 45 and not is_early_mover and not _is_opening_window:
+                self._tick_rejected.add(sym)  # 30-min cooldown
                 self._log(
                     f"Suppressed {sym}: engine says '{_now_action}' + RSI {_rsi_val:.0f} >= 45 "
                     f"— no buy recommendation, skip"
@@ -2774,9 +2786,9 @@ class AutoPilotInvestor:
             }
         else:
             # REJECTED — log why, do NOT send any alert.
-            # WATCH alerts have been removed: they were noise the user couldn't act on.
-            # The scanner re-checks every 5s and auto-upgrades to BUY when score reaches
-            # effective_min. Users only see actionable BUY alerts, nothing else.
+            # Mark as rejected so tick scanner uses 30-min cooldown instead of 3-min.
+            # This frees confirmation slots for NEW stocks entering the 2-5% zone.
+            self._tick_rejected.add(sym)
             self._log(
                 f"Not a buy: {sym} score={blind_score:.0f} (need {effective_min:.0f}) | "
                 f"change={daily_change:.2f}% | reasons={blind_reasons[:80]}"
