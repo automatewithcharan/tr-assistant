@@ -103,8 +103,38 @@ def compute_volume_ratio(volumes: list, period: int = 20) -> float:
     return volumes[-1] / avg_vol
 
 
+def compute_mfi(highs: list, lows: list, closes: list, volumes: list, period: int = 14) -> float:
+    """Compute Money Flow Index (0-100). Like RSI but volume-weighted."""
+    if len(closes) < period + 1:
+        return 50.0
+    pos_flow = 0.0
+    neg_flow = 0.0
+    for i in range(-period, 0):
+        tp_now = (highs[i] + lows[i] + closes[i]) / 3
+        tp_prev = (highs[i - 1] + lows[i - 1] + closes[i - 1]) / 3
+        raw_flow = tp_now * volumes[i]
+        if tp_now > tp_prev:
+            pos_flow += raw_flow
+        else:
+            neg_flow += raw_flow
+    if neg_flow == 0:
+        return 100.0
+    mf_ratio = pos_flow / neg_flow
+    return 100 - (100 / (1 + mf_ratio))
+
+
+def compute_daily_turnover_cr(volume: float, close: float) -> float:
+    """Compute approximate daily turnover in Crores."""
+    return (volume * close) / 1e7 if close > 0 else 0
+
+
+# Minimum daily turnover (₹ Cr) — from Quantopian Volume/Slippage lecture
+# Stocks below this can't absorb ₹50K orders without significant slippage
+MIN_TURNOVER_CR = 2.0
+
+
 # ──────────────────────────────────────────────────────────────────────
-# Simplified BlindBuyScorer (captures ~80% of the real scorer's logic)
+# Simplified BlindBuyScorer (matches CONSOLIDATED oscillator logic)
 # ──────────────────────────────────────────────────────────────────────
 
 def simplified_blind_score(
@@ -112,34 +142,40 @@ def simplified_blind_score(
     change_pct: float,
     rsi: float,
     cci: float,
+    mfi: float,
     volume_ratio: float,
     gap_pct: float = 0.0,
 ) -> int:
-    """Simplified scorer matching the core components of BlindBuyScorer."""
+    """Simplified scorer matching the consolidated oscillator BlindBuyScorer.
+
+    Uses single median of RSI/CCI(normalized)/MFI instead of scoring each
+    independently — reduces correlated factor triple-counting.
+    """
     if price < MIN_PRICE:
         return 0
 
     score = 0
+    _high_vol_momentum = volume_ratio >= 2.0
 
-    # RSI component
-    if rsi < 30:
+    # CONSOLIDATED OSCILLATOR: median of RSI, CCI(norm), MFI
+    _cci_norm = max(0.0, min(100.0, (cci + 200) / 4.0))  # -200→0, 0→50, +200→100
+    _osc_values = sorted([rsi, _cci_norm, mfi])
+    _osc_median = _osc_values[1]  # median of 3
+
+    if _osc_median < 25:
         score += 25
-    elif rsi < 40:
+    elif _osc_median < 35:
         score += 18
-    elif rsi < 50:
+    elif _osc_median < 50:
         score += 10
-    elif rsi > 70 and change_pct < 5:
-        score -= 8
-
-    # CCI component
-    if cci < -100:
-        score += 12
-    elif cci < -50:
-        score += 6
-    elif cci > 200:
-        score -= 15 if volume_ratio < 2.0 else 8
-    elif cci > 150:
-        score -= 8 if volume_ratio < 2.0 else 4
+    elif _osc_median > 80:
+        if change_pct >= 5.0 or _high_vol_momentum:
+            score -= 5
+        else:
+            score -= 12
+    elif _osc_median > 65:
+        if not (change_pct >= 5.0 or _high_vol_momentum):
+            score -= 5
 
     # Volume component
     if volume_ratio >= 2.5:
@@ -158,12 +194,13 @@ def simplified_blind_score(
         score += 10
 
     # Change% / green candle
+    _change_cap = 10 if gap_pct >= 4 else 15
     if change_pct >= 5:
-        score += 15 if gap_pct < 4 else 10
+        score += _change_cap
     elif change_pct >= 2.5:
-        score += 12
+        score += min(12, _change_cap)
     elif change_pct >= 1:
-        score += 10
+        score += min(10, _change_cap)
     elif change_pct > 0:
         score += 6
     elif change_pct > -1:
@@ -268,6 +305,12 @@ def scan_daily_candidates(target_dates: List[str], top_n: int = 0) -> Dict[str, 
             atr = compute_atr(prior_highs, prior_lows, prior_closes)
             cci = compute_cci(prior_highs, prior_lows, prior_closes)
             vol_ratio = compute_volume_ratio(prior_volumes)
+            mfi = compute_mfi(prior_highs, prior_lows, prior_closes, prior_volumes)
+            turnover_cr = compute_daily_turnover_cr(v, c)
+
+            # Liquidity gate — skip stocks that can't absorb ₹50K orders
+            if turnover_cr < MIN_TURNOVER_CR:
+                continue
 
             candidates[dt].append({
                 "symbol": sym,
@@ -278,7 +321,9 @@ def scan_daily_candidates(target_dates: List[str], top_n: int = 0) -> Dict[str, 
                 "rsi": round(rsi, 1),
                 "atr": round(atr, 2),
                 "cci": round(cci, 1),
+                "mfi": round(mfi, 1),
                 "vol_ratio": round(vol_ratio, 2),
+                "turnover_cr": round(turnover_cr, 1),
                 "faded": close_chg < high_chg * 0.5,
                 "prev_close": prev_close,
             })
@@ -393,6 +438,7 @@ def simulate_intraday(
     # ── Compute score at entry ──
     rsi = daily_info.get("rsi", 50.0)
     cci = daily_info.get("cci", 0.0)
+    mfi = daily_info.get("mfi", 50.0)
     vol_ratio = daily_info.get("vol_ratio", 1.0)
 
     score = simplified_blind_score(
@@ -400,6 +446,7 @@ def simulate_intraday(
         change_pct=change_at_entry,
         rsi=rsi,
         cci=cci,
+        mfi=mfi,
         volume_ratio=vol_ratio,
         gap_pct=gap_pct,
     )
@@ -543,6 +590,43 @@ def print_report(all_trades: List[Trade], candidates_per_day: Dict[str, int]):
             for t in fade_false
             for candle_close in [t.exit_price]  # We exited at fade price, but stock recovered
         )
+
+    # Spearman rank correlation: score vs P&L
+    print(f"\n  ── Scorer Validation (Spearman) ──")
+    if total >= 10:
+        import math
+        scores = [t.score for t in all_trades]
+        pnls = [t.pnl_pct for t in all_trades]
+        n = len(scores)
+        def _rank(arr):
+            sorted_idx = sorted(range(n), key=lambda i: arr[i])
+            ranks = [0.0] * n
+            for rv, idx in enumerate(sorted_idx):
+                ranks[idx] = rv + 1
+            return ranks
+        r_scores = _rank(scores)
+        r_pnls = _rank(pnls)
+        d_sq = sum((r_scores[i] - r_pnls[i]) ** 2 for i in range(n))
+        rho = 1 - (6 * d_sq) / (n * (n ** 2 - 1))
+        if rho >= 0.20:
+            verdict = "🟢 STRONG EDGE"
+        elif rho >= 0.10:
+            verdict = "🟡 WEAK EDGE"
+        elif rho >= 0.05:
+            verdict = "🟠 MARGINAL"
+        elif rho >= -0.05:
+            verdict = "🔴 NO EDGE (random)"
+        else:
+            verdict = "⛔ ANTI-PREDICTIVE"
+        print(f"  Score vs Return ρ: {rho:+.3f}  → {verdict}")
+        # Also test volume_ratio
+        vols = [t.volume_ratio for t in all_trades]
+        r_vols = _rank(vols)
+        d_sq_v = sum((r_vols[i] - r_pnls[i]) ** 2 for i in range(n))
+        rho_vol = 1 - (6 * d_sq_v) / (n * (n ** 2 - 1))
+        print(f"  Volume vs Return ρ: {rho_vol:+.3f}")
+    else:
+        print(f"  Need ≥10 trades for Spearman validation (have {total})")
 
     # Score distribution
     print(f"\n  ── Score Distribution ──")
@@ -732,6 +816,7 @@ def main():
                     change_pct=(entry_price - cand["open"]) / cand["open"] * 100,
                     rsi=cand["rsi"],
                     cci=cand["cci"],
+                    mfi=cand.get("mfi", 50.0),
                     volume_ratio=cand["vol_ratio"],
                     gap_pct=cand["gap_pct"],
                 )
