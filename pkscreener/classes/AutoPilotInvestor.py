@@ -2791,8 +2791,9 @@ class AutoPilotInvestor:
     def _load_ticks_snapshot(self) -> Dict[str, Dict]:
         """Read the latest ticks JSON saved by KiteTickerStream.
 
-        Uses mtime-based caching: if the file hasn't been modified since last
-        read, returns the cached dict instantly (~0.005ms vs ~16ms for re-parse).
+        Uses stat-based caching: if the file's mtime AND size haven't changed
+        since last read, returns the cached dict instantly (~0.005ms vs ~16ms).
+        Double-checks both mtime and size to be safe on any filesystem.
         Uses orjson when available for 2x faster parsing.
         """
         ticks_path = os.path.join(
@@ -2802,10 +2803,10 @@ class AutoPilotInvestor:
         if not os.path.isfile(ticks_path):
             return {}
         try:
-            # mtime check — skip re-parse if unchanged (< 0.01ms)
-            current_mtime = os.path.getmtime(ticks_path)
-            cached_mtime = getattr(self, "_ticks_cache_mtime", 0.0)
-            if current_mtime == cached_mtime and hasattr(self, "_ticks_cache_data"):
+            # stat check — mtime + size together prevent stale cache on any FS
+            st = os.stat(ticks_path)
+            cache_key = (st.st_mtime_ns, st.st_size)
+            if cache_key == getattr(self, "_ticks_cache_key", None) and hasattr(self, "_ticks_cache_data"):
                 return self._ticks_cache_data
 
             try:
@@ -2817,7 +2818,7 @@ class AutoPilotInvestor:
                 with open(ticks_path, "r") as f:
                     data = json.load(f)
             result = {str(k).strip().upper(): v for k, v in data.items()} if isinstance(data, dict) else {}
-            self._ticks_cache_mtime = current_mtime
+            self._ticks_cache_key = cache_key
             self._ticks_cache_data = result
             return result
         except Exception:
