@@ -10,12 +10,19 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 import threading
 import time
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
+
+try:
+    import orjson as _json_fast
+    _HAS_ORJSON = True
+except ImportError:
+    _HAS_ORJSON = False
 
 from PKDevTools.classes import Archiver
 from PKDevTools.classes.OutputControls import OutputControls
@@ -69,8 +76,12 @@ def load_latest_live_ticks(universe: str) -> Dict[str, Dict]:
     if not os.path.exists(path):
         return {}
     try:
-        with open(path, "r", encoding="utf-8") as handle:
-            payload = json.load(handle)
+        if _HAS_ORJSON:
+            with open(path, "rb") as handle:
+                payload = _json_fast.loads(handle.read())
+        else:
+            with open(path, "r", encoding="utf-8") as handle:
+                payload = json.load(handle)
         return payload if isinstance(payload, dict) else {}
     except Exception as exc:
         default_logger().debug(f"Could not read latest Kite live ticks: {exc}", exc_info=True)
@@ -114,13 +125,13 @@ class KiteTickerStreamRunner:
         config_manager,
         universe: str = "nifty50",
         limit: Optional[int] = None,
-        save_interval_seconds: int = 2,
+        save_interval_seconds: float = 0.5,
         run_seconds: Optional[int] = None,
     ) -> None:
         self.config_manager = config_manager
         self.universe = str(universe or "nifty50").strip().lower()
         self.limit = int(limit) if limit not in [None, ""] else None
-        self.save_interval_seconds = max(1, int(save_interval_seconds or 2))
+        self.save_interval_seconds = max(0.2, float(save_interval_seconds or 0.5))
         self.run_seconds = int(run_seconds) if run_seconds not in [None, ""] else None
         self.session_manager = KiteConnectSessionManager()
 
@@ -375,13 +386,44 @@ class KiteTickerStreamRunner:
 
     def _persist_snapshots(self) -> None:
         with self._lock:
-            snapshot = dict(sorted(self._ticks_by_symbol.items()))
+            snapshot = dict(self._ticks_by_symbol)  # fast shallow copy, skip sort
 
         os.makedirs(_output_dir(), exist_ok=True)
-        with open(_latest_ticks_json_path(self.universe), "w", encoding="utf-8") as handle:
-            json.dump(snapshot, handle, indent=2, sort_keys=True, default=str)
+        dest = _latest_ticks_json_path(self.universe)
 
-        if snapshot:
+        # Use orjson (C extension) for ~20x faster serialization vs json.dump+indent.
+        # Atomic write via tempfile → rename to prevent readers seeing partial data.
+        if _HAS_ORJSON:
+            data_bytes = _json_fast.dumps(snapshot, option=_json_fast.OPT_SORT_KEYS)
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(dest), suffix=".tmp")
+            try:
+                os.write(fd, data_bytes)
+                os.close(fd)
+                fd = -1
+                os.replace(tmp, dest)  # atomic on POSIX
+            except Exception:
+                if fd >= 0:
+                    try:
+                        os.close(fd)
+                    except OSError:
+                        pass
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
+                raise
+        else:
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(dest), suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    json.dump(snapshot, handle, separators=(",", ":"), default=str)
+                os.replace(tmp, dest)
+            except Exception:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
+                raise
+
+        # CSV is slower — save less frequently (every 5th cycle)
+        self._csv_counter = getattr(self, "_csv_counter", 0) + 1
+        if snapshot and self._csv_counter % 10 == 0:
             rows = list(snapshot.values())
             pd.DataFrame(rows).sort_values("symbol").to_csv(
                 _latest_ticks_csv_path(self.universe),

@@ -796,8 +796,8 @@ class ArgumentParser:
         )
         parser.add_argument(
             "--kitetickersaveinterval",
-            type=int,
-            help="Seconds between saving official KiteTicker snapshots to disk",
+            type=float,
+            help="Seconds between saving official KiteTicker snapshots to disk (default 0.5)",
             required=False,
         )
         parser.add_argument(

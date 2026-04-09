@@ -58,7 +58,7 @@ class AssistantLiveSettings:
     signal_limit: int = 0
     alert_channels: str = "discord"
     ticker_limit: int = 0
-    ticker_save_interval: int = 2
+    ticker_save_interval: float = 0.5
     prewarm: bool = False
     prewarm_workers: int = 4
     strong_buy_only: bool = False
@@ -81,7 +81,7 @@ class AssistantLiveSettings:
             signal_limit=max(0, int(self.signal_limit or 0)),
             alert_channels=str(self.alert_channels or "discord").strip().lower(),
             ticker_limit=max(0, int(self.ticker_limit or 0)),
-            ticker_save_interval=max(1, int(self.ticker_save_interval or 2)),
+            ticker_save_interval=max(0.2, float(self.ticker_save_interval or 0.5)),
             prewarm=bool(self.prewarm),
             prewarm_workers=max(1, int(self.prewarm_workers or 1)),
             strong_buy_only=bool(self.strong_buy_only),
@@ -131,7 +131,7 @@ class AssistantRuntimeStore:
                     signal_limit INTEGER,
                     alert_channels TEXT,
                     ticker_limit INTEGER,
-                    ticker_save_interval INTEGER,
+                    ticker_save_interval REAL,
                     prewarm INTEGER,
                     prewarm_workers INTEGER,
                     settings_json TEXT,
