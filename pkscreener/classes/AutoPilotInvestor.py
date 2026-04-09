@@ -863,7 +863,7 @@ class AutoPilotInvestor:
         if _h < 9 or (_h == 9 and _m < 30) or _h >= 15 and _m > 15:
             return
 
-        _sm_path = os.path.join("results", "Data", "signalmonitor_allstocks_signals_simple_latest.csv")
+        _sm_path = os.path.join(self.output_dir, f"signalmonitor_{self.config.universe}_signals_simple_latest.csv")
         if not os.path.exists(_sm_path):
             return
 
