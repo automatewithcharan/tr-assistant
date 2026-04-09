@@ -30,6 +30,7 @@ from PKDevTools.classes.OutputControls import OutputControls
 from PKDevTools.classes.PKDateUtilities import PKDateUtilities
 from PKDevTools.classes.log import default_logger
 
+from pkscreener.classes.PaperTradeTracker import PaperTradeTracker
 from pkscreener.classes.PreOpenAnalyzer import PreOpenAnalyzer
 from pkscreener.classes.RiskGuardrails import LiveTradingGuardrails
 
@@ -516,6 +517,8 @@ class AutoPilotInvestor:
         self._last_opening_flush: float = 0.0
         self._OPENING_FLUSH_INTERVAL_SEC = 30 # flush buffer every 30s during opening
         self._opening_flush_done_date: Optional[str] = None  # date of last complete flush
+        # Paper trade tracker — logs every alert, checks EOD outcome
+        self._paper_tracker = PaperTradeTracker()
 
     # ------------------------------------------------------------------
     # Public API
@@ -1541,6 +1544,7 @@ class AutoPilotInvestor:
                 )
 
             self._send_to_channels(message)
+            self._paper_tracker.log_fade(sym, alert_level)
             self._log(
                 f"Fade detector [{alert_level}]: {sym} entry=₹{entry_price:.2f} "
                 f"now=₹{current_price:.2f} drop_entry={drop_from_entry_pct:.1f}% "
@@ -1605,6 +1609,13 @@ class AutoPilotInvestor:
             lines.append("")
 
         lines.append("_Go to Groww → Portfolio → Sell all intraday positions. Do it NOW._")
+
+        # Close paper trades for the day and append summary
+        paper_summary = self._paper_tracker.close_day(ticks)
+        if paper_summary:
+            lines.append("")
+            lines.append(paper_summary)
+
         self._send_to_channels("\n".join(lines))
         self._log("EOD exit alert sent.")
 
@@ -1859,6 +1870,13 @@ class AutoPilotInvestor:
             "last_alert_time": datetime.now(),
             "stop_loss": round(price * 0.97, 2),  # 3% default for tick-only
         }
+        # Paper trade tracking
+        self._paper_tracker.log_entry(
+            symbol=sym, price=price, score=_score, grade=_grade,
+            volume_ratio=imbalance_ratio, change_at_entry=daily_change,
+            stop_loss=round(price * 0.97, 2), suggested_qty=_suggested_qty,
+            source="tick_only",
+        )
 
     # ------------------------------------------------------------------
     # Demand Watchlist — proactively track rejected stocks for momentum
@@ -2948,6 +2966,15 @@ class AutoPilotInvestor:
                 "last_alert_time": datetime.now(),
                 "stop_loss": stop_loss,
             }
+            # Paper trade tracking
+            self._paper_tracker.log_entry(
+                symbol=sym, price=_price_now, score=blind_score,
+                grade="A+" if blind_score >= 70 else ("A" if blind_score >= 60 else "B"),
+                volume_ratio=volume_ratio, change_at_entry=daily_change,
+                stop_loss=stop_loss, target1=target1, target2=target2,
+                suggested_qty=suggested_qty, source="ohlcv",
+            )
+
         else:
             # REJECTED — log why, do NOT send any alert.
             # Mark as rejected so tick scanner uses 30-min cooldown instead of 3-min.
@@ -3801,6 +3828,14 @@ class AutoPilotInvestor:
             "last_alert_time": datetime.now(),
             "stop_loss": c.stop_loss,
         }
+        # Paper trade tracking
+        self._paper_tracker.log_entry(
+            symbol=c.symbol, price=c.price, score=c.blind_score,
+            grade=grade, volume_ratio=c.volume_ratio,
+            change_at_entry=c.change_pct, stop_loss=c.stop_loss,
+            target1=c.target1, target2=c.target2,
+            suggested_qty=c.suggested_qty, source="batch",
+        )
 
     @staticmethod
     def _simplify_blind_reasons(reasons: str) -> str:
