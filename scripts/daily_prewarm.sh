@@ -15,8 +15,8 @@ send_discord() {
     curl -s -X POST "$WEBHOOK"          -H 'Content-Type: application/json'          -d "{\"content\": \"$1\"}" > /dev/null 2>&1 || true
 }
 
-echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Prewarm: starting cache refresh for allstocks" >> $LOG
-send_discord "🔄 **Daily prewarm started** — refreshing cache for ~2000 stocks (8 AM IST)"
+echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Prewarm: starting cache refresh for NSE+BSE" >> $LOG
+send_discord "🔄 **Daily prewarm started** — refreshing cache for NSE+BSE stocks (8 AM IST)"
 
 # Check Kite session is valid before starting; re-login if token is expired
 SESSION_FILE=$REPO/results/Data/kite_connect_session.json
@@ -31,7 +31,37 @@ if [ -f "$SESSION_FILE" ]; then
 fi
 
 # Run standalone prewarm (exits when done — does NOT start a trading session)
-TERM=xterm $PYTHON -m pkscreener.pkscreenercli     --kiteprewarm allstocks     --kiteprewarmforce     --kiteprewarmworkers 4     >> $LOG 2>&1
+# 1. Refresh NSE allstocks
+TERM=xterm $PYTHON -m pkscreener.pkscreenercli     --kiteprewarm allstocks     --kiteprewarmforce     --kiteprewarmworkers 8     >> $LOG 2>&1
+
+# 2. Refresh BSE stocks (bonds already excluded in BSE_EQUITY_L.csv)
+TERM=xterm $PYTHON -m pkscreener.pkscreenercli     --kiteprewarm bse_allstocks     --kiteprewarmworkers 8     >> $LOG 2>&1
+
+# 3. Rebuild combined universe sorted by liquidity (for ticker subscription)
+TERM=xterm $PYTHON -c "
+import pandas as pd, os, csv
+cache_dir = 'results/Data/kite_history_cache/day'
+nse_syms = set(pd.read_csv('results/Indices/EQUITY_L.csv')['SYMBOL'].str.strip().str.upper())
+results = []
+for fname in os.listdir(cache_dir):
+    if not fname.endswith('.csv'): continue
+    sym = fname[:-4]
+    try:
+        candles = []
+        with open(os.path.join(cache_dir, fname)) as f:
+            for row in csv.DictReader(f):
+                candles.append(float(row['close']) * int(float(row['volume'])))
+        if len(candles) < 20: continue
+        avg_to = sum(candles[-20:]) / 20
+        results.append({'Symbol': sym, 'AvgTurnover': avg_to, 'Exchange': 'NSE' if sym in nse_syms else 'BSE'})
+    except: continue
+df = pd.DataFrame(results)
+nse_all = df[df['Exchange']=='NSE']
+bse_liquid = df[(df['Exchange']=='BSE') & (df['AvgTurnover'] >= 5_000_000)]
+combined = pd.concat([nse_all, bse_liquid]).sort_values('AvgTurnover', ascending=False)
+combined[['Symbol']].to_csv('results/Indices/NSE_BSE_COMBINED.csv', index=False)
+print(f'Combined universe: {len(combined)} symbols (NSE={len(nse_all)}, BSE-liquid={len(bse_liquid)})')
+" >> $LOG 2>&1
 
 EXIT_CODE=$?
 

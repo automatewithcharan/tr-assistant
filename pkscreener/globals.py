@@ -1398,9 +1398,11 @@ def main(userArgs=None,optionalFinalOutcome_df=None):
                     for strFilter in strategyFilter:
                         cleanedUpSaveResults = PortfolioXRay.strategyForKey(strFilter)(cleanedUpSaveResults)
                         saveResults = saveResults[saveResults.index.isin(cleanedUpSaveResults.index.values)]
-                    for stk in saveResults.index.values:
-                        df_screenResults_filter = screenResults[screenResults.index.astype(str).str.contains(f"NSE%3A{stk}") == True]
-                        df_screenResults = pd.concat([df_screenResults, df_screenResults_filter], axis=0)
+                    # Vectorized: single regex match instead of O(n²) concat-in-loop
+                    import re as _re
+                    _stk_pattern = "|".join(_re.escape(str(s)) for s in saveResults.index.values)
+                    _mask = screenResults.index.astype(str).str.contains(_stk_pattern, regex=True)
+                    df_screenResults = screenResults[_mask] if _mask.any() else None
                     if df_screenResults is None or len(df_screenResults) == 0:
                         OutputControls().printOutput(colorText.FAIL + f"  [+] Of the {len(screenResults) if screenResults is not None else 0} stocks, no results matching the selected strategies!" + colorText.END)
                     screenResults = df_screenResults

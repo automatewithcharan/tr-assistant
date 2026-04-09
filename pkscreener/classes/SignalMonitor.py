@@ -20,6 +20,7 @@ from PKDevTools.classes.PKDateUtilities import PKDateUtilities
 from PKDevTools.classes.log import default_logger
 
 from pkscreener.classes.ActionableReport import ActionableReportRunner
+from pkscreener.classes.AnomalyDetector import VolumeAnomalyDetector
 from pkscreener.classes.RiskGuardrails import LiveTradingGuardrails
 from pkscreener.classes.SignalPerformanceTracker import SignalPerformanceTracker
 
@@ -27,7 +28,7 @@ from pkscreener.classes.SignalPerformanceTracker import SignalPerformanceTracker
 class SignalMonitorRunner:
     """Continuously monitor a universe and alert on fresh Buy Now / Sell Now changes."""
 
-    FULL_REFRESH_EVERY_CYCLES = 20
+    FULL_REFRESH_EVERY_CYCLES = 50
     MEANINGFUL_PRICE_MOVE_PCT = 0.5   # Tick-to-tick price move threshold (lowered for faster pick-up)
     TRIGGER_PROXIMITY_PCT = 1.0
     STREAM_BOOTSTRAP_MAX_SYMBOLS = 600
@@ -152,6 +153,9 @@ class SignalMonitorRunner:
             use_live_kite=use_live_kite,
         )
         self.last_guardrail_status = None
+        self._anomaly_detector: Optional[VolumeAnomalyDetector] = None
+        self._anomaly_profiles_loaded = False
+        self._market_context = None  # Lazy-init MarketContextEngine
 
     def run(
         self,
@@ -248,6 +252,13 @@ class SignalMonitorRunner:
         momentum_alerts_df = self._build_momentum_alerts(previous_simple_df, merged_simple_df)
         if not momentum_alerts_df.empty:
             alerts_df = pd.concat([alerts_df, momentum_alerts_df], ignore_index=True)
+        anomaly_alerts_df = self._run_anomaly_detection()
+        if not anomaly_alerts_df.empty:
+            alerts_df = pd.concat([alerts_df, anomaly_alerts_df], ignore_index=True)
+        # V2: Follow-through check + exit monitoring
+        followthrough_alerts = self._check_followthrough_and_exits()
+        # V2: End-of-day missed opportunity analysis
+        self._run_missed_opportunity_analysis()
         summary_df = self._build_summary_from_simple(merged_simple_df, total, len(alerts_df))
         _, scorecard_df = self.performance_tracker.register_and_update(alerts_df)
 
@@ -394,9 +405,10 @@ class SignalMonitorRunner:
             return {}
         prepared = simple_df.copy()
         prepared["Stock"] = prepared["Stock"].astype(str).str.strip().str.upper()
+        prepared_records = prepared.to_dict(orient="records")
         return {
-            str(row["Stock"]).strip().upper(): row.to_dict()
-            for _, row in prepared.iterrows()
+            str(rec["Stock"]).strip().upper(): rec
+            for rec in prepared_records
         }
 
     def _symbol_needs_refresh(
@@ -842,14 +854,14 @@ class SignalMonitorRunner:
         previous_map = {}
         if previous_state_df is not None and not previous_state_df.empty:
             previous_map = {
-                str(row["Symbol"]).strip().upper(): str(row["NowAction"]).strip()
-                for _, row in previous_state_df.iterrows()
+                str(rec["Symbol"]).strip().upper(): str(rec["NowAction"]).strip()
+                for rec in previous_state_df.to_dict(orient="records")
             }
 
         alert_rows = []
         skipped_already_ran = []
         allowed_buy_actions = ["Strong Buy Now"] if self.strong_buy_only else ["Strong Buy Now", "Buy Now"]
-        for _, row in state_df.iterrows():
+        for row in state_df.to_dict(orient="records"):
             symbol = str(row["Symbol"]).strip().upper()
             now_action = str(row["NowAction"]).strip()
             if now_action not in (allowed_buy_actions + ["Sell / Exit"]):
@@ -923,6 +935,210 @@ class SignalMonitorRunner:
             )
         return alerts_df[self.ALERT_COLUMNS].copy()
 
+    def _run_anomaly_detection(self) -> pd.DataFrame:
+        """Run V2 volume anomaly detection with market context awareness.
+
+        Returns an alerts DataFrame matching ALERT_COLUMNS for any detected
+        volume anomaly candidates (labelled by confidence tier).
+        """
+        if not self.use_live_kite:
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+
+        # Lazy-init the detector and load profiles once
+        if self._anomaly_detector is None:
+            self._anomaly_detector = VolumeAnomalyDetector()
+        if not self._anomaly_profiles_loaded:
+            try:
+                count = self._anomaly_detector.load_historical_profiles(None)
+                self._anomaly_profiles_loaded = count > 0
+                if count > 0:
+                    OutputControls().printOutput(
+                        f"  [+] Anomaly detector: loaded {count} volume profiles (all cached)"
+                    )
+            except Exception as exc:
+                default_logger().warning(f"AnomalyDetector profile load failed: {exc}")
+                return pd.DataFrame(columns=self.ALERT_COLUMNS)
+
+        # Lazy-init market context engine
+        if self._market_context is None:
+            try:
+                from pkscreener.classes.MarketContext import MarketContextEngine
+                self._market_context = MarketContextEngine()
+            except Exception as exc:
+                default_logger().warning(f"MarketContext init failed: {exc}")
+
+        # Get current ticks
+        current_ticks = self.actionable_runner.live_ticks or {}
+        if not current_ticks:
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+
+        try:
+            candidates = self._anomaly_detector.update_from_ticks(
+                current_ticks, market_context=self._market_context
+            )
+        except Exception as exc:
+            default_logger().warning(f"AnomalyDetector update failed: {exc}")
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+
+        if not candidates:
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+
+        # Convert V2 candidates to alert rows
+        alert_rows = []
+        for c in candidates:
+            entry = c.last_price
+            # V2: Tighter SL for high-quality, wider for lower
+            sl_pct = 0.03 if c.confidence_tier == "A" else 0.05
+            stop_loss = round(entry * (1 - sl_pct), 2)
+            target1 = round(entry * 1.08, 2)
+            target2 = round(entry * 1.15, 2) if c.confidence_tier == "A" else round(entry * 1.12, 2)
+
+            # Action label encodes confidence
+            tier_labels = {
+                "A": "🔥 Grade-A Runner",
+                "B": "⚡ Grade-B Anomaly",
+                "C": "👀 Pre-Move Watch",
+            }
+            action_label = tier_labels.get(c.confidence_tier, "Volume Anomaly")
+
+            # V2: Rich checks with quality score and sector
+            checks_parts = [
+                f"Q:{c.quality_score:.0f}/100 [{c.confidence_tier}]",
+                f"Vol {c.volume_ratio_time_adj:.1f}x",
+                f"+{c.price_from_open_pct:.1f}%",
+            ]
+            if c.sector_confirmed:
+                checks_parts.append(f"Sector✓ ({c.sector})")
+            if c.buy_sell_ratio > 1.5:
+                checks_parts.append(f"B/S {c.buy_sell_ratio:.1f}x")
+            if c.range_compression:
+                checks_parts.append("Compressed📐")
+            if not c.market_safe:
+                checks_parts.append("⚠️CRASH")
+
+            alert_rows.append({
+                "When": self.run_at_str,
+                "Symbol": c.symbol,
+                "PreviousAction": "None",
+                "NowAction": action_label,
+                "PriceNow": c.last_price,
+                "BuyAbove": entry,
+                "SellIfBelow": stop_loss,
+                "TakeProfit1": target1,
+                "TakeProfit2": target2,
+                "SuggestedQty": "",
+                "SignalStrengthPct": round(c.quality_score, 1),
+                "Checks": " | ".join(checks_parts),
+                "Why": c.narrative,
+            })
+
+        if alert_rows:
+            summary = ", ".join(
+                f"{c.symbol}[{c.confidence_tier}] +{c.price_from_open_pct:.1f}% Q:{c.quality_score:.0f}"
+                for c in candidates[:5]
+            )
+            regime_str = candidates[0].market_regime if candidates else "?"
+            OutputControls().printOutput(
+                f"  [+] 🔥 V2 Anomaly ({regime_str} market): {len(alert_rows)} candidate(s) — {summary}"
+            )
+
+        # Register for follow-through monitoring (5-min recheck)
+        if candidates:
+            self._anomaly_detector.register_for_followthrough(candidates)
+
+        return pd.DataFrame(alert_rows, columns=self.ALERT_COLUMNS)
+
+    def _check_followthrough_and_exits(self) -> None:
+        """Check follow-through on recent alerts and exit signals on active positions."""
+        if not self.use_live_kite or self._anomaly_detector is None:
+            return
+
+        current_ticks = self.actionable_runner.live_ticks or {}
+        if not current_ticks:
+            return
+
+        # 1. Follow-through check (5 min after alert)
+        try:
+            ft_results = self._anomaly_detector.check_followthrough(current_ticks)
+            for ft in ft_results:
+                sym = ft["symbol"]
+                if ft["confirmed"]:
+                    emoji = "✅" if ft["action"] == "hold_strong" else "👍"
+                    OutputControls().printOutput(
+                        f"  [{emoji}] Follow-through {sym}: {ft['change_pct']:+.2f}% "
+                        f"after {ft['minutes_elapsed']:.0f}min → {ft['action'].upper()}"
+                    )
+                    # Auto-register as active position for exit monitoring
+                    self._anomaly_detector.register_position(
+                        sym, ft["alert_price"], ft["tier"]
+                    )
+                else:
+                    OutputControls().printOutput(
+                        f"  [❌] Follow-through FAILED {sym}: {ft['change_pct']:+.2f}% "
+                        f"after {ft['minutes_elapsed']:.0f}min — consider EXIT"
+                    )
+        except Exception as exc:
+            default_logger().debug(f"Follow-through check error: {exc}")
+
+        # 2. Exit signal check on active positions
+        try:
+            exits = self._anomaly_detector.check_exits(current_ticks)
+            for ex in exits:
+                pnl_emoji = "🟢" if ex["pnl_pct"] > 0 else "🔴"
+                OutputControls().printOutput(
+                    f"  [{pnl_emoji}] EXIT {ex['symbol']}: {ex['pnl_pct']:+.2f}% "
+                    f"(₹{ex['entry_price']:.2f} → ₹{ex['current_price']:.2f}) | "
+                    f"{ex['exit_reason']}"
+                )
+        except Exception as exc:
+            default_logger().debug(f"Exit check error: {exc}")
+
+    def _run_missed_opportunity_analysis(self) -> None:
+        """Run end-of-day missed opportunity analysis. Call after 15:00."""
+        if not self.use_live_kite or self._anomaly_detector is None:
+            return
+
+        minutes = 0
+        try:
+            import datetime
+            try:
+                from zoneinfo import ZoneInfo
+            except ImportError:
+                from backports.zoneinfo import ZoneInfo
+            now = datetime.datetime.now(ZoneInfo("Asia/Kolkata"))
+            market_open = now.replace(hour=9, minute=15, second=0, microsecond=0)
+            minutes = int((now - market_open).total_seconds() / 60)
+        except Exception:
+            return
+
+        # Only run after 15:00 IST (345 min after open) and only once
+        if minutes < 345 or getattr(self, "_missed_analysis_done", False):
+            return
+        self._missed_analysis_done = True
+
+        current_ticks = self.actionable_runner.live_ticks or {}
+        if not current_ticks:
+            return
+
+        try:
+            missed = self._anomaly_detector.analyze_missed_opportunities(current_ticks)
+            if missed:
+                OutputControls().printOutput(
+                    f"\n  [📊] MISSED OPPORTUNITY ANALYSIS — {len(missed)} stocks ran 5%+ today but were NOT alerted:"
+                )
+                for i, m in enumerate(missed[:10], 1):
+                    OutputControls().printOutput(
+                        f"  {i}. {m['symbol']}: +{m['from_open_pct']:.1f}% from open | "
+                        f"Vol {m['volume_ratio']:.1f}x | Gap {m['gap_pct']:+.1f}% | "
+                        f"WHY MISSED: {m['reasons']}"
+                    )
+            else:
+                OutputControls().printOutput(
+                    "  [📊] Missed opportunity analysis: No major runners missed today 🎯"
+                )
+        except Exception as exc:
+            default_logger().debug(f"Missed opportunity analysis error: {exc}")
+
     def _build_momentum_alerts(
         self,
         previous_simple_df: pd.DataFrame,
@@ -948,18 +1164,18 @@ class SignalMonitorRunner:
             and "Momentum Setup" in previous_simple_df.columns
             and "Stock" in previous_simple_df.columns
         ):
-            for _, row in previous_simple_df.iterrows():
-                sym = str(row.get("Stock", "")).strip().upper()
+            for rec in previous_simple_df.to_dict(orient="records"):
+                sym = str(rec.get("Stock", "")).strip().upper()
                 if sym:
-                    prev_momentum_map[sym] = str(row.get("Momentum Setup", "")).strip()
+                    prev_momentum_map[sym] = str(rec.get("Momentum Setup", "")).strip()
 
         alert_rows = []
-        for _, row in current_simple_df.iterrows():
-            current_setup = str(row.get("Momentum Setup", "")).strip()
+        for rec in current_simple_df.to_dict(orient="records"):
+            current_setup = str(rec.get("Momentum Setup", "")).strip()
             if current_setup != "Momentum Buy":
                 continue
 
-            sym = str(row.get("Stock", "")).strip().upper()
+            sym = str(rec.get("Stock", "")).strip().upper()
             if not sym:
                 continue
 
@@ -968,7 +1184,7 @@ class SignalMonitorRunner:
                 continue  # Already was Momentum Buy — no transition, no alert
 
             # Only fire when stock has meaningful intraday gain (it is already in motion)
-            change_pct = self._to_float(row.get("Change %"))
+            change_pct = self._to_float(rec.get("Change %"))
             if change_pct < self.MIN_MOMENTUM_EXTENSION_PCT:
                 continue
 
@@ -978,15 +1194,15 @@ class SignalMonitorRunner:
                     "Symbol": sym,
                     "PreviousAction": prev_setup or "None",
                     "NowAction": "Momentum Buy",
-                    "PriceNow": row.get("Price Now", ""),
-                    "BuyAbove": row.get("Buy Above", ""),
-                    "SellIfBelow": row.get("Sell If Below", ""),
-                    "TakeProfit1": row.get("Take Profit 1", ""),
-                    "TakeProfit2": row.get("Take Profit 2", ""),
-                    "SuggestedQty": row.get("Suggested Qty", 0),
-                    "SignalStrengthPct": row.get("Signal Strength %", 0),
-                    "Checks": row.get("Checks", ""),
-                    "Why": str(row.get("Why", "")) + f" | Momentum extension: day gain +{change_pct:.1f}%",
+                    "PriceNow": rec.get("Price Now", ""),
+                    "BuyAbove": rec.get("Buy Above", ""),
+                    "SellIfBelow": rec.get("Sell If Below", ""),
+                    "TakeProfit1": rec.get("Take Profit 1", ""),
+                    "TakeProfit2": rec.get("Take Profit 2", ""),
+                    "SuggestedQty": rec.get("Suggested Qty", 0),
+                    "SignalStrengthPct": rec.get("Signal Strength %", 0),
+                    "Checks": rec.get("Checks", ""),
+                    "Why": str(rec.get("Why", "")) + f" | Momentum extension: day gain +{change_pct:.1f}%",
                 }
             )
 
@@ -1210,7 +1426,7 @@ class SignalMonitorRunner:
             qty = int(float(row["SuggestedQty"])) if str(row["SuggestedQty"]).strip() else 0
             qty_text = f" | qty {qty}" if qty > 0 else ""
             action = str(row["NowAction"])
-            prefix = "🚀 " if action == "Momentum Buy" else ""
+            prefix = "🚀 " if action == "Momentum Buy" else "🔥 " if action == "Volume Anomaly" else ""
             event_lines.append(
                 f"{prefix}[{action}] {row['Symbol']} @ {self._fmt_price(row['PriceNow'])} | "
                 f"buy>{self._fmt_price(row['BuyAbove'])} | stop<{self._fmt_price(row['SellIfBelow'])}{qty_text}"
@@ -1396,6 +1612,8 @@ class SignalMonitorRunner:
                 action_emoji = "🟢"
             elif action == "Momentum Buy":
                 action_emoji = "🚀"
+            elif action == "Volume Anomaly":
+                action_emoji = "🔥"
             else:
                 action_emoji = "🔴"
             block_lines = [

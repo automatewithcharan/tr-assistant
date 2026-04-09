@@ -26,6 +26,13 @@ from pkscreener.classes.KiteHistoricalData import KiteHistoricalDataProvider
 from pkscreener.classes.KiteTickerStream import load_latest_live_ticks
 from pkscreener.classes.Pktalib import pktalib
 from pkscreener.classes.screening.signals import SignalStrength, TradingSignals
+from pkscreener.classes.ExchangeManager import (
+    ExchangeManager, load_bse_universe, BSE_UNIVERSE_FILES,
+    EXCHANGE_SUFFIX_NSE, EXCHANGE_SUFFIX_BSE,
+)
+from pkscreener.classes.UniversePreFilter import UniversePreFilter
+from pkscreener.classes.RankingEngine import RankingEngine
+from pkscreener.classes.AdvancedFilters import SignalQualityFilter, GARCHVolatility
 
 
 class ActionableReportRunner:
@@ -45,6 +52,15 @@ class ActionableReportRunner:
         "smallcap100": os.path.join("results", "Indices", "ind_niftysmallcap100list.csv"),
         "smallcap250": os.path.join("results", "Indices", "ind_niftysmallcap250list.csv"),
         "fo": os.path.join("results", "Indices", "NSE_FO_SosScheme.csv"),
+        # BSE universes
+        "bse_allstocks": os.path.join("results", "Indices", "BSE_EQUITY_L.csv"),
+        "bse_tradeable": os.path.join("results", "Indices", "BSE_TRADEABLE.csv"),
+        "bse_uncached": os.path.join("results", "Indices", "BSE_UNCACHED.csv"),
+        "bse500": os.path.join("results", "Indices", "BSE500.csv"),
+        "bse_midcap": os.path.join("results", "Indices", "BSE_MIDCAP.csv"),
+        "bse_smallcap": os.path.join("results", "Indices", "BSE_SMALLCAP.csv"),
+        # Combined NSE + BSE (deduplicated)
+        "all": os.path.join("results", "Indices", "NSE_BSE_COMBINED.csv"),
     }
 
     def __init__(
@@ -57,7 +73,7 @@ class ActionableReportRunner:
         risk_percent: float = 1.0,
         min_trade_value: float = 10000000.0,
         min_volume_ratio: float = 1.0,
-        max_workers: int = 3,
+        max_workers: int = 0,  # 0 = auto (min(8, cpu_count))
         use_live_kite: bool = False,
         strong_buy_only: bool = False,
     ):
@@ -69,17 +85,17 @@ class ActionableReportRunner:
         self.risk_percent = float(risk_percent)
         self.min_trade_value = float(min_trade_value)
         self.min_volume_ratio = float(min_volume_ratio)
-        self.max_workers = max(1, int(max_workers or 1))
+        self.max_workers = max(1, int(max_workers or 0)) if max_workers else min(8, max(1, (os.cpu_count() or 2)))
         self.use_live_kite = bool(use_live_kite)
         self.strong_buy_only = bool(strong_buy_only)
-        self.buy_ready_max_gap_pct = 0.60
-        self.strong_buy_max_gap_pct = 0.35
-        self.momentum_buy_min_score = 75.0
-        self.momentum_watch_min_score = 60.0
-        self.buy_now_min_volume_ratio = 0.5
-        self.strong_buy_min_confidence = max(float(self.min_confidence) + 7.5, 22.5)
-        self.strong_buy_min_volume_ratio = max(float(self.min_volume_ratio) + 0.35, 1.35)
-        self.strong_buy_min_trade_value = max(float(self.min_trade_value) * 1.5, 15000000.0)
+        self.buy_ready_max_gap_pct = 0.50
+        self.strong_buy_max_gap_pct = 0.25
+        self.momentum_buy_min_score = 80.0
+        self.momentum_watch_min_score = 65.0
+        self.buy_now_min_volume_ratio = 1.3
+        self.strong_buy_min_confidence = max(float(self.min_confidence) + 10.0, 25.0)
+        self.strong_buy_min_volume_ratio = max(float(self.min_volume_ratio) + 0.5, 1.5)
+        self.strong_buy_min_trade_value = max(float(self.min_trade_value) * 2.0, 20000000.0)
         self.fetcher = screenerStockDataFetcher(config_manager)
         self.signals = TradingSignals(config_manager)
         self._thread_local = threading.local()
@@ -92,6 +108,15 @@ class ActionableReportRunner:
         self._incr_registry = IncrementalStateRegistry()  # per-symbol incremental indicator state
         self.live_ticks: Dict[str, Dict] = {}
         self.kite_history_provider = KiteHistoricalDataProvider() if self.use_live_kite else None
+        self._pre_filter = UniversePreFilter(
+            min_price=10.0,
+            max_price=50000.0,
+            min_avg_volume=50000,
+            min_avg_trade_value=float(self.min_trade_value) * 0.5,
+            min_candles=60,
+        )
+        self._signal_quality_filter = SignalQualityFilter()
+        self._garch = GARCHVolatility()
 
     def get_universe_symbols(self) -> List[str]:
         """Return symbols for the selected universe."""
@@ -171,6 +196,11 @@ class ActionableReportRunner:
         if not rows:
             return None, None
         report_df = pd.DataFrame(rows)
+
+        # Compute composite rank using multi-factor ranking engine
+        ranking_engine = RankingEngine()
+        report_df = ranking_engine.rank_dataframe(report_df)
+
         report_df["ActionRank"] = report_df["Action"].map(
             {
                 "BUY": 0,
@@ -191,8 +221,8 @@ class ActionableReportRunner:
             }
         ).fillna(9)
         report_df.sort_values(
-            by=["NowActionRank", "ActionRank", "ConfidencePct", "Symbol"],
-            ascending=[True, True, False, True],
+            by=["NowActionRank", "ActionRank", "CompositeRank", "ConfidencePct", "Symbol"],
+            ascending=[True, True, False, False, True],
             inplace=True,
         )
 
@@ -297,13 +327,13 @@ class ActionableReportRunner:
             self._analysis_cache.clear()
 
     def _get_cached_prepared_data(self, symbol: str) -> Optional[pd.DataFrame]:
-        """Return a copy of the in-memory prepared OHLCV data when available."""
+        """Return cached in-memory prepared OHLCV data when available (shallow copy for speed)."""
         normalized_symbol = str(symbol or "").strip().upper()
         with self._prepared_cache_lock:
             cached = self._prepared_cache.get(normalized_symbol)
             if cached is None:
                 return None
-            return cached.copy(deep=True)
+            return cached.copy(deep=False)
 
     def _store_cached_prepared_data(self, symbol: str, df: pd.DataFrame) -> None:
         """Persist a clean base OHLCV frame for reuse across live monitor cycles."""
@@ -311,7 +341,7 @@ class ActionableReportRunner:
             return
         normalized_symbol = str(symbol or "").strip().upper()
         with self._prepared_cache_lock:
-            self._prepared_cache[normalized_symbol] = df.copy(deep=True)
+            self._prepared_cache[normalized_symbol] = df
 
     def _load_prepared_base_data(self, symbol: str, fetcher) -> pd.DataFrame:
         """Load a reusable OHLCV frame, preferring local caches before expensive fetches."""
@@ -336,17 +366,21 @@ class ActionableReportRunner:
                 )
 
         if data is None:
+            # Use BSE suffix for BSE-only universes, NSE otherwise
+            _suffix = EXCHANGE_SUFFIX_BSE if self.universe.startswith("bse") else EXCHANGE_SUFFIX_NSE
+            if self.universe == "watchlist":
+                _suffix = ""
             data = fetcher.fetchStockData(
                 symbol,
                 period=self.config_manager.period,
                 duration=self.config_manager.duration,
-                exchangeSuffix=".NS" if self.universe != "watchlist" else "",
+                exchangeSuffix=_suffix,
             )
 
         prepared = self._prepare_ohlcv_data(symbol, data)
         if prepared is not None and not prepared.empty:
-            self._store_cached_prepared_data(symbol, prepared)
-            return prepared.copy(deep=True)
+            self._store_cached_prepared_data(symbol, prepared.copy())
+            return prepared
         return pd.DataFrame()
 
     def _collect_rows(
@@ -415,6 +449,12 @@ class ActionableReportRunner:
             fetcher, signals = self._get_thread_components()
             data = self._load_prepared_base_data(symbol, fetcher)
             if len(data) < 60:
+                return None
+
+            # Pre-filter: fast liquidity/quality gates before expensive analysis
+            eligible, reason = self._pre_filter.is_eligible(data)
+            if not eligible:
+                default_logger().debug(f"Pre-filter rejected {symbol}: {reason}")
                 return None
 
             if self.use_live_kite and self.live_ticks:
@@ -521,8 +561,27 @@ class ActionableReportRunner:
         avg_trade_value_20 = float((data["close"].tail(20) * data["volume"].tail(20)).mean())
         atr = self._compute_atr(data, close)
         action = self._signal_to_action(result.signal)
+
+        # --- Advanced quality gate: Kalman trend + GARCH volatility ---
+        close_arr = data["close"].values.astype(float)
+        sq = self._signal_quality_filter.evaluate(close_arr)
+        kalman_quality = sq.get("quality_score", 50.0)
+        kalman_trend = sq.get("kalman_trend", "flat")
+        vol_regime = sq.get("vol_regime", "normal")
+
+        # GARCH-adaptive ATR multiplier for stop-loss sizing
+        returns_arr = data["close"].pct_change().dropna().values
+        garch_atr_mult = self._garch.adaptive_atr_multiplier(returns_arr, base_multiplier=2.0)
+
+        # Downgrade action for noisy/downtrend signals
+        if action in ["BUY", "WATCH BUY"]:
+            if kalman_trend == "down" and kalman_quality < 40:
+                action = "HOLD"  # Kalman says downtrend despite noisy price spike
+            elif sq.get("noise_spike", False) and kalman_quality < 45:
+                action = "WATCH BUY"  # noise spike, demote from BUY
+
         entry, stop_loss, target_1, target_2, risk_pct = self._build_trade_plan(
-            close, atr, action
+            close, atr, action, garch_atr_mult=garch_atr_mult
         )
         risk_per_share = round(max(abs(entry - stop_loss), 0.01), 2)
         entry_gap_pct = (
@@ -548,6 +607,9 @@ class ActionableReportRunner:
             strong_liquidity_ok=strong_liquidity_ok,
             strong_volume_ok=strong_volume_ok,
             reason_text=" | ".join(result.reasons[:5]) if result.reasons else "",
+            kalman_quality=kalman_quality,
+            kalman_trend=kalman_trend,
+            vol_regime=vol_regime,
         )
         momentum_score, momentum_setup, momentum_reason = self._score_momentum_setup(
             action=action,
@@ -567,6 +629,8 @@ class ActionableReportRunner:
             and momentum_setup == "Momentum Buy"
             and float(result.confidence) >= self.min_confidence
             and volume_ratio >= self.buy_now_min_volume_ratio
+            and kalman_quality >= 50
+            and kalman_trend != "down"
         ):
             now_action = "Buy Now"
             quality_checks = f"{quality_checks}, momentum promotion".strip(", ")
@@ -605,6 +669,10 @@ class ActionableReportRunner:
             "RSI": round(float(result.indicators.get("RSI", 50)), 1),
             "CCI": round(float(result.indicators.get("CCI", 0)), 1),
             "MFI": round(float(result.indicators.get("MFI", 50)), 1),
+            "KalmanQuality": round(kalman_quality, 1),
+            "KalmanTrend": kalman_trend,
+            "VolRegime": vol_regime,
+            "GARCHAtrMult": garch_atr_mult,
             "RunAt": run_at_text or PKDateUtilities.currentDateTime().strftime("%Y-%m-%d %H:%M:%S"),
         }
 
@@ -685,8 +753,8 @@ class ActionableReportRunner:
         if (
             score >= self.momentum_buy_min_score
             and change_pct > 0
-            and volume_ratio >= 1.3
-            and entry_gap_pct <= 1.0
+            and volume_ratio >= 1.5
+            and entry_gap_pct <= 0.80
             and "ma contradiction" not in reasons
         ):
             setup = "Momentum Buy"
@@ -876,10 +944,12 @@ class ActionableReportRunner:
             return "WATCH SELL"
         return "HOLD"
 
-    def _build_trade_plan(self, close: float, atr: float, action: str) -> Tuple[float, float, float, float, float]:
-        """Build a simple entry / stop / target plan."""
+    def _build_trade_plan(self, close: float, atr: float, action: str, garch_atr_mult: float = 2.0) -> Tuple[float, float, float, float, float]:
+        """Build a simple entry / stop / target plan with GARCH-adaptive sizing."""
         buffer_amt = max(close * 0.002, atr * 0.10)
-        risk_amt = max(close * 0.015, atr * 1.5)
+        # GARCH-adaptive risk: scale ATR multiplier based on volatility regime
+        risk_mult = max(garch_atr_mult * 0.75, 1.0)  # floor at 1.0x ATR
+        risk_amt = max(close * 0.015, atr * risk_mult)
 
         if action in ["BUY", "WATCH BUY"]:
             entry = round(close + buffer_amt, 2)
@@ -913,6 +983,9 @@ class ActionableReportRunner:
         strong_liquidity_ok: bool,
         strong_volume_ok: bool,
         reason_text: str = "",
+        kalman_quality: float = 50.0,
+        kalman_trend: str = "flat",
+        vol_regime: str = "normal",
     ) -> Tuple[str, str]:
         """Turn a raw signal into a stricter real-time decision label."""
         checks = []
@@ -937,6 +1010,18 @@ class ActionableReportRunner:
         if strong_volume_ok:
             checks.append("strong volume")
 
+        # Kalman quality gate
+        if kalman_quality >= 60:
+            checks.append("kalman quality ok")
+        elif kalman_quality >= 40:
+            checks.append("kalman marginal")
+        else:
+            checks.append("kalman weak")
+        if kalman_trend == "down":
+            checks.append("kalman downtrend")
+        if vol_regime in ("elevated", "extreme"):
+            checks.append(f"vol {vol_regime}")
+
         # Trend safety: block Buy Now for stocks in confirmed downtrends
         reason_lower = str(reason_text).lower()
         bearish_trend = (
@@ -952,12 +1037,19 @@ class ActionableReportRunner:
             # Never promote to Buy Now if stock is in a bearish trend
             if bearish_trend:
                 return "Watch for Buy", ", ".join(checks)
+            # Kalman quality gate: block Buy Now for weak signals
+            if kalman_quality < 35 or kalman_trend == "down":
+                return "Watch for Buy", ", ".join(checks)
+            # Vol regime gate: block in extreme volatility
+            if vol_regime == "extreme":
+                return "Watch for Buy", ", ".join(checks)
             if (
                 normalized == "BUY"
                 and strong_confidence_ok
                 and strong_trigger
                 and strong_liquidity_ok
                 and strong_volume_ok
+                and kalman_quality >= 55
             ):
                 return "Strong Buy Now", ", ".join(checks)
             if (
@@ -966,6 +1058,7 @@ class ActionableReportRunner:
                 and near_trigger
                 and liquidity_ok
                 and volume_ok
+                and kalman_quality >= 40
             ):
                 return "Buy Now", ", ".join(checks)
             return "Watch for Buy", ", ".join(checks)

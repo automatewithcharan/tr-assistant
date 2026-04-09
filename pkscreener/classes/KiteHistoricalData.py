@@ -284,35 +284,54 @@ class KiteHistoricalDataProvider:
             if self._instrument_map is not None:
                 return self._instrument_map
 
-            cache_path = os.path.join(Archiver.get_user_data_dir(), "kite_instruments_nse_latest.csv")
-            try:
-                if os.path.exists(cache_path):
-                    df = pd.read_csv(cache_path)
-                    if not df.empty and {"tradingsymbol", "instrument_token"}.issubset(df.columns):
-                        self._instrument_map = {
-                            str(row["tradingsymbol"]).strip().upper(): int(row["instrument_token"])
-                            for _, row in df.iterrows()
-                        }
-                        return self._instrument_map
-            except Exception as exc:
-                default_logger().debug(f"Could not read cached Kite instruments: {exc}")
+            # Load both NSE and BSE instruments
+            nse_cache = os.path.join(Archiver.get_user_data_dir(), "kite_instruments_nse_latest.csv")
+            bse_cache = os.path.join(Archiver.get_user_data_dir(), "kite_instruments_bse_latest.csv")
+            combined_map: Dict[str, int] = {}
 
-            client = self._get_client()
-            instruments = client.instruments("NSE")
-            instruments_df = pd.DataFrame(instruments or [])
-            if instruments_df.empty:
-                self._instrument_map = {}
+            # Try loading from cache first (both exchanges)
+            loaded_from_cache = False
+            for cache_path, exchange in [(nse_cache, "NSE"), (bse_cache, "BSE")]:
+                try:
+                    if os.path.exists(cache_path):
+                        df = pd.read_csv(cache_path)
+                        if not df.empty and {"tradingsymbol", "instrument_token"}.issubset(df.columns):
+                            # Vectorized map build instead of iterrows
+                            symbols = df["tradingsymbol"].astype(str).str.strip().str.upper()
+                            tokens = df["instrument_token"].astype(int)
+                            exchange_map = dict(zip(symbols, tokens))
+                            combined_map.update(exchange_map)
+                            loaded_from_cache = True
+                except Exception as exc:
+                    default_logger().debug(f"Could not read cached {exchange} instruments: {exc}")
+
+            if loaded_from_cache and combined_map:
+                self._instrument_map = combined_map
                 return self._instrument_map
 
-            filtered = instruments_df[instruments_df["segment"].astype(str).str.upper().eq("NSE")].copy()
-            try:
-                filtered.to_csv(cache_path, index=False)
-            except Exception:
-                pass
-            self._instrument_map = {
-                str(row["tradingsymbol"]).strip().upper(): int(row["instrument_token"])
-                for _, row in filtered.iterrows()
-            }
+            # Fetch from Kite API for both exchanges
+            client = self._get_client()
+            for exchange, cache_path in [("NSE", nse_cache), ("BSE", bse_cache)]:
+                try:
+                    instruments = client.instruments(exchange)
+                    instruments_df = pd.DataFrame(instruments or [])
+                    if instruments_df.empty:
+                        continue
+                    filtered = instruments_df[
+                        instruments_df["segment"].astype(str).str.upper().eq(exchange)
+                    ].copy()
+                    try:
+                        filtered.to_csv(cache_path, index=False)
+                    except Exception:
+                        pass
+                    # Vectorized map build instead of iterrows
+                    symbols = filtered["tradingsymbol"].astype(str).str.strip().str.upper()
+                    tokens = filtered["instrument_token"].astype(int)
+                    combined_map.update(dict(zip(symbols, tokens)))
+                except Exception as exc:
+                    default_logger().debug(f"Failed to fetch {exchange} instruments: {exc}")
+
+            self._instrument_map = combined_map
             return self._instrument_map
 
     def _cache_path(self, symbol: str, interval: str) -> str:

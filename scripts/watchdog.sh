@@ -39,11 +39,11 @@ fi
 echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Watchdog: supervisor down ($REASON), restarting..." >> $LOG
 
 # Clean up stale state
-$PYTHON -m pkscreener.pkscreenercli --assistantstop allstocks >> $LOG 2>&1 || true
+$PYTHON -m pkscreener.pkscreenercli --assistantstop all >> $LOG 2>&1 || true
 sleep 3
 
-# Restart
-TERM=xterm $PYTHON -m pkscreener.pkscreenercli     --assistantstart allstocks     --assistantautotune     --assistantbudget 100000     --assistantinterval 60     --assistantalerts discord     --assistantautopilot >> $LOG 2>&1
+# Restart with combined NSE+BSE universe
+TERM=xterm $PYTHON -m pkscreener.pkscreenercli     --assistantstart all     --assistantautotune     --assistantbudget 100000     --assistantinterval 60     --assistantalerts discord     --assistantautopilot >> $LOG 2>&1
 
 if [ $? -eq 0 ]; then
     echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Watchdog: restart succeeded" >> $LOG

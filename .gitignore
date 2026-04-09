@@ -26,3 +26,4 @@ Backtest-Reports/
 *.sqlite
 *.db
 *.session
+docs/quantopian_lectures/

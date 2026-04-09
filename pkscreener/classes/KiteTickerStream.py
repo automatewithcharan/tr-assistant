@@ -38,6 +38,12 @@ UNIVERSE_FILES = {
     "smallcap50": os.path.join("results", "Indices", "ind_niftysmallcap50list.csv"),
     "smallcap100": os.path.join("results", "Indices", "ind_niftysmallcap100list.csv"),
     "smallcap250": os.path.join("results", "Indices", "ind_niftysmallcap250list.csv"),
+    # BSE universes
+    "bse_allstocks": os.path.join("results", "Indices", "BSE_EQUITY_L.csv"),
+    "bse_tradeable": os.path.join("results", "Indices", "BSE_TRADEABLE.csv"),
+    "bse_uncached": os.path.join("results", "Indices", "BSE_UNCACHED.csv"),
+    # Combined NSE + BSE (deduplicated)
+    "all": os.path.join("results", "Indices", "NSE_BSE_COMBINED.csv"),
 }
 
 
@@ -227,21 +233,33 @@ class KiteTickerStreamRunner:
             self._persist_status()
 
     def _resolve_tokens(self, symbols: List[str]) -> Tuple[List[int], List[str]]:
-        """Map symbol list to official NSE instrument tokens."""
+        """Map symbol list to official NSE and BSE instrument tokens."""
         client = self.session_manager._build_client()
-        instruments = client.instruments("NSE")
-        instruments_df = pd.DataFrame(instruments or [])
-        if instruments_df.empty:
-            return [], list(symbols)
+        symbol_to_token: Dict[str, int] = {}
 
-        symbol_to_token = {}
-        if "tradingsymbol" in instruments_df.columns and "instrument_token" in instruments_df.columns:
-            filtered = instruments_df[instruments_df["segment"].astype(str).str.upper().eq("NSE")]
-            for _, row in filtered.iterrows():
-                try:
-                    symbol_to_token[str(row["tradingsymbol"]).strip().upper()] = int(row["instrument_token"])
-                except Exception:
+        for exchange in ("NSE", "BSE"):
+            try:
+                instruments = client.instruments(exchange)
+                instruments_df = pd.DataFrame(instruments or [])
+                if instruments_df.empty:
                     continue
+                if "tradingsymbol" in instruments_df.columns and "instrument_token" in instruments_df.columns:
+                    filtered = instruments_df[
+                        instruments_df["segment"].astype(str).str.upper().eq(exchange)
+                    ]
+                    for _, row in filtered.iterrows():
+                        try:
+                            sym = str(row["tradingsymbol"]).strip().upper()
+                            # NSE tokens take priority over BSE for dual-listed
+                            if sym not in symbol_to_token or exchange == "NSE":
+                                symbol_to_token[sym] = int(row["instrument_token"])
+                        except Exception:
+                            continue
+            except Exception as exc:
+                default_logger().debug(f"Failed to fetch {exchange} instruments for ticker: {exc}")
+
+        if not symbol_to_token:
+            return [], list(symbols)
 
         tokens: List[int] = []
         missing: List[str] = []
