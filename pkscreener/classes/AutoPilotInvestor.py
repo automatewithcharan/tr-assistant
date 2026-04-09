@@ -566,6 +566,7 @@ class AutoPilotInvestor:
             if self._momentum_tracked_date and self._momentum_tracked_date != today_str:
                 self._log(f"New trading day {today_str}: clearing {len(self._momentum_tracked)} stale momentum entries from {self._momentum_tracked_date}")
                 self._momentum_tracked.clear()
+                self._tick_only_alert_count = 0
                 self._nifty_crash_pause = False
             self._momentum_tracked_date = today_str
             # Pre-open auction scan: fires during 9:00-9:15 AM IST
@@ -1467,6 +1468,257 @@ class AutoPilotInvestor:
         self._log("EOD exit alert sent.")
 
     # ------------------------------------------------------------------
+    # Tick-only scoring for stocks NOT in signal state
+    # ------------------------------------------------------------------
+
+    def _handle_tick_only_alert(self, item: Dict, sym: str, price: float,
+                                 daily_change: float, direction: str,
+                                 reasons_text: str) -> None:
+        """Score and alert a stock using ONLY tick data (no OHLCV/signal state).
+
+        This catches big movers like ITDC (+20%), AWHCL (+14%), BHAGYANGR (+14%)
+        that are in our tick subscription (2305 stocks) but NOT in the signal
+        monitor's scanned set (~600 stocks).
+
+        Available data per tick:
+            price, change%, volume, avg_traded_price (VWAP), open, high, low,
+            close (prev), total_buy_qty, total_sell_qty, best_bid, best_ask
+
+        Quality gates (all must pass):
+            1. Price >= ₹20 (no penny stocks)
+            2. Turnover >= ₹5 Cr today (real institutional liquidity)
+            3. Change >= 5% (meaningful momentum) — OR 3%+ in opening window
+            4. Not upper-circuit locked (sell_qty=0 → can't buy)
+            5. Price above VWAP (bullish — buying at premium to avg)
+            6. Max 12 tick-only alerts per day (prevent alert flooding)
+        """
+        total_buy = float(item.get("total_buy", 0))
+        total_sell = float(item.get("total_sell", 0))
+        volume = float(item.get("volume", 0))
+        avg_price = float(item.get("average_traded_price", 0))
+        open_px = float(item.get("open", 0))
+        high = float(item.get("high", 0))
+        low = float(item.get("low", 0))
+        close_prev = float(item.get("close", 0))  # previous day close
+
+        imbalance_ratio = (total_buy / total_sell) if total_sell > 0 else 0.0
+        is_upper_circuit = total_sell == 0 and total_buy > 0
+        turnover = (volume * avg_price) if avg_price > 0 else (volume * price)
+        turnover_cr = turnover / 1e7
+        above_vwap = price > avg_price if avg_price > 0 else False
+
+        # Time context
+        try:
+            import pytz as _pytz_to
+            _ist_to = _pytz_to.timezone("Asia/Kolkata")
+            _now_to = datetime.now(_ist_to)
+            _min_since_open = (_now_to.hour * 60 + _now_to.minute) - (9 * 60 + 15)
+        except Exception:
+            _min_since_open = 120
+        _is_opening = _min_since_open <= 30
+
+        # ---- HARD GATES ----
+        # Gate 1: Min price
+        if price < 20.0:
+            self._log(f"Tick-only skip {sym}: price ₹{price:.2f} < ₹20")
+            return
+
+        # Gate 2: Liquidity — turnover >= ₹5 Cr (during opening, allow ₹1 Cr)
+        _min_turnover_cr = 1.0 if _is_opening else 5.0
+        if turnover_cr < _min_turnover_cr:
+            self._log(f"Tick-only skip {sym}: turnover ₹{turnover_cr:.1f}Cr < ₹{_min_turnover_cr:.0f}Cr")
+            self._add_to_demand_watchlist(
+                sym, price, daily_change, imbalance_ratio, volume,
+                item.get("reasons", []), f"low turnover ₹{turnover_cr:.1f}Cr"
+            )
+            return
+
+        # Gate 3: Minimum change — 5% normally, 3% in opening window
+        _min_change = 3.0 if _is_opening else 5.0
+        if daily_change < _min_change:
+            self._add_to_demand_watchlist(
+                sym, price, daily_change, imbalance_ratio, volume,
+                item.get("reasons", []), f"change +{daily_change:.1f}% < {_min_change:.0f}%"
+            )
+            return
+
+        # Gate 4: Upper circuit — can't buy, skip silently
+        if is_upper_circuit:
+            self._log(f"Tick-only skip {sym}: upper circuit locked (sell_qty=0)")
+            return
+
+        # Gate 5: Already alerted
+        if sym in self._already_alerted_buys:
+            return
+
+        # Gate 6: Alert count cap — max 12 tick-only alerts per day
+        _tick_count = getattr(self, '_tick_only_alert_count', 0)
+        if _tick_count >= 12:
+            self._log(f"Tick-only skip {sym}: daily cap reached ({_tick_count}/12)")
+            return
+
+        # ---- TICK-ONLY SCORING ----
+        _score = 0
+        _score_reasons = []
+
+        # Change% momentum
+        if daily_change >= 10.0:
+            _score += 30
+            _score_reasons.append(f"🚀 +{daily_change:.1f}% breakout")
+        elif daily_change >= 7.0:
+            _score += 25
+            _score_reasons.append(f"Strong momentum +{daily_change:.1f}%")
+        elif daily_change >= 5.0:
+            _score += 20
+            _score_reasons.append(f"Moving +{daily_change:.1f}%")
+        elif daily_change >= 3.0:
+            _score += 12
+            _score_reasons.append(f"Early +{daily_change:.1f}%")
+
+        # Turnover (institutional liquidity)
+        if turnover_cr >= 100:
+            _score += 25
+            _score_reasons.append(f"Massive liquidity ₹{turnover_cr:.0f}Cr")
+        elif turnover_cr >= 25:
+            _score += 20
+            _score_reasons.append(f"Strong liquidity ₹{turnover_cr:.0f}Cr")
+        elif turnover_cr >= 10:
+            _score += 15
+            _score_reasons.append(f"Good liquidity ₹{turnover_cr:.0f}Cr")
+        elif turnover_cr >= 5:
+            _score += 8
+            _score_reasons.append(f"Adequate liquidity ₹{turnover_cr:.0f}Cr")
+
+        # Order book imbalance (only if sell_qty > 0, otherwise UC handled above)
+        if total_sell > 0 and imbalance_ratio >= 5.0:
+            _score += 15
+            _score_reasons.append(f"Heavy buyer demand {imbalance_ratio:.1f}x")
+        elif total_sell > 0 and imbalance_ratio >= 2.0:
+            _score += 10
+            _score_reasons.append(f"Buyers outnumber sellers {imbalance_ratio:.1f}x")
+
+        # Price vs VWAP (above = bullish, institutions buying at premium)
+        if above_vwap:
+            _score += 10
+            _score_reasons.append("Above VWAP ✅")
+        else:
+            _score -= 5
+            _score_reasons.append("Below VWAP ⚠️")
+
+        # Gap-up quality: open significantly above prev close
+        if close_prev > 0 and open_px > 0:
+            gap_pct = (open_px - close_prev) / close_prev * 100
+            if gap_pct >= 5.0:
+                _score += 10
+                _score_reasons.append(f"Strong gap-up +{gap_pct:.1f}%")
+            elif gap_pct >= 2.0:
+                _score += 5
+                _score_reasons.append(f"Gap-up +{gap_pct:.1f}%")
+
+        # Intraday range health: if price is near the high, trend is intact
+        if high > 0 and low > 0 and open_px > 0:
+            range_pct = (high - low) / open_px * 100 if open_px > 0 else 0
+            price_position = (price - low) / (high - low) if high > low else 0.5
+            if price_position >= 0.8:
+                _score += 5
+                _score_reasons.append("Near day's high")
+            elif price_position < 0.4:
+                _score -= 10
+                _score_reasons.append("Fading from high ⚠️")
+
+        _score = max(0, min(100, _score))
+
+        # ---- DECISION ----
+        # Tier 1: score >= 50 in opening window OR score >= 60 after
+        _min_score = 45 if _is_opening else 55
+        if _score < _min_score:
+            self._log(
+                f"Tick-only reject {sym}: score {_score:.0f} < {_min_score} "
+                f"(+{daily_change:.1f}%, ₹{turnover_cr:.1f}Cr, imb={imbalance_ratio:.1f}x)"
+            )
+            self._add_to_demand_watchlist(
+                sym, price, daily_change, imbalance_ratio, volume,
+                item.get("reasons", []), f"tick score {_score:.0f} < {_min_score}"
+            )
+            return
+
+        # ---- GRADE ----
+        if _score >= 75:
+            _grade = "A+"
+            _grade_badge = "⭐ **A+**"
+            _conviction = "high"
+        elif _score >= 60:
+            _grade = "A"
+            _grade_badge = "**A**"
+            _conviction = "medium-high"
+        else:
+            _grade = "B"
+            _grade_badge = "B"
+            _conviction = "medium"
+
+        # ---- TARGETS ----
+        # Derive SL and targets from tick data:
+        # SL = max of (low of day, 3% below current price)
+        # T1 = price × (1 + remaining scope × 0.5)
+        # T2 = price × (1 + remaining scope)
+        # Remaining scope based on strength indicators
+        if imbalance_ratio >= 5.0:
+            _remaining_scope = max(5, 15 - daily_change)
+        elif imbalance_ratio >= 2.0 or turnover_cr >= 50:
+            _remaining_scope = max(3, 10 - daily_change)
+        else:
+            _remaining_scope = max(2, 7 - daily_change)
+
+        _sl_price = max(low if low > 0 else price * 0.95, price * 0.97)
+        _t1_price = price * (1 + _remaining_scope * 0.5 / 100)
+        _t2_price = price * (1 + _remaining_scope / 100)
+
+        # Risk/reward check
+        _risk = abs(price - _sl_price)
+        _reward = abs(_t2_price - price)
+        _rr = round(_reward / _risk, 1) if _risk > 0 else 0
+
+        # Suggest qty based on budget ₹4000
+        _suggested_qty = max(1, int(4000 / price))
+        _approx_cost = _suggested_qty * price
+
+        # Imbalance string
+        imb_str = ""
+        if total_sell > 0 and imbalance_ratio >= 2.0:
+            imb_str = f" | 👥 {imbalance_ratio:.1f}x more buyers than sellers"
+
+        # ---- FORMAT AND SEND ----
+        score_reasons_str = " | ".join(_score_reasons)
+        msg = (
+            f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
+            f"**🔵 MOMENTUM BUY [{_grade_badge}] — `{sym}`**\n"
+            f"📈 Price `₹{price:.2f}` | {direction}{daily_change:.1f}% today | Score **{_score:.0f}/100**{imb_str}\n"
+            f"Turnover `₹{turnover_cr:.0f}Cr` | {'Above' if above_vwap else 'Below'} VWAP\n\n"
+            f"🔴 Stop Loss `₹{_sl_price:.0f}` | 🟡 Target 1 `₹{_t1_price:.0f}` | 🟢 Target 2 `₹{_t2_price:.0f}` | R:R `1:{_rr}`\n"
+            f"Why: {score_reasons_str}\n\n"
+            f"**What to do ({_conviction} conviction):**\n"
+            f"Buy **{_suggested_qty} shares** (≈ ₹{_approx_cost:,.0f})\n"
+            f"_Open Groww → Buy → then use `/buy {sym} {_suggested_qty} {price:.0f}` to record_\n"
+            f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+        )
+        self._send_to_channels(msg)
+        self._already_alerted_buys.add(sym)
+        self._save_daily_alerted(sym)
+        self._tick_only_alert_count = getattr(self, '_tick_only_alert_count', 0) + 1
+        self._log(
+            f"🔵 MOMENTUM BUY [{_grade}] {sym} at ₹{price:.2f} "
+            f"({direction}{daily_change:.1f}%) score={_score:.0f} "
+            f"turnover=₹{turnover_cr:.0f}Cr imb={imbalance_ratio:.1f}x "
+            f"[{self._tick_only_alert_count}/12]"
+        )
+        # Track for momentum continuation re-alerts
+        self._momentum_tracked[sym] = {
+            "entry_price": price,
+            "last_alert_pct": daily_change,
+            "last_alert_time": datetime.now(),
+        }
+
+    # ------------------------------------------------------------------
     # Demand Watchlist — proactively track rejected stocks for momentum
     # ------------------------------------------------------------------
 
@@ -1820,6 +2072,14 @@ class AutoPilotInvestor:
                     "volume": current_vol,
                     "reasons": signal_reasons,
                     "early_mover": early_mover,
+                    # Extra tick fields for tick-only scoring (non-signal-state stocks)
+                    "open": float(tick.get("open") or 0),
+                    "high": float(tick.get("high") or 0),
+                    "low": float(tick.get("low") or 0),
+                    "close": float(tick.get("close") or 0),  # prev close
+                    "average_traded_price": float(tick.get("average_traded_price") or 0),
+                    "best_bid": float(tick.get("best_bid") or 0),
+                    "best_ask": float(tick.get("best_ask") or 0),
                     # Priority: daily change% + imbalance strength
                     "_priority": daily_change * 10 + (
                         (total_buy / max(total_sell, 1)) if total_sell > 0 else 0
@@ -1931,89 +2191,7 @@ class AutoPilotInvestor:
         # BUT only for high-conviction setups to avoid alert flooding.
         # Quality gates for tick-only: price >= ₹50, volume > 0, order imbalance >= 2x OR change >= 7%.
         if report_df is None or report_df.empty:
-            try:
-                import pytz as _pytz_ohlcv
-                _ist_ohlcv = _pytz_ohlcv.timezone("Asia/Kolkata")
-                _now_ohlcv = datetime.now(_ist_ohlcv)
-                _min_since_open_ohlcv = (_now_ohlcv.hour * 60 + _now_ohlcv.minute) - (9 * 60 + 15)
-            except Exception:
-                _min_since_open_ohlcv = 120
-
-            total_buy = float(item.get("total_buy", 0))
-            total_sell = float(item.get("total_sell", 0))
-            volume = float(item.get("volume", 0))
-            imbalance_ratio = (total_buy / total_sell) if total_sell > 0 else 0.0
-            has_imbalance = imbalance_ratio >= 2.0
-            has_strong_imbalance = imbalance_ratio >= 3.0
-
-            # Check historical avg volume — block illiquid micro-caps
-            # EMMBI had 154-1007 shares/day → stale prices, unreliable ticks
-            _hist_avg_vol = 0
-            try:
-                _hist_path = os.path.join("results", "Data", "kite_history_cache", "day", f"{sym}.csv")
-                if os.path.exists(_hist_path):
-                    _hdf = pd.read_csv(_hist_path)
-                    _hist_avg_vol = _hdf["volume"].tail(10).mean()
-            except Exception:
-                pass
-
-            # Tiered tick-only alerts: catch moves EARLY when order book confirms
-            # Tier 1: 2-3.5% move WITH strong imbalance (3x+) — truly early, ~1.5-3% scope
-            # Tier 2: 2.5-4.5% move WITH imbalance (2x+) — moderate, ~0.5-2.5% scope
-            # Cap ensures minimum ~1.5% (T1) or ~0.5% (T2) scope when alert fires.
-            # Require avg daily volume >= 50,000 for tick-only (no OHLCV backing).
-            _tier = 0
-            if (_min_since_open_ohlcv <= 30 and price >= 50.0 and volume > 100
-                    and _hist_avg_vol >= 50000  # min 50k avg daily volume for tick-only
-                    and sym not in self._already_alerted_buys):
-                if 2.0 <= daily_change <= 3.5 and has_strong_imbalance:
-                    _tier = 1  # best — early + confirmed demand, 1.5-3% scope
-                elif 2.5 <= daily_change <= 4.5 and has_imbalance:
-                    _tier = 2  # good — moderate move + demand, 0.5-2.5% scope
-            _tick_only_ok = _tier > 0 and getattr(self, '_tick_only_alert_count', 0) < 8
-            if _tick_only_ok:
-                tier_label = {1: "🟢 EARLY — buy before the big move", 2: "🟡 BUILDING — stock gaining strength"}[_tier]
-                imb_str = ""
-                if has_imbalance:
-                    imb_str = f" | 👥 {imbalance_ratio:.1f}x more buyers than sellers"
-                # Dynamic target based on imbalance strength:
-                # Stronger imbalance = bigger institutional demand = larger expected move
-                if imbalance_ratio >= 10.0:
-                    _target_pct = 15.0  # monster imbalance — could be a 15%+ day
-                elif imbalance_ratio >= 5.0:
-                    _target_pct = 10.0  # strong imbalance — expect 10%+
-                else:
-                    _target_pct = 7.0   # moderate imbalance — conservative 7%
-                scope_pct = max(0, _target_pct - daily_change)
-                _sl_price = price * 0.98
-                _target_price = price * (1 + (_target_pct - daily_change) / 100)
-                # Suggest qty based on ₹4000 position size
-                _suggested_qty = max(1, int(4000 / price))
-                _approx_cost = _suggested_qty * price
-                _conviction = "high" if _tier == 1 else "medium"
-                msg = (
-                    f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                    f"**{tier_label} — {sym}**\n"
-                    f"📈 Price: `₹{price:.2f}` | Up `+{daily_change:.1f}%` today{imb_str}\n"
-                    f"{reasons_text}\n\n"
-                    f"**What to do ({_conviction} conviction):**\n"
-                    f"Buy **{_suggested_qty} shares** (≈ ₹{_approx_cost:,.0f})\n"
-                    f"🔴 EXIT if price drops to `₹{_sl_price:.0f}` (limits loss to 2%)\n"
-                    f"🟢 SELL near `₹{_target_price:.0f}` (+{scope_pct:.1f}% profit from here)\n"
-                    f"_Open Groww → Buy → then use `/buy {sym} {_suggested_qty} {price:.0f}` to record_\n"
-                    f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-                )
-                self._send_to_channels(msg)
-                self._already_alerted_buys.add(sym)
-                self._tick_only_alert_count = getattr(self, '_tick_only_alert_count', 0) + 1
-                self._log(f"Tier-{_tier} tick alert for {sym} (+{daily_change:.1f}%, imb={imbalance_ratio:.1f}x) [{self._tick_only_alert_count}/8]")
-            else:
-                self._log(f"Tick OHLCV unavailable for {sym} (+{daily_change:.1f}%) — suppressed (no data to act on)")
-                # Still add to demand watchlist if has imbalance — track for momentum
-                self._add_to_demand_watchlist(
-                    sym, price, daily_change, imbalance_ratio, volume,
-                    item.get("reasons", []), "no OHLCV data, tick-only gates failed"
-                )
+            self._handle_tick_only_alert(item, sym, price, daily_change, direction, reasons_text)
             return
 
         row = report_df.iloc[0]

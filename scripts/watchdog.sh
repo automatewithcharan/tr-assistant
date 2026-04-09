@@ -6,10 +6,41 @@ REPO=/home/charan_sai/tr-assistant
 PYTHON=$REPO/venv/bin/python3
 LOG=/tmp/trade_watchdog.log
 WEBHOOK=$(grep DISCORD_WEBHOOK_URL $REPO/.env.dev 2>/dev/null | cut -d= -f2- || echo '')
+CLEANUP_STAMP=/tmp/trade_data_cleanup_last_date
 
 send_discord() {
     [ -z "$WEBHOOK" ] && return
     curl -s -X POST "$WEBHOOK"          -H 'Content-Type: application/json'          -d "{\"content\": \"$1\"}" > /dev/null 2>&1 || true
+}
+
+run_daily_data_cleanup() {
+    TODAY=$(date +%Y-%m-%d)
+    LAST_DONE=""
+    [ -f "$CLEANUP_STAMP" ] && LAST_DONE=$(cat "$CLEANUP_STAMP" 2>/dev/null || echo "")
+
+    # Run once per day only. Uses safe defaults:
+    # - keep *_latest files
+    # - keep portfolio history
+    # - keep cache directories
+    if [ "$LAST_DONE" = "$TODAY" ]; then
+        return
+    fi
+
+    CLEANUP_OUT=$(cd "$REPO" && "$PYTHON" scripts/cleanup_results_data.py --apply --keep-days 14 --archive-instead-of-delete 2>&1)
+    CLEANUP_RC=$?
+    if [ "$CLEANUP_RC" -eq 0 ]; then
+        DELETED_COUNT=$(echo "$CLEANUP_OUT" | grep 'Delete count:' | awk '{print $3}' | head -1)
+        ARCHIVED_COUNT=$(echo "$CLEANUP_OUT" | grep 'Archived count:' | awk '{print $3}' | head -1)
+        [ -z "$DELETED_COUNT" ] && DELETED_COUNT=0
+        [ -z "$ARCHIVED_COUNT" ] && ARCHIVED_COUNT=0
+        echo "$TODAY" > "$CLEANUP_STAMP"
+        echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Watchdog: data cleanup done (deleted=$DELETED_COUNT archived=$ARCHIVED_COUNT)" >> "$LOG"
+        send_discord "🧹 **Data cleanup completed** at $(TZ='Asia/Kolkata' date +'%H:%M') IST — archived $ARCHIVED_COUNT and deleted $DELETED_COUNT old files"
+    else
+        echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Watchdog: data cleanup failed" >> "$LOG"
+        echo "$CLEANUP_OUT" >> "$LOG"
+        send_discord "⚠️ **Data cleanup failed** at $(TZ='Asia/Kolkata' date +'%H:%M') IST — check /tmp/trade_watchdog.log"
+    fi
 }
 
 cd $REPO
@@ -27,6 +58,7 @@ fi
 
 if [ "$DB_RUNNING" -gt 0 ] && [ "$PID_ALIVE" -eq 1 ]; then
     echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Watchdog: healthy (pid=$SUPERVISOR_PID)" >> $LOG
+    run_daily_data_cleanup
     exit 0
 fi
 
