@@ -3091,34 +3091,46 @@ class AutoPilotInvestor:
         self._pending_followups = []
 
     @staticmethod
-    def _grade_candidate(c: 'BlindBuyCandidate') -> str:
-        """Assign a conviction grade (A+, A, B) based on score + volume + momentum.
+    def _grade_candidate(c: 'BlindBuyCandidate') -> Tuple[str, str]:
+        """Assign a conviction grade (A+, A, B) and risk flag.
 
-        Momentum intensity = volume_ratio × change_pct — measures real money flow.
-        High-momentum runners with extreme volume are A+ regardless of score,
-        because the score often penalizes overbought indicators that are
-        actually confirmatory on genuine breakouts.
+        Returns (grade, risk_flag) where risk_flag may be empty or a warning.
+
+        Key insight from backtesting: volume × change (raw momentum) is deceptive.
+        Extreme volume with modest change (vol/change > 1.5) indicates DISTRIBUTION
+        — smart money selling into the gap-up. This pattern (KEC 10.6x/+5.5%,
+        RITES 12.1x/+4.9%) loses 3-4% by EOD.
+
+        Efficient breakouts have lower vol/change ratios (JTLIND 5.5x/+9.1% = 0.60,
+        ITI 2.5x/+8.7% = 0.29) — small volume producing big moves = genuine demand.
+
+        Score is the primary signal. Volume confirms but cannot override low scores.
         """
         momentum = c.volume_ratio * abs(c.change_pct) if c.change_pct > 0 else 0
+        vol_efficiency = (c.volume_ratio / c.change_pct) if c.change_pct > 0 else 99
+        risk_flag = ""
 
-        # A+ = extreme volume-confirmed momentum (overrides score penalties)
-        if momentum >= 40 and c.volume_ratio >= 3.0:
-            return "A+"
-        if c.blind_score >= 65 and c.volume_ratio >= 2.0 and momentum >= 15:
-            return "A+"
+        # Distribution risk: lots of volume but modest move = selling into strength
+        if vol_efficiency > 1.5 and c.volume_ratio >= 3.0:
+            risk_flag = "⚠️ GAP-FADE RISK — high volume relative to move (possible distribution)"
+
+        # A+ = high score WITH volume confirmation (score is primary, volume confirms)
+        if c.blind_score >= 65 and c.volume_ratio >= 2.0 and c.change_pct >= 3.0:
+            return "A+", risk_flag
         if c.blind_score >= 70 and c.volume_ratio >= 1.5:
-            return "A+"
-        # A = strong volume or high score with momentum
-        if c.volume_ratio >= 5.0 and c.change_pct >= 3.0:
-            return "A"
-        if c.blind_score >= 55 and c.volume_ratio >= 2.0 and momentum >= 10:
-            return "A"
-        if c.blind_score >= 60 and c.volume_ratio >= 1.0:
-            return "A"
-        if c.blind_score >= 50 and momentum >= 20:
-            return "A"
-        # Everything else
-        return "B"
+            return "A+", risk_flag
+
+        # A = good score with some backing OR efficient breakout
+        if c.blind_score >= 55 and c.volume_ratio >= 1.5 and c.change_pct >= 3.0:
+            return "A", risk_flag
+        if c.blind_score >= 60:
+            return "A", risk_flag
+        # Efficient high-change breakout: big move on moderate volume = real demand
+        if c.change_pct >= 7.0 and c.blind_score >= 50 and vol_efficiency < 1.0:
+            return "A", risk_flag
+
+        # B = everything else
+        return "B", risk_flag
 
     def _do_send_buy_alert(self, candidates: List[BlindBuyCandidate], is_followup: bool) -> None:
         """Format and send a buy alert message to Discord.
@@ -3142,12 +3154,12 @@ class AutoPilotInvestor:
         # -- Grade and sort candidates by conviction --
         graded = []
         for c in candidates:
-            grade = self._grade_candidate(c)
+            grade, risk_flag = self._grade_candidate(c)
             momentum = c.volume_ratio * abs(c.change_pct) if c.change_pct > 0 else 0
-            graded.append((c, grade, momentum))
-        # Sort: A+ first, then A, then B; within tier by momentum desc
+            graded.append((c, grade, momentum, risk_flag))
+        # Sort: A+ first, then A, then B; within tier by score desc (not raw momentum)
         _grade_order = {"A+": 0, "A": 1, "B": 2}
-        graded.sort(key=lambda x: (_grade_order.get(x[1], 9), -x[2]))
+        graded.sort(key=lambda x: (_grade_order.get(x[1], 9), -x[0].blind_score, -x[2]))
 
         # Split into main (top 10) and overflow
         _MAX_MAIN = 10
@@ -3155,8 +3167,8 @@ class AutoPilotInvestor:
         overflow_picks = graded[_MAX_MAIN:]
 
         # Count grades for header
-        n_aplus = sum(1 for _, g, _ in main_picks if g == "A+")
-        n_a = sum(1 for _, g, _ in main_picks if g == "A")
+        n_aplus = sum(1 for _, g, _, _ in main_picks if g == "A+")
+        n_a = sum(1 for _, g, _, _ in main_picks if g == "A")
 
         if is_post_market:
             sections = [
@@ -3181,8 +3193,8 @@ class AutoPilotInvestor:
                 f"Top **{len(main_picks)}** of {len(candidates)} picks ranked by conviction{grade_summary}:",
             ]
 
-        for rank, (c, grade, momentum) in enumerate(main_picks, 1):
-            self._format_candidate_block(sections, c, grade, momentum, rank, len(main_picks))
+        for rank, (c, grade, momentum, risk_flag) in enumerate(main_picks, 1):
+            self._format_candidate_block(sections, c, grade, momentum, rank, len(main_picks), risk_flag=risk_flag)
 
         sections.append("_Open Groww → Buy → then use `/buy SYMBOL QTY PRICE` to record_")
         message = "\n\n".join(sections)
@@ -3193,14 +3205,14 @@ class AutoPilotInvestor:
             overflow_sections = [
                 f"**📝 WATCHLIST** — {len(overflow_picks)} more picks (lower conviction):",
             ]
-            for rank, (c, grade, momentum) in enumerate(overflow_picks, _MAX_MAIN + 1):
-                self._format_candidate_block(overflow_sections, c, grade, momentum, rank, len(candidates), compact=True)
+            for rank, (c, grade, momentum, risk_flag) in enumerate(overflow_picks, _MAX_MAIN + 1):
+                self._format_candidate_block(overflow_sections, c, grade, momentum, rank, len(candidates), compact=True, risk_flag=risk_flag)
             overflow_msg = "\n\n".join(overflow_sections)
             self._send_to_channels(overflow_msg)
 
     def _format_candidate_block(self, sections: list, c: 'BlindBuyCandidate', grade: str,
                                  momentum: float, rank: int, total: int,
-                                 compact: bool = False) -> None:
+                                 compact: bool = False, risk_flag: str = "") -> None:
         """Format a single candidate block and append to sections. Also records tracking."""
         pct = f"+{c.change_pct:.1f}%" if c.change_pct > 0 else f"{c.change_pct:.1f}%"
         risk_reward = ""
@@ -3249,8 +3261,9 @@ class AutoPilotInvestor:
 
         if compact:
             # Compact format for watchlist overflow
+            _risk = " ⚠️FADE" if risk_flag else ""
             block = [
-                f"`{c.symbol}` [{grade_badge}] Score {c.blind_score:.0f} | `{c.price:.2f}` ({pct}) | Vol `{c.volume_ratio:.1f}x` | SL `{c.stop_loss:.2f}` → T1 `{c.target1:.2f}` T2 `{c.target2:.2f}`",
+                f"`{c.symbol}` [{grade_badge}] Score {c.blind_score:.0f} | `{c.price:.2f}` ({pct}) | Vol `{c.volume_ratio:.1f}x` | SL `{c.stop_loss:.2f}` → T1 `{c.target1:.2f}` T2 `{c.target2:.2f}`{_risk}",
             ]
         else:
             block = [
@@ -3259,6 +3272,8 @@ class AutoPilotInvestor:
                 f"Stop Loss `{c.stop_loss:.2f}` | Target 1 `{c.target1:.2f}` | Target 2 `{c.target2:.2f}`{risk_reward}",
                 f"Why: {simple_reasons}",
             ]
+            if risk_flag:
+                block.append(risk_flag)
             if c.suggested_qty > 0:
                 _invest = round(c.suggested_qty * c.price, 0)
                 block.append(f"Suggested: Buy **`{c.suggested_qty}` shares** (≈ ₹{_invest:,.0f})")
