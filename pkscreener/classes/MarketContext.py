@@ -130,6 +130,10 @@ class MarketRegime:
     total_buy_pressure: float = 0.0   # Sum of total_buy_quantity across all ticks
     total_sell_pressure: float = 0.0  # Sum of total_sell_quantity
 
+    # TICK/TRIN (market internals from NSE-Stock-Scanner concept)
+    tick_value: int = 0               # net advancing - declining (positive = bullish)
+    trin: float = 1.0                 # (adv/decl) / (adv_vol/decl_vol); <1 = bullish, >1 = bearish
+
 
 class MarketContextEngine:
     """Computes real-time market context from the live tick stream.
@@ -154,6 +158,8 @@ class MarketContextEngine:
         advancing = 0
         declining = 0
         unchanged = 0
+        advancing_volume = 0.0
+        declining_volume = 0.0
         sector_changes: Dict[str, List[float]] = defaultdict(list)
         total_buy = 0.0
         total_sell = 0.0
@@ -170,11 +176,14 @@ class MarketContextEngine:
             except (ValueError, TypeError):
                 continue
 
-            # Breadth
+            # Breadth + volume-weighted breadth (for TRIN)
+            vol = float(tick.get("volume_traded", 0) or tick.get("volume", 0) or 0)
             if change_pct > 0.1:
                 advancing += 1
+                advancing_volume += vol
             elif change_pct < -0.1:
                 declining += 1
+                declining_volume += vol
             else:
                 unchanged += 1
 
@@ -196,6 +205,17 @@ class MarketContextEngine:
 
         # Breadth ratio
         breadth_ratio = advancing / max(declining, 1)
+
+        # TICK: net advancing stocks (positive = bullish momentum)
+        tick_value = advancing - declining
+
+        # TRIN (Arms Index): (adv/decl) / (adv_vol/decl_vol)
+        # < 1.0 = money flowing into advancing stocks (bullish)
+        # > 1.0 = money flowing into declining stocks (bearish)
+        if declining > 0 and declining_volume > 0 and advancing_volume > 0:
+            trin = (advancing / declining) / (advancing_volume / declining_volume)
+        else:
+            trin = 1.0
 
         # Sector strength
         sector_strength = {}
@@ -230,6 +250,12 @@ class MarketContextEngine:
             elif flow_ratio < 0.9:
                 regime_score -= 10
 
+        # TRIN confirmation (±10): reinforces breadth signal
+        if trin < 0.7:
+            regime_score += 10   # strongly bullish flow
+        elif trin > 1.5:
+            regime_score -= 10   # strongly bearish flow
+
         regime_score = max(-100, min(100, regime_score))
 
         if regime_score >= 50:
@@ -255,6 +281,8 @@ class MarketContextEngine:
                 sector_strength=sector_strength,
                 total_buy_pressure=total_buy,
                 total_sell_pressure=total_sell,
+                tick_value=tick_value,
+                trin=round(trin, 3),
             )
         return self._regime
 

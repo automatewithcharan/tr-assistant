@@ -156,6 +156,7 @@ class SymbolVolumeProfile:
     range_compression_ratio: float = 0.0  # 5d_range / 20d_range (< 0.5 = compressed)
     volume_trend_5d: float = 0.0       # ratio of avg vol last 5d vs 20d (>1 = creeping up)
     consecutive_narrow_days: int = 0   # days where range < 50% of avg range
+    nr7: bool = False                  # Narrow Range 7: today's range is narrowest of last 7 days
 
 
 class VolumeAnomalyDetector:
@@ -280,6 +281,13 @@ class VolumeAnomalyDetector:
         range_pct_5d = statistics.mean(ranges_5) if ranges_5 else 0
         range_compression = range_pct_5d / range_pct_20d if range_pct_20d > 0 else 1.0
 
+        # NR7: last day's range is narrowest of the last 7 days
+        nr7 = False
+        if len(candles) >= 7:
+            last_7_ranges = [(c["h"] - c["l"]) for c in candles[-7:]]
+            if last_7_ranges[-1] == min(last_7_ranges) and last_7_ranges[-1] > 0:
+                nr7 = True
+
         # Volume trend (last 5d vs 20d avg)
         vol_5d = statistics.mean([c["v"] for c in recent_5]) if recent_5 else 0
         volume_trend = vol_5d / avg_vol if avg_vol > 0 else 1.0
@@ -311,6 +319,7 @@ class VolumeAnomalyDetector:
             range_compression_ratio=round(range_compression, 3),
             volume_trend_5d=round(volume_trend, 3),
             consecutive_narrow_days=narrow_days,
+            nr7=nr7,
         )
 
     # ------------------------------------------------------------------
@@ -511,6 +520,10 @@ class VolumeAnomalyDetector:
 
             # Near 20d low bonus (0-5)
             quality += low_bonus * 2.5
+
+            # NR7 bonus (0-5): narrowest range in 7 days = coiled spring
+            if profile.nr7:
+                quality += 5
 
             quality = max(0, min(100, quality))
 
