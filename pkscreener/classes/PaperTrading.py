@@ -748,6 +748,35 @@ class PaperTradingRunner:
         added_cash = round(self._cash_added(cashflows_df), 2)
         total_money_added = round(self.initial_capital + added_cash, 2)
 
+        # Live/manual portfolios can start from migrated trade rows without a prior
+        # funding event in SQLite (initial_capital=0 and no cashflow rows). In that
+        # case, total_money_added would be 0 and reported P/L becomes misleading
+        # (TotalPnL ~= Equity). Infer a baseline funding amount from ledger economics.
+        # Rearranged from cash equation with cash floored at 0:
+        # funding ~= invested_total + entry_charges - exit_total + exit_charges.
+        if total_money_added <= 0 and not trades_df.empty:
+            invested_total_for_funding = round(trades_df["InvestedAmount"].sum(), 2)
+            exit_total_for_funding = round(trades_df["ExitValue"].sum(), 2)
+            entry_charges_for_funding = round(
+                sum(self._entry_charges_for_trade(row) for _, row in trades_df.iterrows()),
+                2,
+            )
+            exit_charges_for_funding = round(
+                sum(
+                    self._exit_charges_for_trade(self._to_float(row["ExitValue"]))
+                    for _, row in trades_df.loc[trades_df["Status"] == "CLOSED"].iterrows()
+                ),
+                2,
+            )
+            inferred_funding = round(
+                invested_total_for_funding
+                + entry_charges_for_funding
+                - exit_total_for_funding
+                + exit_charges_for_funding,
+                2,
+            )
+            total_money_added = max(inferred_funding, 0.0)
+
         cash = self._compute_cash(trades_df, cashflows_df)
         invested = round(open_df["InvestedAmount"].sum(), 2)
         market_value = round(open_df["CurrentValue"].sum(), 2)
