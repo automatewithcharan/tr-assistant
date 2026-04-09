@@ -30,6 +30,7 @@ from PKDevTools.classes.OutputControls import OutputControls
 from PKDevTools.classes.PKDateUtilities import PKDateUtilities
 from PKDevTools.classes.log import default_logger
 
+from pkscreener.classes.PreOpenAnalyzer import PreOpenAnalyzer
 from pkscreener.classes.RiskGuardrails import LiveTradingGuardrails
 
 
@@ -444,6 +445,8 @@ class AutoPilotInvestor:
         )
         self._cycle_count = 0
         self._already_alerted_buys: Set[str] = self._load_daily_alerted_set()  # persist across restarts
+        self._definitely_buy_alerted: Set[str] = set()  # track DEFINITELY BUY to allow upgrade re-alerts
+        self._last_buynow_rescan: float = 0.0  # timestamp of last /buynow rescan
         self._already_alerted_sells: Set[str] = set()  # avoid repeat sell alerts
         self._last_buy_alert_time: Optional[datetime] = None  # cooldown tracking
         self._pending_followups: List["BlindBuyCandidate"] = []  # buffer for batching
@@ -456,12 +459,25 @@ class AutoPilotInvestor:
         self._TICK_ORDER_IMBALANCE_RATIO = 2.5  # buy_qty / sell_qty threshold
         self._TICK_VOLUME_BURST_FRACTION = 0.025  # 2.5% of day-vol in 60s
         self._TICK_HIGH_DAILY_CHANGE_PCT = 2.0   # daily change% to auto-flag (catch moves early, at 2% not 3%)
-        self._TICK_ALREADY_MOVED_PCT = 10.0      # above this % skip — too late to enter intraday (risk > reward)
-        self._TICK_ALERT_COOLDOWN_SEC = 1800     # 30 min before re-triggering same symbol
+        self._TICK_ALREADY_MOVED_PCT = 12.0      # above this % skip — too late to enter intraday (risk > reward)
+        self._TICK_ALERT_COOLDOWN_SEC = 900      # 15 min before re-triggering same symbol (catch late movers)
         # Early Mover: catch stocks at 0.3-2% with heavy accumulation (volume moves before price)
         self._TICK_EARLY_MOVER_IMBALANCE = 3.0   # stricter imbalance ratio for early, unconfirmed moves
         self._TICK_EARLY_MOVER_MIN_PCT = 0.3     # minimum daily change% to consider as early mover
         self._TICK_EARLY_MOVER_VOL_RATIO = 3.0   # OHLCV volume ratio required to confirm early mover
+        # Demand Watchlist: tracks stocks rejected by OHLCV gates but showing demand signals.
+        # Re-checked every tick scan cycle (5s) for momentum confirmation.
+        # schema: {symbol: {detect_price, detect_change, detect_time, imbalance, volume, reasons, peak_price}}
+        self._demand_watchlist: Dict[str, Dict] = {}
+        self._demand_alert_count: int = 0  # cap demand-confirmed alerts per session
+        self._DEMAND_WATCHLIST_EXPIRY_SEC = 5400  # 90 min expiry — stocks can explode late
+        self._DEMAND_WATCHLIST_MAX_ALERTS = 12    # max demand-confirmed alerts per session
+        self._DEMAND_CONFIRM_RISE_PCT = 0.9       # standard rise threshold from detection
+        self._DEMAND_CONFIRM_MIN_IMBALANCE = 2.8  # minimum persistent order-book demand
+        self._DEMAND_CONFIRM_MIN_VOL_RATIO = 2.0  # minimum live volume / 10-day avg volume
+        self._DEMAND_CONFIRM_MAX_DAY_CHANGE = 5.5 # avoid late chase entries in this path
+        self._DEMAND_CONFIRM_FAST_RISE_PCT = 0.7  # fast-track stronger setups earlier
+        self._DEMAND_CONFIRM_FAST_IMBALANCE = 4.5 # fast-track needs very strong imbalance
         # NSE market hours (IST): 9:15 AM open, 3:30 PM close
         self._MARKET_OPEN_HOUR_IST = 9
         self._MARKET_OPEN_MIN_IST = 15
@@ -469,6 +485,10 @@ class AutoPilotInvestor:
         self._MARKET_CLOSE_MIN_IST = 30
         # Pre-market watchlist state
         self._premarket_sent_date: Optional[str] = None  # date string — send once per day
+        # Pre-open auction analyzer
+        self._preopen_analyzer = PreOpenAnalyzer(universe=self.config.universe)
+        self._preopen_auction_sent_phase: Optional[str] = None  # last phase alert sent
+        self._preopen_auction_sent_date: Optional[str] = None
         self._midday_sent_date: Optional[str] = None     # mid-day scanner — once per day
         self._powerhour_sent_date: Optional[str] = None  # power hour alert — once per day
         self._eod_exit_sent_date: Optional[str] = None   # end-of-day exit reminder — once per day
@@ -546,6 +566,8 @@ class AutoPilotInvestor:
                 self._momentum_tracked.clear()
                 self._nifty_crash_pause = False
             self._momentum_tracked_date = today_str
+            # Pre-open auction scan: fires during 9:00-9:15 AM IST
+            self._run_preopen_auction_scan()
             # Pre-market watchlist: fires once per day at 9:05 AM IST
             self._run_premarket_watchlist()
             # Mid-day scanner: fires once per day at 11:00 AM IST
@@ -559,6 +581,9 @@ class AutoPilotInvestor:
             # Fast tick scan (zero API calls, < 1s) — catches pre-jump conditions
             # BEFORE the full OHLCV cycle would even start.
             self._run_tick_fast_scan()
+            # Re-scan signal monitor "Buy Now" stocks — catches stocks that improved
+            # since initial rejection (low score early → strong later in the day).
+            self._run_buynow_rescan()
             self.run_once()
 
             # During the 60s wait, run tick scans every 5s.
@@ -573,6 +598,89 @@ class AutoPilotInvestor:
                 self._run_tick_fast_scan()
             if _remaining > 0:
                 time.sleep(_remaining)
+
+    # ------------------------------------------------------------------
+    # Pre-open auction scan (9:00 – 9:15 AM IST)
+    # ------------------------------------------------------------------
+
+    def _run_preopen_auction_scan(self) -> None:
+        """Analyze pre-open auction data and send alerts during 9:00-9:15 AM.
+
+        Fires up to 2 alerts per day:
+          1. During 'auction' phase (9:08-9:12) — equilibrium price being set
+          2. During 'buffer' phase (9:12-9:15) — price locked, ready to act
+
+        Uses live WebSocket ticks (total_buy_qty, total_sell_qty, open price)
+        to score order imbalance and detect institutional interest.
+        """
+        if not PreOpenAnalyzer.is_preopen_window():
+            return
+
+        try:
+            import pytz
+            ist = pytz.timezone("Asia/Kolkata")
+            now_ist = datetime.now(ist)
+        except Exception:
+            from datetime import timezone, timedelta
+            ist_offset = timezone(timedelta(hours=5, minutes=30))
+            now_ist = datetime.now(ist_offset)
+
+        today_str = now_ist.strftime("%Y-%m-%d")
+        current_phase = PreOpenAnalyzer._current_phase()
+
+        # Reset on new day
+        if self._preopen_auction_sent_date != today_str:
+            self._preopen_auction_sent_phase = None
+            self._preopen_auction_sent_date = today_str
+
+        # Only alert once per phase (auction, buffer)
+        # Skip 'collection' phase — orders can still be cancelled, too noisy
+        if current_phase == "collection":
+            return
+        if self._preopen_auction_sent_phase == current_phase:
+            return
+
+        self._log(f"Pre-open auction scan: phase={current_phase}")
+
+        ticks = self._load_ticks_snapshot()
+        if not ticks:
+            self._log("Pre-open auction: no tick data available yet")
+            return
+
+        summary = self._preopen_analyzer.analyze(ticks)
+        if summary.total_symbols_with_ticks == 0:
+            return
+
+        # Get watchlist symbols from the pre-market watchlist if already sent
+        watchlist_symbols = None
+        signal_state = self._load_signal_state()
+        if signal_state is not None and not signal_state.empty:
+            from pkscreener.classes.BlindBuyScorer import BlindBuyScorer
+            watchlist_symbols = []
+            for _, row in signal_state.iterrows():
+                sym = str(row.get("Symbol", "")).strip().upper()
+                if sym:
+                    sc, _ = BlindBuyScorer.score(row)
+                    if sc >= 50:
+                        watchlist_symbols.append(sym)
+
+        picks = self._preopen_analyzer.get_top_picks(summary, watchlist_symbols, max_picks=8)
+
+        if picks:
+            msg = self._preopen_analyzer.format_alert(picks, current_phase)
+            if msg:
+                self._send_to_channels(msg)
+                self._log(f"Pre-open auction: sent {len(picks)} picks for phase={current_phase}")
+        else:
+            # Only send "no signals" during buffer phase (most reliable)
+            if current_phase == "buffer":
+                self._send_to_channels(
+                    f"**🔔 PRE-OPEN AUCTION — {now_ist.strftime('%d %b %Y %H:%M')}**\n"
+                    f"No strong auction signals detected. Market may open flat.\n"
+                    f"_Tick scanner active — alerts will fire if anything develops after 9:15_"
+                )
+
+        self._preopen_auction_sent_phase = current_phase
 
     # ------------------------------------------------------------------
     # Pre-market watchlist (9:05 AM IST, once per day)
@@ -709,6 +817,165 @@ class AutoPilotInvestor:
 
     # ------------------------------------------------------------------
     # Mid-day consolidation scanner (11:00 AM IST, once per day)
+    # ------------------------------------------------------------------
+
+    # ------------------------------------------------------------------
+    # Periodic re-scan of signal monitor "Buy Now" stocks
+    # ------------------------------------------------------------------
+
+    def _run_buynow_rescan(self) -> None:
+        """Re-scan signal monitor 'Buy Now' stocks every 10 minutes.
+
+        Catches stocks that scored low early but improved as:
+        - Volume increased (0.5x at open → 3x by 10 AM)
+        - Price confirmed (engine upgraded Hold → Buy Now)
+        - Indicators updated (RSI, CCI, MFI refreshed)
+
+        Example: MEESHO scored 44 at 9:20 (+3.3%, vol 1.9x) → rejected.
+        By 10:09: score 58 (+9.7%, vol 10.1x) → /buynow shows it, autopilot missed it.
+        This rescan catches those upgrades.
+        """
+        now_ts = time.time()
+        if now_ts - self._last_buynow_rescan < 600:  # every 10 minutes
+            return
+        self._last_buynow_rescan = now_ts
+
+        try:
+            import pytz as _pytz_rs
+            _ist_rs = _pytz_rs.timezone("Asia/Kolkata")
+            _now_ist = datetime.now(_ist_rs)
+        except Exception:
+            from datetime import timezone, timedelta
+            _now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+
+        # Only during market hours (9:30 AM - 3:15 PM)
+        _h, _m = _now_ist.hour, _now_ist.minute
+        if _h < 9 or (_h == 9 and _m < 30) or _h >= 15 and _m > 15:
+            return
+
+        _sm_path = os.path.join("results", "Data", "signalmonitor_allstocks_signals_simple_latest.csv")
+        if not os.path.exists(_sm_path):
+            return
+
+        try:
+            _sm_df = pd.read_csv(_sm_path)
+        except Exception:
+            return
+
+        if "What To Do" not in _sm_df.columns:
+            return
+
+        # Only look at stocks the engine says "Buy Now" or "Strong Buy Now"
+        buy_actions = {"Strong Buy Now", "Buy Now"}
+        candidates = _sm_df[_sm_df["What To Do"].astype(str).str.strip().isin(buy_actions)]
+        if candidates.empty:
+            return
+
+        _rescan_count = 0
+        _max_rescan_alerts = 3  # max 3 per rescan cycle to avoid flooding
+        ticks = self._load_ticks_snapshot()
+
+        for _, row in candidates.iterrows():
+            sym = str(row.get("Stock", "")).strip()
+            if not sym or sym in self._already_alerted_buys:
+                continue
+
+            # Get live tick data
+            tick = ticks.get(sym, {})
+            live_price = float(tick.get("last_price", 0))
+            if live_price <= 0:
+                continue
+
+            # Quality gates (same as DEFINITELY BUY)
+            if live_price < 100.0:
+                continue
+
+            # Score with BlindBuyScorer
+            blind_score, blind_reasons = BlindBuyScorer.score(row)
+            if blind_score < 50:
+                continue
+
+            reasons_lower = blind_reasons.lower()
+            if "do not buy" in reasons_lower:
+                continue
+
+            vol_ratio = float(row.get("Volume vs Avg", row.get("Volume Ratio", 0)) or 0)
+            if vol_ratio < 1.5:
+                continue
+
+            confidence = float(row.get("Signal Strength %", 0) or 0)
+            stop_loss = float(row.get("Sell If Below", 0) or 0)
+            target1 = float(row.get("Take Profit 1", 0) or 0)
+            target2 = float(row.get("Take Profit 2", 0) or 0)
+            rsi = float(row.get("RSI", 50) or 50)
+
+            if rsi >= 78:
+                continue
+
+            if stop_loss <= 0 or target2 <= 0 or live_price <= stop_loss:
+                continue
+
+            rr2 = (target2 - live_price) / (live_price - stop_loss)
+            if rr2 < 1.5:
+                continue
+
+            # Check historical avg volume
+            _hist_avg = 0
+            try:
+                _hp = os.path.join("results", "Data", "kite_history_cache", "day", f"{sym}.csv")
+                if os.path.exists(_hp):
+                    _hdf = pd.read_csv(_hp)
+                    _hist_avg = _hdf["volume"].tail(10).mean()
+            except Exception:
+                pass
+            if _hist_avg < 100000:
+                continue
+
+            # Calculate live change
+            prev_close = float(row.get("PrevClose", 0) or 0)
+            if prev_close <= 0:
+                prev_close = float(tick.get("ohlc", {}).get("close", 0))
+            daily_change = ((live_price - prev_close) / prev_close * 100) if prev_close > 0 else 0
+
+            # Scope from entry
+            scope_t1 = ((target1 - live_price) / live_price * 100) if target1 > 0 else 0
+            scope_t2 = ((target2 - live_price) / live_price * 100) if target2 > 0 else 0
+
+            score_label = f"🔥 **{blind_score:.0f}/100**" if blind_score >= 70 else f"✅ **{blind_score:.0f}/100**"
+
+            suggested_qty = max(1, int(4000 / live_price))
+            approx_cost = suggested_qty * live_price
+
+            msg = (
+                f"**🔍 RESCAN CATCH — `{sym}`** — Score {score_label}\n"
+                f"Price `{live_price:.2f}` (+{daily_change:.1f}% today) | Engine says: `{row.get('What To Do', '?')}`\n"
+                f"Stop Loss `{stop_loss:.2f}` | Target 1 `{target1:.2f}` | Target 2 `{target2:.2f}` | R:R `1:{rr2:.1f}`"
+            )
+            if scope_t1 > 0 or scope_t2 > 0:
+                msg += f" | **Scope: +{scope_t1:.1f}% to T1 | +{scope_t2:.1f}% to T2**"
+            msg += (
+                f"\nVolume `{vol_ratio:.1f}x avg` | Confidence `{confidence:.0f}%`\n"
+                f"Why: {self._simplify_blind_reasons(blind_reasons)}\n"
+                f"Suggested: Buy **{suggested_qty} shares** (≈ ₹{approx_cost:,.0f})\n"
+                f"_Caught by periodic rescan — initially missed due to low early score._"
+            )
+
+            self._send_to_channels(msg)
+            self._already_alerted_buys.add(sym)
+            self._save_daily_alerted(sym)
+            self._log(
+                f"🔍 RESCAN CATCH: {sym} score={blind_score:.0f} vol={vol_ratio:.1f}x "
+                f"conf={confidence:.0f}% change=+{daily_change:.1f}% — was missed earlier"
+            )
+            _rescan_count += 1
+            if _rescan_count >= _max_rescan_alerts:
+                break
+
+        if _rescan_count > 0:
+            self._log(f"BuyNow rescan: sent {_rescan_count} new alerts from signal monitor")
+
+    # ------------------------------------------------------------------
+    # Mid-day consolidation scanner (11:00 AM IST)
     # ------------------------------------------------------------------
 
     def _run_midday_scanner(self) -> None:
@@ -1155,6 +1422,233 @@ class AutoPilotInvestor:
         self._log("EOD exit alert sent.")
 
     # ------------------------------------------------------------------
+    # Demand Watchlist — proactively track rejected stocks for momentum
+    # ------------------------------------------------------------------
+
+    def _add_to_demand_watchlist(self, sym: str, price: float, change: float,
+                                 imbalance: float, volume: float,
+                                 reasons: List[str], reject_reason: str) -> None:
+        """Add a rejected stock to the demand watchlist for tick-level monitoring.
+
+        Only stocks with genuine demand signals (imbalance + minimum move) are tracked.
+        The watchlist is checked every tick cycle (5s) for momentum confirmation.
+        """
+        # Don't re-add if already watching or already alerted
+        if sym in self._demand_watchlist or sym in self._already_alerted_buys:
+            return
+        # Minimum criteria to watch: price >= ₹100, imbalance >= 2x, change >= 1%
+        if price < 100.0 or imbalance < 2.0 or change < 1.0:
+            return
+
+        hist_avg_vol = 0.0
+        try:
+            hist_path = os.path.join("results", "Data", "kite_history_cache", "day", f"{sym}.csv")
+            if os.path.exists(hist_path):
+                hdf = pd.read_csv(hist_path)
+                if "volume" in hdf.columns and not hdf.empty:
+                    hist_avg_vol = float(hdf["volume"].tail(10).mean() or 0.0)
+        except Exception:
+            hist_avg_vol = 0.0
+
+        self._demand_watchlist[sym] = {
+            "detect_price": price,
+            "detect_change": change,
+            "detect_time": datetime.now(),
+            "imbalance": imbalance,
+            "volume": volume,
+            "hist_avg_vol": hist_avg_vol,
+            "reasons": reasons,
+            "reject_reason": reject_reason,
+            "peak_price": price,
+            "consecutive_up": 0,  # track consecutive tick-over-tick rises
+        }
+        self._log(
+            f"Demand watchlist ADD: {sym} ₹{price:.0f} +{change:.1f}% "
+            f"imb={imbalance:.1f}x (rejected: {reject_reason})"
+        )
+
+    def _check_demand_watchlist(self) -> None:
+        """Check watchlist stocks against live ticks for momentum confirmation.
+
+        Called every tick scan cycle (5s). When a watchlisted stock shows:
+        - Price rose >= 1.5% from detection price
+        - Order imbalance still >= 2x (demand persists)
+        - Volume increasing (not a thin spike)
+        → Send a DEMAND CONFIRMED alert.
+        """
+        if not self._demand_watchlist:
+            return
+        if self._demand_alert_count >= self._DEMAND_WATCHLIST_MAX_ALERTS:
+            return
+
+        ticks = self._load_ticks_snapshot()
+        if not ticks:
+            return
+
+        now = datetime.now()
+        expired = []
+        confirmed = []
+
+        for sym, watch in list(self._demand_watchlist.items()):
+            # Skip if already alerted by another path
+            if sym in self._already_alerted_buys:
+                expired.append(sym)
+                continue
+
+            # Expiry check
+            age_sec = (now - watch["detect_time"]).total_seconds()
+            if age_sec > self._DEMAND_WATCHLIST_EXPIRY_SEC:
+                self._log(f"Demand watchlist EXPIRED: {sym} (no confirmation in {age_sec/60:.0f}m)")
+                expired.append(sym)
+                continue
+
+            tick = ticks.get(sym)
+            if not tick:
+                continue
+
+            live_price = float(tick.get("last_price") or 0)
+            if live_price <= 0:
+                continue
+
+            live_change = float(tick.get("change") or 0)
+            total_buy = float(tick.get("total_buy_quantity") or 0)
+            total_sell = float(tick.get("total_sell_quantity") or 0)
+            live_volume = float(tick.get("volume_traded") or 0)
+            live_imbalance = (total_buy / total_sell) if total_sell > 0 else 0.0
+            hist_avg_vol = float(watch.get("hist_avg_vol", 0.0) or 0.0)
+            live_vol_ratio = (live_volume / hist_avg_vol) if hist_avg_vol > 0 else 0.0
+
+            # Update peak price
+            if live_price > watch["peak_price"]:
+                watch["peak_price"] = live_price
+                watch["consecutive_up"] = watch.get("consecutive_up", 0) + 1
+            else:
+                watch["consecutive_up"] = 0
+
+            # Remove if price dropped below detection (demand evaporated)
+            if live_price < watch["detect_price"] * 0.995:
+                self._log(
+                    f"Demand watchlist DROPPED: {sym} ₹{live_price:.0f} "
+                    f"< detect ₹{watch['detect_price']:.0f}"
+                )
+                expired.append(sym)
+                continue
+
+            # Don't chase this path once day move is already stretched.
+            # Those should be handled by the main BUY path / momentum continuation logic.
+            if live_change >= self._DEMAND_CONFIRM_MAX_DAY_CHANGE:
+                self._log(
+                    f"Demand watchlist EXPIRED: {sym} day move +{live_change:.1f}% "
+                    f">= {self._DEMAND_CONFIRM_MAX_DAY_CHANGE:.1f}% (late chase risk)"
+                )
+                expired.append(sym)
+                continue
+
+            # Confirmation criteria:
+            # Standard: rise +0.9% + persistent imbalance + healthy live volume ratio.
+            # Fast-track: rise +0.7% with very strong imbalance (4.5x+) and momentum.
+            # Late window (>10m): require stricter quality to avoid stale entries.
+            rise_from_detect = ((live_price - watch["detect_price"]) / watch["detect_price"]) * 100
+            vol_grew = live_volume > watch["volume"] * 1.1  # at least 10% more volume
+            consecutive_up = watch.get("consecutive_up", 0) >= 3  # 3+ consecutive upticks
+
+            standard_quality = (
+                rise_from_detect >= self._DEMAND_CONFIRM_RISE_PCT
+                and live_imbalance >= self._DEMAND_CONFIRM_MIN_IMBALANCE
+                and live_vol_ratio >= self._DEMAND_CONFIRM_MIN_VOL_RATIO
+                and (vol_grew or consecutive_up)
+            )
+            fast_track = (
+                rise_from_detect >= self._DEMAND_CONFIRM_FAST_RISE_PCT
+                and live_imbalance >= self._DEMAND_CONFIRM_FAST_IMBALANCE
+                and live_vol_ratio >= 1.5
+                and watch.get("consecutive_up", 0) >= 2
+            )
+
+            if age_sec > 600 and not (
+                rise_from_detect >= 1.4
+                and live_imbalance >= 3.0
+                and live_vol_ratio >= 2.2
+            ):
+                continue
+
+            if standard_quality or fast_track:
+                confirmed.append({
+                    "symbol": sym,
+                    "detect_price": watch["detect_price"],
+                    "detect_change": watch["detect_change"],
+                    "live_price": live_price,
+                    "live_change": live_change,
+                    "rise_from_detect": rise_from_detect,
+                    "imbalance": live_imbalance,
+                    "live_vol_ratio": live_vol_ratio,
+                    "volume": live_volume,
+                    "detect_imbalance": watch["imbalance"],
+                    "reasons": watch["reasons"],
+                    "reject_reason": watch["reject_reason"],
+                    "age_sec": age_sec,
+                })
+
+        # Clean up expired
+        for sym in expired:
+            self._demand_watchlist.pop(sym, None)
+
+        # Send confirmed alerts (max 2 per cycle to avoid flooding)
+        for item in confirmed[:2]:
+            sym = item["symbol"]
+            if sym in self._already_alerted_buys:
+                continue
+            if self._demand_alert_count >= self._DEMAND_WATCHLIST_MAX_ALERTS:
+                break
+
+            price = item["live_price"]
+            _imb = float(item.get("imbalance", 0.0) or 0.0)
+            _volr = float(item.get("live_vol_ratio", 0.0) or 0.0)
+            _rise = float(item.get("rise_from_detect", 0.0) or 0.0)
+
+            # Grade Demand Confirmed quality so user can size positions safely.
+            # A: strongest (full size), B: moderate (reduced size), C: weak (smallest).
+            if _imb >= 5.0 and _volr >= 3.0 and _rise <= 2.5:
+                _demand_grade = "A"
+                _size_mult = 1.0
+            elif _imb >= 3.0 and _volr >= 2.0 and _rise <= 3.0:
+                _demand_grade = "B"
+                _size_mult = 0.7
+            else:
+                _demand_grade = "C"
+                _size_mult = 0.5
+
+            _sl_price = round(price * 0.97, 2)  # 3% SL
+            _target_price = round(price * 1.08, 2)  # 8% target
+            _scope_pct = round((((_target_price / price) - 1) * 100), 1)
+            _base_qty = max(1, int(4000 / price))
+            _suggested_qty = max(1, int(_base_qty * _size_mult))
+            _approx_cost = _suggested_qty * price
+            _rr = round((_target_price - price) / max(price - _sl_price, 0.01), 1)
+            _age_min = item["age_sec"] / 60
+
+            msg = (
+                f"**🔮 DEMAND CONFIRMED ({_demand_grade}-GRADE) — {sym}**\n"
+                f"Detected at `₹{item['detect_price']:.0f}` "
+                f"→ Now `₹{price:.2f}`\n"
+                f"Rise since detection: `+{item['rise_from_detect']:.1f}%` in {_age_min:.0f}m\n"
+                f"📥 Buy imbalance: `{item['imbalance']:.1f}x` "
+                f"(was {item['detect_imbalance']:.1f}x at detection)\n"
+                f"📊 Live volume: `{item.get('live_vol_ratio', 0.0):.1f}x` vs 10-day avg\n\n"
+                f"SL: `₹{_sl_price:.0f}` (3%) | Target: `₹{_target_price:.0f}` (+{_scope_pct:.1f}%)\n"
+                f"R:R `1:{_rr}` | Size: `{_size_mult:.1f}x` | Suggested: **{_suggested_qty} shares** (≈ ₹{_approx_cost:,.0f})\n"
+                f"_Was rejected: {item['reject_reason']} — demand persisted, momentum confirmed._"
+            )
+            self._send_to_channels(msg)
+            self._already_alerted_buys.add(sym)
+            self._demand_watchlist.pop(sym, None)
+            self._demand_alert_count += 1
+            self._log(
+                f"DEMAND CONFIRMED alert: {sym} +{item['rise_from_detect']:.1f}% from detect, "
+                f"imb={item['imbalance']:.1f}x [{self._demand_alert_count}/{self._DEMAND_WATCHLIST_MAX_ALERTS}]"
+            )
+
+    # ------------------------------------------------------------------
     # Tick-only millisecond fast scanner
     # ------------------------------------------------------------------
 
@@ -1171,6 +1665,10 @@ class AutoPilotInvestor:
         """
         if not self._is_market_open():
             return  # NSE not open yet — skip tick scanning
+
+        # Check demand watchlist FIRST — these are previously-rejected stocks
+        # being monitored for momentum confirmation (runs in < 1ms)
+        self._check_demand_watchlist()
 
         ticks = self._load_ticks_snapshot()
         if not ticks:
@@ -1318,6 +1816,12 @@ class AutoPilotInvestor:
         daily_change = item["daily_change"]
         direction = "+" if daily_change >= 0 else ""
         reasons_text = "\n".join(f"  \u2022 {r}" for r in item["reasons"])
+        # Pre-compute imbalance for demand watchlist hooks
+        _item_total_buy = float(item.get("total_buy", 0))
+        _item_total_sell = float(item.get("total_sell", 0))
+        _item_imbalance = (_item_total_buy / _item_total_sell) if _item_total_sell > 0 else 0.0
+        _item_volume = float(item.get("volume", 0))
+        _item_reasons = item.get("reasons", [])
         try:
             from pkscreener.classes.ActionableReport import ActionableReportRunner
             runner = ActionableReportRunner(
@@ -1335,11 +1839,121 @@ class AutoPilotInvestor:
             self._log(f"Tick OHLCV confirm failed for {sym}: {exc}")
             report_df = None
 
-        # If OHLCV is unavailable (no Kite history, SME/penny stock, etc.),
-        # suppress silently — we have no targets, no stop-loss, nothing actionable.
-        # Sending a "check manually" alert is noise that wastes the user's attention.
+        # Fallback: if build_report returned nothing, try the signal monitor's
+        # latest scan CSV. This has yesterday's (or today's) full scan for ~5000 stocks.
+        if (report_df is None or report_df.empty):
+            try:
+                _sm_path = os.path.join("results", "Data", "signalmonitor_allstocks_signals_simple_latest.csv")
+                if os.path.exists(_sm_path):
+                    _sm_df = pd.read_csv(_sm_path)
+                    _sm_row = _sm_df[_sm_df["Stock"] == sym]
+                    if not _sm_row.empty:
+                        # Rename columns to match ActionableReport format
+                        _rename = {
+                            "Stock": "Stock", "What To Do": "NowAction",
+                            "Signal Strength %": "ConfidencePct",
+                            "Price Now": "Price Now", "Buy Above": "BuyAbove",
+                            "Sell If Below": "SellIfBelow",
+                            "Take Profit 1": "TakeProfit1", "Take Profit 2": "TakeProfit2",
+                            "Volume vs Avg": "VolumeRatio", "RSI": "RSI",
+                            "CCI": "CCI", "MFI": "MFI",
+                            "Why": "BlindBuyReasons", "Suggested Qty": "SuggestedQty",
+                            "Avg Daily Value": "AvgDailyValue", "ATR": "ATR",
+                            "PrevClose": "PrevClose",
+                        }
+                        report_df = _sm_row.rename(columns=_rename)
+                        # Fill missing columns expected by scorer
+                        for col in ["BlindBuyScore", "ATR"]:
+                            if col not in report_df.columns:
+                                report_df[col] = 0
+                        self._log(f"Fallback: loaded {sym} from signal monitor scan (last scan CSV)")
+            except Exception as _fb_exc:
+                self._log(f"Signal monitor fallback failed for {sym}: {_fb_exc}")
+
+        # If OHLCV is unavailable (no Kite history, SME/penny stock, etc.):
+        # During opening 30-min window, send a lightweight tick-only alert
+        # BUT only for high-conviction setups to avoid alert flooding.
+        # Quality gates for tick-only: price >= ₹50, volume > 0, order imbalance >= 2x OR change >= 7%.
         if report_df is None or report_df.empty:
-            self._log(f"Tick OHLCV unavailable for {sym} (+{daily_change:.1f}%) — suppressed (no data to act on)")
+            try:
+                import pytz as _pytz_ohlcv
+                _ist_ohlcv = _pytz_ohlcv.timezone("Asia/Kolkata")
+                _now_ohlcv = datetime.now(_ist_ohlcv)
+                _min_since_open_ohlcv = (_now_ohlcv.hour * 60 + _now_ohlcv.minute) - (9 * 60 + 15)
+            except Exception:
+                _min_since_open_ohlcv = 120
+
+            total_buy = float(item.get("total_buy", 0))
+            total_sell = float(item.get("total_sell", 0))
+            volume = float(item.get("volume", 0))
+            imbalance_ratio = (total_buy / total_sell) if total_sell > 0 else 0.0
+            has_imbalance = imbalance_ratio >= 2.0
+            has_strong_imbalance = imbalance_ratio >= 3.0
+
+            # Check historical avg volume — block illiquid micro-caps
+            # EMMBI had 154-1007 shares/day → stale prices, unreliable ticks
+            _hist_avg_vol = 0
+            try:
+                _hist_path = os.path.join("results", "Data", "kite_history_cache", "day", f"{sym}.csv")
+                if os.path.exists(_hist_path):
+                    _hdf = pd.read_csv(_hist_path)
+                    _hist_avg_vol = _hdf["volume"].tail(10).mean()
+            except Exception:
+                pass
+
+            # Tiered tick-only alerts: catch moves EARLY when order book confirms
+            # Tier 1: 2-3.5% move WITH strong imbalance (3x+) — truly early, ~1.5-3% scope
+            # Tier 2: 2.5-4.5% move WITH imbalance (2x+) — moderate, ~0.5-2.5% scope
+            # Cap ensures minimum ~1.5% (T1) or ~0.5% (T2) scope when alert fires.
+            # Require avg daily volume >= 50,000 for tick-only (no OHLCV backing).
+            _tier = 0
+            if (_min_since_open_ohlcv <= 30 and price >= 50.0 and volume > 100
+                    and _hist_avg_vol >= 50000  # min 50k avg daily volume for tick-only
+                    and sym not in self._already_alerted_buys):
+                if 2.0 <= daily_change <= 3.5 and has_strong_imbalance:
+                    _tier = 1  # best — early + confirmed demand, 1.5-3% scope
+                elif 2.5 <= daily_change <= 4.5 and has_imbalance:
+                    _tier = 2  # good — moderate move + demand, 0.5-2.5% scope
+            _tick_only_ok = _tier > 0 and getattr(self, '_tick_only_alert_count', 0) < 8
+            if _tick_only_ok:
+                tier_label = {1: "🟢 EARLY CATCH", 2: "🟡 BUILDING MOVE"}[_tier]
+                imb_str = ""
+                if has_imbalance:
+                    imb_str = f" | 📥 Buy orders {imbalance_ratio:.1f}x sell"
+                # Dynamic target based on imbalance strength:
+                # Stronger imbalance = bigger institutional demand = larger expected move
+                if imbalance_ratio >= 10.0:
+                    _target_pct = 15.0  # monster imbalance — could be a 15%+ day
+                elif imbalance_ratio >= 5.0:
+                    _target_pct = 10.0  # strong imbalance — expect 10%+
+                else:
+                    _target_pct = 7.0   # moderate imbalance — conservative 7%
+                scope_pct = max(0, _target_pct - daily_change)
+                scope_str = f" | Scope: `~{scope_pct:.1f}%` to {_target_pct:.0f}%"
+                _sl_price = price * 0.98
+                _target_price = price * (1 + (_target_pct - daily_change) / 100)
+                # Suggest qty based on ₹4000 position size
+                _suggested_qty = max(1, int(4000 / price))
+                _approx_cost = _suggested_qty * price
+                msg = (
+                    f"**{tier_label} — {sym}**\n"
+                    f"Price: `₹{price:.2f}` | Up: `+{daily_change:.1f}%`{imb_str}{scope_str}\n"
+                    f"Tick signals:\n{reasons_text}\n\n"
+                    f"SL: `₹{_sl_price:.0f}` (2%) | Target: `₹{_target_price:.0f}` ({_target_pct - daily_change:.1f}% from here)\n"
+                    f"Suggested: Buy **{_suggested_qty} shares** (≈ ₹{_approx_cost:,.0f})\n"
+                    f"_Tier {_tier} — {'high' if _tier == 1 else 'medium'} conviction._"
+                )
+                self._send_to_channels(msg)
+                self._already_alerted_buys.add(sym)
+                self._tick_only_alert_count = getattr(self, '_tick_only_alert_count', 0) + 1
+                self._log(f"Tier-{_tier} tick alert for {sym} (+{daily_change:.1f}%, imb={imbalance_ratio:.1f}x) [{self._tick_only_alert_count}/8]")
+            else:
+                self._log(f"Tick OHLCV unavailable for {sym} (+{daily_change:.1f}%) — suppressed (no data to act on)")
+                # Still add to demand watchlist if has imbalance — track for momentum
+                self._add_to_demand_watchlist(
+                    sym, price, daily_change, imbalance_ratio, volume,
+                    item.get("reasons", []), "no OHLCV data, tick-only gates failed"
+                )
             return
 
         row = report_df.iloc[0]
@@ -1489,6 +2103,10 @@ class AutoPilotInvestor:
                     f"vol {_vol_ratio_live:.2f}x < {_vol_gate:.1f}x "
                     f"(weak-volume runner{', broad rally +' + f'{_nifty_chg:.1f}%' if _is_broad_rally else ''})"
                 )
+                self._add_to_demand_watchlist(
+                    sym, price, daily_change, _item_imbalance, _item_volume,
+                    _item_reasons, f"weak vol {_vol_ratio_live:.1f}x < {_vol_gate:.1f}x"
+                )
                 return
             # Score gate: 58 normally, 50 for broad-rally outperformers or
             # high-volume Buy-Now stocks (vol >= 2.0x + engine says buy = double
@@ -1519,7 +2137,9 @@ class AutoPilotInvestor:
         else:
             effective_min = 65.0 if _price_below_trigger else self.config.blind_buy_min_score
 
-        if blind_score >= effective_min and sym not in self._already_alerted_buys:
+        if blind_score >= effective_min and (sym not in self._already_alerted_buys
+                                            or sym not in getattr(self, '_definitely_buy_alerted', set())):
+            _is_re_alert = sym in self._already_alerted_buys  # True if already sent a regular BUY
             # CONFIRMED — send a proper BUY ALERT immediately
             stop_loss = float(row.get("SellIfBelow", row.get("Sell If Below", 0)) or 0)
             target1 = float(row.get("TakeProfit1", row.get("Take Profit 1", 0)) or 0)
@@ -1528,6 +2148,27 @@ class AutoPilotInvestor:
             confidence = float(row.get("ConfidencePct", row.get("Signal Strength %", 0)) or 0)
             volume_ratio = float(row.get("VolumeRatio", row.get("Volume Ratio", 0)) or 0)
             atr = float(row.get("ATR", 0) or 0)
+
+            # ── Gate: Inverted targets sanity check ──────────────────
+            # If SL is ABOVE current price and targets are BELOW, the signal monitor
+            # returned a SHORT/sell setup. This happens when the engine's analysis is
+            # bearish but the stock gapped up (CONCORDBIO: SL ₹1123 > price ₹1072,
+            # T1 ₹926, T2 ₹847 — clearly a short setup, NOT a buy).
+            # Fix: detect and recompute fresh long targets from current price.
+            _sl_above_price = stop_loss > 0 and _price_now > 0 and stop_loss > _price_now
+            _targets_below_price = (target1 > 0 and target1 < _price_now) or (target2 > 0 and target2 < _price_now)
+            if _sl_above_price or _targets_below_price:
+                self._log(
+                    f"Inverted targets for {sym}: SL ₹{stop_loss:.0f} {'>' if _sl_above_price else '<'} "
+                    f"Price ₹{_price_now:.0f}, T1 ₹{target1:.0f}, T2 ₹{target2:.0f} — "
+                    f"signal monitor returned SHORT setup, recomputing from live price"
+                )
+                if atr > 0:
+                    stop_loss = round(_price_now - 1.5 * atr, 2)
+                else:
+                    stop_loss = round(_price_now * 0.97, 2)  # 3% SL
+                target1 = round(_price_now * 1.05, 2)  # +5%
+                target2 = round(_price_now * 1.10, 2)  # +10%
 
             # ── QUALITY GATES for ~90% win rate ─────────────────────────
             # Data-driven from April 8 backtest on 1,357 three-percent movers:
@@ -1542,12 +2183,24 @@ class AutoPilotInvestor:
             # Gate A: Engine action — require "Buy Now" or similar.
             # Override: RSI < 45 (oversold bounce — engine may say Hold but reversal
             # is the signal, e.g. PACEDIGITK RSI 39, +3.1% entry → +6.2% high).
-            if not _is_buy_action and _rsi_val >= 45 and not is_early_mover:
+            # Override: Opening 30-min window — signal state is from yesterday,
+            # engine says "Hold" for stocks that are NOW breaking out at market open.
+            # A +3%+ gap-up with volume IS the buy signal, engine just hasn't re-scanned.
+            if not _is_buy_action and _rsi_val >= 45 and not is_early_mover and not _is_opening_window:
                 self._log(
                     f"Suppressed {sym}: engine says '{_now_action}' + RSI {_rsi_val:.0f} >= 45 "
                     f"— no buy recommendation, skip"
                 )
+                self._add_to_demand_watchlist(
+                    sym, price, daily_change, _item_imbalance, _item_volume,
+                    _item_reasons, f"engine='{_now_action}', RSI={_rsi_val:.0f}"
+                )
                 return
+            if not _is_buy_action and _is_opening_window:
+                self._log(
+                    f"Opening window bypass: {sym} engine says '{_now_action}' but "
+                    f"+{daily_change:.1f}% move overrides stale signal"
+                )
 
             # Gate B: RSI < 80 — extremely overbought stocks stall.
             # SETCO RSI 83 → max +5% then reversed. LUXIND RSI 78 borderline.
@@ -1558,16 +2211,34 @@ class AutoPilotInvestor:
                 return
 
             # Gate C: Confidence >= 20% — engine must have minimum conviction.
-            if confidence < 20 and not is_early_mover and not (_rsi_val < 45):
+            # Bypass during opening window — confidence from yesterday's scan is stale.
+            if confidence < 20 and not is_early_mover and not (_rsi_val < 45) and not _is_opening_window:
                 self._log(
                     f"Suppressed {sym}: confidence {confidence:.0f}% < 20% — low conviction, skip"
                 )
+                self._add_to_demand_watchlist(
+                    sym, price, daily_change, _item_imbalance, _item_volume,
+                    _item_reasons, f"low confidence {confidence:.0f}%"
+                )
+                return
+
+            # Gate E: Price >= ₹50 — skip penny stocks entirely.
+            # OLAELEC ₹32 — wide spreads, hard to exit, unreliable volume data.
+            if _price_now < 50.0:
+                self._log(f"Suppressed {sym}: price ₹{_price_now:.0f} < ₹50 — penny stock, skip")
+                return
+
+            # Gate F: Volume ratio >= 0.5x — must have real trading activity.
+            # GUJALKALI 0.2x avg vol — imbalance on tiny volume is meaningless.
+            if volume_ratio < 0.5 and not is_early_mover:
+                self._log(f"Suppressed {sym}: volume {volume_ratio:.1f}x < 0.5x avg — illiquid, skip")
                 return
 
             # Gate D: Real targets — require at least one real OHLCV-derived target.
             # Without SL/T1/T2, the engine couldn't find support/resistance.
+            # Bypass during opening window — we'll derive targets from price.
             _has_real_targets = stop_loss > 0 or target1 > 0 or target2 > 0
-            if not _has_real_targets and not is_early_mover:
+            if not _has_real_targets and not is_early_mover and not _is_opening_window:
                 self._log(
                     f"Suppressed {sym}: NO real targets (SL=0, T1=0, T2=0) "
                     f"+{daily_change:.1f}%, conf={confidence:.0f}%, action='{_now_action}' "
@@ -1676,6 +2347,40 @@ class AutoPilotInvestor:
 
             qty_line = f"\nSuggested: Buy **`{suggested_qty}` shares** (≈ ₹{_invest_amt:,.0f})"
 
+            # ── "DEFINITELY BUY" classification ────────────────────────
+            # Only fires when ALL quality signals align. User can act instantly.
+            # Criteria (ALL must be true):
+            #   1. OHLCV confirmed (we're already in this path)
+            #   2. Score >= 55
+            #   3. Confidence >= 30%
+            #   4. Volume >= 2.0x avg
+            #   5. Price >= ₹100 (no micro-caps)
+            #   6. Change 2-5% (early enough — scope to run)
+            #   7. Real targets (SL, T1, T2 all > 0)
+            #   8. R:R >= 1.5 (from T2)
+            #   9. Historical avg volume >= 100k (highly liquid)
+            _def_buy_hist_avg = 0
+            try:
+                _def_hist_path = os.path.join("results", "Data", "kite_history_cache", "day", f"{sym}.csv")
+                if os.path.exists(_def_hist_path):
+                    _def_hdf = pd.read_csv(_def_hist_path)
+                    _def_buy_hist_avg = _def_hdf["volume"].tail(10).mean()
+            except Exception:
+                pass
+            _has_all_targets = stop_loss > 0 and target1 > 0 and target2 > 0
+            _rr2_val = ((target2 - _price_now) / (_price_now - stop_loss)) if (_price_now > stop_loss and stop_loss > 0) else 0
+            _is_definitely_buy = (
+                blind_score >= 50
+                and confidence >= 30
+                and volume_ratio >= 2.0
+                and _price_now >= 100.0
+                and 2.0 <= daily_change <= 5.0
+                and _has_all_targets
+                and _rr2_val >= 1.5
+                and _def_buy_hist_avg >= 100000
+                and not is_early_mover
+            )
+
             # Time-of-day context: after 1 PM + already moved 5%+ = swing trade only
             try:
                 import pytz
@@ -1691,7 +2396,9 @@ class AutoPilotInvestor:
             is_swing_only = daily_change >= 8.0
             swing_tag = f"\n⏰ **SWING ONLY** — already +{daily_change:.1f}% today. Do NOT enter for intraday — swing trade only (hold 2-5 days)." if is_swing_only else ""
 
-            if is_early_mover:
+            if _is_definitely_buy:
+                alert_header = f"**\U0001f525 DEFINITELY BUY `{sym}`** \u2014 Score {score_label}\n\u2705 All quality checks passed: OHLCV \u2713 | Volume {volume_ratio:.1f}x \u2713 | Confidence {confidence:.0f}% \u2713 | R:R 1:{_rr2_val:.1f} \u2713"
+            elif is_early_mover:
                 alert_header = f"**\U0001f331 EARLY MOVER `{sym}`** (accumulation detected, low % — target 5-10%) \u2014 Score {score_label}"
             else:
                 alert_header = f"**\U0001f7e2 BUY `{sym}`** (tick-confirmed in ~2s) \u2014 Score {score_label}{swing_tag}"
@@ -1741,29 +2448,80 @@ class AutoPilotInvestor:
                 _buy_above_display = _buy_above if _buy_above > 0 else _price_now
                 is_swing_only = daily_change >= 8.0
                 swing_tag = f"\n⏰ **SWING ONLY** — already +{daily_change:.1f}% today. Do NOT enter for intraday — swing trade only (hold 2-5 days)." if is_swing_only else ""
-                if is_early_mover:
+                # Recalculate _is_definitely_buy with fresh data
+                _rr2_val = ((target2 - _price_now) / (_price_now - stop_loss)) if (_price_now > stop_loss and stop_loss > 0) else 0
+                _is_definitely_buy = (
+                    blind_score >= 50
+                    and confidence >= 30
+                    and volume_ratio >= 2.0
+                    and _price_now >= 100.0
+                    and 2.0 <= daily_change <= 5.0
+                    and _has_all_targets
+                    and _rr2_val >= 1.5
+                    and _def_buy_hist_avg >= 100000
+                    and not is_early_mover
+                )
+                if _is_definitely_buy:
+                    alert_header = f"**\U0001f525 DEFINITELY BUY `{sym}`** \u2014 Score {score_label}\n\u2705 All quality checks passed: OHLCV \u2713 | Volume {volume_ratio:.1f}x \u2713 | Confidence {confidence:.0f}% \u2713 | R:R 1:{_rr2_val:.1f} \u2713"
+                elif is_early_mover:
                     alert_header = f"**\U0001f331 EARLY MOVER `{sym}`** (accumulation detected, low % — target 5-10%) \u2014 Score {score_label}"
                 else:
                     alert_header = f"**\U0001f7e2 BUY `{sym}`** (tick-confirmed in ~2s) \u2014 Score {score_label}{swing_tag}"
 
+            # Scope from entry price to targets
+            _scope_t1 = ((target1 - _price_now) / _price_now * 100) if target1 > 0 and _price_now > 0 else 0
+            _scope_t2 = ((target2 - _price_now) / _price_now * 100) if target2 > 0 and _price_now > 0 else 0
+            _scope_line = ""
+            if _scope_t1 > 0 or _scope_t2 > 0:
+                parts = []
+                if _scope_t1 > 0:
+                    parts.append(f"+{_scope_t1:.1f}% to T1")
+                if _scope_t2 > 0:
+                    parts.append(f"+{_scope_t2:.1f}% to T2")
+                _scope_line = f" | **Scope: {' | '.join(parts)}**"
+
+            _ohlcv_reasons_text = self._simplify_blind_reasons(blind_reasons)
+            # BlindBuy reasons are computed before final stop/target normalization.
+            # If we corrected an inverted short setup into a long setup, drop stale
+            # danger text when stop-loss is safely below current price.
+            if _price_now > 0 and stop_loss > 0 and stop_loss < _price_now * 0.99:
+                _ohlcv_reasons_text = _ohlcv_reasons_text.replace(
+                    "DANGER: price at stop loss level | ", ""
+                ).replace(" | DANGER: price at stop loss level", "").replace(
+                    "DANGER: price at stop loss level", ""
+                )
+
             message = (
                 f"{alert_header}\n"
                 f"Price `{_price_now:.2f}` ({direction}{daily_change:.2f}% from prev close) | Buy Above `{_buy_above_display:.2f}`\n"
-                f"Stop Loss `{stop_loss:.2f}` | Target 1 `{target1:.2f}` | Target 2 `{target2:.2f}`{risk_reward}\n"
+                f"Stop Loss `{stop_loss:.2f}` | Target 1 `{target1:.2f}` | Target 2 `{target2:.2f}`{risk_reward}{_scope_line}\n"
                 f"Volume `{volume_ratio:.1f}x avg` | Confidence `{confidence:.0f}%`\n"
                 f"Tick signals:\n{reasons_text}\n"
-                f"OHLCV confirms: {self._simplify_blind_reasons(blind_reasons)}"
+                f"OHLCV confirms: {_ohlcv_reasons_text}"
                 f"{qty_line}\n"
                 f"_Open Groww \u2192 Buy \u2192 then use `/buy {sym} QTY PRICE` to record_"
             )
-            self._log(
-                f"🟢 BUY ALERT SENT: {sym} at ₹{_price_now:.2f} ({direction}{daily_change:.2f}%) "
-                f"score={blind_score:.0f}/{effective_min:.0f} vol={volume_ratio:.1f}x "
-                f"reasons={blind_reasons[:80]}"
-            )
-            self._already_alerted_buys.add(sym)
-            self._save_daily_alerted(sym)
-            self._send_to_channels(message)
+            # For re-alerts: only send if it's a DEFINITELY BUY upgrade
+            if _is_re_alert and not _is_definitely_buy:
+                self._log(f"Skip re-alert for {sym}: already alerted, not a DEFINITELY BUY upgrade")
+            else:
+                if _is_re_alert and _is_definitely_buy:
+                    message = f"**⬆️ UPGRADED to DEFINITELY BUY**\n{message}"
+                    self._log(
+                        f"🔥 DEFINITELY BUY UPGRADE: {sym} at ₹{_price_now:.2f} ({direction}{daily_change:.2f}%) "
+                        f"score={blind_score:.0f} vol={volume_ratio:.1f}x conf={confidence:.0f}%"
+                    )
+                else:
+                    self._log(
+                        f"🟢 BUY ALERT SENT: {sym} at ₹{_price_now:.2f} ({direction}{daily_change:.2f}%) "
+                        f"score={blind_score:.0f}/{effective_min:.0f} vol={volume_ratio:.1f}x "
+                        f"reasons={blind_reasons[:80]}"
+                    )
+                self._already_alerted_buys.add(sym)
+                if _is_definitely_buy:
+                    self._definitely_buy_alerted.add(sym)
+                self._save_daily_alerted(sym)
+                self._send_to_channels(message)
             # Track for momentum continuation re-alerts
             self._momentum_tracked[sym] = {
                 "entry_price": _price_now,
@@ -1778,6 +2536,12 @@ class AutoPilotInvestor:
             self._log(
                 f"Not a buy: {sym} score={blind_score:.0f} (need {effective_min:.0f}) | "
                 f"change={daily_change:.2f}% | reasons={blind_reasons[:80]}"
+            )
+            # Add to demand watchlist — if demand persists and price accelerates,
+            # we'll catch the momentum instead of waiting for the 10-min rescan.
+            self._add_to_demand_watchlist(
+                sym, price, daily_change, _item_imbalance, _item_volume,
+                _item_reasons, f"score {blind_score:.0f} < {effective_min:.0f}"
             )
 
     def _load_ticks_snapshot(self) -> Dict[str, Dict]:
