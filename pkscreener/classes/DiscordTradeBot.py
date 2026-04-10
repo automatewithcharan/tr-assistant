@@ -320,6 +320,11 @@ def _format_signal_rows_text(rows_df: pd.DataFrame, empty_text: str) -> str:
     if rows_df is None or rows_df.empty:
         return empty_text
 
+    try:
+        from pkscreener.classes.AutoPilotInvestor import _compute_suggested_qty
+    except Exception:
+        _compute_suggested_qty = None
+
     lines = []
     for _, row in rows_df.iterrows():
         sym = str(row.get("Stock", row.get("Symbol", ""))).strip().upper()
@@ -345,13 +350,16 @@ def _format_signal_rows_text(rows_df: pd.DataFrame, empty_text: str) -> str:
             qty = int(float(_qty_raw)) if _qty_raw == _qty_raw else 0
         except (TypeError, ValueError):
             qty = 0
-        if qty <= 0 and price > 0 and stop_loss > 0 and price > stop_loss:
-            qty = max(1, int(1000 / (price - stop_loss)))
-        elif qty <= 0 and price > 0:
-            qty = max(1, int(1000 / (price * 0.03)))
-        if price > 0:
-            qty = min(qty, max(1, int(5000 / price)))
-        invest_amt = round(qty * price, 0) if price > 0 else 0
+        if qty <= 0 and _compute_suggested_qty is not None:
+            qty, invest_amt = _compute_suggested_qty(
+                price,
+                stop_loss=stop_loss,
+                score=blind_score,
+            )
+        else:
+            if price > 0:
+                qty = min(qty, int(5000 // price))
+            invest_amt = round(qty * price, 0) if price > 0 and qty > 0 else 0
 
         # R:R
         rr_text = ""
@@ -367,7 +375,11 @@ def _format_signal_rows_text(rows_df: pd.DataFrame, empty_text: str) -> str:
             f"**\U0001f7e2 BUY `{sym}`** (OHLCV signal, not yet tick-confirmed) \u2014 Score {score_label}",
             f"Price `{price:.2f}` ({direction}{change_pct:.2f}% today) | Buy Above `{buy_above:.2f}`",
             f"Stop Loss `{stop_loss:.2f}` | Target 1 `{target1:.2f}` | Target 2 `{target2:.2f}`{rr_text}",
-            f"Suggested: Buy **`{qty}` shares** (\u20b9{invest_amt:,.0f})",
+            (
+                f"Suggested: Buy **`{qty}` shares** (\u20b9{invest_amt:,.0f})"
+                if qty > 0
+                else "Suggested: Skip starter-size entry under the \u20b95,000 cap"
+            ),
             f"Why: {why}",
             "",
         ])

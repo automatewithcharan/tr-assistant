@@ -51,7 +51,7 @@ class AutoPilotConfig:
     min_trade_value: float = 0.0        # no liquidity floor — small caps welcome
     min_volume_ratio: float = 0.0       # don't gate on volume ratio
     max_entry_gap_pct: float = 5.0      # wider trigger window (backtest shows 1.5 blocks good picks)
-    blind_buy_min_score: float = 40.0   # min score to alert; intraday path uses max(34, config-6)
+    blind_buy_min_score: float = 43.0   # min score to alert (raised from 40 — 40-42 had 80% loss rate on Apr 10 audit)
 
     # Sell monitoring
     auto_exit_on_sell: bool = True
@@ -149,6 +149,110 @@ def _safe_float(value, default: float = 0.0) -> float:
         return float(value)
     except (TypeError, ValueError):
         return default
+
+
+def _normalize_long_levels(
+    price: float,
+    stop_loss: float,
+    target1: float,
+    target2: float,
+    atr: float = 0.0,
+    aggressive: bool = False,
+) -> Tuple[float, float, float, bool]:
+    """Ensure a buy alert has long-side levels around the current price."""
+    if price <= 0:
+        return stop_loss, target1, target2, False
+
+    changed = False
+    stop_mult = 2.0 if aggressive else 1.5
+    stop_fallback = 0.96 if aggressive else 0.95
+    t1_mult = 1.05 if aggressive else 1.02
+    t2_mult = 1.10 if aggressive else 1.04
+
+    if stop_loss <= 0 or stop_loss >= price:
+        stop_loss = round(price - stop_mult * atr, 2) if atr > 0 else round(price * stop_fallback, 2)
+        changed = True
+
+    if target1 <= price:
+        target1 = round(price * t1_mult, 2)
+        changed = True
+
+    if target2 <= max(price, target1):
+        target2 = round(price * t2_mult, 2)
+        if target2 <= target1:
+            target2 = round(target1 * 1.02, 2)
+        changed = True
+
+    return stop_loss, target1, target2, changed
+
+
+def _compute_long_rr(price: float, stop_loss: float, target2: float) -> float:
+    """Compute long-side reward/risk only when the setup geometry is valid."""
+    if price <= 0 or stop_loss <= 0 or price <= stop_loss or target2 <= price:
+        return 0.0
+    risk = price - stop_loss
+    if risk <= 0:
+        return 0.0
+    return round((target2 - price) / risk, 1)
+
+
+def _compute_suggested_qty(
+    price: float,
+    stop_loss: float = 0.0,
+    score: float = 0.0,
+    atr: float = 0.0,
+    size_mult: float = 1.0,
+    max_position: float = 5000.0,
+    risk_amount: float = 1000.0,
+    portfolio: float = 100000.0,
+    target_vol: float = 0.15,
+) -> Tuple[int, float]:
+    """Size a position consistently across alert paths.
+
+    Returns (qty, invested_amount). A quantity of 0 means the stock is too
+    expensive for the configured starter-size cap or too risky for the risk cap.
+    """
+    if price <= 0 or size_mult <= 0:
+        return 0, 0.0
+
+    budget_qty = int(max_position // price) if max_position > 0 else 0
+    if max_position > 0 and budget_qty <= 0:
+        return 0, 0.0
+
+    risk_per_share = 0.0
+    if stop_loss > 0 and price > stop_loss:
+        risk_per_share = price - stop_loss
+    else:
+        risk_per_share = price * 0.03
+    risk_qty = int(risk_amount // risk_per_share) if risk_per_share > 0 else 0
+
+    atr_val = atr if atr > 0 else price * 0.02
+    asset_vol = max((atr_val / price) * (252 ** 0.5), 0.05)
+    vol_position_value = (target_vol / asset_vol) * portfolio if asset_vol > 0 else max_position
+    if max_position > 0:
+        vol_position_value = min(vol_position_value, max_position)
+    vol_qty = int(vol_position_value // price) if price > 0 else 0
+
+    candidate_caps = [q for q in [budget_qty, risk_qty, vol_qty] if q > 0]
+    if not candidate_caps:
+        return 0, 0.0
+    base_qty = min(candidate_caps)
+
+    if score >= 70:
+        score_mult = 1.5
+    elif score >= 60:
+        score_mult = 1.0
+    else:
+        score_mult = 0.8
+
+    qty = int(base_qty * score_mult * size_mult)
+    if qty <= 0 and base_qty > 0:
+        qty = 1
+    if max_position > 0:
+        qty = min(qty, budget_qty)
+    if qty <= 0:
+        return 0, 0.0
+    return qty, round(qty * price, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -457,10 +561,20 @@ class AutoPilotInvestor:
         self._already_alerted_buys: Set[str] = self._load_daily_alerted_set()  # persist across restarts
         self._definitely_buy_alerted: Set[str] = set()  # track DEFINITELY BUY to allow upgrade re-alerts
         self._last_buynow_rescan: float = 0.0  # timestamp of last /buynow rescan
+        self._rescan_alert_count: int = 0  # number of BuyNow-rescan alerts sent today
         self._already_alerted_sells: Set[str] = set()  # avoid repeat sell alerts
         self._last_buy_alert_time: Optional[datetime] = None  # cooldown tracking
         self._pending_followups: List["BlindBuyCandidate"] = []  # buffer for batching
         self._FOLLOWUP_COOLDOWN_SEC = 900  # 15 minutes between follow-up alerts
+        # BuyNow rescan tuning: keep this path rare and high quality (fallback only).
+        self._RESCAN_INTERVAL_SEC = 180         # every 3 min (was effectively every 60s)
+        self._RESCAN_MAX_PER_CYCLE = 2          # burst control: max 2 per rescan cycle
+        self._RESCAN_MAX_PER_DAY = 12           # hard daily cap for "MISSED EARLIER" alerts
+        self._RESCAN_MIN_SCORE = 50.0           # stricter than global min-score
+        self._RESCAN_MIN_CONFIDENCE = 20.0      # avoid low-conviction stale setups
+        self._RESCAN_MIN_VOL_RATIO = 0.8        # require at least reasonable volume backing
+        self._RESCAN_MIN_DAY_CHANGE = 2.0       # must show live momentum now
+        self._RESCAN_MAX_DAY_CHANGE = 12.0      # avoid very late chase entries
 
         # Tick-only fast scanner state (no OHLCV, fires in < 1 second)
         self._tick_alerted: Dict[str, datetime] = {}  # symbol -> time of last tick-triggered scan
@@ -470,7 +584,17 @@ class AutoPilotInvestor:
         self._TICK_ORDER_IMBALANCE_RATIO = 2.5  # buy_qty / sell_qty threshold
         self._TICK_VOLUME_BURST_FRACTION = 0.025  # 2.5% of day-vol in 60s
         self._TICK_HIGH_DAILY_CHANGE_PCT = 2.0   # daily change% to auto-flag (catch moves early, at 2% not 3%)
-        self._TICK_ALREADY_MOVED_PCT = 16.0      # above this % skip — too late to enter intraday (was 12%, raised to catch 12-15% runners)
+        self._TICK_ALREADY_MOVED_PCT = 16.0      # above this % skip — too late to enter intraday. Correct fix: catch EARLIER at 3-5%, not buy LATER at 16%+
+        # Hard cutoff: never send BUY alerts after this IST minute-of-day
+        self._BUY_ALERT_CUTOFF_MIN = 15 * 60 + 15  # 3:15 PM — last 15 min are exit zone
+        # ETFs, liquid funds, and bond funds — not equity picks, never alert
+        self._EXCLUDED_SYMBOLS: Set[str] = {
+            "LIQUIDBEES", "CPSEETF", "NIFTYBEES", "BANKBEES", "JUNIORBEES",
+            "GOLDBEES", "SILVERBEES", "SETFNIFBK", "SETFNIF50", "ICICIB22",
+            "HABORETF", "EBBETF0425", "EBBETF0431", "EBBETF0430",
+            "UTINIFTETF", "NETFNIF100", "ITBEES", "SHARIABEES",
+            "MON100", "QNIFTY", "PSUBNKBEES", "INFRABEES", "MAFANG",
+        }
         self._TICK_ALERT_COOLDOWN_SEC = 180      # 3 min cooldown for ALERTING same symbol (re-check for continuation)
         self._TICK_REJECT_COOLDOWN_SEC = 1800    # 30 min cooldown for REJECTED stocks — stops same losers hogging confirmation slots
         self._TICK_POLL_INTERVAL_SEC = 0.5       # sub-second polling — mtime cache avoids redundant parsing
@@ -486,6 +610,9 @@ class AutoPilotInvestor:
         self._demand_alert_count: int = 0  # cap demand-confirmed alerts per session
         self._DEMAND_WATCHLIST_EXPIRY_SEC = 5400  # 90 min expiry — stocks can explode late
         self._DEMAND_WATCHLIST_MAX_ALERTS = 12    # max demand-confirmed alerts per session
+        # Demand-confirmed alerts target +8% continuation; don't send too late in day.
+        # After 2:45 PM there is usually not enough session left for this setup to play out.
+        self._DEMAND_ALERT_CUTOFF_MIN = 14 * 60 + 45
         self._DEMAND_CONFIRM_RISE_PCT = 0.9       # standard rise threshold from detection
         self._DEMAND_CONFIRM_MIN_IMBALANCE = 2.8  # minimum persistent order-book demand
         self._DEMAND_CONFIRM_MIN_VOL_RATIO = 2.0  # minimum live volume / 10-day avg volume
@@ -646,6 +773,7 @@ class AutoPilotInvestor:
                 self._log(f"New trading day {today_str}: clearing {len(self._momentum_tracked)} stale momentum entries from {self._momentum_tracked_date}")
                 self._momentum_tracked.clear()
                 self._tick_only_alert_count = 0
+                self._rescan_alert_count = 0
                 self._nifty_crash_pause = False
             self._momentum_tracked_date = today_str
             # Pre-open auction scan: fires during 9:00-9:15 AM IST
@@ -932,9 +1060,16 @@ class AutoPilotInvestor:
         basic safety gates (score, RSI, price > stop loss).
         """
         now_ts = time.time()
-        if now_ts - self._last_buynow_rescan < 60:  # every 60 seconds — match signal monitor cadence
+        if now_ts - self._last_buynow_rescan < self._RESCAN_INTERVAL_SEC:
             return
         self._last_buynow_rescan = now_ts
+
+        # Hard guard: no actionable BuyNow rescan alerts past cutoff.
+        # This prevents late-session "MISSED EARLIER, NOW STRONG" noise near/after close.
+        if self._past_buy_cutoff():
+            return
+        if self._rescan_alert_count >= self._RESCAN_MAX_PER_DAY:
+            return
 
         try:
             import pytz as _pytz_rs
@@ -949,21 +1084,45 @@ class AutoPilotInvestor:
         if _now_min < 9 * 60 + 30 or _now_min > 15 * 60 + 15:
             return
 
-        _sm_path = os.path.join(self.output_dir, f"signalmonitor_{self.config.universe}_signals_simple_latest.csv")
-        if not os.path.exists(_sm_path):
+        _sm_df = self._load_rescan_signal_state()
+        if _sm_df is None or _sm_df.empty or "What To Do" not in _sm_df.columns:
             return
 
-        try:
-            _sm_df = pd.read_csv(_sm_path)
-        except Exception:
-            return
+        action_series = _sm_df["What To Do"].astype(str).str.strip()
+        change_series = _sm_df["Change %"].apply(_safe_float)
+        vol_series = _sm_df["Volume vs Avg"].apply(_safe_float)
+        conf_series = _sm_df["Signal Strength %"].apply(_safe_float)
+        rsi_series = _sm_df["RSI"].apply(_safe_float)
 
-        if "What To Do" not in _sm_df.columns:
-            return
-
-        # Only look at stocks the engine says "Buy Now" or "Strong Buy Now"
+        # Primary: stocks the engine already upgraded to Buy Now.
         buy_actions = {"Strong Buy Now", "Buy Now"}
-        candidates = _sm_df[_sm_df["What To Do"].astype(str).str.strip().isin(buy_actions)]
+        buy_candidates = _sm_df[action_series.isin(buy_actions)].copy()
+        buy_candidates["_rescan_priority"] = 2
+
+        # Secondary: slow-build runners. These are not fully upgraded yet, but
+        # the tape is already confirming a real move with enough volume support.
+        slow_runner_actions = {"Watch Buy", "Momentum Buy", "Momentum Watch", "Hold / Do Nothing"}
+        slow_runner_mask = (
+            action_series.isin(slow_runner_actions)
+            & (change_series >= 4.5)
+            & (change_series <= 7.5)
+            & (vol_series >= 1.2)
+            & (conf_series >= 16.0)
+            & (rsi_series < 72.0)
+        )
+        slow_candidates = _sm_df[slow_runner_mask & ~action_series.isin(buy_actions)].copy()
+        slow_candidates["_rescan_priority"] = 1
+
+        candidates = pd.concat([buy_candidates, slow_candidates], ignore_index=True)
+        if not candidates.empty:
+            candidates = candidates.drop_duplicates(subset=["Stock"], keep="first")
+            candidates["_sort_conf"] = candidates["Signal Strength %"].apply(_safe_float)
+            candidates["_sort_vol"] = candidates["Volume vs Avg"].apply(_safe_float)
+            candidates["_sort_change"] = candidates["Change %"].apply(_safe_float).abs()
+            candidates = candidates.sort_values(
+                by=["_rescan_priority", "_sort_conf", "_sort_vol", "_sort_change"],
+                ascending=[False, False, False, False],
+            )
         if candidates.empty:
             return
 
@@ -974,12 +1133,19 @@ class AutoPilotInvestor:
             self._log(f"BuyNow rescan: engine says Buy Now for {len(candidates)} stocks, {len(_new_candidates)} not yet alerted: {', '.join(_new_candidates[:10])}")
 
         _rescan_count = 0
-        _max_rescan_alerts = 6  # max 6 per rescan cycle (was 3 — too restrictive)
+        _remaining_daily = max(0, self._RESCAN_MAX_PER_DAY - self._rescan_alert_count)
+        _max_rescan_alerts = min(self._RESCAN_MAX_PER_CYCLE, _remaining_daily)
+        if _max_rescan_alerts <= 0:
+            return
         ticks = self._load_ticks_snapshot()
 
         for _, row in candidates.iterrows():
             sym = str(row.get("Stock", "")).strip()
             if not sym or sym in self._already_alerted_buys:
+                continue
+
+            # Exclude ETFs and non-equity instruments
+            if self._is_excluded_symbol(sym):
                 continue
 
             # Get live tick data
@@ -995,7 +1161,8 @@ class AutoPilotInvestor:
 
             # Score with BlindBuyScorer
             blind_score, blind_reasons = BlindBuyScorer.score(row)
-            if blind_score < 40:  # relaxed from 50 — engine already confirmed Buy Now
+            _min_score = max(self.config.blind_buy_min_score, self._RESCAN_MIN_SCORE)
+            if blind_score < _min_score:
                 continue
 
             reasons_lower = blind_reasons.lower()
@@ -1003,12 +1170,13 @@ class AutoPilotInvestor:
                 continue
 
             vol_ratio = float(row.get("Volume vs Avg", row.get("Volume Ratio", 0)) or 0)
-            # No strict volume gate — engine already checked volume.
-            # Just skip if volume is clearly dead (< 0.3x)
-            if vol_ratio > 0 and vol_ratio < 0.3:
+            # Require non-trivial current volume support to reduce stale rescans.
+            if vol_ratio <= 0 or vol_ratio < self._RESCAN_MIN_VOL_RATIO:
                 continue
 
             confidence = float(row.get("Signal Strength %", 0) or 0)
+            if confidence < self._RESCAN_MIN_CONFIDENCE:
+                continue
             stop_loss = float(row.get("Sell If Below", 0) or 0)
             target1 = float(row.get("Take Profit 1", 0) or 0)
             target2 = float(row.get("Take Profit 2", 0) or 0)
@@ -1017,11 +1185,17 @@ class AutoPilotInvestor:
             if rsi >= 78:
                 continue
 
+            stop_loss, target1, target2, _ = _normalize_long_levels(
+                live_price,
+                stop_loss,
+                target1,
+                target2,
+            )
             if stop_loss <= 0 or target2 <= 0 or live_price <= stop_loss:
                 continue
 
-            rr2 = (target2 - live_price) / (live_price - stop_loss)
-            if rr2 < 1.0:  # relaxed from 1.5 — 1:1 is breakeven, anything above is worth it
+            rr2 = _compute_long_rr(live_price, stop_loss, target2)
+            if rr2 < 1.3:
                 continue
 
             # Skip truly illiquid stocks (avg < 10k shares/day)
@@ -1039,8 +1213,16 @@ class AutoPilotInvestor:
             # Calculate live change
             prev_close = float(row.get("PrevClose", 0) or 0)
             if prev_close <= 0:
-                prev_close = float(tick.get("ohlc", {}).get("close", 0))
+                # Top-level 'close' in tick = previous day's close
+                prev_close = float(tick.get("close", 0) or 0)
             daily_change = ((live_price - prev_close) / prev_close * 100) if prev_close > 0 else 0
+            if daily_change < self._RESCAN_MIN_DAY_CHANGE or daily_change > self._RESCAN_MAX_DAY_CHANGE:
+                continue
+
+            # HARD FILTER: Stock already ran too far — entry risk exceeds reward
+            # Apr 10 audit: 21 stocks alerted after >12% move had avg PnL -0.3%
+            if daily_change > self._TICK_ALREADY_MOVED_PCT:
+                continue
 
             # HARD FILTER: Never buy a stock trending DOWN intraday
             # A stock that opened strong but is now RED indicates reversal/profit-taking.
@@ -1064,8 +1246,16 @@ class AutoPilotInvestor:
 
             score_label = f"🔥 **{blind_score:.0f}/100**" if blind_score >= 70 else f"✅ **{blind_score:.0f}/100**"
 
-            suggested_qty = max(1, int(4000 / live_price))
-            approx_cost = suggested_qty * live_price
+            suggested_qty, approx_cost = _compute_suggested_qty(
+                live_price,
+                stop_loss=stop_loss,
+                score=blind_score,
+            )
+            if suggested_qty <= 0:
+                self._log(
+                    f"Suppressed {sym}: starter position exceeds ₹5000 cap at ₹{live_price:.2f}"
+                )
+                continue
 
             _risk_ps = round(live_price - stop_loss, 2) if stop_loss > 0 else 0
             _reward_ps = round(target2 - live_price, 2) if target2 > 0 else 0
@@ -1079,7 +1269,7 @@ class AutoPilotInvestor:
             msg = (
                 f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"**🔍 MISSED EARLIER, NOW STRONG — `{sym}`** — Quality {score_label}\n"
-                f"📈 **Expected to grow +{_expected_growth:.1f}% today** | Price now: `₹{live_price:.2f}` (+{daily_change:.1f}% so far){_scope_str}\n"
+                f"📈 **Expected to grow {_expected_growth:+.1f}% today** | Price now: `₹{live_price:.2f}` (+{daily_change:.1f}% so far){_scope_str}\n"
                 f"📊 Volume: `{vol_ratio:.1f}x` above normal | `{confidence:.0f}%` indicators agree\n\n"
                 f"**What to do:**\n"
                 f"Buy **{suggested_qty} shares** (≈ ₹{approx_cost:,.0f})\n"
@@ -1098,6 +1288,7 @@ class AutoPilotInvestor:
                 self._send_to_channels(_auto_result)
             self._already_alerted_buys.add(sym)
             self._save_daily_alerted(sym)
+            self._rescan_alert_count += 1
             self._log(
                 f"🔍 RESCAN CATCH: {sym} score={blind_score:.0f} vol={vol_ratio:.1f}x "
                 f"conf={confidence:.0f}% change=+{daily_change:.1f}% — was missed earlier"
@@ -1107,7 +1298,10 @@ class AutoPilotInvestor:
                 break
 
         if _rescan_count > 0:
-            self._log(f"BuyNow rescan: sent {_rescan_count} new alerts from signal monitor")
+            self._log(
+                f"BuyNow rescan: sent {_rescan_count} new alerts "
+                f"({self._rescan_alert_count}/{self._RESCAN_MAX_PER_DAY} today)"
+            )
 
     # ------------------------------------------------------------------
     # Mid-day consolidation scanner (11:00 AM IST)
@@ -1690,24 +1884,16 @@ class AutoPilotInvestor:
     def _handle_tick_only_alert(self, item: Dict, sym: str, price: float,
                                  daily_change: float, direction: str,
                                  reasons_text: str) -> None:
-        """Score and alert a stock using ONLY tick data (no OHLCV/signal state).
+        """Score and alert a stock using ONLY tick data (no OHLCV/signal state)."""
 
-        This catches big movers like ITDC (+20%), AWHCL (+14%), BHAGYANGR (+14%)
-        that are in our tick subscription (2305 stocks) but NOT in the signal
-        monitor's scanned set (~600 stocks).
+        # Time guard: no actionable buys past cutoff
+        if self._past_buy_cutoff():
+            return
 
-        Available data per tick:
-            price, change%, volume, avg_traded_price (VWAP), open, high, low,
-            close (prev), total_buy_qty, total_sell_qty, best_bid, best_ask
+        # ETF/non-equity filter
+        if self._is_excluded_symbol(sym):
+            return
 
-        Quality gates (all must pass):
-            1. Price >= ₹20 (no penny stocks)
-            2. Turnover >= ₹5 Cr today (real institutional liquidity)
-            3. Change >= 5% (meaningful momentum) — OR 3%+ in opening window
-            4. Not upper-circuit locked (sell_qty=0 → can't buy)
-            5. Price above VWAP (bullish — buying at premium to avg)
-            6. Max 12 tick-only alerts per day (prevent alert flooding)
-        """
         total_buy = float(item.get("total_buy", 0))
         total_sell = float(item.get("total_sell", 0))
         volume = float(item.get("volume", 0))
@@ -1740,7 +1926,7 @@ class AutoPilotInvestor:
             return
 
         # Gate 2: Liquidity — turnover >= ₹5 Cr (during opening, allow ₹1 Cr)
-        _min_turnover_cr = 1.0 if _is_opening else 5.0
+        _min_turnover_cr = 1.0 if _is_opening else 3.0  # was ₹5Cr; lowered to catch RSWM (₹3.4Cr, +11.4%) type stocks
         if turnover_cr < _min_turnover_cr:
             self._log(f"Tick-only skip {sym}: turnover ₹{turnover_cr:.1f}Cr < ₹{_min_turnover_cr:.0f}Cr")
             self._add_to_demand_watchlist(
@@ -1894,9 +2080,18 @@ class AutoPilotInvestor:
         _reward = abs(_t2_price - price)
         _rr = round(_reward / _risk, 1) if _risk > 0 else 0
 
-        # Suggest qty based on budget ₹4000
-        _suggested_qty = max(1, int(4000 / price))
-        _approx_cost = _suggested_qty * price
+        _size_mult = 1.0 if _grade == "A+" else 0.85 if _grade == "A" else 0.7
+        _suggested_qty, _approx_cost = _compute_suggested_qty(
+            price,
+            stop_loss=_sl_price,
+            score=_score,
+            size_mult=_size_mult,
+        )
+        if _suggested_qty <= 0:
+            self._log(
+                f"Tick-only skip {sym}: starter position exceeds ₹5000 cap at ₹{price:.2f}"
+            )
+            return
 
         # Imbalance string
         imb_str = ""
@@ -1957,6 +2152,16 @@ class AutoPilotInvestor:
         # Don't re-add if already watching or already alerted
         if sym in self._demand_watchlist or sym in self._already_alerted_buys:
             return
+        # Do not start new demand-watch tracking late in the day.
+        try:
+            import pytz
+            ist = pytz.timezone("Asia/Kolkata")
+            _now_ist = datetime.now(ist)
+        except Exception:
+            from datetime import timezone, timedelta
+            _now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+        if (_now_ist.hour * 60 + _now_ist.minute) > self._DEMAND_ALERT_CUTOFF_MIN:
+            return
         # Minimum criteria to watch: price >= ₹100, imbalance >= 2x, change >= 1%
         if price < 100.0 or imbalance < 2.0 or change < 1.0:
             return
@@ -2000,6 +2205,21 @@ class AutoPilotInvestor:
         if not self._demand_watchlist:
             return
         if self._demand_alert_count >= self._DEMAND_WATCHLIST_MAX_ALERTS:
+            return
+
+        # Time guard: stop demand-confirmed actionable alerts well before close.
+        # Also clear stale watchlist entries so they don't burst near end-of-day.
+        try:
+            import pytz
+            ist = pytz.timezone("Asia/Kolkata")
+            _now_ist = datetime.now(ist)
+        except Exception:
+            from datetime import timezone, timedelta
+            _now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+        _now_min = _now_ist.hour * 60 + _now_ist.minute
+        if _now_min > self._DEMAND_ALERT_CUTOFF_MIN:
+            if self._demand_watchlist:
+                self._demand_watchlist.clear()
             return
 
         ticks = self._load_ticks_snapshot()
@@ -2142,9 +2362,18 @@ class AutoPilotInvestor:
             _sl_price = round(price * 0.97, 2)  # 3% SL
             _target_price = round(price * 1.08, 2)  # 8% target
             _scope_pct = round((((_target_price / price) - 1) * 100), 1)
-            _base_qty = max(1, int(4000 / price))
-            _suggested_qty = max(1, int(_base_qty * _size_mult))
-            _approx_cost = _suggested_qty * price
+            _suggested_qty, _approx_cost = _compute_suggested_qty(
+                price,
+                stop_loss=_sl_price,
+                score=60 if _demand_grade == "A" else 52 if _demand_grade == "B" else 45,
+                size_mult=_size_mult,
+            )
+            if _suggested_qty <= 0:
+                self._log(
+                    f"Demand-confirmed skip {sym}: starter position exceeds ₹5000 cap at ₹{price:.2f}"
+                )
+                self._demand_watchlist.pop(sym, None)
+                continue
             _rr = round((_target_price - price) / max(price - _sl_price, 0.01), 1)
             _age_min = item["age_sec"] / 60
 
@@ -2216,9 +2445,20 @@ class AutoPilotInvestor:
             # Cooldown: don't spam re-alerts on the same symbol.
             # Rejected stocks get 30-min cooldown (stop hogging confirmation slots);
             # alerted stocks get 3-min cooldown (allow re-check for continuation).
+            # High-change stocks (7%+) get shorter reject cooldown (10 min) — these are
+            # genuine runners that may have been rejected for a transient reason (early-morning
+            # low volume ratio, etc.) and deserve a faster re-check. Apr 10: SHRIPISTON (+11.9%)
+            # was likely rejected for low volume early in the day and the 30-min cooldown
+            # prevented timely re-check at higher volumes later.
             last_tick_alert = self._tick_alerted.get(symbol)
             if isinstance(last_tick_alert, datetime):
-                cooldown = self._TICK_REJECT_COOLDOWN_SEC if symbol in self._tick_rejected else self._TICK_ALERT_COOLDOWN_SEC
+                signed_change_peek = float(tick.get("change") or 0)
+                if symbol in self._tick_rejected and signed_change_peek >= 5.0:
+                    cooldown = 600  # 10-min for 5%+ runners rejected earlier — momentum override will catch them now
+                elif symbol in self._tick_rejected:
+                    cooldown = self._TICK_REJECT_COOLDOWN_SEC  # 30-min for other rejected stocks
+                else:
+                    cooldown = self._TICK_ALERT_COOLDOWN_SEC   # 3-min for alerted stocks
                 if (now - last_tick_alert).total_seconds() < cooldown:
                     continue
 
@@ -2361,6 +2601,17 @@ class AutoPilotInvestor:
         This replaces the old "EARLY WATCH — wait 45 min for full scan" pattern.
         """
         sym = item["symbol"]
+
+        # Time guard: don't send actionable BUY alerts past the cutoff
+        if self._past_buy_cutoff():
+            self._log(f"OHLCV confirm skip {sym}: past buy cutoff")
+            return
+
+        # ETF/non-equity filter
+        if self._is_excluded_symbol(sym):
+            self._log(f"OHLCV confirm skip {sym}: excluded symbol (ETF/fund)")
+            return
+
         price = item["price"]
         daily_change = item["daily_change"]
         direction = "+" if daily_change >= 0 else ""
@@ -2566,7 +2817,7 @@ class AutoPilotInvestor:
             #   JTLIND  open +6.6%, score 47 → would pass 42 ✓ (closed +20%)
             #   PINELABS open +5.7%, score 32 → would NOT pass 42 (no indicator support)
             #   SEPC     open +13.5%, score ~35 → would NOT pass 42 (but gap was huge)
-            effective_min = max(42.0, self.config.blind_buy_min_score - 5)
+            effective_min = max(self.config.blind_buy_min_score, self.config.blind_buy_min_score - 3)
             self._log(
                 f"Early-market window: {sym} +{daily_change:.1f}%, score {blind_score:.0f}, "
                 f"effective_min={effective_min:.0f} (opening 30-min rules)"
@@ -2631,7 +2882,7 @@ class AutoPilotInvestor:
         elif _entry_confirmed and _no_hard_blockers:
             # Price just crossed entry trigger (fresh breakout, stock hasn't run much yet).
             # Standard threshold is fine here.
-            effective_min = max(40.0, self.config.blind_buy_min_score - 5)
+            effective_min = self.config.blind_buy_min_score - 3
         elif _intraday_override:
             effective_min = self.config.blind_buy_min_score
         else:
@@ -2686,7 +2937,19 @@ class AutoPilotInvestor:
             # Override: Opening 30-min window — signal state is from yesterday,
             # engine says "Hold" for stocks that are NOW breaking out at market open.
             # A +3%+ gap-up with volume IS the buy signal, engine just hasn't re-scanned.
-            if not _is_buy_action and _rsi_val >= 45 and not is_early_mover and not _is_opening_window:
+            # Override: Intraday momentum — stock up 5%+ with real volume (2x+) and
+            # turnover (₹3Cr+). These slow-buildup stocks cross 3% after the opening
+            # window closes, get blocked by Gate A, then run to 10-20%.
+            # Apr 10 data: 5%+TO≥₃Cr+vol≥2x → 81 alerts, 60% win, catches 12/13 missed.
+            # Without vol≥2x: 161 alerts, 44% win (too noisy — half the 5%+ crossers fade).
+            # Volume confirms real institutional buying vs thin-volume spike.
+            _momentum_override = (
+                daily_change >= 5.0
+                and _item_turnover_cr >= 3.0
+                and price >= 20.0
+                and _vol_ratio_live >= 2.0
+            )
+            if not _is_buy_action and _rsi_val >= 45 and not is_early_mover and not _is_opening_window and not _momentum_override:
                 self._tick_rejected.add(sym)  # 30-min cooldown
                 self._log(
                     f"Suppressed {sym}: engine says '{_now_action}' + RSI {_rsi_val:.0f} >= 45 "
@@ -2697,7 +2960,12 @@ class AutoPilotInvestor:
                     _item_reasons, f"engine='{_now_action}', RSI={_rsi_val:.0f}"
                 )
                 return
-            if not _is_buy_action and _is_opening_window:
+            if not _is_buy_action and _momentum_override:
+                self._log(
+                    f"Momentum override: {sym} +{daily_change:.1f}% with "
+                    f"₹{_item_turnover_cr:.1f}Cr turnover — price action overrides stale engine '{_now_action}'"
+                )
+            elif not _is_buy_action and _is_opening_window:
                 self._log(
                     f"Opening window bypass: {sym} engine says '{_now_action}' but "
                     f"+{daily_change:.1f}% move overrides stale signal"
@@ -2705,7 +2973,9 @@ class AutoPilotInvestor:
 
             # Gate B: RSI < 80 — extremely overbought stocks stall.
             # SETCO RSI 83 → max +5% then reversed. LUXIND RSI 78 borderline.
-            if _rsi_val >= 80 and not is_early_mover:
+            # Bypass: momentum override (5%+ with turnover) — RSI 80 is expected for
+            # stocks running intraday. OLAELEC RSI 80, +12.6%, TO ₹4048Cr is valid.
+            if _rsi_val >= 80 and not is_early_mover and not _momentum_override:
                 self._log(
                     f"Suppressed {sym}: RSI {_rsi_val:.0f} >= 80 — extremely overbought, skip"
                 )
@@ -2713,7 +2983,9 @@ class AutoPilotInvestor:
 
             # Gate C: Confidence >= 20% — engine must have minimum conviction.
             # Bypass during opening window — confidence from yesterday's scan is stale.
-            if confidence < 20 and not is_early_mover and not (_rsi_val < 45) and not _is_opening_window:
+            # Bypass for momentum override — confidence is stale when live price action
+            # contradicts the signal. VPRPL 18% conf, +12.5% move, TO ₹24Cr is valid.
+            if confidence < 20 and not is_early_mover and not (_rsi_val < 45) and not _is_opening_window and not _momentum_override:
                 self._log(
                     f"Suppressed {sym}: confidence {confidence:.0f}% < 20% — low conviction, skip"
                 )
@@ -2723,10 +2995,16 @@ class AutoPilotInvestor:
                 )
                 return
 
-            # Gate E: Price >= ₹50 — skip penny stocks entirely.
-            # OLAELEC ₹32 — wide spreads, hard to exit, unreliable volume data.
-            if _price_now < 50.0:
-                self._log(f"Suppressed {sym}: price ₹{_price_now:.0f} < ₹50 — penny stock, skip")
+            # Gate E: Price floor — skip illiquid penny stocks.
+            # Original ₹50 floor blocked stocks like OLAELEC (₹40, TO ₹4048Cr),
+            # VPRPL (₹42, TO ₹24Cr), SNOWMAN (₹40, TO ₹7Cr) which are NOT penny stocks.
+            # Fix: allow lower-priced stocks if turnover proves institutional liquidity.
+            # Hard floor ₹15 — below that, spreads are physically too wide for auto-trading.
+            if _price_now < 15.0:
+                self._log(f"Suppressed {sym}: price ₹{_price_now:.0f} < ₹15 — micro penny stock, skip")
+                return
+            if _price_now < 50.0 and _item_turnover_cr < 5.0:
+                self._log(f"Suppressed {sym}: price ₹{_price_now:.0f} < ₹50 and turnover ₹{_item_turnover_cr:.1f}Cr < ₹5Cr — illiquid penny stock, skip")
                 return
 
             # Gate F: Volume ratio >= 0.5x — must have real trading activity.
@@ -2739,7 +3017,7 @@ class AutoPilotInvestor:
             # Without SL/T1/T2, the engine couldn't find support/resistance.
             # Bypass during opening window — we'll derive targets from price.
             _has_real_targets = stop_loss > 0 or target1 > 0 or target2 > 0
-            if not _has_real_targets and not is_early_mover and not _is_opening_window:
+            if not _has_real_targets and not is_early_mover and not _is_opening_window and not _momentum_override:
                 self._log(
                     f"Suppressed {sym}: NO real targets (SL=0, T1=0, T2=0) "
                     f"+{daily_change:.1f}%, conf={confidence:.0f}%, action='{_now_action}' "
@@ -2750,15 +3028,20 @@ class AutoPilotInvestor:
             # Fallback stop/target computation.
             # Early movers: use wider targets (5%/10%) to capture the full expected move.
             # Regular (HOLD-rated) stocks already running: conservative 2%/4%.
-            if stop_loss <= 0 and _price_now > 0:
-                if atr > 0:
-                    stop_loss = round(_price_now - (2.0 if is_early_mover else 1.5) * atr, 2)
-                else:
-                    stop_loss = round(_price_now * (0.96 if is_early_mover else 0.95), 2)
-            if target1 <= 0 and _price_now > 0:
-                target1 = round(_price_now * (1.05 if is_early_mover else 1.02), 2)
-            if target2 <= 0 and _price_now > 0:
-                target2 = round(_price_now * (1.10 if is_early_mover else 1.04), 2)
+            _aggressive_targets = is_early_mover or _intraday_override or daily_change >= 3.0
+            stop_loss, target1, target2, _levels_normalized = _normalize_long_levels(
+                _price_now,
+                stop_loss,
+                target1,
+                target2,
+                atr=atr,
+                aggressive=_aggressive_targets,
+            )
+            if _levels_normalized:
+                self._log(
+                    f"Normalized long levels for {sym}: price ₹{_price_now:.2f}, "
+                    f"SL ₹{stop_loss:.2f}, T1 ₹{target1:.2f}, T2 ₹{target2:.2f}"
+                )
             # ── Position Sizing (volatility-adjusted, score-scaled) ──────────
             # Base: risk ₹1000 per trade (1% of ₹1L budget), stop defined by ATR/SL.
             # Volatility cap: position value <= (target_vol% / asset_vol%) × portfolio.
@@ -2769,40 +3052,27 @@ class AutoPilotInvestor:
             _portfolio = 100000     # assumed ₹1L trading budget
             _target_vol = 0.15      # 15% target portfolio volatility contribution
 
-            if suggested_qty <= 0 and _price_now > 0:
-                # Step 1: Risk-per-share sizing (primary method)
-                if stop_loss > 0 and _price_now > stop_loss:
-                    risk_per_share = _price_now - stop_loss
-                    _qty_risk = max(1, int(_risk_amt / risk_per_share))
-                else:
-                    _qty_risk = max(1, int(_risk_amt / (_price_now * 0.03)))
-
-                # Step 2: Volatility-targeting cap (from Auto-Alpha-Forge position_sizer)
-                # Estimate annualised asset vol from ATR proxy: vol ≈ (ATR / price) × sqrt(252)
-                # Note: BlindBuyCandidate has no .atr field — use 2% daily price proxy
-                _atr_val = _price_now * 0.02
-                _asset_vol = (_atr_val / _price_now) * (252 ** 0.5)
-                _asset_vol = max(_asset_vol, 0.05)  # floor at 5% annualised
-                _vol_position_value = (_target_vol / _asset_vol) * _portfolio
-                _qty_vol = max(1, int(min(_vol_position_value, _max_position) / _price_now))
-
-                # Step 3: Score confidence multiplier (0.8x to 1.5x)
-                # Low score (<=55): size down 20%; high score (>=70): size up 50%
-                if blind_score >= 70:
-                    _score_mult = 1.5
-                elif blind_score >= 60:
-                    _score_mult = 1.0
-                else:
-                    _score_mult = 0.8
-
-                # Take the more conservative of risk-based and vol-based, then apply score
-                suggested_qty = max(1, int(min(_qty_risk, _qty_vol) * _score_mult))
-
-            # Hard cap to max position value
-            if _price_now > 0:
-                max_shares = max(1, int(_max_position / _price_now))
-                suggested_qty = min(suggested_qty, max_shares)
-            _invest_amt = round(suggested_qty * _price_now, 0) if _price_now > 0 else 0
+            _auto_qty, _auto_invest_amt = _compute_suggested_qty(
+                _price_now,
+                stop_loss=stop_loss,
+                score=blind_score,
+                atr=atr,
+                size_mult=1.0,
+                max_position=_max_position,
+                risk_amount=_risk_amt,
+                portfolio=_portfolio,
+                target_vol=_target_vol,
+            )
+            if suggested_qty <= 0:
+                suggested_qty = _auto_qty
+            elif _price_now > 0 and _max_position > 0:
+                suggested_qty = min(suggested_qty, int(_max_position // _price_now))
+            if suggested_qty <= 0:
+                self._log(
+                    f"Suppressed {sym}: starter position exceeds ₹{_max_position:.0f} cap at ₹{_price_now:.2f}"
+                )
+                return
+            _invest_amt = round(suggested_qty * _price_now, 0) if _price_now > 0 else _auto_invest_amt
 
             # Gate 1: time-weighted volume gate — early morning (9:15–10:30 AM) has naturally low
             # cumulative volume vs full-day average. Require 80% of time-proportional pace, floor 0.15x.
@@ -2821,10 +3091,8 @@ class AutoPilotInvestor:
 
             score_label = f"\U0001f525 **{blind_score:.0f}/100**" if blind_score >= 70 else f"\u2705 **{blind_score:.0f}/100**"
             risk_reward = ""
-            rr2 = 0.0
-            if stop_loss > 0 and target2 > 0 and _price_now > 0:
-                risk = abs(_price_now - stop_loss)
-                rr2 = round(abs(target2 - _price_now) / risk, 1) if risk > 0 else 0
+            rr2 = _compute_long_rr(_price_now, stop_loss, target2)
+            if rr2 > 0:
                 risk_reward = f" | R:R `1:{rr2}`"
 
             # Gate 2: R:R must be at least 1:1.0 — risking more than you gain is a losing strategy.
@@ -2949,8 +3217,28 @@ class AutoPilotInvestor:
                 _buy_above_display = _buy_above if _buy_above > 0 else _price_now
                 is_swing_only = daily_change >= 8.0
                 swing_tag = f"\n⏰ **SWING ONLY** — already +{daily_change:.1f}% today. Do NOT enter for intraday — swing trade only (hold 2-5 days)." if is_swing_only else ""
+                stop_loss, target1, target2, _fresh_levels_normalized = _normalize_long_levels(
+                    _price_now,
+                    stop_loss,
+                    target1,
+                    target2,
+                    atr=atr,
+                    aggressive=is_early_mover or _intraday_override or daily_change >= 3.0,
+                )
+                if _fresh_levels_normalized:
+                    self._log(
+                        f"Fresh-tick normalized long levels for {sym}: price ₹{_price_now:.2f}, "
+                        f"SL ₹{stop_loss:.2f}, T1 ₹{target1:.2f}, T2 ₹{target2:.2f}"
+                    )
+                rr2 = _compute_long_rr(_price_now, stop_loss, target2)
+                risk_reward = f" | R:R `1:{rr2}`" if rr2 > 0 else ""
+                if rr2 > 0 and rr2 < min_rr:
+                    self._log(
+                        f"Suppressed {sym}: fresh-tick R:R 1:{rr2} < 1:{min_rr} minimum"
+                    )
+                    return
                 # Recalculate _is_definitely_buy with fresh data
-                _rr2_val = ((target2 - _price_now) / (_price_now - stop_loss)) if (_price_now > stop_loss and stop_loss > 0) else 0
+                _rr2_val = _compute_long_rr(_price_now, stop_loss, target2)
                 _is_definitely_buy = (
                     blind_score >= 45
                     and confidence >= 20
@@ -2998,7 +3286,7 @@ class AutoPilotInvestor:
             _expected_growth_pct = round(((target2 - _price_now) / _price_now) * 100, 1) if target2 > 0 and _price_now > 0 else 0
             message = (
                 f"{alert_header}\n"
-                f"📈 **Expected to grow +{_expected_growth_pct:.1f}% today** | Price now: `₹{_price_now:.2f}` ({direction}{daily_change:.2f}% so far){_scope_line}\n"
+                f"📈 **Expected to grow {_expected_growth_pct:+.1f}% today** | Price now: `₹{_price_now:.2f}` ({direction}{daily_change:.2f}% so far){_scope_line}\n"
                 f"📊 Volume: `{volume_ratio:.1f}x` above normal | `{confidence:.0f}%` indicators agree\n\n"
                 f"**What to do:**\n"
                 f"Buy {f'**{suggested_qty} shares** (≈ ₹{_invest_amt:,.0f})' if suggested_qty > 0 else 'at market price'}\n"
@@ -3172,6 +3460,118 @@ class AutoPilotInvestor:
 
         return None
 
+    def _load_rescan_signal_state(self) -> Optional[pd.DataFrame]:
+        """Load the freshest signal-monitor snapshot and normalize for rescans."""
+        candidates = [
+            (
+                f"signalmonitor_{self.config.universe}_actionable_latest.csv",
+                {
+                    "Symbol": "Stock",
+                    "NowAction": "What To Do",
+                    "ConfidencePct": "Signal Strength %",
+                    "LTP": "Price Now",
+                    "Entry": "Buy Above",
+                    "EntryGapPct": "Entry Gap %",
+                    "StopLoss": "Sell If Below",
+                    "TakeProfit1": "Take Profit 1",
+                    "TakeProfit2": "Take Profit 2",
+                    "VolumeRatio": "Volume vs Avg",
+                    "Reason": "Why",
+                    "SuggestedQty": "Suggested Qty",
+                    "ChangePct": "Change %",
+                    "Action": "Action",
+                },
+            ),
+            (
+                f"signalmonitor_{self.config.universe}_signals_latest.csv",
+                {
+                    "Symbol": "Stock",
+                    "NowAction": "What To Do",
+                    "ConfidencePct": "Signal Strength %",
+                    "LTP": "Price Now",
+                    "Entry": "Buy Above",
+                    "EntryGapPct": "Entry Gap %",
+                    "StopLoss": "Sell If Below",
+                    "Target1": "Take Profit 1",
+                    "Target2": "Take Profit 2",
+                    "VolumeRatio": "Volume vs Avg",
+                    "Reason": "Why",
+                    "SuggestedQty": "Suggested Qty",
+                    "ChangePct": "Change %",
+                    "Action": "Action",
+                },
+            ),
+            (
+                f"signalmonitor_{self.config.universe}_state_latest.csv",
+                {
+                    "Symbol": "Stock",
+                    "NowAction": "What To Do",
+                    "PriceNow": "Price Now",
+                    "BuyAbove": "Buy Above",
+                    "EntryGapPct": "Entry Gap %",
+                    "SellIfBelow": "Sell If Below",
+                    "TakeProfit1": "Take Profit 1",
+                    "TakeProfit2": "Take Profit 2",
+                    "SignalStrengthPct": "Signal Strength %",
+                    "VolumeRatio": "Volume vs Avg",
+                    "ChangePct": "Change %",
+                    "Why": "Why",
+                    "Checks": "Checks",
+                    "SuggestedQty": "Suggested Qty",
+                },
+            ),
+            (f"signalmonitor_{self.config.universe}_signals_simple_latest.csv", {}),
+        ]
+
+        stale_limit_sec = 900
+        for filename, rename_map in candidates:
+            path = os.path.join(self.output_dir, filename)
+            if not os.path.isfile(path):
+                continue
+            try:
+                if self._is_market_open():
+                    file_age = time.time() - os.path.getmtime(path)
+                    if file_age > stale_limit_sec:
+                        self._log(
+                            f"Rescan skip stale signal snapshot '{filename}' "
+                            f"({file_age:.0f}s old)"
+                        )
+                        continue
+                df = pd.read_csv(path)
+            except Exception:
+                continue
+            if df.empty:
+                continue
+            if rename_map:
+                df = df.rename(columns=rename_map)
+            if "Stock" not in df.columns:
+                continue
+            if "What To Do" not in df.columns and "Action" in df.columns:
+                df["What To Do"] = df["Action"]
+            for col in [
+                "Signal Strength %",
+                "Price Now",
+                "Buy Above",
+                "Entry Gap %",
+                "Sell If Below",
+                "Take Profit 1",
+                "Take Profit 2",
+                "Volume vs Avg",
+                "Change %",
+                "RSI",
+                "CCI",
+                "MFI",
+                "PrevClose",
+                "Suggested Qty",
+                "Checks",
+                "Why",
+                "Action",
+            ]:
+                if col not in df.columns:
+                    df[col] = 0 if col not in {"Checks", "Why", "Action"} else ""
+            return df
+        return None
+
     def _run_fresh_scan(self) -> Optional[pd.DataFrame]:
         """If no signal monitor is running, do our own scan with loose filters."""
         try:
@@ -3207,6 +3607,10 @@ class AutoPilotInvestor:
         for _, row in signal_df.iterrows():
             symbol = str(row.get("Symbol", "")).strip().upper()
             if not symbol:
+                continue
+
+            # Exclude ETFs, liquid funds, and bond instruments
+            if self._is_excluded_symbol(symbol):
                 continue
 
             # Get the original action
@@ -3299,6 +3703,14 @@ class AutoPilotInvestor:
             _tick_change = _safe_float(_tick_liq.get("change"), 0.0)
             _display_change = _tick_change if abs(_tick_change) > abs(_row_change) else _row_change
 
+            _suggested_qty = int(float(row.get("SuggestedQty", row.get("Suggested Qty", 0)) or 0))
+            if _suggested_qty <= 0:
+                _suggested_qty, _ = _compute_suggested_qty(
+                    price,
+                    stop_loss=stop_loss,
+                    score=blind_score,
+                )
+
             candidates.append(BlindBuyCandidate(
                 symbol=symbol,
                 price=price,
@@ -3313,7 +3725,7 @@ class AutoPilotInvestor:
                 original_action=now_action,
                 reasons=blind_reasons,
                 checks=str(row.get("QualityChecks", row.get("Checks", ""))).strip(),
-                suggested_qty=int(float(row.get("SuggestedQty", row.get("Suggested Qty", 0)) or 0)),
+                suggested_qty=_suggested_qty,
             ))
 
         # Sort by blind_score descending — best opportunities first
@@ -3323,6 +3735,11 @@ class AutoPilotInvestor:
         fresh_candidates = []
         for c in candidates:
             if c.symbol in self._already_alerted_buys:
+                continue
+            if c.suggested_qty <= 0:
+                self._log(
+                    f"Batch skip {c.symbol}: starter position exceeds ₹5000 cap at ₹{c.price:.2f}"
+                )
                 continue
             fresh_candidates.append(c)
             if len(fresh_candidates) >= self.config.max_buy_alerts_per_cycle:
@@ -3459,6 +3876,29 @@ class AutoPilotInvestor:
     # ------------------------------------------------------------------
     # Discord push alerts
     # ------------------------------------------------------------------
+
+    def _past_buy_cutoff(self) -> bool:
+        """Return True if current IST time is past the last BUY alert cutoff.
+        After this time, only post-market preview alerts (next-day candidates) are allowed.
+        """
+        try:
+            import pytz
+            ist = pytz.timezone("Asia/Kolkata")
+            now_ist = datetime.now(ist)
+        except Exception:
+            from datetime import timezone, timedelta
+            now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+        return (now_ist.hour * 60 + now_ist.minute) > self._BUY_ALERT_CUTOFF_MIN
+
+    def _is_excluded_symbol(self, symbol: str) -> bool:
+        """Return True for ETFs, liquid funds, and other non-equity instruments."""
+        sym = symbol.strip().upper()
+        if sym in self._EXCLUDED_SYMBOLS:
+            return True
+        # Pattern-based: anything ending in BEES, ETF
+        if sym.endswith("BEES") or sym.endswith("ETF"):
+            return True
+        return False
 
     def _is_market_open(self) -> bool:
         """Return True only during NSE market hours (9:15 AM – 3:30 PM IST)."""
@@ -3696,6 +4136,12 @@ class AutoPilotInvestor:
         is_post_market = self._is_post_market_window()
         if not self._is_market_open() and not is_post_market:
             return  # Outside trading hours and post-market window — suppress alerts
+
+        # Past buy cutoff: only post-market previews are allowed, NOT actionable BUY alerts.
+        # This prevents sending "BUY X" right before close when user can't act safely.
+        if self._past_buy_cutoff() and not is_post_market:
+            self._log("Buy alerts suppressed: past buy cutoff time")
+            return
 
         # Nifty crash guard: if Nifty/Sensex is down >2% in first 60 min, suppress OHLCV buys.
         # Individual stocks can still look good on yesterday's setup, but the broader crash means

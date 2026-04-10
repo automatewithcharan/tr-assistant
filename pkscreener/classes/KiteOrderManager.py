@@ -593,12 +593,29 @@ class KiteOrderManager:
     ) -> OrderResult:
         """Auto-buy a stock from a blind-buy candidate alert.
 
-        Calculates quantity based on max_order_value and live_price.
+        Uses the same position sizing logic as the alerting engine so execution
+        matches the quantity shown to the user.
         """
         if live_price <= 0:
             return OrderResult(False, symbol=symbol, message="Invalid price")
 
-        qty = max(1, int(self.max_order_value / live_price))
+        try:
+            from pkscreener.classes.AutoPilotInvestor import _compute_suggested_qty
+
+            qty, _ = _compute_suggested_qty(
+                live_price,
+                stop_loss=stop_loss,
+                score=blind_score,
+                max_position=self.max_order_value,
+            )
+        except Exception:
+            qty = int(self.max_order_value // live_price) if live_price > 0 else 0
+        if qty <= 0:
+            return OrderResult(
+                False,
+                symbol=symbol,
+                message=f"Starter position exceeds limit ₹{self.max_order_value:,.0f}",
+            )
         return self.place_buy_order(
             symbol=symbol, qty=qty, price=0.0,  # market order
             stop_loss=stop_loss, target1=target1, target2=target2,

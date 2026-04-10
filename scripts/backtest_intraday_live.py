@@ -133,6 +133,60 @@ def compute_daily_turnover_cr(volume: float, close: float) -> float:
 MIN_TURNOVER_CR = 2.0
 
 
+def _load_float_env(name: str, default: float) -> float:
+    raw_value = os.environ.get(name, default)
+    try:
+        return float(raw_value)
+    except Exception:
+        return float(default)
+
+
+DEFAULT_BUY_COST_PCT = _load_float_env("CHARAN_EST_BUY_COST_PCT", 0.00118)
+DEFAULT_SELL_COST_PCT = _load_float_env("CHARAN_EST_SELL_COST_PCT", 0.00104)
+DEFAULT_SLIPPAGE_BPS = _load_float_env("CHARAN_EST_SLIPPAGE_BPS", 0.0)
+
+
+@dataclass(frozen=True)
+class CostModel:
+    buy_cost_pct: float = DEFAULT_BUY_COST_PCT
+    sell_cost_pct: float = DEFAULT_SELL_COST_PCT
+    slippage_bps: float = DEFAULT_SLIPPAGE_BPS
+
+
+def _apply_trade_costs(entry_price: float, exit_price: float, cost_model: CostModel) -> dict:
+    """Convert raw entry/exit prices into net-of-cost trade economics."""
+    if entry_price <= 0 or exit_price <= 0:
+        return {
+            "exec_entry_price": entry_price,
+            "exec_exit_price": exit_price,
+            "gross_pnl_pct": 0.0,
+            "net_pnl_pct": 0.0,
+            "entry_charges": 0.0,
+            "exit_charges": 0.0,
+            "slippage_cost": 0.0,
+        }
+
+    slip_frac = max(0.0, cost_model.slippage_bps) / 10000.0
+    exec_entry = entry_price * (1 + slip_frac)
+    exec_exit = exit_price * (1 - slip_frac)
+    entry_charges = exec_entry * max(0.0, cost_model.buy_cost_pct)
+    exit_charges = exec_exit * max(0.0, cost_model.sell_cost_pct)
+    gross_pnl_pct = ((exit_price - entry_price) / entry_price) * 100
+    net_capital = exec_entry + entry_charges
+    net_pnl = exec_exit - exec_entry - entry_charges - exit_charges
+    net_pnl_pct = (net_pnl / net_capital) * 100 if net_capital > 0 else 0.0
+    slippage_cost = max(0.0, exec_entry - entry_price) + max(0.0, exit_price - exec_exit)
+    return {
+        "exec_entry_price": round(exec_entry, 2),
+        "exec_exit_price": round(exec_exit, 2),
+        "gross_pnl_pct": round(gross_pnl_pct, 2),
+        "net_pnl_pct": round(net_pnl_pct, 2),
+        "entry_charges": round(entry_charges, 2),
+        "exit_charges": round(exit_charges, 2),
+        "slippage_cost": round(slippage_cost, 2),
+    }
+
+
 # ──────────────────────────────────────────────────────────────────────
 # Simplified BlindBuyScorer (matches CONSOLIDATED oscillator logic)
 # ──────────────────────────────────────────────────────────────────────
@@ -222,6 +276,8 @@ class Trade:
     entry_time: str       # HH:MM when we entered
     entry_price: float
     exit_price: float
+    exec_entry_price: float
+    exec_exit_price: float
     exit_time: str
     exit_reason: str      # "EOD", "FADE_WARNING", "FADE_EXIT", "STOP_HIT"
     change_at_entry: float  # % change from open when we entered
@@ -229,9 +285,13 @@ class Trade:
     low_after_entry: float
     score: int
     volume_ratio: float
-    pnl_pct: float        # (exit - entry) / entry * 100
+    gross_pnl_pct: float
+    pnl_pct: float        # net-of-costs return%
     max_profit_pct: float  # (high - entry) / entry * 100
     max_drawdown_pct: float  # (entry - low) / entry * 100
+    entry_charges: float
+    exit_charges: float
+    slippage_cost: float
     faded: bool           # Did close < entry?
     fade_detected: bool   # Did our fade detector catch it?
 
@@ -400,6 +460,7 @@ def simulate_intraday(
     date_str: str,
     candles: list,
     daily_info: dict,
+    cost_model: CostModel,
 ) -> Optional[Trade]:
     """
     Simulate the tick scanner + fade detector on minute candles.
@@ -506,11 +567,12 @@ def simulate_intraday(
         exit_price = candles[-1]["close"]
         exit_time = candles[-1]["time"]
 
-    pnl_pct = (exit_price - entry_price) / entry_price * 100
+    gross_pnl_pct = (exit_price - entry_price) / entry_price * 100
     max_profit = (high_after - entry_price) / entry_price * 100
     max_dd = (entry_price - low_after) / entry_price * 100
     actual_close = candles[-1]["close"]
     did_fade = actual_close < entry_price
+    cost_result = _apply_trade_costs(entry_price, exit_price, cost_model)
 
     return Trade(
         symbol=symbol,
@@ -518,6 +580,8 @@ def simulate_intraday(
         entry_time=entry_time,
         entry_price=round(entry_price, 2),
         exit_price=round(exit_price, 2),
+        exec_entry_price=cost_result["exec_entry_price"],
+        exec_exit_price=cost_result["exec_exit_price"],
         exit_time=exit_time,
         exit_reason=exit_reason,
         change_at_entry=round(change_at_entry, 2),
@@ -525,9 +589,13 @@ def simulate_intraday(
         low_after_entry=round(low_after, 2),
         score=score,
         volume_ratio=round(vol_ratio, 2),
-        pnl_pct=round(pnl_pct, 2),
+        gross_pnl_pct=round(gross_pnl_pct, 2),
+        pnl_pct=cost_result["net_pnl_pct"],
         max_profit_pct=round(max_profit, 2),
         max_drawdown_pct=round(max_dd, 2),
+        entry_charges=cost_result["entry_charges"],
+        exit_charges=cost_result["exit_charges"],
+        slippage_cost=cost_result["slippage_cost"],
         faded=did_fade,
         fade_detected=fade_detected,
     )
@@ -537,7 +605,7 @@ def simulate_intraday(
 # Step 4: Report
 # ──────────────────────────────────────────────────────────────────────
 
-def print_report(all_trades: List[Trade], candidates_per_day: Dict[str, int]):
+def print_report(all_trades: List[Trade], candidates_per_day: Dict[str, int], cost_model: CostModel):
     """Print comprehensive backtest report."""
     if not all_trades:
         print("\n❌ No trades executed. Check data availability.")
@@ -555,22 +623,34 @@ def print_report(all_trades: List[Trade], candidates_per_day: Dict[str, int]):
     fade_caught = [t for t in all_trades if t.faded and t.fade_detected]
     fade_false = [t for t in all_trades if not t.faded and t.fade_detected]
 
+    avg_gross_pnl = sum(t.gross_pnl_pct for t in all_trades) / total
     avg_pnl = sum(t.pnl_pct for t in all_trades) / total
     avg_win = sum(t.pnl_pct for t in winners) / len(winners) if winners else 0
     avg_loss = sum(t.pnl_pct for t in losers) / len(losers) if losers else 0
     avg_max_profit = sum(t.max_profit_pct for t in all_trades) / total
     avg_max_dd = sum(t.max_drawdown_pct for t in all_trades) / total
+    avg_cost_drag = sum((t.gross_pnl_pct - t.pnl_pct) for t in all_trades) / total
+    gross_winners = [t for t in all_trades if t.gross_pnl_pct > 0]
 
     win_rate = len(winners) / total * 100
+    gross_win_rate = len(gross_winners) / total * 100 if total else 0
     expectancy = (win_rate / 100 * avg_win) + ((1 - win_rate / 100) * avg_loss)
 
     print(f"\n  Total Candidates Scanned: {sum(candidates_per_day.values())} across {len(candidates_per_day)} days")
     print(f"  Total Trades Simulated:  {total}")
-    print(f"  Win Rate:                {win_rate:.1f}% ({len(winners)}W / {len(losers)}L)")
-    print(f"  Avg P&L per Trade:       {avg_pnl:+.2f}%")
-    print(f"  Avg Winner:              {avg_win:+.2f}%")
-    print(f"  Avg Loser:               {avg_loss:+.2f}%")
-    print(f"  Expectancy:              {expectancy:+.3f}% per trade")
+    print(
+        f"  Net Assumptions:         buy {cost_model.buy_cost_pct*100:.3f}% | "
+        f"sell {cost_model.sell_cost_pct*100:.3f}% | "
+        f"slippage {cost_model.slippage_bps:.1f} bps/side"
+    )
+    print(f"  Gross Win Rate:          {gross_win_rate:.1f}%")
+    print(f"  Net Win Rate:            {win_rate:.1f}% ({len(winners)}W / {len(losers)}L)")
+    print(f"  Avg Gross P&L/Trade:     {avg_gross_pnl:+.2f}%")
+    print(f"  Avg Net P&L/Trade:       {avg_pnl:+.2f}%")
+    print(f"  Avg Cost Drag:           -{avg_cost_drag:.2f}%")
+    print(f"  Avg Net Winner:          {avg_win:+.2f}%")
+    print(f"  Avg Net Loser:           {avg_loss:+.2f}%")
+    print(f"  Net Expectancy:          {expectancy:+.3f}% per trade")
     print(f"  Avg Max Profit (peak):   +{avg_max_profit:.2f}%")
     print(f"  Avg Max Drawdown:        -{avg_max_dd:.2f}%")
 
@@ -647,7 +727,8 @@ def print_report(all_trades: List[Trade], candidates_per_day: Dict[str, int]):
             continue
         wr = sum(1 for t in trades if t.won) / len(trades) * 100
         ap = sum(t.pnl_pct for t in trades) / len(trades)
-        print(f"    {bucket}: {len(trades):3d} trades | WR {wr:5.1f}% | Avg {ap:+.2f}%")
+        gross_ap = sum(t.gross_pnl_pct for t in trades) / len(trades)
+        print(f"    {bucket}: {len(trades):3d} trades | WR {wr:5.1f}% | Net {ap:+.2f}% | Gross {gross_ap:+.2f}%")
 
     # Per-day breakdown
     print(f"\n  ── Per-Day Breakdown ──")
@@ -655,34 +736,35 @@ def print_report(all_trades: List[Trade], candidates_per_day: Dict[str, int]):
     for t in all_trades:
         by_date[t.date].append(t)
 
-    print(f"  {'Date':<12s} {'Candidates':>10s} {'Trades':>7s} {'Wins':>5s} {'Win%':>6s} {'Avg P&L':>8s} {'Best':>8s} {'Worst':>8s}")
-    print(f"  {'─' * 12} {'─' * 10} {'─' * 7} {'─' * 5} {'─' * 6} {'─' * 8} {'─' * 8} {'─' * 8}")
+    print(f"  {'Date':<12s} {'Candidates':>10s} {'Trades':>7s} {'Wins':>5s} {'Win%':>6s} {'Net Avg':>8s} {'Gross':>8s} {'Best':>8s} {'Worst':>8s}")
+    print(f"  {'─' * 12} {'─' * 10} {'─' * 7} {'─' * 5} {'─' * 6} {'─' * 8} {'─' * 8} {'─' * 8} {'─' * 8}")
     for dt in sorted(by_date.keys()):
         trades = by_date[dt]
         n = len(trades)
         w = sum(1 for t in trades if t.won)
         wr = w / n * 100 if n else 0
         ap = sum(t.pnl_pct for t in trades) / n
+        gross_ap = sum(t.gross_pnl_pct for t in trades) / n
         best = max(t.pnl_pct for t in trades)
         worst = min(t.pnl_pct for t in trades)
         cand = candidates_per_day.get(dt, 0)
-        print(f"  {dt:<12s} {cand:>10d} {n:>7d} {w:>5d} {wr:>5.1f}% {ap:>+7.2f}% {best:>+7.2f}% {worst:>+7.2f}%")
+        print(f"  {dt:<12s} {cand:>10d} {n:>7d} {w:>5d} {wr:>5.1f}% {ap:>+7.2f}% {gross_ap:>+7.2f}% {best:>+7.2f}% {worst:>+7.2f}%")
 
     # Top 10 best trades
     print(f"\n  ── Top 10 Winners ──")
     top = sorted(all_trades, key=lambda t: -t.pnl_pct)[:10]
-    print(f"  {'Symbol':<15s} {'Date':<12s} {'Entry':>6s} {'Exit':>6s} {'P&L':>7s} {'Score':>6s} {'Entry@':>7s} {'Exit@':>7s} {'Reason':<12s}")
-    print(f"  {'─' * 15} {'─' * 12} {'─' * 6} {'─' * 6} {'─' * 7} {'─' * 6} {'─' * 7} {'─' * 7} {'─' * 12}")
+    print(f"  {'Symbol':<15s} {'Date':<12s} {'Entry':>6s} {'Exit':>6s} {'Net':>7s} {'Gross':>7s} {'Score':>6s} {'Entry@':>7s} {'Exit@':>7s} {'Reason':<12s}")
+    print(f"  {'─' * 15} {'─' * 12} {'─' * 6} {'─' * 6} {'─' * 7} {'─' * 7} {'─' * 6} {'─' * 7} {'─' * 7} {'─' * 12}")
     for t in top:
-        print(f"  {t.symbol:<15s} {t.date:<12s} {t.entry_price:>6.0f} {t.exit_price:>6.0f} {t.pnl_pct:>+6.2f}% {t.score:>5d} {t.entry_time:>7s} {t.exit_time:>7s} {t.exit_reason:<12s}")
+        print(f"  {t.symbol:<15s} {t.date:<12s} {t.entry_price:>6.0f} {t.exit_price:>6.0f} {t.pnl_pct:>+6.2f}% {t.gross_pnl_pct:>+6.2f}% {t.score:>5d} {t.entry_time:>7s} {t.exit_time:>7s} {t.exit_reason:<12s}")
 
     # Top 10 worst trades
     print(f"\n  ── Top 10 Losers ──")
     bottom = sorted(all_trades, key=lambda t: t.pnl_pct)[:10]
-    print(f"  {'Symbol':<15s} {'Date':<12s} {'Entry':>6s} {'Exit':>6s} {'P&L':>7s} {'Score':>6s} {'Entry@':>7s} {'Exit@':>7s} {'Reason':<12s}")
-    print(f"  {'─' * 15} {'─' * 12} {'─' * 6} {'─' * 6} {'─' * 7} {'─' * 6} {'─' * 7} {'─' * 7} {'─' * 12}")
+    print(f"  {'Symbol':<15s} {'Date':<12s} {'Entry':>6s} {'Exit':>6s} {'Net':>7s} {'Gross':>7s} {'Score':>6s} {'Entry@':>7s} {'Exit@':>7s} {'Reason':<12s}")
+    print(f"  {'─' * 15} {'─' * 12} {'─' * 6} {'─' * 6} {'─' * 7} {'─' * 7} {'─' * 6} {'─' * 7} {'─' * 7} {'─' * 12}")
     for t in bottom:
-        print(f"  {t.symbol:<15s} {t.date:<12s} {t.entry_price:>6.0f} {t.exit_price:>6.0f} {t.pnl_pct:>+6.2f}% {t.score:>5d} {t.entry_time:>7s} {t.exit_time:>7s} {t.exit_reason:<12s}")
+        print(f"  {t.symbol:<15s} {t.date:<12s} {t.entry_price:>6.0f} {t.exit_price:>6.0f} {t.pnl_pct:>+6.2f}% {t.gross_pnl_pct:>+6.2f}% {t.score:>5d} {t.entry_time:>7s} {t.exit_time:>7s} {t.exit_reason:<12s}")
 
     # Exit reason breakdown
     print(f"\n  ── Exit Reason Breakdown ──")
@@ -695,7 +777,8 @@ def print_report(all_trades: List[Trade], candidates_per_day: Dict[str, int]):
             continue
         wr = sum(1 for t in trades if t.won) / len(trades) * 100
         ap = sum(t.pnl_pct for t in trades) / len(trades)
-        print(f"    {reason:<12s}: {len(trades):3d} trades | WR {wr:5.1f}% | Avg {ap:+.2f}%")
+        gross_ap = sum(t.gross_pnl_pct for t in trades) / len(trades)
+        print(f"    {reason:<12s}: {len(trades):3d} trades | WR {wr:5.1f}% | Net {ap:+.2f}% | Gross {gross_ap:+.2f}%")
 
     print("\n" + "=" * 90)
 
@@ -710,8 +793,10 @@ def export_trades_csv(trades: List[Trade], filepath: str):
         return
     fieldnames = [
         "date", "symbol", "entry_time", "entry_price", "exit_time", "exit_price",
-        "exit_reason", "pnl_pct", "max_profit_pct", "max_drawdown_pct",
-        "score", "volume_ratio", "change_at_entry", "faded", "fade_detected",
+        "exec_entry_price", "exec_exit_price",
+        "exit_reason", "gross_pnl_pct", "net_pnl_pct", "max_profit_pct", "max_drawdown_pct",
+        "score", "volume_ratio", "change_at_entry", "entry_charges", "exit_charges",
+        "slippage_cost", "faded", "fade_detected",
     ]
     with open(filepath, "w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=fieldnames)
@@ -724,13 +809,19 @@ def export_trades_csv(trades: List[Trade], filepath: str):
                 "entry_price": t.entry_price,
                 "exit_time": t.exit_time,
                 "exit_price": t.exit_price,
+                "exec_entry_price": t.exec_entry_price,
+                "exec_exit_price": t.exec_exit_price,
                 "exit_reason": t.exit_reason,
-                "pnl_pct": t.pnl_pct,
+                "gross_pnl_pct": t.gross_pnl_pct,
+                "net_pnl_pct": t.pnl_pct,
                 "max_profit_pct": t.max_profit_pct,
                 "max_drawdown_pct": t.max_drawdown_pct,
                 "score": t.score,
                 "volume_ratio": t.volume_ratio,
                 "change_at_entry": t.change_at_entry,
+                "entry_charges": t.entry_charges,
+                "exit_charges": t.exit_charges,
+                "slippage_cost": t.slippage_cost,
                 "faded": t.faded,
                 "fade_detected": t.fade_detected,
             })
@@ -765,7 +856,15 @@ def main():
     parser.add_argument("--top", type=int, default=0, help="Top N candidates per day (0 = all, for honest test)")
     parser.add_argument("--no-api", action="store_true", help="Skip Kite API, use daily-only simulation")
     parser.add_argument("--export", type=str, default=None, help="Export trades to CSV file")
+    parser.add_argument("--buy-cost-pct", type=float, default=DEFAULT_BUY_COST_PCT, help="Estimated buy-side cost percentage")
+    parser.add_argument("--sell-cost-pct", type=float, default=DEFAULT_SELL_COST_PCT, help="Estimated sell-side cost percentage")
+    parser.add_argument("--slippage-bps", type=float, default=DEFAULT_SLIPPAGE_BPS, help="Estimated slippage in basis points per side")
     args = parser.parse_args()
+    cost_model = CostModel(
+        buy_cost_pct=max(0.0, float(args.buy_cost_pct)),
+        sell_cost_pct=max(0.0, float(args.sell_cost_pct)),
+        slippage_bps=max(0.0, float(args.slippage_bps)),
+    )
 
     # Determine target dates
     if args.date:
@@ -807,7 +906,7 @@ def main():
                 if entry_price > cand["high"]:
                     continue  # Never reached entry
                 exit_price = cand["close"]
-                pnl = (exit_price - entry_price) / entry_price * 100
+                gross_pnl_pct = (exit_price - entry_price) / entry_price * 100
                 max_profit = (cand["high"] - entry_price) / entry_price * 100
                 max_dd = (entry_price - cand["low"]) / entry_price * 100
 
@@ -828,7 +927,7 @@ def main():
                 if fade_detected:
                     # Conservative: exit at high - 4%
                     exit_price = cand["high"] * (1 - FADE_DROP_FROM_HIGH_PCT / 100)
-                    pnl = (exit_price - entry_price) / entry_price * 100
+                    gross_pnl_pct = (exit_price - entry_price) / entry_price * 100
                     exit_reason = "FADE_EXIT"
                 else:
                     exit_reason = "EOD"
@@ -838,9 +937,10 @@ def main():
                 sl = entry_price - SL_ATR_MULTIPLIER * atr if atr > 0 else entry_price * (1 - SL_FALLBACK_PCT)
                 if cand["low"] <= sl:
                     exit_price = sl
-                    pnl = (exit_price - entry_price) / entry_price * 100
+                    gross_pnl_pct = (exit_price - entry_price) / entry_price * 100
                     exit_reason = "STOP_HIT"
                     fade_detected = True
+                cost_result = _apply_trade_costs(entry_price, exit_price, cost_model)
 
                 trade = Trade(
                     symbol=cand["symbol"],
@@ -848,6 +948,8 @@ def main():
                     entry_time="~09:20",
                     entry_price=round(entry_price, 2),
                     exit_price=round(exit_price, 2),
+                    exec_entry_price=cost_result["exec_entry_price"],
+                    exec_exit_price=cost_result["exec_exit_price"],
                     exit_time="15:15" if exit_reason == "EOD" else "~?",
                     exit_reason=exit_reason,
                     change_at_entry=TICK_ENTRY_PCT,
@@ -855,9 +957,13 @@ def main():
                     low_after_entry=round(cand["low"], 2),
                     score=score,
                     volume_ratio=cand["vol_ratio"],
-                    pnl_pct=round(pnl, 2),
+                    gross_pnl_pct=round(gross_pnl_pct, 2),
+                    pnl_pct=cost_result["net_pnl_pct"],
                     max_profit_pct=round(max_profit, 2),
                     max_drawdown_pct=round(max_dd, 2),
+                    entry_charges=cost_result["entry_charges"],
+                    exit_charges=cost_result["exit_charges"],
+                    slippage_cost=cost_result["slippage_cost"],
                     faded=cand["close"] < entry_price,
                     fade_detected=fade_detected,
                 )
@@ -877,12 +983,12 @@ def main():
                 sym = cand["symbol"]
                 if sym not in minute_data:
                     continue
-                trade = simulate_intraday(sym, dt, minute_data[sym], cand)
+                trade = simulate_intraday(sym, dt, minute_data[sym], cand, cost_model)
                 if trade is not None:
                     all_trades.append(trade)
 
     # Step 4: Report
-    print_report(all_trades, candidates_per_day)
+    print_report(all_trades, candidates_per_day, cost_model)
 
     # Step 5: Export
     if args.export:
