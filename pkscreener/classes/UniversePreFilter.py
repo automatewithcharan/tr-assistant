@@ -4,10 +4,18 @@ expensive per-symbol analysis to cut the scan universe early.
 
 This module filters out stocks that are obviously unfit for trading
 (too illiquid, too cheap, no volume) before burning CPU on indicators.
+
+Performance features:
+- Concurrent filtering via ThreadPoolExecutor for large universes
+- Dynamic "active universe" cache to skip re-filtering stable symbols
+- Batch-friendly: filter_symbols() processes all symbols in one call
 """
 
 import logging
-from typing import Dict, List, Optional, Tuple
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 
@@ -38,6 +46,20 @@ class UniversePreFilter:
         self.min_avg_trade_value = min_avg_trade_value
         self.min_candles = min_candles
         self.max_spread_pct = max_spread_pct
+
+        # Dynamic universe cache: symbol -> (eligible: bool, reason: str, timestamp)
+        self._cache: Dict[str, Tuple[bool, str, float]] = {}
+        self._cache_lock = threading.Lock()
+        self._cache_ttl: float = 300.0  # 5 minutes default
+
+    def set_cache_ttl(self, ttl_seconds: float) -> None:
+        """Set the cache TTL for pre-filter results."""
+        self._cache_ttl = max(0.0, ttl_seconds)
+
+    def clear_cache(self) -> None:
+        """Clear the pre-filter cache."""
+        with self._cache_lock:
+            self._cache.clear()
 
     def is_eligible(self, df: pd.DataFrame) -> Tuple[bool, str]:
         """
@@ -87,29 +109,125 @@ class UniversePreFilter:
     def filter_symbols(
         self,
         symbols: List[str],
-        data_loader,
+        data_loader: Callable,
         show_progress: bool = False,
+        max_workers: int = 4,
+        use_cache: bool = True,
     ) -> Tuple[List[str], List[Tuple[str, str]]]:
         """
         Filter a list of symbols, returning (eligible, rejected_with_reasons).
 
-        data_loader: callable(symbol) -> pd.DataFrame (OHLCV data)
-        """
-        eligible = []
-        rejected = []
+        Uses concurrent execution and caching for fast filtering of large universes.
 
+        Args:
+            symbols: List of stock symbols to filter
+            data_loader: callable(symbol) -> pd.DataFrame (OHLCV data)
+            show_progress: Log progress every 100 symbols
+            max_workers: Number of concurrent workers (1 = sequential)
+            use_cache: Use dynamic cache to skip recently-checked symbols
+        """
+        eligible: List[str] = []
+        rejected: List[Tuple[str, str]] = []
+        to_check: List[str] = []
+        now = time.monotonic()
+
+        # Check cache first
+        if use_cache:
+            with self._cache_lock:
+                for symbol in symbols:
+                    key = str(symbol).strip().upper()
+                    cached = self._cache.get(key)
+                    if cached and (now - cached[2]) < self._cache_ttl:
+                        if cached[0]:
+                            eligible.append(symbol)
+                        else:
+                            rejected.append((symbol, cached[1]))
+                    else:
+                        to_check.append(symbol)
+        else:
+            to_check = list(symbols)
+
+        if not to_check:
+            return eligible, rejected
+
+        # Filter uncached symbols
+        if max_workers <= 1 or len(to_check) <= 10:
+            self._filter_sequential(to_check, data_loader, eligible, rejected, show_progress, now)
+        else:
+            self._filter_concurrent(to_check, data_loader, eligible, rejected,
+                                    show_progress, max_workers, now)
+
+        return eligible, rejected
+
+    def _filter_sequential(self, symbols, data_loader, eligible, rejected,
+                           show_progress, timestamp):
+        """Filter symbols sequentially (for small universes)."""
         for i, symbol in enumerate(symbols):
-            try:
-                df = data_loader(symbol)
-                ok, reason = self.is_eligible(df)
-                if ok:
-                    eligible.append(symbol)
-                else:
-                    rejected.append((symbol, reason))
-            except Exception as exc:
-                rejected.append((symbol, f"error: {exc}"))
+            ok, reason = self._check_one(symbol, data_loader, timestamp)
+            if ok:
+                eligible.append(symbol)
+            else:
+                rejected.append((symbol, reason))
 
             if show_progress and ((i + 1) % 100 == 0 or i + 1 == len(symbols)):
                 logger.debug(f"Pre-filter: {i+1}/{len(symbols)} checked, {len(eligible)} eligible")
 
-        return eligible, rejected
+    def _filter_concurrent(self, symbols, data_loader, eligible, rejected,
+                           show_progress, max_workers, timestamp):
+        """Filter symbols concurrently via ThreadPoolExecutor."""
+        completed = 0
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_map = {
+                executor.submit(self._check_one, sym, data_loader, timestamp): sym
+                for sym in symbols
+            }
+            for future in as_completed(future_map):
+                completed += 1
+                sym = future_map[future]
+                try:
+                    ok, reason = future.result()
+                    if ok:
+                        eligible.append(sym)
+                    else:
+                        rejected.append((sym, reason))
+                except Exception as exc:
+                    rejected.append((sym, f"error: {exc}"))
+
+                if show_progress and (completed % 100 == 0 or completed == len(symbols)):
+                    logger.debug(f"Pre-filter: {completed}/{len(symbols)} checked, {len(eligible)} eligible")
+
+    def _check_one(self, symbol: str, data_loader: Callable, timestamp: float) -> Tuple[bool, str]:
+        """Check one symbol and update the cache."""
+        key = str(symbol).strip().upper()
+        try:
+            df = data_loader(symbol)
+            ok, reason = self.is_eligible(df)
+        except Exception as exc:
+            ok, reason = False, f"error: {exc}"
+
+        with self._cache_lock:
+            self._cache[key] = (ok, reason, timestamp)
+
+        return ok, reason
+
+    def get_cached_eligible(self) -> List[str]:
+        """Return the current set of cached eligible symbols."""
+        now = time.monotonic()
+        with self._cache_lock:
+            return [
+                sym for sym, (ok, _, ts) in self._cache.items()
+                if ok and (now - ts) < self._cache_ttl
+            ]
+
+    def get_cache_stats(self) -> Dict[str, int]:
+        """Return cache statistics."""
+        now = time.monotonic()
+        with self._cache_lock:
+            valid = [(ok, reason) for ok, reason, ts in self._cache.values()
+                     if (now - ts) < self._cache_ttl]
+            return {
+                "total_cached": len(valid),
+                "eligible": sum(1 for ok, _ in valid if ok),
+                "rejected": sum(1 for ok, _ in valid if not ok),
+                "expired": len(self._cache) - len(valid),
+            }
