@@ -560,12 +560,21 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
                     if channel is None:
                         channel = await self.fetch_channel(int(allowed_channel_id))
                     if channel:
+                        kite_line = ""
+                        try:
+                            from pkscreener.classes.KiteOrderManager import KiteOrderManager
+                            _km = KiteOrderManager(output_dir=Archiver.get_user_outputs_dir())
+                            if _km.auto_trade:
+                                kite_line = f"\n• 🤖 Kite auto-trade **ON** (dry_run={'Yes' if _km.dry_run else 'No'})"
+                        except Exception:
+                            pass
                         await channel.send(
                             f"**\U0001f7e2 Trade bot online** (`{self.user}`)"
                             f"\n• `/buy symbol:RELIANCE qty:2 price:1450` — log a buy"
                             f"\n• `/sell symbol:RELIANCE qty:2 price:1480` — log a sell"
                             f"\n• `/portfolio` — see all positions + P&L"
                             f"\n• `/buynow` — latest buy signals"
+                            f"{kite_line}"
                             f"\n• `/helptrade` — full command list"
                         )
                 except Exception as exc:
@@ -693,8 +702,15 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
                 "`/history` — recent trade log",
                 "`/refresh` — refresh prices for open positions",
                 "`/autopilot` — run a blind-buy scan now",
-                "`/whoami` — show your user/channel IDs",
                 "",
+                "**Kite Auto-Trade:**",
+                "`/kitebuy symbol:RELIANCE` — buy via Kite API",
+                "`/kitesell symbol:RELIANCE` — sell via Kite API",
+                "`/kitepositions` — Kite-tracked positions + P/L",
+                "`/kitestatus` — auto-trade config + stats",
+                "`/kitereconcile` — compare tracked vs broker positions",
+                "",
+                "`/whoami` — show your user/channel IDs",
                 "_Commands only work in the configured trade channel._",
             ]
         )
@@ -1040,6 +1056,148 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
             message = f"⚠️ autopilot failed: {exc}"
 
         await interaction.followup.send(message[:1900])
+
+    # ------------------------------------------------------------------
+    # Kite auto-trade commands
+    # ------------------------------------------------------------------
+
+    @bot.tree.command(name="kitepositions", description="Show positions tracked by Kite auto-trader")
+    async def kitepositions(interaction):  # type: ignore
+        ok, reason = _authorize(interaction)
+        if not ok:
+            await _reply_unauthorized(interaction, reason)
+            return
+
+        try:
+            from pkscreener.classes.KiteOrderManager import KiteOrderManager
+            mgr = KiteOrderManager(output_dir=Archiver.get_user_outputs_dir())
+            message = mgr.format_positions_summary()
+        except Exception as exc:
+            message = f"⚠️ kitepositions failed: {exc}"
+        await interaction.response.send_message(message[:1900])
+
+    @bot.tree.command(name="kitesell", description="Sell a Kite-tracked position via market order")
+    @app_commands.describe(symbol="Stock symbol to sell")
+    async def kitesell(interaction, symbol: str):  # type: ignore
+        ok, reason = _authorize(interaction)
+        if not ok:
+            await _reply_unauthorized(interaction, reason)
+            return
+
+        await interaction.response.defer(thinking=True)
+        try:
+            from pkscreener.classes.KiteOrderManager import KiteOrderManager
+            mgr = KiteOrderManager(output_dir=Archiver.get_user_outputs_dir())
+            result = mgr.place_sell_order(symbol=symbol, reason="manual_sell")
+            if result.success:
+                pos = mgr.get_position(symbol.strip().upper())
+                pnl_text = f" | P/L: ₹{pos.pnl:+,.0f}" if pos and pos.sell_price > 0 else ""
+                message = f"✅ Sold `{symbol.upper()}` x{result.qty} (ID: {result.order_id}){pnl_text}"
+            else:
+                message = f"⚠️ Sell failed: {result.message}"
+        except Exception as exc:
+            message = f"⚠️ kitesell failed: {exc}"
+        await interaction.followup.send(message[:1900])
+
+    @bot.tree.command(name="kitebuy", description="Buy a stock via Kite auto-trader")
+    @app_commands.describe(
+        symbol="Stock symbol",
+        amount="Approximate amount to invest (INR, default: max per trade setting)",
+    )
+    async def kitebuy(interaction, symbol: str, amount: Optional[float] = None):  # type: ignore
+        ok, reason = _authorize(interaction)
+        if not ok:
+            await _reply_unauthorized(interaction, reason)
+            return
+
+        await interaction.response.defer(thinking=True)
+        try:
+            from pkscreener.classes.KiteOrderManager import KiteOrderManager
+            mgr = KiteOrderManager(output_dir=Archiver.get_user_outputs_dir())
+
+            # Get live price from ticks
+            ticks = mgr._load_ticks()
+            tick = ticks.get(symbol.strip().upper(), {})
+            live_price = float(tick.get("last_price", 0))
+            if live_price <= 0:
+                message = f"⚠️ No live price for `{symbol.upper()}` — is the ticker running?"
+            else:
+                invest = amount if amount and amount > 0 else mgr.max_order_value
+                qty = max(1, int(invest / live_price))
+                result = mgr.place_buy_order(
+                    symbol=symbol, qty=qty, price=0.0, order_type="MARKET"
+                )
+                if result.success:
+                    message = f"✅ Bought `{symbol.upper()}` x{qty} @ market (ID: {result.order_id})"
+                else:
+                    message = f"⚠️ Buy failed: {result.message}"
+        except Exception as exc:
+            message = f"⚠️ kitebuy failed: {exc}"
+        await interaction.followup.send(message[:1900])
+
+    @bot.tree.command(name="kitereconcile", description="Compare Kite broker positions with tracked positions")
+    async def kitereconcile(interaction):  # type: ignore
+        ok, reason = _authorize(interaction)
+        if not ok:
+            await _reply_unauthorized(interaction, reason)
+            return
+
+        await interaction.response.defer(thinking=True)
+        try:
+            from pkscreener.classes.KiteOrderManager import KiteOrderManager
+            mgr = KiteOrderManager(output_dir=Archiver.get_user_outputs_dir())
+            report = await asyncio.to_thread(mgr.reconcile_with_broker)
+            if report.get("error"):
+                message = f"⚠️ Reconciliation error: {report['error']}"
+            else:
+                lines = [
+                    f"**📊 Position Reconciliation**",
+                    f"Broker positions: {report['broker_positions']}",
+                    f"Tracked positions: {report['tracked_positions']}",
+                ]
+                if report.get("mismatches"):
+                    lines.append("**Mismatches:**")
+                    for m in report["mismatches"]:
+                        lines.append(f"  ⚠️ {m}")
+                if report.get("untracked"):
+                    lines.append(f"**Untracked in broker:** {', '.join(report['untracked'])}")
+                if not report.get("mismatches") and not report.get("untracked"):
+                    lines.append("✅ All positions match!")
+                message = "\n".join(lines)
+        except Exception as exc:
+            message = f"⚠️ reconcile failed: {exc}"
+        await interaction.followup.send(message[:1900])
+
+    @bot.tree.command(name="kitestatus", description="Show Kite auto-trade settings and daily stats")
+    async def kitestatus(interaction):  # type: ignore
+        ok, reason = _authorize(interaction)
+        if not ok:
+            await _reply_unauthorized(interaction, reason)
+            return
+
+        try:
+            from pkscreener.classes.KiteOrderManager import KiteOrderManager
+            mgr = KiteOrderManager(output_dir=Archiver.get_user_outputs_dir())
+            open_pos = mgr.get_open_positions()
+            closed_pos = mgr.get_closed_positions()
+            total_pnl = mgr.get_total_pnl()
+            lines = [
+                f"**⚙️ Kite Auto-Trade Status**",
+                f"Auto-trade: {'✅ ON' if mgr.auto_trade else '❌ OFF'}",
+                f"Dry run: {'🧪 YES' if mgr.dry_run else 'No'}",
+                f"Max per order: ₹{mgr.max_order_value:,.0f}",
+                f"Max daily orders: {mgr.max_daily_orders}",
+                f"Max open positions: {mgr.max_open_positions}",
+                f"Trailing stop: activates at +{mgr.trailing_stop_pct}%, trails at {mgr.trailing_trail_pct}%",
+                f"Max hold days: {mgr.max_hold_days}",
+                f"Open positions: {len(open_pos)}",
+                f"Closed today: {len(closed_pos)}",
+                f"Total booked P/L: ₹{total_pnl:+,.0f}",
+            ]
+            message = "\n".join(lines)
+        except Exception as exc:
+            message = f"⚠️ kitestatus failed: {exc}"
+        await interaction.response.send_message(message[:1900])
 
     # Assign health_monitor to bot instance before starting
     bot.health_monitor = health_monitor

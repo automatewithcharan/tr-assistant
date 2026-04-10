@@ -134,6 +134,23 @@ class CycleResult:
     error: Optional[str] = None
 
 
+def _safe_float(value, default: float = 0.0) -> float:
+    """Parse floats safely from raw CSV/tick values (including '12.3%')."""
+    try:
+        if value is None:
+            return default
+        if isinstance(value, str):
+            cleaned = value.strip().replace(",", "")
+            if cleaned.endswith("%"):
+                cleaned = cleaned[:-1]
+            if not cleaned:
+                return default
+            return float(cleaned)
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 # ---------------------------------------------------------------------------
 # Blind Buy Scorer
 # ---------------------------------------------------------------------------
@@ -171,7 +188,10 @@ class BlindBuyScorer:
         cci = float(row.get("CCI", 0) or 0)
         mfi = float(row.get("MFI", 50) or 50)
         vol_ratio = float(row.get("VolumeRatio", row.get("Volume Ratio", row.get("Volume vs Avg", 0))) or 0)
-        change_pct = float(row.get("ChangePct", row.get("Change %", 0)) or 0)
+        change_pct = _safe_float(
+            row.get("ChangePct", row.get("Change %", row.get("Change%", row.get("change", 0)))),
+            0.0,
+        )
         entry_gap_pct = float(row.get("EntryGapPct", row.get("Entry Gap %", 0)) or 0)
         confidence = float(row.get("ConfidencePct", row.get("Signal Strength %", row.get("SignalStrengthPct", 0))) or 0)
         trigger_ready = str(row.get("TriggerReady", "")).strip().lower() == "true"
@@ -509,6 +529,52 @@ class AutoPilotInvestor:
         # Paper trade tracker — logs every alert, checks EOD outcome
         self._paper_tracker = PaperTradeTracker()
 
+        # Kite auto-order manager (only if KITE_AUTO_TRADE=1)
+        self._order_manager = None
+        try:
+            from pkscreener.classes.KiteOrderManager import KiteOrderManager
+            mgr = KiteOrderManager(output_dir=self.output_dir)
+            if mgr.auto_trade or mgr.dry_run:
+                self._order_manager = mgr
+                self._log(f"Kite order manager active (dry_run={mgr.dry_run})")
+        except Exception:
+            pass  # Kite trading not configured — alert-only mode
+
+    def _try_auto_buy(self, symbol: str, price: float, stop_loss: float = 0.0,
+                      target1: float = 0.0, target2: float = 0.0,
+                      blind_score: float = 0.0, reasons: str = "") -> Optional[str]:
+        """Attempt to auto-buy via Kite if order manager is active.
+
+        Returns a Discord-ready status line, or None if auto-trade is off.
+        """
+        if self._order_manager is None:
+            return None
+        result = self._order_manager.auto_buy_from_candidate(
+            symbol=symbol, live_price=price, stop_loss=stop_loss,
+            target1=target1, target2=target2,
+            blind_score=blind_score, reasons=reasons,
+        )
+        if result.success:
+            return f"✅ Auto-bought `{symbol}` x{result.qty} via Kite (ID: {result.order_id})"
+        else:
+            return f"⚠️ Auto-buy skipped for `{symbol}`: {result.message}"
+
+    def _run_sell_monitor(self) -> None:
+        """Check tracked Kite positions for sell signals and execute."""
+        if self._order_manager is None:
+            return
+        results = self._order_manager.execute_sell_signals()
+        for r in results:
+            if r.success:
+                pos = self._order_manager.get_position(r.symbol)
+                sell_reason = pos.sell_reason if pos else ""
+                reason_text = self._order_manager.format_sell_reason(sell_reason)
+                pnl = pos.pnl if pos else 0
+                self._send_to_channels(
+                    f"🔔 **AUTO-SELL `{r.symbol}`** x{r.qty} — {reason_text}\n"
+                    f"Order ID: {r.order_id} | P/L: ₹{pnl:+,.0f}"
+                )
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -550,6 +616,9 @@ class AutoPilotInvestor:
             # 5. Push alerts
             self._push_buy_alerts(result.buy_candidates)
             self._push_sell_alerts(result.sell_alerts)
+
+            # 5b. Check Kite positions for sell signals (auto-sell)
+            self._run_sell_monitor()
 
             # 6. Save cycle log
             self._save_cycle_log(result)
@@ -876,8 +945,8 @@ class AutoPilotInvestor:
             _now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
 
         # Only during market hours (9:30 AM - 3:15 PM)
-        _h, _m = _now_ist.hour, _now_ist.minute
-        if _h < 9 or (_h == 9 and _m < 30) or _h >= 15 and _m > 15:
+        _now_min = _now_ist.hour * 60 + _now_ist.minute
+        if _now_min < 9 * 60 + 30 or _now_min > 15 * 60 + 15:
             return
 
         _sm_path = os.path.join(self.output_dir, f"signalmonitor_{self.config.universe}_signals_simple_latest.csv")
@@ -1021,6 +1090,12 @@ class AutoPilotInvestor:
             )
 
             self._send_to_channels(msg)
+            # Auto-buy via Kite if enabled
+            _auto_result = self._try_auto_buy(
+                sym, live_price, stop_loss, target1, target2, blind_score, blind_reasons
+            )
+            if _auto_result:
+                self._send_to_channels(_auto_result)
             self._already_alerted_buys.add(sym)
             self._save_daily_alerted(sym)
             self._log(
@@ -2404,7 +2479,10 @@ class AutoPilotInvestor:
             # and may reflect the signal's HISTORICAL change (e.g. 4.9%), not today's
             # actual intraday gain (e.g. 9.3%). Fix: use today's actual gain so the scorer
             # correctly rewards the intraday momentum (+15 for 5%+ vs +12 for 2.5-4.99%).
-            _ohlcv_chg = float(row.get("ChangePct", row.get("Change %", 0)) or 0)
+            _ohlcv_chg = _safe_float(
+                row.get("ChangePct", row.get("Change %", row.get("Change%", row.get("change", 0)))),
+                0.0,
+            )
             if abs(daily_change) > abs(_ohlcv_chg):
                 scoring_row["ChangePct"] = daily_change
                 scoring_row["Change %"] = daily_change
@@ -2431,7 +2509,10 @@ class AutoPilotInvestor:
         # Kite tick `change` = (last - prev_close) / prev_close × 100.
         # If the stock gapped down at open and then rallied, tick change may show +0.8%
         # while the intraday move from open is +4%. OHLCV ChangePct reflects today's candle.
-        _ohlcv_change = float(row.get("ChangePct", row.get("Change %", 0)) or 0)
+        _ohlcv_change = _safe_float(
+            row.get("ChangePct", row.get("Change %", row.get("Change%", row.get("change", 0)))),
+            0.0,
+        )
         if abs(_ohlcv_change) > abs(daily_change):
             # OHLCV shows a bigger move (e.g. intraday from open) — use that for display
             daily_change = _ohlcv_change
@@ -3211,6 +3292,13 @@ class AutoPilotInvestor:
                 if rr2 < 1.5:
                     continue
 
+            _row_change = _safe_float(
+                row.get("ChangePct", row.get("Change %", row.get("Change%", row.get("change", 0)))),
+                0.0,
+            )
+            _tick_change = _safe_float(_tick_liq.get("change"), 0.0)
+            _display_change = _tick_change if abs(_tick_change) > abs(_row_change) else _row_change
+
             candidates.append(BlindBuyCandidate(
                 symbol=symbol,
                 price=price,
@@ -3220,7 +3308,7 @@ class AutoPilotInvestor:
                 target2=target2,
                 confidence=confidence,
                 volume_ratio=vol_ratio,
-                change_pct=float(row.get("ChangePct", row.get("Change %", 0)) or 0),
+                change_pct=_display_change,
                 blind_score=blind_score,
                 original_action=now_action,
                 reasons=blind_reasons,
@@ -3771,6 +3859,20 @@ class AutoPilotInvestor:
         sections.append("_Open Groww → Buy → then use `/buy SYMBOL QTY PRICE` to record_")
         message = "\n\n".join(sections)
         self._send_to_channels(message)
+
+        # Auto-buy top-grade candidates via Kite if enabled
+        if not is_post_market and self._order_manager is not None:
+            _auto_lines = []
+            for c, grade, _, _ in main_picks:
+                if grade in ("A+", "A"):
+                    _ar = self._try_auto_buy(
+                        c.symbol, c.price, c.stop_loss, c.target1, c.target2,
+                        c.blind_score, c.reasons
+                    )
+                    if _ar:
+                        _auto_lines.append(_ar)
+            if _auto_lines:
+                self._send_to_channels("\n".join(_auto_lines))
 
         # Send overflow as a separate watchlist message
         if overflow_picks:
