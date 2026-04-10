@@ -12,7 +12,6 @@ Higher CompositeRank = better trading candidate.
 """
 
 import logging
-import math
 from typing import Dict, List, Optional
 
 import numpy as np
@@ -29,12 +28,26 @@ class RankingEngine:
 
     # Default factor weights (sum to 100)
     DEFAULT_WEIGHTS = {
-        "momentum": 20,
-        "breakout": 25,
-        "volume": 15,
-        "trend": 20,
+        "momentum": 15,
+        "breakout": 20,
+        "volume": 12,
+        "trend": 15,
         "relative_strength": 10,
-        "quality": 10,
+        "quality": 8,
+        "volatility_expansion": 10,
+        "setup_quality": 10,
+    }
+
+    # Factor key → score column name mapping
+    _FACTOR_SCORE_COLS = {
+        "momentum": "momentum_score",
+        "breakout": "breakout_score",
+        "volume": "volume_score",
+        "trend": "trend_score",
+        "relative_strength": "rs_score",
+        "quality": "quality_score",
+        "volatility_expansion": "volatility_expansion_score",
+        "setup_quality": "setup_quality_score",
     }
 
     def __init__(self, weights: Optional[Dict[str, float]] = None):
@@ -65,46 +78,76 @@ class RankingEngine:
         scores["trend_score"] = self._score_trend(indicators)
         scores["rs_score"] = self._score_relative_strength(indicators, ohlcv_df)
         scores["quality_score"] = self._score_quality(indicators)
+        scores["volatility_expansion_score"] = self._score_volatility_expansion(indicators, ohlcv_df)
+        scores["setup_quality_score"] = self._score_setup_quality(indicators, ohlcv_df)
 
-        composite = (
-            scores["momentum_score"] * self.weights.get("momentum", 0)
-            + scores["breakout_score"] * self.weights.get("breakout", 0)
-            + scores["volume_score"] * self.weights.get("volume", 0)
-            + scores["trend_score"] * self.weights.get("trend", 0)
-            + scores["rs_score"] * self.weights.get("relative_strength", 0)
-            + scores["quality_score"] * self.weights.get("quality", 0)
+        composite = sum(
+            scores[self._FACTOR_SCORE_COLS[factor]] * self.weights.get(factor, 0)
+            for factor in self.weights
+            if factor in self._FACTOR_SCORE_COLS
         ) / 100.0
 
         scores["CompositeRank"] = round(max(0.0, min(100.0, composite)), 1)
+        scores["setup_type"] = self._classify_setup(scores, indicators)
         return scores
 
     def rank_dataframe(self, report_df: pd.DataFrame) -> pd.DataFrame:
         """
-        Add CompositeRank column to a report DataFrame.
+        Add CompositeRank and score breakdown columns to a report DataFrame.
+        Uses vectorized numpy operations for speed.
         Expects columns: RSI, CCI, MFI, VolumeRatio, ChangePct, ConfidencePct
         """
         if report_df is None or report_df.empty:
             return report_df
 
-        ranks = []
-        for _, row in report_df.iterrows():
-            indicators = {
-                "rsi": _safe_float(row.get("RSI")),
-                "cci": _safe_float(row.get("CCI")),
-                "mfi": _safe_float(row.get("MFI")),
-                "volume_ratio": _safe_float(row.get("VolumeRatio", 1.0)),
-                "change_pct": _safe_float(row.get("ChangePct", 0)),
-                "confidence": _safe_float(row.get("ConfidencePct", 0)),
-                "close": _safe_float(row.get("PriceNow", 0)),
-                "entry_gap_pct": _safe_float(row.get("EntryGapPct", 0)),
-            }
-            scores = self.rank_single(indicators)
-            ranks.append(scores["CompositeRank"])
+        df = report_df.copy()
+        n = len(df)
 
-        report_df = report_df.copy()
-        report_df["CompositeRank"] = ranks
-        report_df.sort_values("CompositeRank", ascending=False, inplace=True)
-        return report_df
+        # Extract arrays (safe float conversion via vectorized helper)
+        rsi = _safe_float_series(df.get("RSI"), 50.0, n)
+        cci = _safe_float_series(df.get("CCI"), 0.0, n)
+        mfi = _safe_float_series(df.get("MFI"), 50.0, n)
+        volume_ratio = _safe_float_series(df.get("VolumeRatio"), 1.0, n)
+        change_pct = _safe_float_series(df.get("ChangePct"), 0.0, n)
+        confidence = _safe_float_series(df.get("ConfidencePct"), 0.0, n)
+        entry_gap = np.abs(_safe_float_series(df.get("EntryGapPct"), 0.0, n))
+        atr_pct = _safe_float_series(df.get("ATRPct"), 0.0, n)
+        avg_trade_value = _safe_float_series(df.get("AvgTradeValue20"), 0.0, n)
+
+        # Vectorized scoring
+        mom = _vec_score_momentum(rsi, cci, mfi)
+        brk = _vec_score_breakout(volume_ratio, change_pct)
+        vol = _vec_score_volume(volume_ratio, change_pct)
+        trn = _vec_score_trend_from_indicators(change_pct)
+        rs = _vec_score_relative_strength(change_pct)
+        qua = _vec_score_quality(confidence, entry_gap)
+        vex = _vec_score_volatility_expansion(atr_pct, volume_ratio, change_pct)
+        sq = _vec_score_setup_quality(volume_ratio, avg_trade_value, confidence, entry_gap)
+
+        # Composite
+        composite = (
+            mom * self.weights.get("momentum", 0)
+            + brk * self.weights.get("breakout", 0)
+            + vol * self.weights.get("volume", 0)
+            + trn * self.weights.get("trend", 0)
+            + rs * self.weights.get("relative_strength", 0)
+            + qua * self.weights.get("quality", 0)
+            + vex * self.weights.get("volatility_expansion", 0)
+            + sq * self.weights.get("setup_quality", 0)
+        ) / 100.0
+
+        df["CompositeRank"] = np.round(np.clip(composite, 0.0, 100.0), 1)
+        df["MomentumScore"] = np.round(mom, 1)
+        df["BreakoutScore"] = np.round(brk, 1)
+        df["VolumeScore"] = np.round(vol, 1)
+        df["TrendScore"] = np.round(trn, 1)
+        df["RSScore"] = np.round(rs, 1)
+        df["QualityScore"] = np.round(qua, 1)
+        df["VolExpansionScore"] = np.round(vex, 1)
+        df["SetupQualityScore"] = np.round(sq, 1)
+
+        df.sort_values("CompositeRank", ascending=False, inplace=True)
+        return df
 
     # ---- Factor scoring methods (each returns 0-100) ----
 
@@ -301,6 +344,258 @@ class RankingEngine:
             trigger_score = 0.0
 
         return min(100.0, conf_score + trigger_score)
+
+    def _score_volatility_expansion(self, ind: Dict, ohlcv_df: Optional[pd.DataFrame]) -> float:
+        """Detect volatility contraction followed by expansion (VCP-like).
+
+        High scores mean the stock was recently quiet and is now expanding —
+        classic pre-breakout behavior.
+        """
+        score = 0.0
+        volume_ratio = ind.get("volume_ratio", 1.0)
+        change_pct = abs(ind.get("change_pct", 0))
+
+        if ohlcv_df is not None and not ohlcv_df.empty and len(ohlcv_df) >= 20:
+            high_col = "high" if "high" in ohlcv_df.columns else "High"
+            low_col = "low" if "low" in ohlcv_df.columns else "Low"
+            close_col = "close" if "close" in ohlcv_df.columns else "Close"
+            if all(c in ohlcv_df.columns for c in [high_col, low_col, close_col]):
+                recent = ohlcv_df.tail(20)
+                ranges = (recent[high_col] - recent[low_col]).values
+                closes = recent[close_col].values
+                with np.errstate(divide="ignore", invalid="ignore"):
+                    range_pcts = np.where(closes > 0, ranges / closes * 100.0, 0.0)
+
+                if len(range_pcts) >= 10:
+                    old_range = float(np.mean(range_pcts[:10]))
+                    new_range = float(np.mean(range_pcts[-5:]))
+                    today_range = float(range_pcts[-1]) if len(range_pcts) > 0 else 0
+
+                    # Contraction: recent range is smaller than prior range
+                    if old_range > 0 and new_range < old_range * 0.7:
+                        score += 30.0
+                    elif old_range > 0 and new_range < old_range * 0.85:
+                        score += 15.0
+
+                    # Today's expansion: current bar wider than recent average
+                    if new_range > 0 and today_range > new_range * 1.5:
+                        score += 30.0
+                    elif new_range > 0 and today_range > new_range * 1.2:
+                        score += 15.0
+        else:
+            atr_pct = ind.get("atr_pct", 0)
+            if atr_pct > 0 and change_pct > atr_pct * 1.5:
+                score += 30.0
+            elif atr_pct > 0 and change_pct > atr_pct:
+                score += 15.0
+
+        # Volume expansion confirms volatility expansion
+        if volume_ratio >= 2.0:
+            score += 25.0
+        elif volume_ratio >= 1.5:
+            score += 15.0
+
+        # Strong directional move adds conviction
+        if change_pct > 3.0:
+            score += 15.0
+        elif change_pct > 1.5:
+            score += 10.0
+
+        return min(100.0, score)
+
+    def _score_setup_quality(self, ind: Dict, ohlcv_df: Optional[pd.DataFrame]) -> float:
+        """Combined setup quality: liquidity, execution readiness, clean chart.
+
+        High scores mean the setup is actionable (liquid, near trigger, confirmed).
+        """
+        score = 0.0
+        volume_ratio = ind.get("volume_ratio", 1.0)
+        avg_trade_value = ind.get("avg_trade_value", 0)
+        confidence = ind.get("confidence", 0)
+        entry_gap = abs(ind.get("entry_gap_pct", 0))
+
+        # Liquidity score (0-40)
+        if avg_trade_value >= 100_000_000:
+            score += 40.0
+        elif avg_trade_value >= 50_000_000:
+            score += 30.0
+        elif avg_trade_value >= 10_000_000:
+            score += 20.0
+        elif avg_trade_value >= 5_000_000:
+            score += 10.0
+
+        # Volume participation (0-20)
+        if volume_ratio >= 2.0:
+            score += 20.0
+        elif volume_ratio >= 1.5:
+            score += 15.0
+        elif volume_ratio >= 1.0:
+            score += 10.0
+
+        # Trigger proximity (0-20)
+        if entry_gap <= 0.3:
+            score += 20.0
+        elif entry_gap <= 0.6:
+            score += 15.0
+        elif entry_gap <= 1.0:
+            score += 10.0
+
+        # Confidence (0-20)
+        score += min(20.0, max(0.0, confidence * 0.2))
+
+        return min(100.0, score)
+
+    # ---- Setup classification ----
+
+    def _classify_setup(self, scores: Dict, ind: Dict) -> str:
+        """Classify the dominant setup type from score distribution."""
+        if scores.get("breakout_score", 0) >= 70 and scores.get("volume_score", 0) >= 50:
+            return "breakout"
+        if scores.get("momentum_score", 0) >= 70:
+            return "momentum"
+        if scores.get("volatility_expansion_score", 0) >= 60:
+            return "volatility_expansion"
+        if scores.get("trend_score", 0) >= 70 and scores.get("rs_score", 0) >= 50:
+            return "trend_continuation"
+        if scores.get("rs_score", 0) >= 70:
+            return "relative_strength"
+        if scores.get("volume_score", 0) >= 70 and ind.get("change_pct", 0) > 2:
+            return "volume_surge"
+        return "composite"
+
+
+# ---------------------------------------------------------------------------
+# Vectorized scoring helpers (operate on numpy arrays for rank_dataframe)
+# ---------------------------------------------------------------------------
+
+def _safe_float_series(series, default: float, n: int) -> np.ndarray:
+    """Convert a DataFrame column to a float64 numpy array with safe defaults."""
+    if series is None:
+        return np.full(n, default, dtype=np.float64)
+    return pd.to_numeric(series, errors="coerce").fillna(default).to_numpy(dtype=np.float64)
+
+
+def _vec_score_momentum(rsi: np.ndarray, cci: np.ndarray, mfi: np.ndarray) -> np.ndarray:
+    """Vectorized momentum scoring using np.select."""
+    r = np.select(
+        condlist=[(rsi >= 40) & (rsi <= 70), (rsi >= 30) & (rsi < 40), rsi < 30, (rsi > 70) & (rsi <= 80)],
+        choicelist=[40.0, 25.0, 15.0, 20.0],
+        default=5.0,
+    )
+    c = np.select(
+        condlist=[(cci > 0) & (cci <= 100), (cci > 100) & (cci <= 200), cci > 200, (cci >= -100) & (cci <= 0)],
+        choicelist=[30.0, 25.0, 10.0, 15.0],
+        default=20.0,
+    )
+    m = np.select(
+        condlist=[(mfi >= 40) & (mfi <= 80), (mfi >= 20) & (mfi < 40), mfi < 20],
+        choicelist=[30.0, 20.0, 15.0],
+        default=5.0,
+    )
+    return r + c + m
+
+
+def _vec_score_breakout(volume_ratio: np.ndarray, change_pct: np.ndarray) -> np.ndarray:
+    """Vectorized breakout scoring (without OHLCV DataFrame — uses change_pct proxy)."""
+    change_score = np.select(
+        condlist=[change_pct > 3, change_pct > 1],
+        choicelist=[30.0, 15.0],
+        default=0.0,
+    )
+    vol_score = np.select(
+        condlist=[volume_ratio >= 2.0, volume_ratio >= 1.5, volume_ratio >= 1.0],
+        choicelist=[30.0, 20.0, 10.0],
+        default=0.0,
+    )
+    return np.clip(change_score + vol_score, 0.0, 100.0)
+
+
+def _vec_score_volume(volume_ratio: np.ndarray, change_pct: np.ndarray) -> np.ndarray:
+    """Vectorized volume scoring."""
+    base = np.select(
+        condlist=[volume_ratio >= 3.0, volume_ratio >= 2.0, volume_ratio >= 1.5, volume_ratio >= 1.0, volume_ratio >= 0.5],
+        choicelist=[80.0, 65.0, 50.0, 35.0, 15.0],
+        default=5.0,
+    )
+    bonus = np.select(
+        condlist=[(volume_ratio > 1.5) & (change_pct > 0), (volume_ratio > 1.5) & (change_pct < -1)],
+        choicelist=[20.0, -10.0],
+        default=0.0,
+    )
+    return np.clip(base + bonus, 0.0, 100.0)
+
+
+def _vec_score_trend_from_indicators(change_pct: np.ndarray) -> np.ndarray:
+    """Vectorized trend scoring (simplified — no per-row MA data available)."""
+    return np.select(
+        condlist=[change_pct > 3, change_pct > 1, change_pct > 0, change_pct > -1],
+        choicelist=[80.0, 60.0, 45.0, 30.0],
+        default=15.0,
+    )
+
+
+def _vec_score_relative_strength(change_pct: np.ndarray) -> np.ndarray:
+    """Vectorized relative strength scoring."""
+    return np.select(
+        condlist=[change_pct > 5, change_pct > 3, change_pct > 1, change_pct > 0, change_pct > -1, change_pct > -3],
+        choicelist=[90.0, 70.0, 55.0, 40.0, 30.0, 15.0],
+        default=5.0,
+    )
+
+
+def _vec_score_quality(confidence: np.ndarray, entry_gap: np.ndarray) -> np.ndarray:
+    """Vectorized quality scoring."""
+    conf_score = np.clip(confidence * 0.6, 0.0, 60.0)
+    trigger_score = np.select(
+        condlist=[entry_gap <= 0.3, entry_gap <= 0.6, entry_gap <= 1.0, entry_gap <= 2.0],
+        choicelist=[40.0, 30.0, 20.0, 10.0],
+        default=0.0,
+    )
+    return np.clip(conf_score + trigger_score, 0.0, 100.0)
+
+
+def _vec_score_volatility_expansion(atr_pct: np.ndarray, volume_ratio: np.ndarray,
+                                     change_pct: np.ndarray) -> np.ndarray:
+    """Vectorized volatility expansion scoring (uses ATR% as proxy)."""
+    abs_change = np.abs(change_pct)
+    atr_score = np.select(
+        condlist=[(atr_pct > 0) & (abs_change > atr_pct * 1.5), (atr_pct > 0) & (abs_change > atr_pct)],
+        choicelist=[30.0, 15.0],
+        default=0.0,
+    )
+    vol_score = np.select(
+        condlist=[volume_ratio >= 2.0, volume_ratio >= 1.5],
+        choicelist=[25.0, 15.0],
+        default=0.0,
+    )
+    dir_score = np.select(
+        condlist=[abs_change > 3.0, abs_change > 1.5],
+        choicelist=[15.0, 10.0],
+        default=0.0,
+    )
+    return np.clip(atr_score + vol_score + dir_score, 0.0, 100.0)
+
+
+def _vec_score_setup_quality(volume_ratio: np.ndarray, avg_trade_value: np.ndarray,
+                              confidence: np.ndarray, entry_gap: np.ndarray) -> np.ndarray:
+    """Vectorized setup quality scoring (liquidity + execution readiness)."""
+    liq = np.select(
+        condlist=[avg_trade_value >= 100_000_000, avg_trade_value >= 50_000_000, avg_trade_value >= 10_000_000, avg_trade_value >= 5_000_000],
+        choicelist=[40.0, 30.0, 20.0, 10.0],
+        default=0.0,
+    )
+    vol = np.select(
+        condlist=[volume_ratio >= 2.0, volume_ratio >= 1.5, volume_ratio >= 1.0],
+        choicelist=[20.0, 15.0, 10.0],
+        default=0.0,
+    )
+    trg = np.select(
+        condlist=[entry_gap <= 0.3, entry_gap <= 0.6, entry_gap <= 1.0],
+        choicelist=[20.0, 15.0, 10.0],
+        default=0.0,
+    )
+    conf = np.clip(confidence * 0.2, 0.0, 20.0)
+    return np.clip(liq + vol + trg + conf, 0.0, 100.0)
 
 
 def _safe_float(val, default: float = 0.0) -> float:
