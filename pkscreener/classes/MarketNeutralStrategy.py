@@ -648,7 +648,7 @@ class MarketNeutralSignalGenerator:
         pair = ss.pair
 
         # Cointegration quality: lower p-value = better (0.00 → 30, 0.05 → 0)
-        max_pv = self.MAX_COINT_PVALUE
+        max_pv = PairDiscoveryEngine.MAX_COINT_PVALUE
         coint_score = self._W_COINT * max(
             0.0, 1.0 - pair.coint_pvalue / max_pv
         )
@@ -670,9 +670,6 @@ class MarketNeutralSignalGenerator:
 
         total = coint_score + hl_score + z_score_component + corr_score
         return max(0.0, min(100.0, total))
-
-    # --- configuration for signal thresholds ---
-    MAX_COINT_PVALUE = 0.05
 
 
 # ===================================================================
