@@ -18,6 +18,8 @@ import threading
 from collections import deque
 from typing import Dict, Optional
 
+import numpy as np
+
 
 class _EMAState:
     """Standard EMA(n): alpha = 2/(n+1), seeds from first n-bar SMA."""
@@ -288,7 +290,7 @@ class SymbolIncrementalState:
             volumes = (
                 df[vol_col].to_numpy(dtype=float, na_value=0.0)
                 if vol_col in df.columns
-                else __import__("numpy").zeros(len(df), dtype=float)
+                else np.zeros(len(df), dtype=float)
             )
 
             for i in range(len(closes)):

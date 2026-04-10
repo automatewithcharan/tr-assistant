@@ -498,82 +498,110 @@ def _safe_float_series(series, default: float, n: int) -> np.ndarray:
 
 
 def _vec_score_momentum(rsi: np.ndarray, cci: np.ndarray, mfi: np.ndarray) -> np.ndarray:
-    """Vectorized momentum scoring."""
-    # RSI component
-    r = np.where((rsi >= 40) & (rsi <= 70), 40.0,
-        np.where((rsi >= 30) & (rsi < 40), 25.0,
-        np.where(rsi < 30, 15.0,
-        np.where((rsi > 70) & (rsi <= 80), 20.0, 5.0))))
+    """Vectorized momentum scoring using np.select for clarity."""
+    # RSI component: maps RSI ranges to scores
+    r = np.select(
+        condlist=[
+            (rsi >= 40) & (rsi <= 70),
+            (rsi >= 30) & (rsi < 40),
+            rsi < 30,
+            (rsi > 70) & (rsi <= 80),
+        ],
+        choicelist=[40.0, 25.0, 15.0, 20.0],
+        default=5.0,
+    )
 
-    # CCI component
-    c = np.where((cci > 0) & (cci <= 100), 30.0,
-        np.where((cci > 100) & (cci <= 200), 25.0,
-        np.where(cci > 200, 10.0,
-        np.where((cci >= -100) & (cci <= 0), 15.0, 20.0))))
+    # CCI component: maps CCI ranges to scores
+    c = np.select(
+        condlist=[
+            (cci > 0) & (cci <= 100),
+            (cci > 100) & (cci <= 200),
+            cci > 200,
+            (cci >= -100) & (cci <= 0),
+        ],
+        choicelist=[30.0, 25.0, 10.0, 15.0],
+        default=20.0,
+    )
 
-    # MFI component
-    m = np.where((mfi >= 40) & (mfi <= 80), 30.0,
-        np.where((mfi >= 20) & (mfi < 40), 20.0,
-        np.where(mfi < 20, 15.0, 5.0)))
+    # MFI component: maps MFI ranges to scores
+    m = np.select(
+        condlist=[
+            (mfi >= 40) & (mfi <= 80),
+            (mfi >= 20) & (mfi < 40),
+            mfi < 20,
+        ],
+        choicelist=[30.0, 20.0, 15.0],
+        default=5.0,
+    )
 
     return r + c + m
 
 
 def _vec_score_breakout(close: np.ndarray, volume_ratio: np.ndarray, change_pct: np.ndarray) -> np.ndarray:
     """Vectorized breakout scoring (without OHLCV DataFrame - uses change_pct proxy)."""
-    # Change-based proxy for breakout (no per-row OHLCV available in vectorized mode)
-    change_score = np.where(change_pct > 3, 30.0, np.where(change_pct > 1, 15.0, 0.0))
-
-    # Volume confirmation
-    vol_score = np.where(volume_ratio >= 2.0, 30.0,
-               np.where(volume_ratio >= 1.5, 20.0,
-               np.where(volume_ratio >= 1.0, 10.0, 0.0)))
-
+    change_score = np.select(
+        condlist=[change_pct > 3, change_pct > 1],
+        choicelist=[30.0, 15.0],
+        default=0.0,
+    )
+    vol_score = np.select(
+        condlist=[volume_ratio >= 2.0, volume_ratio >= 1.5, volume_ratio >= 1.0],
+        choicelist=[30.0, 20.0, 10.0],
+        default=0.0,
+    )
     return np.clip(change_score + vol_score, 0.0, 100.0)
 
 
 def _vec_score_volume(volume_ratio: np.ndarray, change_pct: np.ndarray) -> np.ndarray:
     """Vectorized volume scoring."""
-    base = np.where(volume_ratio >= 3.0, 80.0,
-           np.where(volume_ratio >= 2.0, 65.0,
-           np.where(volume_ratio >= 1.5, 50.0,
-           np.where(volume_ratio >= 1.0, 35.0,
-           np.where(volume_ratio >= 0.5, 15.0, 5.0)))))
-
-    bonus = np.where((volume_ratio > 1.5) & (change_pct > 0), 20.0,
-            np.where((volume_ratio > 1.5) & (change_pct < -1), -10.0, 0.0))
-
+    base = np.select(
+        condlist=[
+            volume_ratio >= 3.0, volume_ratio >= 2.0, volume_ratio >= 1.5,
+            volume_ratio >= 1.0, volume_ratio >= 0.5,
+        ],
+        choicelist=[80.0, 65.0, 50.0, 35.0, 15.0],
+        default=5.0,
+    )
+    bonus = np.select(
+        condlist=[
+            (volume_ratio > 1.5) & (change_pct > 0),
+            (volume_ratio > 1.5) & (change_pct < -1),
+        ],
+        choicelist=[20.0, -10.0],
+        default=0.0,
+    )
     return np.clip(base + bonus, 0.0, 100.0)
 
 
 def _vec_score_trend_from_indicators(close: np.ndarray, change_pct: np.ndarray) -> np.ndarray:
     """Vectorized trend scoring (simplified — no per-row MA data available)."""
-    # Use change_pct as a proxy for trend alignment
-    return np.where(change_pct > 3, 80.0,
-           np.where(change_pct > 1, 60.0,
-           np.where(change_pct > 0, 45.0,
-           np.where(change_pct > -1, 30.0, 15.0))))
+    return np.select(
+        condlist=[change_pct > 3, change_pct > 1, change_pct > 0, change_pct > -1],
+        choicelist=[80.0, 60.0, 45.0, 30.0],
+        default=15.0,
+    )
 
 
 def _vec_score_relative_strength(change_pct: np.ndarray) -> np.ndarray:
     """Vectorized relative strength scoring."""
-    return np.where(change_pct > 5, 90.0,
-           np.where(change_pct > 3, 70.0,
-           np.where(change_pct > 1, 55.0,
-           np.where(change_pct > 0, 40.0,
-           np.where(change_pct > -1, 30.0,
-           np.where(change_pct > -3, 15.0, 5.0))))))
+    return np.select(
+        condlist=[
+            change_pct > 5, change_pct > 3, change_pct > 1,
+            change_pct > 0, change_pct > -1, change_pct > -3,
+        ],
+        choicelist=[90.0, 70.0, 55.0, 40.0, 30.0, 15.0],
+        default=5.0,
+    )
 
 
 def _vec_score_quality(confidence: np.ndarray, entry_gap: np.ndarray) -> np.ndarray:
     """Vectorized quality scoring."""
     conf_score = np.clip(confidence * 0.6, 0.0, 60.0)
-
-    trigger_score = np.where(entry_gap <= 0.3, 40.0,
-                   np.where(entry_gap <= 0.6, 30.0,
-                   np.where(entry_gap <= 1.0, 20.0,
-                   np.where(entry_gap <= 2.0, 10.0, 0.0))))
-
+    trigger_score = np.select(
+        condlist=[entry_gap <= 0.3, entry_gap <= 0.6, entry_gap <= 1.0, entry_gap <= 2.0],
+        choicelist=[40.0, 30.0, 20.0, 10.0],
+        default=0.0,
+    )
     return np.clip(conf_score + trigger_score, 0.0, 100.0)
 
 
@@ -581,44 +609,49 @@ def _vec_score_volatility_expansion(atr_pct: np.ndarray, volume_ratio: np.ndarra
                                      change_pct: np.ndarray) -> np.ndarray:
     """Vectorized volatility expansion scoring (uses ATR% as proxy)."""
     abs_change = np.abs(change_pct)
-
-    # ATR-based expansion: today's move exceeds recent ATR
-    atr_score = np.where((atr_pct > 0) & (abs_change > atr_pct * 1.5), 30.0,
-               np.where((atr_pct > 0) & (abs_change > atr_pct), 15.0, 0.0))
-
-    # Volume expansion confirms
-    vol_score = np.where(volume_ratio >= 2.0, 25.0,
-               np.where(volume_ratio >= 1.5, 15.0, 0.0))
-
-    # Strong directional move
-    dir_score = np.where(abs_change > 3.0, 15.0,
-               np.where(abs_change > 1.5, 10.0, 0.0))
-
+    atr_score = np.select(
+        condlist=[
+            (atr_pct > 0) & (abs_change > atr_pct * 1.5),
+            (atr_pct > 0) & (abs_change > atr_pct),
+        ],
+        choicelist=[30.0, 15.0],
+        default=0.0,
+    )
+    vol_score = np.select(
+        condlist=[volume_ratio >= 2.0, volume_ratio >= 1.5],
+        choicelist=[25.0, 15.0],
+        default=0.0,
+    )
+    dir_score = np.select(
+        condlist=[abs_change > 3.0, abs_change > 1.5],
+        choicelist=[15.0, 10.0],
+        default=0.0,
+    )
     return np.clip(atr_score + vol_score + dir_score, 0.0, 100.0)
 
 
 def _vec_score_setup_quality(volume_ratio: np.ndarray, avg_trade_value: np.ndarray,
                               confidence: np.ndarray, entry_gap: np.ndarray) -> np.ndarray:
     """Vectorized setup quality scoring (liquidity + execution readiness)."""
-    # Liquidity
-    liq = np.where(avg_trade_value >= 100_000_000, 40.0,
-          np.where(avg_trade_value >= 50_000_000, 30.0,
-          np.where(avg_trade_value >= 10_000_000, 20.0,
-          np.where(avg_trade_value >= 5_000_000, 10.0, 0.0))))
-
-    # Volume participation
-    vol = np.where(volume_ratio >= 2.0, 20.0,
-          np.where(volume_ratio >= 1.5, 15.0,
-          np.where(volume_ratio >= 1.0, 10.0, 0.0)))
-
-    # Trigger proximity
-    trg = np.where(entry_gap <= 0.3, 20.0,
-          np.where(entry_gap <= 0.6, 15.0,
-          np.where(entry_gap <= 1.0, 10.0, 0.0)))
-
-    # Confidence
+    liq = np.select(
+        condlist=[
+            avg_trade_value >= 100_000_000, avg_trade_value >= 50_000_000,
+            avg_trade_value >= 10_000_000, avg_trade_value >= 5_000_000,
+        ],
+        choicelist=[40.0, 30.0, 20.0, 10.0],
+        default=0.0,
+    )
+    vol = np.select(
+        condlist=[volume_ratio >= 2.0, volume_ratio >= 1.5, volume_ratio >= 1.0],
+        choicelist=[20.0, 15.0, 10.0],
+        default=0.0,
+    )
+    trg = np.select(
+        condlist=[entry_gap <= 0.3, entry_gap <= 0.6, entry_gap <= 1.0],
+        choicelist=[20.0, 15.0, 10.0],
+        default=0.0,
+    )
     conf = np.clip(confidence * 0.2, 0.0, 20.0)
-
     return np.clip(liq + vol + trg + conf, 0.0, 100.0)
 
 

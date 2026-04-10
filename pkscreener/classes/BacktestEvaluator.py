@@ -134,8 +134,14 @@ class BacktestEvaluator:
 
         # Max favorable and adverse excursion
         window = min(5, len(highs))
-        mfe = round((float(np.max(highs[:window])) - entry_price) / entry_price * 100.0, 2) if window > 0 else None
-        mae = round((float(np.min(lows[:window])) - entry_price) / entry_price * 100.0, 2) if window > 0 else None
+        mfe = (
+            round((float(np.max(highs[:window])) - entry_price) / entry_price * 100.0, 2)
+            if window > 0 and entry_price > 0 else None
+        )
+        mae = (
+            round((float(np.min(lows[:window])) - entry_price) / entry_price * 100.0, 2)
+            if window > 0 and entry_price > 0 else None
+        )
 
         # Triggered = entry price was reached (for buy signals: high >= entry)
         triggered = bool(np.any(highs[:window] >= entry_price)) if window > 0 else False

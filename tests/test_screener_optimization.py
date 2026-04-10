@@ -275,7 +275,10 @@ class TestUniversePreFilter:
         assert "SYM1" in eligible1
 
         # Second call should use cache (even with a broken loader)
-        eligible2, _ = pf.filter_symbols(["SYM1"], lambda s: (_ for _ in ()).throw(RuntimeError("should not be called")), max_workers=1, use_cache=True)
+        def _broken_loader(s):
+            raise RuntimeError("should not be called")
+
+        eligible2, _ = pf.filter_symbols(["SYM1"], _broken_loader, max_workers=1, use_cache=True)
         assert "SYM1" in eligible2
 
     def test_cache_stats(self):
