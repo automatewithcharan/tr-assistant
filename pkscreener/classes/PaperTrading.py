@@ -1,10 +1,13 @@
 """
 Local paper-trading engine for PKScreener actionable signals.
 
-This module keeps a simple long-only paper account on disk so repeated runs can:
+This module keeps a paper account on disk so repeated runs can:
 - open new paper positions from high-confidence BUY signals
+- open market-neutral (long+short) pair trades for consistent daily profits
 - update held positions with the latest signal snapshot
 - close positions on stop-loss, target, or sell-side signal changes
+
+Supports both LONG and SHORT sides for full market-neutral pairs trading.
 """
 
 import html
@@ -298,7 +301,12 @@ class PaperTradingRunner:
     def _update_open_positions(
         self, trades_df: pd.DataFrame, market_map: Dict[str, pd.Series], cashflows_df: pd.DataFrame
     ) -> Tuple[pd.DataFrame, List[str], Set[str]]:
-        """Refresh open positions and close them if stops, targets, or sell signals fire."""
+        """Refresh open positions and close them if stops, targets, or sell signals fire.
+
+        Handles both LONG and SHORT sides:
+        - LONG: profit when price rises, stop when price falls below StopLoss
+        - SHORT: profit when price falls, stop when price rises above StopLoss
+        """
         exit_events: List[str] = []
         recently_closed: Set[str] = set()
         open_indices = trades_df.index[trades_df["Status"] == "OPEN"].tolist()
@@ -314,8 +322,15 @@ class PaperTradingRunner:
             entry_price = self._to_float(trade["EntryPrice"])
             invested_amount = self._to_float(trade["InvestedAmount"])
             current_price = self._to_float(market_row.get("LTP"), fallback=entry_price)
+            side = str(trade.get("Side", "LONG")).strip().upper()
+            is_short = side == "SHORT"
+
             current_value = round(current_price * quantity, 2)
-            unrealized_pnl = round(current_value - invested_amount, 2)
+            if is_short:
+                # SHORT P&L: profit when price falls (entry - current)
+                unrealized_pnl = round(invested_amount - current_value, 2)
+            else:
+                unrealized_pnl = round(current_value - invested_amount, 2)
             unrealized_return = (
                 round((unrealized_pnl * 100) / invested_amount, 2)
                 if invested_amount > 0
@@ -344,14 +359,25 @@ class PaperTradingRunner:
             ).strip().upper()
 
             exit_reason = None
-            if stop_loss > 0 and current_price <= stop_loss:
-                exit_reason = f"Stop loss hit ({stop_loss:.2f})"
-            elif target_2 > 0 and current_price >= target_2:
-                exit_reason = f"Target 2 hit ({target_2:.2f})"
-            elif target_1 > 0 and current_price >= target_1:
-                exit_reason = f"Target 1 hit ({target_1:.2f})"
-            elif current_action in ["SELL/EXIT", "WATCH SELL"]:
-                exit_reason = f"{current_action} signal"
+            if is_short:
+                # SHORT exits: stop if price rises above StopLoss, target if price falls below Target
+                if stop_loss > 0 and current_price >= stop_loss:
+                    exit_reason = f"Short stop loss hit ({stop_loss:.2f})"
+                elif target_2 > 0 and current_price <= target_2:
+                    exit_reason = f"Short target 2 hit ({target_2:.2f})"
+                elif target_1 > 0 and current_price <= target_1:
+                    exit_reason = f"Short target 1 hit ({target_1:.2f})"
+                elif current_action in ["BUY/COVER", "COVER"]:
+                    exit_reason = f"{current_action} signal"
+            else:
+                if stop_loss > 0 and current_price <= stop_loss:
+                    exit_reason = f"Stop loss hit ({stop_loss:.2f})"
+                elif target_2 > 0 and current_price >= target_2:
+                    exit_reason = f"Target 2 hit ({target_2:.2f})"
+                elif target_1 > 0 and current_price >= target_1:
+                    exit_reason = f"Target 1 hit ({target_1:.2f})"
+                elif current_action in ["SELL/EXIT", "WATCH SELL"]:
+                    exit_reason = f"{current_action} signal"
 
             if exit_reason is None:
                 continue
@@ -373,7 +399,7 @@ class PaperTradingRunner:
             trades_df.loc[index, "UnrealizedReturnPct"] = 0.0
 
             exit_events.append(
-                f"EXIT {symbol} x{quantity} at {current_price:.2f} | {exit_reason}"
+                f"EXIT {side} {symbol} x{quantity} at {current_price:.2f} | {exit_reason}"
             )
             recently_closed.add(symbol)
 
@@ -668,6 +694,143 @@ class PaperTradingRunner:
 
         return trades_df[self.TRADE_COLUMNS].copy(), events
 
+    def open_pair_trades(
+        self,
+        trades_df: pd.DataFrame,
+        cashflows_df: pd.DataFrame,
+        sized_trades: List,
+    ) -> Tuple[pd.DataFrame, List[str]]:
+        """Open market-neutral pair trades (long + short legs) from SizedPairTrade objects.
+
+        Each SizedPairTrade produces two trade rows — one LONG and one SHORT —
+        linked by a common PairId prefix in EntryReason.
+
+        Args:
+            trades_df: current trade ledger.
+            cashflows_df: cashflow ledger (for available cash check).
+            sized_trades: list of ``SizedPairTrade`` from the MarketNeutralSizer.
+
+        Returns:
+            ``(updated_trades_df, entry_events)``
+        """
+        entry_events: List[str] = []
+        if not sized_trades:
+            return trades_df, entry_events
+
+        next_trade_id = self._next_trade_id(trades_df)
+        cash_remaining = self._compute_cash(trades_df, cashflows_df)
+        open_symbols = set(
+            trades_df.loc[trades_df["Status"] == "OPEN", "Symbol"].astype(str).str.upper().tolist()
+        )
+        new_rows = []
+
+        for pair_idx, st in enumerate(sized_trades):
+            sig = st.signal
+            pair = sig.pair
+            pair_id = f"PAIR-{pair.symbol_a}/{pair.symbol_b}-{pair_idx}"
+
+            # Check capital availability (need capital for long leg; short leg
+            # is a margin-based notional but we still reserve the same amount)
+            total_needed = st.total_capital
+            if total_needed > cash_remaining:
+                entry_events.append(
+                    f"Skipped pair {pair.symbol_a}/{pair.symbol_b}: "
+                    f"need ₹{total_needed:,.0f}, have ₹{cash_remaining:,.0f}"
+                )
+                continue
+
+            # --- LONG leg ---
+            long_invested = round(sig.long_price * st.long_quantity, 2)
+            new_rows.append(
+                {
+                    "TradeId": next_trade_id,
+                    "Universe": self.universe,
+                    "Symbol": sig.long_symbol,
+                    "Side": "LONG",
+                    "Status": "OPEN",
+                    "EntryDate": self.run_date,
+                    "EntryPrice": sig.long_price,
+                    "Quantity": st.long_quantity,
+                    "InvestedAmount": long_invested,
+                    "StopLoss": 0.0,  # managed by pair spread z-score
+                    "Target1": 0.0,
+                    "Target2": 0.0,
+                    "EntrySignal": f"PAIR LONG z={sig.z_score:+.2f}",
+                    "EntryConfidencePct": sig.confidence,
+                    "EntryReason": f"{pair_id} | {sig.reason}",
+                    "CurrentPrice": sig.long_price,
+                    "CurrentValue": long_invested,
+                    "UnrealizedPnL": 0.0,
+                    "UnrealizedReturnPct": 0.0,
+                    "LastAction": sig.signal_type,
+                    "LastSignal": f"PAIR LONG z={sig.z_score:+.2f}",
+                    "LastConfidencePct": sig.confidence,
+                    "LastReason": sig.reason,
+                    "LastUpdatedAt": self.run_at_str,
+                    "ExitDate": "",
+                    "ExitPrice": 0.0,
+                    "ExitValue": 0.0,
+                    "ExitReason": "",
+                    "RealizedPnL": 0.0,
+                    "RealizedReturnPct": 0.0,
+                }
+            )
+            next_trade_id += 1
+
+            # --- SHORT leg ---
+            short_invested = round(sig.short_price * st.short_quantity, 2)
+            new_rows.append(
+                {
+                    "TradeId": next_trade_id,
+                    "Universe": self.universe,
+                    "Symbol": sig.short_symbol,
+                    "Side": "SHORT",
+                    "Status": "OPEN",
+                    "EntryDate": self.run_date,
+                    "EntryPrice": sig.short_price,
+                    "Quantity": st.short_quantity,
+                    "InvestedAmount": short_invested,
+                    "StopLoss": 0.0,
+                    "Target1": 0.0,
+                    "Target2": 0.0,
+                    "EntrySignal": f"PAIR SHORT z={sig.z_score:+.2f}",
+                    "EntryConfidencePct": sig.confidence,
+                    "EntryReason": f"{pair_id} | {sig.reason}",
+                    "CurrentPrice": sig.short_price,
+                    "CurrentValue": short_invested,
+                    "UnrealizedPnL": 0.0,
+                    "UnrealizedReturnPct": 0.0,
+                    "LastAction": sig.signal_type,
+                    "LastSignal": f"PAIR SHORT z={sig.z_score:+.2f}",
+                    "LastConfidencePct": sig.confidence,
+                    "LastReason": sig.reason,
+                    "LastUpdatedAt": self.run_at_str,
+                    "ExitDate": "",
+                    "ExitPrice": 0.0,
+                    "ExitValue": 0.0,
+                    "ExitReason": "",
+                    "RealizedPnL": 0.0,
+                    "RealizedReturnPct": 0.0,
+                }
+            )
+            next_trade_id += 1
+            cash_remaining = round(cash_remaining - total_needed, 2)
+            open_symbols.add(sig.long_symbol)
+            open_symbols.add(sig.short_symbol)
+
+            entry_events.append(
+                f"PAIR {pair.symbol_a}/{pair.symbol_b} ({pair.sector}) | "
+                f"LONG {sig.long_symbol} x{st.long_quantity} @ {sig.long_price:.2f} + "
+                f"SHORT {sig.short_symbol} x{st.short_quantity} @ {sig.short_price:.2f} | "
+                f"z={sig.z_score:+.2f} conf={sig.confidence:.0f}"
+            )
+
+        if new_rows:
+            new_df = pd.DataFrame(new_rows, columns=self.TRADE_COLUMNS)
+            trades_df = pd.concat([trades_df, new_df], axis=0, ignore_index=True)
+
+        return trades_df[self.TRADE_COLUMNS].copy(), entry_events
+
     def _create_closed_trade_record(
         self,
         trade: pd.Series,
@@ -676,11 +839,18 @@ class PaperTradingRunner:
         exit_reason: str,
         trade_id: int,
     ) -> Dict:
-        """Create a closed-trade record from an existing open trade row."""
+        """Create a closed-trade record from an existing open trade row.
+
+        Handles both LONG (profit = exit - entry) and SHORT (profit = entry - exit) sides.
+        """
         entry_price = self._to_float(trade["EntryPrice"])
         invested_amount = round(entry_price * sell_qty, 2)
         exit_value = round(exit_price * sell_qty, 2)
-        realized_pnl = round(exit_value - invested_amount, 2)
+        side = str(trade.get("Side", "LONG")).strip().upper()
+        if side == "SHORT":
+            realized_pnl = round(invested_amount - exit_value, 2)
+        else:
+            realized_pnl = round(exit_value - invested_amount, 2)
         realized_return = (
             round((realized_pnl * 100) / invested_amount, 2)
             if invested_amount > 0
