@@ -44,6 +44,12 @@ try:
 except ImportError:
     _COINT_AVAILABLE = False
 
+# Sentinel for non-mean-reverting or insufficient data (used as half-life)
+_INVALID_HALF_LIFE = 999.0
+
+# Assumed max adverse spread move (5%) for risk-based capital allocation
+_ASSUMED_MAX_SPREAD_MOVE_PCT = 0.05
+
 try:
     from scipy.stats import pearsonr as _pearsonr
     _SCIPY_AVAILABLE = True
@@ -330,9 +336,11 @@ class PairDiscoveryEngine:
 
     @staticmethod
     def _ols_hedge_ratio(y: np.ndarray, x: np.ndarray) -> float:
-        """Compute OLS hedge ratio: y = beta * x + alpha."""
+        """Compute OLS hedge ratio via least-squares: y = beta[0]*x + beta[1].
+
+        Returns beta[0] (the slope / hedge ratio).
+        """
         x_with_const = np.column_stack([x, np.ones(len(x))])
-        # np.linalg.lstsq is fast and handles rank-deficient data
         beta, _, _, _ = np.linalg.lstsq(x_with_const, y, rcond=None)
         return float(beta[0])
 
@@ -345,7 +353,7 @@ class PairDiscoveryEngine:
         Half-life = -ln(2) / θ
         """
         if len(spread) < 3:
-            return 999.0
+            return _INVALID_HALF_LIFE
         lag = spread[:-1]
         delta = np.diff(spread)
         # OLS: delta = theta * lag
@@ -353,7 +361,7 @@ class PairDiscoveryEngine:
         beta, _, _, _ = np.linalg.lstsq(lag_with_const, delta, rcond=None)
         theta = float(beta[0])
         if theta >= 0:
-            return 999.0  # not mean-reverting
+            return _INVALID_HALF_LIFE  # not mean-reverting
         half_life = -np.log(2) / theta
         return max(1.0, float(half_life))
 
@@ -640,8 +648,9 @@ class MarketNeutralSignalGenerator:
         pair = ss.pair
 
         # Cointegration quality: lower p-value = better (0.00 → 30, 0.05 → 0)
+        max_pv = self.MAX_COINT_PVALUE
         coint_score = self._W_COINT * max(
-            0.0, 1.0 - pair.coint_pvalue / self._max_pvalue_for_scoring
+            0.0, 1.0 - pair.coint_pvalue / max_pv
         )
 
         # Half-life: shorter = better (1d → 30, 60d → 0)
@@ -650,7 +659,11 @@ class MarketNeutralSignalGenerator:
 
         # Z-score: closer to entry zone = better for entries
         abs_z = abs(ss.z_score)
-        z_score_component = self._W_Z * min(1.0, abs_z / self._z_entry) if abs_z <= self._z_stop else 0.0
+        if abs_z <= self._z_stop:
+            z_ratio = min(1.0, abs_z / self._z_entry)
+            z_score_component = self._W_Z * z_ratio
+        else:
+            z_score_component = 0.0
 
         # Correlation: higher = better
         corr_score = self._W_CORR * min(1.0, abs(pair.correlation))
@@ -658,9 +671,8 @@ class MarketNeutralSignalGenerator:
         total = coint_score + hl_score + z_score_component + corr_score
         return max(0.0, min(100.0, total))
 
-    @property
-    def _max_pvalue_for_scoring(self) -> float:
-        return 0.05
+    # --- configuration for signal thresholds ---
+    MAX_COINT_PVALUE = 0.05
 
 
 # ===================================================================
@@ -744,9 +756,13 @@ class MarketNeutralSizer:
         capital: float,
         weights: np.ndarray,
     ) -> np.ndarray:
-        """Distribute capital according to weights, respecting 2% risk cap."""
-        max_per_pair = capital * MarketNeutralSizer.MAX_RISK_PCT / 0.05
-        # max_per_pair = capital that would result in 2% loss if spread moves 5%
+        """Distribute capital according to weights, respecting risk cap.
+
+        ``max_per_pair`` is the capital that would result in a
+        ``MAX_RISK_PCT`` (2%) loss if the spread moves by
+        ``_ASSUMED_MAX_SPREAD_MOVE_PCT`` (5%).
+        """
+        max_per_pair = capital * MarketNeutralSizer.MAX_RISK_PCT / _ASSUMED_MAX_SPREAD_MOVE_PCT
         raw = capital * weights
         capped = np.minimum(raw, max_per_pair)
         return capped
