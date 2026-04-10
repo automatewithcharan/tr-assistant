@@ -27,6 +27,23 @@ into the V2 intelligence engine.
   candidate via the market regime component.
 - **Where**: `MarketContext.py` → `update()`, regime classification
 
+### Pair Trading / Cointegration
+- **Source**: https://github.com/je-suis-tm/quant-trading (strategy #2)
+- **Concept**: Use Engle-Granger cointegration to find pairs. Trade mean
+  reversion when spread exceeds threshold.
+- **Our implementation**: Full market-neutral pairs trading pipeline in
+  `MarketNeutralStrategy.py` and `MarketNeutralScanner.py`. Discovers
+  cointegrated sector pairs, monitors spread z-scores, generates
+  dollar-neutral ENTRY/EXIT/STOP signals, and sizes positions to target
+  ₹10k-20k daily profit. Paper trading supports both LONG and SHORT legs
+  via `PaperTrading.open_pair_trades()`.
+- **Where**: `MarketNeutralStrategy.py` → `PairDiscoveryEngine`,
+  `SpreadMonitor`, `MarketNeutralSignalGenerator`, `MarketNeutralSizer`;
+  `MarketNeutralScanner.py` → `MarketNeutralScanner`;
+  `PaperTrading.py` → `open_pair_trades()`
+- **Reference**: Engle-Granger (1987) cointegration test, Ornstein-Uhlenbeck
+  half-life estimation
+
 ---
 
 ## Reference Strategies (Not Integrated — Future Potential)
@@ -45,13 +62,6 @@ into the V2 intelligence engine.
   compression, but adds statistical thresholds (standard deviation bands).
 - **Potential use**: Could add Bollinger squeeze as a secondary pre-move
   filter alongside range compression ratio.
-
-### Pair Trading / Cointegration
-- **Source**: https://github.com/je-suis-tm/quant-trading (strategy #2)
-- **Concept**: Use Engle-Granger cointegration to find pairs. Trade mean
-  reversion when spread exceeds threshold.
-- **Potential use**: Could identify sector pairs. If stock A breaks out but
-  its cointegrated partner doesn't, signal quality is lower.
 
 ### Sector Rotation / Momentum
 - **Source**: paperswithbacktest — "Sector Momentum – Rotational System"
