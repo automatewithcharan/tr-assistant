@@ -7,6 +7,64 @@
 
 ---
 
+## Execution Modes (Deployment Strategy)
+
+The system can operate in **three modes** controlled by environment variables:
+
+### Mode 1: Alerts Only (Default — Safe Testing)
+```bash
+KITE_AUTO_TRADE=0  # Disabled
+KITE_DRY_RUN=0     # Disabled
+```
+✅ **What happens:**
+- Gaps + ORB conditions scanned every minute
+- When trade qualifies → **Discord alert sent** (symbol, strategy, entry, SL, T1, T2)
+- **No orders placed** — manual decision on Discord
+- **Paper P&L logged** for analysis
+- **Risk**: None (no capital deployed)
+- **Recommended for**: First week, validation, learning
+
+### Mode 2: Paper Trading (Backtest Live)
+```bash
+KITE_AUTO_TRADE=0   # Disabled
+KITE_DRY_RUN=1      # Enabled
+```
+✅ **What happens:**
+- Gaps + ORB conditions scanned every minute
+- When trade qualifies → **Discord alert + paper order logged** (not sent to broker)
+- Position tracking happens in memory
+- Exit signals auto-tracked (SL, T1, T2, trailing stop)
+- **Daily P&L reported** as if real (but no ₹ moved)
+- **Risk**: None (no real trades)
+- **Recommended for**: Weeks 2-4, verify system stability, check exit logic
+
+### Mode 3: Live Trading (Real Money)
+```bash
+KITE_AUTO_TRADE=1   # Enabled
+KITE_DRY_RUN=0      # Disabled
+```
+⚠️ **What happens:**
+- Gaps + ORB conditions scanned every minute
+- When trade qualifies → **Order placed AUTOMATICALLY via Kite API**
+- Real ₹₹ charged to account
+- Position tracking live against broker account
+- Exits executed automatically (SL, T1, T2, trailing stop, EOD)
+- **Real P&L** generated daily
+- **Risk**: Capital at risk per position sizing plan below
+- **Recommended for**: Week 5+, after successful paper trading phase
+
+### Recommended Deployment Timeline
+
+| Phase | Duration | Mode | Position Size | Capital | Focus |
+|-------|----------|------|----------------|---------|-------|
+| **Phase 1** | Week 1-2 | Alerts Only | $0 | $0 | Validate signals, learn |
+| **Phase 2** | Week 3-4 | Paper Trading | ₹75K (virtual) | $0 | Verify exits, API stability |
+| **Phase 3a** | Week 5-6 | Live Trading | ₹50K (50% of target) | ₹2,50,000 | Small proof of concept |
+| **Phase 3b** | Week 7-8 | Live Trading | ₹75K (target) | ₹3,75,000 | Full system |
+| **Phase 3c** | Month 3+ | Live Trading | ₹1,50K-3L | Scale per gates | Scaled operation |
+
+---
+
 ## System Risk Profile (₹75K/trade baseline)
 
 | Metric | Value | Risk Level |
