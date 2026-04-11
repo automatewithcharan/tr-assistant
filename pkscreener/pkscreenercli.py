@@ -148,6 +148,20 @@ except Exception as e:
 
 from time import sleep
 
+# ── Load .env.dev (or .env) so Kite/Discord secrets are available ──
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    import pathlib as _pathlib
+    _repo_root = _pathlib.Path(__file__).resolve().parent.parent
+    _env_dev = _repo_root / ".env.dev"
+    _env_file = _repo_root / ".env"
+    if _env_dev.exists():
+        _load_dotenv(_env_dev, override=False)
+    elif _env_file.exists():
+        _load_dotenv(_env_file, override=False)
+except Exception:
+    pass
+
 from PKDevTools.classes import log as log
 from PKDevTools.classes.ColorText import colorText
 from PKDevTools.classes.log import default_logger
