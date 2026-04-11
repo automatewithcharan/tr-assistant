@@ -2773,12 +2773,12 @@ def pkscreenercli():
                 max_daily_loss_amount=(
                     args.autopilotmaxdailyloss
                     if args.autopilotmaxdailyloss is not None
-                    else 0.0
+                    else float(os.environ.get("AUTOPILOT_MAX_DAILY_LOSS", "0") or 0)
                 ),
                 max_consecutive_losses=(
                     args.autopilotmaxconsecutivelosses
                     if args.autopilotmaxconsecutivelosses is not None
-                    else 0
+                    else int(os.environ.get("AUTOPILOT_MAX_CONSECUTIVE_LOSSES", "0") or 0)
                 ),
                 alert_channels=str(args.autopilotalerts or "discord").strip().lower(),
                 cycle_interval_sec=(

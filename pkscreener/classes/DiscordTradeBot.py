@@ -534,6 +534,7 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
     config_manager.getConfig(ConfigManager.parser)
 
     intents = discord.Intents.default()
+    intents.message_content = True  # required to read plain-text messages for buy-intent workflow
 
     class PKScreenerDiscordTradeBot(discord.Client):
         def __init__(self):
@@ -582,7 +583,8 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
                             pass
                         await channel.send(
                             f"**\U0001f7e2 Trade bot online** (`{self.user}`)"
-                            f"\n• `/buy symbol:RELIANCE qty:2 price:1450` — log a buy"
+                            f"\n• `buy RELIANCE` — record buy intent (then `bought RELIANCE 10 1450` to confirm + auto-GTT)"
+                            f"\n• `/buy symbol:RELIANCE qty:2 price:1450` — log a buy (slash)"
                             f"\n• `/sell symbol:RELIANCE qty:2 price:1480` — log a sell"
                             f"\n• `/portfolio` — see all positions + P&L"
                             f"\n• `/buynow` — latest buy signals"
@@ -714,6 +716,13 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
                 "`/history` — recent trade log",
                 "`/refresh` — refresh prices for open positions",
                 "`/autopilot` — run a blind-buy scan now",
+                "",
+                "**Manual Buy Workflow (plain text):**",
+                "`buy RELIANCE` — record intent (shows SL + target from signal)",
+                "`buy RELIANCE 10 1450` — intent with qty and price",
+                "`bought RELIANCE 10 1450` — confirm you bought; auto-sets GTT stop-loss + target on Kite",
+                "`cancel RELIANCE` — drop a pending intent",
+                "`intents` — list pending buy intents",
                 "",
                 "**Kite Auto-Trade:**",
                 "`/kitebuy symbol:RELIANCE` — buy via Kite API",
@@ -1210,6 +1219,199 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
         except Exception as exc:
             message = f"⚠️ kitestatus failed: {exc}"
         await interaction.response.send_message(message[:1900])
+
+    # ------------------------------------------------------------------
+    # Natural-text buy-intent workflow
+    # i.   "buy RELIANCE"  → records intent, replies with signal summary
+    # ii.  "bought RELIANCE 10 1450"  → confirms buy, fetches Kite portfolio,
+    #       logs trade, places GTT OCO (SL + target automatically)
+    # iii. "cancel RELIANCE" → drops a pending intent
+    # ------------------------------------------------------------------
+
+    # symbol -> {"qty": int, "price": float, "stop_loss": float, "target": float}
+    _buy_intents: Dict[str, Dict] = {}
+
+    async def _handle_buy_intent(message, symbol: str):
+        """Step i: user says 'buy SYMBOL [qty] [price]' — record intent, show signal."""
+        symbol = symbol.strip().upper()
+        parts = message.content.strip().split()
+        # Optional: "buy RELIANCE 10 1450"
+        qty = 0
+        price = 0.0
+        try:
+            if len(parts) >= 3:
+                qty = int(parts[2])
+            if len(parts) >= 4:
+                price = float(parts[3])
+        except (ValueError, IndexError):
+            pass
+
+        # Look up signal data for SL/target
+        try:
+            from pkscreener.classes.DiscordTradeBot import _load_signal_rows
+            rows = _load_signal_rows(universe, ["Strong Buy Now", "Buy Now", "Watch"], limit=50)
+            row = rows[rows["Symbol"].astype(str).str.upper() == symbol] if not rows.empty else None
+            if row is not None and not row.empty:
+                row = row.iloc[0]
+                if price <= 0:
+                    price = float(row.get("LTP", row.get("Price Now", 0)) or 0)
+                sl = float(row.get("SellIfBelow", row.get("StopLoss", row.get("Sell If Below", 0))) or 0)
+                t2 = float(row.get("Target2", row.get("TakeProfit2", row.get("Take Profit 2", 0))) or 0)
+                t1 = float(row.get("Target1", row.get("TakeProfit1", 0)) or 0)
+                score = float(row.get("BlindScore", row.get("Score", 0)) or 0)
+                vol = float(row.get("VolumeRatio", row.get("Volume Ratio", 0)) or 0)
+            else:
+                sl = t1 = t2 = score = vol = 0.0
+        except Exception:
+            sl = t1 = t2 = score = vol = 0.0
+
+        _buy_intents[symbol] = {"qty": qty, "price": price, "stop_loss": sl, "target1": t1, "target": t2, "score": score}
+
+        lines = [f"📋 **Intent recorded: BUY `{symbol}`**"]
+        if price > 0:
+            lines.append(f"Price ≈ ₹{price:.2f}")
+        if sl > 0:
+            lines.append(f"Stop Loss: ₹{sl:.2f}")
+        if t2 > 0:
+            lines.append(f"Target: ₹{t2:.2f}")
+        if score > 0:
+            lines.append(f"Score: {score:.0f}/100 | Vol {vol:.1f}x")
+        lines.append(f'\nWhen you buy in Kite, type: `bought {symbol} {qty or "<qty>"} {price or "<price>"}`')
+        lines.append("To cancel this intent: `cancel " + symbol + "`")
+        await message.channel.send("\n".join(lines))
+
+    async def _handle_bought_confirm(message, parts):
+        """Step ii/iii: user says 'bought SYMBOL QTY PRICE' — log + GTT + reconcile."""
+        # Parse: bought RELIANCE 10 1450.5
+        if len(parts) < 4:
+            await message.channel.send(
+                "⚠️ Format: `bought SYMBOL QTY PRICE` — e.g. `bought RELIANCE 10 1450`"
+            )
+            return
+        symbol = parts[1].strip().upper()
+        try:
+            qty = int(parts[2])
+            price = float(parts[3])
+        except (ValueError, IndexError):
+            await message.channel.send("⚠️ Could not parse qty/price. Format: `bought SYMBOL QTY PRICE`")
+            return
+
+        intent = _buy_intents.pop(symbol, {})
+        stop_loss = float(intent.get("stop_loss", 0))
+        target = float(intent.get("target", 0))
+        target1 = float(intent.get("target1", 0))
+        score = float(intent.get("score", 0))
+
+        reply_lines = [f"✅ **Confirmed: BUY `{symbol}` x{qty} @ ₹{price:.2f}**"]
+
+        # Log trade to portfolio journal
+        try:
+            tag = await asyncio.to_thread(
+                _tag_buy_with_blind_score, symbol, qty, price, account_name, universe
+            )
+            if tag:
+                reply_lines.append(tag)
+        except Exception as exc:
+            reply_lines.append(f"_(Journal log failed: {exc})_")
+
+        # Auto-place GTT OCO on Kite (stop-loss + target)
+        gtt_placed = False
+        if stop_loss > 0 and target > 0:
+            try:
+                from pkscreener.classes.KiteOrderManager import KiteOrderManager
+                mgr = KiteOrderManager(output_dir=Archiver.get_user_outputs_dir())
+                gtt = await asyncio.to_thread(
+                    mgr.place_gtt_oco, symbol, qty, price, stop_loss, target
+                )
+                if gtt.get("success"):
+                    reply_lines.append(
+                        f"🔐 **GTT set automatically:**\n"
+                        f"  SL ₹{stop_loss:.2f} (auto-sell if drops)\n"
+                        f"  Target ₹{target:.2f} (auto-sell at profit)\n"
+                        f"  _{gtt.get('message', '')}_"
+                    )
+                    gtt_placed = True
+                else:
+                    reply_lines.append(f"⚠️ GTT failed: {gtt.get('message', 'unknown error')}")
+            except Exception as exc:
+                reply_lines.append(f"⚠️ GTT error: {exc}")
+        elif stop_loss <= 0 or target <= 0:
+            reply_lines.append(
+                "ℹ️ No SL/target in signal data. Set manually in Kite or use `/kitestatus` to confirm."
+            )
+
+        # Reconcile with Kite portfolio to confirm holding
+        try:
+            from pkscreener.classes.KiteOrderManager import KiteOrderManager
+            mgr = KiteOrderManager(output_dir=Archiver.get_user_outputs_dir())
+            rec = await asyncio.to_thread(mgr.reconcile_with_broker)
+            kite_holdings = rec.get("broker_positions", []) or []
+            found = any(
+                str(p.get("tradingsymbol", "")).upper() == symbol
+                for p in kite_holdings
+            )
+            if found:
+                reply_lines.append(f"📊 Kite confirms you hold `{symbol}` ✅")
+            else:
+                reply_lines.append(
+                    f"⚠️ Kite doesn't show `{symbol}` in holdings yet "
+                    f"(may take a minute to settle — check `/kitereconcile`)"
+                )
+        except Exception as exc:
+            reply_lines.append(f"_(Kite reconcile failed: {exc})_")
+
+        await message.channel.send("\n".join(reply_lines)[:1900])
+
+    @bot.event
+    async def on_message(message):
+        """Handle natural-text buy-intent commands alongside slash commands.
+
+        Supported patterns (case-insensitive, in the configured trade channel):
+          buy SYMBOL [qty] [price]   → record buy intent
+          bought SYMBOL QTY PRICE    → confirm manual buy, auto-GTT, reconcile
+          cancel SYMBOL              → drop pending intent
+        """
+        # Ignore messages from the bot itself
+        if message.author == bot.user:
+            return
+        # Only act in the configured trade channel (same guard as slash commands)
+        if allowed_channel_id and str(message.channel.id) != str(allowed_channel_id):
+            return
+        # Only act for the configured user (same guard as slash commands)
+        if allowed_user_id and str(message.author.id) != str(allowed_user_id):
+            return
+
+        content = message.content.strip()
+        lower = content.lower()
+        parts = content.split()
+
+        if not parts:
+            return
+
+        cmd = lower.split()[0]
+
+        if cmd == "buy" and len(parts) >= 2:
+            await _handle_buy_intent(message, parts[1])
+
+        elif cmd == "bought" and len(parts) >= 2:
+            await _handle_bought_confirm(message, parts)
+
+        elif cmd == "cancel" and len(parts) >= 2:
+            sym = parts[1].strip().upper()
+            if sym in _buy_intents:
+                _buy_intents.pop(sym)
+                await message.channel.send(f"❌ Buy intent for `{sym}` cancelled.")
+            else:
+                await message.channel.send(f"Nothing pending for `{sym}`.")
+
+        elif cmd == "intents":
+            if _buy_intents:
+                lines = ["**⏳ Pending buy intents:**"]
+                for s, d in _buy_intents.items():
+                    lines.append(f"  `{s}` — qty={d.get('qty') or '?'} price={d.get('price') or '?'}")
+                await message.channel.send("\n".join(lines))
+            else:
+                await message.channel.send("No pending buy intents.")
 
     # Assign health_monitor to bot instance before starting
     bot.health_monitor = health_monitor

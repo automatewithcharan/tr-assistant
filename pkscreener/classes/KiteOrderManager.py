@@ -87,6 +87,7 @@ class OrderResult:
 class SellReason:
     STOP_LOSS = "stop_loss_hit"
     TARGET_1 = "target_1_hit"
+    PARTIAL_T1 = "partial_t1_profit"  # sell 50% at T1, trail rest
     TARGET_2 = "target_2_hit"
     TRAILING_STOP = "trailing_stop_hit"
     TIME_DECAY = "held_too_long"
@@ -117,6 +118,7 @@ class TrackedPosition:
         self.buy_time = _ist_now().isoformat(timespec="seconds")
         self.highest_price = buy_price
         self.trailing_stop = 0.0
+        self.t1_booked = False  # True after 50% sold at T1
         self.sell_order_id = ""
         self.sell_price = 0.0
         self.sell_time = ""
@@ -140,6 +142,7 @@ class TrackedPosition:
         pos.buy_time = d.get("buy_time", pos.buy_time)
         pos.highest_price = d.get("highest_price", pos.buy_price)
         pos.trailing_stop = d.get("trailing_stop", 0.0)
+        pos.t1_booked = d.get("t1_booked", False)
         pos.sell_order_id = d.get("sell_order_id", "")
         pos.sell_price = d.get("sell_price", 0.0)
         pos.sell_time = d.get("sell_time", "")
@@ -172,9 +175,10 @@ class KiteOrderManager:
         KITE_MAX_DAILY_ORDERS=10        Max orders per day
         KITE_MAX_OPEN_POSITIONS=8       Max simultaneous open positions
         KITE_TRAILING_STOP_PCT=3.0      Trailing stop activation (% above buy)
-        KITE_TRAILING_STOP_TRAIL=1.5    Trail distance (% below highest)
+        KITE_TRAILING_STOP_TRAIL=1.0    Trail distance (% below highest) — tighter for higher capture
         KITE_MAX_HOLD_DAYS=5            Max days to hold before time-decay exit
         KITE_DRY_RUN=0                  1=log orders without placing them
+        KITE_PRODUCT_TYPE=MIS            MIS=intraday margin (5x leverage), CNC=delivery (full capital)
     """
 
     def __init__(self, output_dir: str = ""):
@@ -190,8 +194,12 @@ class KiteOrderManager:
         self.max_daily_orders = int(_get_secret("KITE_MAX_DAILY_ORDERS", "10"))
         self.max_open_positions = int(_get_secret("KITE_MAX_OPEN_POSITIONS", "8"))
         self.trailing_stop_pct = float(_get_secret("KITE_TRAILING_STOP_PCT", "3.0"))
-        self.trailing_trail_pct = float(_get_secret("KITE_TRAILING_STOP_TRAIL", "1.5"))
+        self.trailing_trail_pct = float(_get_secret("KITE_TRAILING_STOP_TRAIL", "1.0"))
         self.max_hold_days = int(_get_secret("KITE_MAX_HOLD_DAYS", "5"))
+        # MIS = intraday margin (5x leverage, auto-squared off at 3:20 PM by broker)
+        # CNC = delivery (full capital, no auto-squareoff)
+        _product = _get_secret("KITE_PRODUCT_TYPE", "MIS").strip().upper()
+        self.product_type = _product if _product in ("MIS", "CNC", "NRML") else "MIS"
 
         self._positions: Dict[str, TrackedPosition] = {}
         self._daily_order_count = 0
@@ -344,7 +352,7 @@ class KiteOrderManager:
                 "transaction_type": "BUY",
                 "quantity": qty,
                 "order_type": kite_order_type,
-                "product": "CNC",  # Delivery (not intraday)
+                "product": self.product_type,  # MIS=intraday margin (5x), CNC=delivery
                 "variety": "regular",
             }
             if kite_order_type == "LIMIT" and price > 0:
@@ -424,7 +432,7 @@ class KiteOrderManager:
                 "transaction_type": "SELL",
                 "quantity": sell_qty,
                 "order_type": kite_order_type,
-                "product": "CNC",
+                "product": self.product_type,
                 "variety": "regular",
             }
             if kite_order_type == "LIMIT" and price > 0:
@@ -473,23 +481,31 @@ class KiteOrderManager:
         with self._lock:
             if result.symbol in self._positions:
                 pos = self._positions[result.symbol]
-                pos.sell_order_id = result.order_id
-                pos.sell_price = result.price
-                pos.sell_time = _ist_now().isoformat(timespec="seconds")
-                pos.sell_reason = reason
-                pos.status = "closed"
-                self._save_positions()
+                # Partial sell: reduce qty, keep position open
+                if reason == SellReason.PARTIAL_T1 and result.qty < pos.qty:
+                    pos.qty -= result.qty
+                    _log.info("Partial sell %s: sold %d, remaining %d",
+                              result.symbol, result.qty, pos.qty)
+                    self._save_positions()
+                else:
+                    # Full sell: close position
+                    pos.sell_order_id = result.order_id
+                    pos.sell_price = result.price
+                    pos.sell_time = _ist_now().isoformat(timespec="seconds")
+                    pos.sell_reason = reason
+                    pos.status = "closed"
+                    self._save_positions()
         self._log_order(result)
 
     # ------------------------------------------------------------------
     # Position monitoring & sell signals
     # ------------------------------------------------------------------
 
-    def check_sell_signals(self, ticks: Dict[str, Dict] = None) -> List[Tuple[str, str, float]]:
+    def check_sell_signals(self, ticks: Dict[str, Dict] = None) -> List[Tuple[str, str, float, int]]:
         """Check all open positions for sell conditions.
 
-        Returns list of (symbol, reason, current_price) for positions that
-        should be sold.
+        Returns list of (symbol, reason, current_price, qty) for positions that
+        should be sold. qty=0 means sell all, qty>0 means partial sell.
         """
         if ticks is None:
             ticks = self._load_ticks()
@@ -514,20 +530,24 @@ class KiteOrderManager:
 
             # 1. Stop loss hit
             if pos.stop_loss > 0 and live_price <= pos.stop_loss:
-                signals.append((sym, SellReason.STOP_LOSS, live_price))
+                signals.append((sym, SellReason.STOP_LOSS, live_price, 0))
                 continue
 
             # 2. Target 2 hit (max profit)
             if pos.target2 > 0 and live_price >= pos.target2:
-                signals.append((sym, SellReason.TARGET_2, live_price))
+                signals.append((sym, SellReason.TARGET_2, live_price, 0))
                 continue
 
-            # 3. Target 1 hit — activate trailing stop if not already
-            if pos.target1 > 0 and live_price >= pos.target1 and pos.trailing_stop <= 0:
-                # Set trailing stop at target1 - trail%
-                pos.trailing_stop = pos.target1 * (1 - self.trailing_trail_pct / 100)
-                _log.info("%s hit T1 (₹%.2f), trailing stop set at ₹%.2f",
-                          sym, pos.target1, pos.trailing_stop)
+            # 3. Target 1 hit — sell 50% to lock in profits, trail the rest
+            if pos.target1 > 0 and live_price >= pos.target1 and not pos.t1_booked:
+                # Partial profit booking: sell half, trail the other half
+                partial_qty = max(1, pos.qty // 2)
+                signals.append((sym, SellReason.PARTIAL_T1, live_price, partial_qty))
+                pos.t1_booked = True
+                # Set trailing stop on remainder at breakeven (buy price)
+                pos.trailing_stop = max(pos.buy_price, pos.target1 * (1 - self.trailing_trail_pct / 100))
+                _log.info("%s hit T1 (₹%.2f): selling %d of %d, trailing rest from ₹%.2f",
+                          sym, pos.target1, partial_qty, pos.qty, pos.trailing_stop)
 
             # 4. Trailing stop — activates after stock rises > trailing_stop_pct above buy
             if pos.trailing_stop <= 0 and pnl_pct >= self.trailing_stop_pct:
@@ -539,7 +559,7 @@ class KiteOrderManager:
                 if new_trail > pos.trailing_stop:
                     pos.trailing_stop = new_trail
                 if live_price <= pos.trailing_stop:
-                    signals.append((sym, SellReason.TRAILING_STOP, live_price))
+                    signals.append((sym, SellReason.TRAILING_STOP, live_price, 0))
                     continue
 
             # 5. Time decay — held too long without meaningful gain
@@ -547,14 +567,14 @@ class KiteOrderManager:
                 buy_date = datetime.fromisoformat(pos.buy_time).date()
                 days_held = (now.date() - buy_date).days
                 if days_held >= self.max_hold_days and pnl_pct < 2.0:
-                    signals.append((sym, SellReason.TIME_DECAY, live_price))
+                    signals.append((sym, SellReason.TIME_DECAY, live_price, 0))
                     continue
             except Exception:
                 pass
 
             # 6. Intraday reversal — stock was up >3% but reversed to negative
             if pnl_pct < -1.0 and pos.highest_price > pos.buy_price * 1.03:
-                signals.append((sym, SellReason.REVERSAL, live_price))
+                signals.append((sym, SellReason.REVERSAL, live_price, 0))
                 continue
 
         # Save updated trailing stops / highest prices
@@ -567,12 +587,13 @@ class KiteOrderManager:
         """Check for sell signals and execute sell orders.
 
         Returns list of OrderResults for executed sells.
+        Supports partial sells (e.g. 50% at T1) via qty parameter.
         """
         signals = self.check_sell_signals(ticks)
         results = []
 
-        for sym, reason, price in signals:
-            result = self.place_sell_order(symbol=sym, reason=reason)
+        for sym, reason, price, qty in signals:
+            result = self.place_sell_order(symbol=sym, qty=qty, reason=reason)
             results.append(result)
 
         return results
@@ -681,6 +702,7 @@ class KiteOrderManager:
         return {
             SellReason.STOP_LOSS: "🔴 Stop loss hit",
             SellReason.TARGET_1: "🟢 Target 1 reached",
+            SellReason.PARTIAL_T1: "🟢 Partial profit booked (50% at T1)",
             SellReason.TARGET_2: "🟢🟢 Max target reached!",
             SellReason.TRAILING_STOP: "🟡 Trailing stop triggered",
             SellReason.TIME_DECAY: "⏰ Held too long without gain",
@@ -790,3 +812,107 @@ class KiteOrderManager:
                     _log.info("%s order %s", sym, status["status"])
         with self._lock:
             self._save_positions()
+
+    # ------------------------------------------------------------------
+    # GTT (Good Till Triggered) — auto stop-loss + target on Kite
+    # ------------------------------------------------------------------
+
+    def place_gtt_oco(
+        self,
+        symbol: str,
+        qty: int,
+        buy_price: float,
+        stop_loss: float,
+        target: float,
+        exchange: str = "NSE",
+    ) -> Dict[str, Any]:
+        """Place a Kite GTT OCO (One-Cancels-Other) order for stop-loss AND target.
+
+        This puts TWO SELL triggers on Kite simultaneously:
+          - If price drops to stop_loss → SELL at market
+          - If price rises to target    → SELL at limit (target price)
+        Whichever fires first cancels the other.
+
+        Args:
+            symbol:     NSE trading symbol (e.g. RELIANCE)
+            qty:        Shares to sell (must match your holding)
+            buy_price:  Your entry price (used as Kite's last_price reference)
+            stop_loss:  SL trigger price (below buy_price)
+            target:     Profit target price (above buy_price)
+            exchange:   Usually "NSE" (default)
+
+        Returns:
+            dict with keys: success (bool), trigger_id (str), message (str)
+        """
+        symbol = symbol.strip().upper()
+        if stop_loss <= 0 or target <= 0:
+            return {"success": False, "message": "stop_loss and target must both be > 0"}
+        if stop_loss >= buy_price:
+            return {"success": False, "message": f"stop_loss {stop_loss} must be below buy_price {buy_price}"}
+        if target <= buy_price:
+            return {"success": False, "message": f"target {target} must be above buy_price {buy_price}"}
+
+        if self.dry_run:
+            _log.info(
+                "[DRY RUN] GTT OCO %s x%d: SL=%.2f TARGET=%.2f (entry ₹%.2f)",
+                symbol, qty, stop_loss, target, buy_price,
+            )
+            return {
+                "success": True,
+                "trigger_id": f"DRY-GTT-{int(time.time())}",
+                "message": (
+                    f"[Dry run] GTT OCO set — SL ₹{stop_loss:.2f} | Target ₹{target:.2f}"
+                ),
+            }
+
+        try:
+            client = self._get_client()
+            # Kite OCO: trigger_values = [stop_loss, target] (ascending order required by API)
+            trigger_id = client.place_gtt(
+                trigger_type=client.GTT_TYPE_OCO,
+                tradingsymbol=symbol,
+                exchange=exchange,
+                trigger_values=[round(stop_loss, 2), round(target, 2)],
+                last_price=round(buy_price, 2),
+                orders=[
+                    # Leg 1: stop-loss — fires when price <= stop_loss
+                    {
+                        "transaction_type": "SELL",
+                        "quantity": qty,
+                        "order_type": "MARKET",
+                        "product": self.product_type,
+                    },
+                    # Leg 2: target — fires when price >= target
+                    {
+                        "transaction_type": "SELL",
+                        "quantity": qty,
+                        "order_type": "LIMIT",
+                        "product": self.product_type,
+                        "price": round(target, 2),
+                    },
+                ],
+            )
+            trigger_id = str(trigger_id or "")
+            _log.info(
+                "GTT OCO placed for %s x%d: SL=%.2f TARGET=%.2f — trigger_id=%s",
+                symbol, qty, stop_loss, target, trigger_id,
+            )
+            return {
+                "success": True,
+                "trigger_id": trigger_id,
+                "message": (
+                    f"✅ GTT set: SL ₹{stop_loss:.2f} | Target ₹{target:.2f} (ID {trigger_id})"
+                ),
+            }
+        except Exception as exc:
+            _log.error("GTT OCO failed for %s: %s", symbol, exc)
+            return {"success": False, "message": str(exc)}
+
+    def get_gtts(self) -> List[Dict]:
+        """List all active GTT triggers on Kite."""
+        try:
+            client = self._get_client()
+            return client.get_gtts() or []
+        except Exception as exc:
+            _log.error("get_gtts failed: %s", exc)
+            return []

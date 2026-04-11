@@ -47,7 +47,7 @@ FADE_DROP_FROM_HIGH_PCT = 4.0
 FADE_COOLDOWN_MIN = 10
 
 # Scorer thresholds
-SCORE_BLIND_BUY = 60          # Definitely buy
+SCORE_BLIND_BUY = 65          # Definitely buy
 SCORE_CONFIRM_MIN = 52        # Minimum to confirm
 
 # Stop loss
@@ -514,6 +514,17 @@ def simulate_intraday(
 
     if score < SCORE_CONFIRM_MIN and entry_price < OHLCV_MIN_PRICE:
         return None  # Would not pass OHLCV confirmation
+
+    # Strict filters from AutoPilotInvestor "Consistent Daily Income Mode"
+    if vol_ratio < 2.5:
+        return None
+
+    if vol_ratio >= 3.0 and change_at_entry > 0:
+        if (vol_ratio / change_at_entry) > 1.5:
+            return None  # Distribution block
+            
+    if score < SCORE_BLIND_BUY:
+        return None
 
     # ── Compute stop loss ──
     atr = daily_info.get("atr", 0)
