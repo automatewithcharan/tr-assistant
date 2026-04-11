@@ -202,6 +202,30 @@ def _compute_long_rr(price: float, stop_loss: float, target2: float) -> float:
     return round((target2 - price) / risk, 1)
 
 
+def _score_to_size_fraction(score: float) -> float:
+    """Map signal confidence score (0-100) to a position size multiplier.
+
+    Uses a piecewise-linear curve inspired by mlfinlab's bet_sizing module:
+      score  0-39  → 0.5× (half size — low confidence)
+      score 40-59  → 0.5–0.8× (linear ramp)
+      score 60-69  → 0.8–1.0× (baseline)
+      score 70-84  → 1.0–1.3× (above baseline)
+      score 85-100 → 1.3–1.5× (full conviction)
+
+    This gives a smooth, granular sizing curve instead of coarse tiers.
+    """
+    if score < 40:
+        return 0.5
+    elif score < 60:
+        return 0.5 + (score - 40) * (0.3 / 20)  # 0.5 → 0.8
+    elif score < 70:
+        return 0.8 + (score - 60) * (0.2 / 10)  # 0.8 → 1.0
+    elif score < 85:
+        return 1.0 + (score - 70) * (0.3 / 15)  # 1.0 → 1.3
+    else:
+        return min(1.5, 1.3 + (score - 85) * (0.2 / 15))  # 1.3 → 1.5
+
+
 def _compute_suggested_qty(
     price: float,
     stop_loss: float = 0.0,
@@ -244,12 +268,11 @@ def _compute_suggested_qty(
         return 0, 0.0
     base_qty = min(candidate_caps)
 
-    if score >= 70:
-        score_mult = 1.5
-    elif score >= 60:
-        score_mult = 1.0
-    else:
-        score_mult = 0.8
+    # Confidence-proportional sizing (adapted from mlfinlab bet_sizing).
+    # Maps signal score (0-100) to a position fraction using a sigmoid-like
+    # curve.  Score 50 → 0.6× base,  70 → 1.0×,  85+ → 1.5×.
+    # This replaces the old coarse 3-tier system.
+    score_mult = _score_to_size_fraction(score)
 
     qty = int(base_qty * score_mult * size_mult)
     if qty <= 0 and base_qty > 0:

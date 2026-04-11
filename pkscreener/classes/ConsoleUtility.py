@@ -33,7 +33,6 @@ from PKDevTools.classes.Utils import random_user_agent
 from PKDevTools.classes.Environment import PKEnvironment
 
 from pkscreener.classes import VERSION, Changelog, Utility
-from pkscreener.classes.ArtTexts import getArtText
 from pkscreener.classes.Utility import marketStatus, STD_ENCODING, lastScreened
 import pkscreener.classes.Fetcher as Fetcher
 
@@ -98,9 +97,10 @@ class PKConsoleTools:
                 OutputControls().moveCursorToStartPosition()
                 
             if clearAlways or OutputControls().enableMultipleLineOutput:
-                art = colorText.GREEN + f"{getArtText()}\n" + colorText.END + f"{marketStatus()}"
+                # Keep startup compact in bot/automation runs.
+                status = f"{marketStatus()}"
                 OutputControls().printOutput(
-                    art.encode('utf-8').decode(STD_ENCODING),
+                    status.encode('utf-8').decode(STD_ENCODING),
                     enableMultipleLineOutput=True
                 )
         except KeyboardInterrupt:
@@ -114,11 +114,6 @@ class PKConsoleTools:
         if platform.system() == "Windows":
             try:
                 os.system('color 0f')  # Black background, white foreground
-            except:
-                pass
-        elif "Darwin" not in platform.system():
-            try:
-                os.system('setterm -background black -foreground white -store')
             except:
                 pass
     

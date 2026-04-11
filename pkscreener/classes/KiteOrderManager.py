@@ -53,6 +53,19 @@ def _is_market_open() -> bool:
     return 9 * 60 + 15 <= now_min <= 15 * 60 + 30
 
 
+def _round_to_nse_tick(price: float) -> float:
+    """Round a price UP to the nearest NSE tick size (₹0.05).
+
+    NSE requires all order prices to be multiples of 0.05.
+    Rounding up avoids placing limit orders below the intended level.
+    Adapted from sdoosa-algo-trade-python.
+    """
+    import math
+    if price <= 0:
+        return 0.0
+    return round(math.ceil(price * 20) / 20, 2)
+
+
 # ---------------------------------------------------------------------------
 # Order result dataclass-like dict
 # ---------------------------------------------------------------------------
@@ -92,6 +105,7 @@ class SellReason:
     TRAILING_STOP = "trailing_stop_hit"
     TIME_DECAY = "held_too_long"
     REVERSAL = "intraday_reversal"
+    REGIME_BREAK = "cusum_regime_break"
     MANUAL = "manual_sell"
 
 
@@ -196,6 +210,8 @@ class KiteOrderManager:
         self.trailing_stop_pct = float(_get_secret("KITE_TRAILING_STOP_PCT", "3.0"))
         self.trailing_trail_pct = float(_get_secret("KITE_TRAILING_STOP_TRAIL", "1.0"))
         self.max_hold_days = int(_get_secret("KITE_MAX_HOLD_DAYS", "5"))
+        # Max positions from the same sector (0 = disabled)
+        self.max_sector_concentration = int(_get_secret("KITE_MAX_SECTOR_POSITIONS", "3"))
         # MIS = intraday margin (5x leverage, auto-squared off at 3:20 PM by broker)
         # CNC = delivery (full capital, no auto-squareoff)
         _product = _get_secret("KITE_PRODUCT_TYPE", "MIS").strip().upper()
@@ -267,6 +283,68 @@ class KiteOrderManager:
         return self._daily_order_count < self.max_daily_orders
 
     # ------------------------------------------------------------------
+    # Circuit limit pre-check (adapted from sdoosa-algo-trade-python)
+    # ------------------------------------------------------------------
+
+    def _is_at_circuit_limit(self, symbol: str) -> Tuple[bool, str]:
+        """Check if a stock is at upper/lower circuit limit via Kite quotes.
+
+        Returns (is_blocked, reason). Buying at upper circuit is pointless
+        (can't fill), selling at lower circuit is pointless.
+        """
+        try:
+            client = self._get_client()
+            quote = client.quote(f"NSE:{symbol}")
+            data = quote.get(f"NSE:{symbol}", {})
+            if not data:
+                return False, ""
+            ltp = float(data.get("last_price", 0))
+            upper = float(data.get("ohlc", {}).get("high", 0))  # day high
+            lower = float(data.get("ohlc", {}).get("low", 0))   # day low
+            upper_circuit = float(data.get("upper_circuit_limit", 0))
+            lower_circuit = float(data.get("lower_circuit_limit", 0))
+            if upper_circuit > 0 and ltp >= upper_circuit * 0.999:
+                return True, f"at upper circuit ₹{upper_circuit:.2f}"
+            if lower_circuit > 0 and ltp <= lower_circuit * 1.001:
+                return True, f"at lower circuit ₹{lower_circuit:.2f}"
+            return False, ""
+        except Exception as exc:
+            _log.debug("Circuit check failed for %s: %s", symbol, exc)
+            return False, ""
+
+    # ------------------------------------------------------------------
+    # Portfolio sector concentration guard (from pysystemtrade IDM concept)
+    # ------------------------------------------------------------------
+
+    def _check_sector_concentration(self, symbol: str) -> Tuple[bool, str]:
+        """Block buy if too many open positions are in the same sector.
+
+        Prevents portfolio blow-up when a whole sector reverses.
+        Returns (is_blocked, reason).
+        """
+        if self.max_sector_concentration <= 0:
+            return False, ""
+        try:
+            from pkscreener.classes.MarketContext import get_sector
+            new_sector = get_sector(symbol)
+            if not new_sector or new_sector == "UNKNOWN":
+                return False, ""
+            sector_count = 0
+            for pos in self._positions.values():
+                if pos.status == "open":
+                    pos_sector = get_sector(pos.symbol)
+                    if pos_sector == new_sector:
+                        sector_count += 1
+            if sector_count >= self.max_sector_concentration:
+                return True, (
+                    f"sector concentration: already {sector_count} open "
+                    f"positions in {new_sector} (max {self.max_sector_concentration})"
+                )
+        except Exception as exc:
+            _log.debug("Sector check failed for %s: %s", symbol, exc)
+        return False, ""
+
+    # ------------------------------------------------------------------
     # Order placement
     # ------------------------------------------------------------------
 
@@ -320,6 +398,22 @@ class KiteOrderManager:
         if symbol in self._positions and self._positions[symbol].status == "open":
             return OrderResult(False, symbol=symbol, message="Already holding this stock")
 
+        # Circuit limit check — avoid orders on locked stocks
+        circuit_blocked, circuit_reason = self._is_at_circuit_limit(symbol)
+        if circuit_blocked:
+            return OrderResult(
+                False, symbol=symbol,
+                message=f"Circuit limit: {circuit_reason}"
+            )
+
+        # Sector concentration check — avoid correlated positions
+        sector_blocked, sector_reason = self._check_sector_concentration(symbol)
+        if sector_blocked:
+            return OrderResult(
+                False, symbol=symbol,
+                message=f"Blocked: {sector_reason}"
+            )
+
         order_value = qty * (price if price > 0 else 0)
         if price > 0 and order_value > self.max_order_value * 1.1:
             return OrderResult(
@@ -356,7 +450,7 @@ class KiteOrderManager:
                 "variety": "regular",
             }
             if kite_order_type == "LIMIT" and price > 0:
-                order_params["price"] = round(price, 2)
+                order_params["price"] = _round_to_nse_tick(price)
 
             order_id = client.place_order(**order_params)
             order_id = str(order_id or "")
@@ -436,7 +530,7 @@ class KiteOrderManager:
                 "variety": "regular",
             }
             if kite_order_type == "LIMIT" and price > 0:
-                order_params["price"] = round(price, 2)
+                order_params["price"] = _round_to_nse_tick(price)
 
             order_id = client.place_order(**order_params)
             order_id = str(order_id or "")
@@ -577,6 +671,31 @@ class KiteOrderManager:
                 signals.append((sym, SellReason.REVERSAL, live_price, 0))
                 continue
 
+            # 7. CUSUM regime break — detect intraday structural shifts
+            #    Uses recent 5-min candle returns to identify when momentum reverses
+            #    Threshold 0.05 tuned via backtest sweep (0.02 was too trigger-happy)
+            tick_data = tick.get("depth", {})
+            ohlc = tick.get("ohlc", {})
+            if ohlc and pnl_pct > 1.5:  # only check when solidly profitable (>1.5%)
+                try:
+                    from pkscreener.classes.AdvancedFilters import CUSUMBreakDetector
+                    from pkscreener.classes.KiteHistoricalData import KiteHistoricalDataProvider
+                    import numpy as _np
+                    provider = KiteHistoricalDataProvider()
+                    # Fetch last ~2 hours of 5-minute candles (24 candles)
+                    candles = provider.get_stock_data(sym, interval="5minute", count=24)
+                    if candles is not None and len(candles) >= 10:
+                        closes = candles["close"].values
+                        returns = _np.diff(closes) / closes[:-1]
+                        cusum = CUSUMBreakDetector(threshold=0.05)
+                        should_exit, reason_text = cusum.should_exit_long(returns)
+                        if should_exit:
+                            signals.append((sym, SellReason.REGIME_BREAK, live_price, 0))
+                            _log.info("%s CUSUM exit: %s (P/L %.1f%%)", sym, reason_text, pnl_pct)
+                            continue
+                except Exception as exc:
+                    _log.debug("CUSUM check failed for %s: %s", sym, exc)
+
         # Save updated trailing stops / highest prices
         with self._lock:
             self._save_positions()
@@ -707,6 +826,7 @@ class KiteOrderManager:
             SellReason.TRAILING_STOP: "🟡 Trailing stop triggered",
             SellReason.TIME_DECAY: "⏰ Held too long without gain",
             SellReason.REVERSAL: "🔻 Intraday reversal detected",
+            SellReason.REGIME_BREAK: "📉 CUSUM regime break — momentum reversed",
             SellReason.MANUAL: "👤 Manual sell",
         }.get(reason, reason)
 
@@ -872,8 +992,8 @@ class KiteOrderManager:
                 trigger_type=client.GTT_TYPE_OCO,
                 tradingsymbol=symbol,
                 exchange=exchange,
-                trigger_values=[round(stop_loss, 2), round(target, 2)],
-                last_price=round(buy_price, 2),
+                trigger_values=[_round_to_nse_tick(stop_loss), _round_to_nse_tick(target)],
+                last_price=_round_to_nse_tick(buy_price),
                 orders=[
                     # Leg 1: stop-loss — fires when price <= stop_loss
                     {
@@ -888,7 +1008,7 @@ class KiteOrderManager:
                         "quantity": qty,
                         "order_type": "LIMIT",
                         "product": self.product_type,
-                        "price": round(target, 2),
+                        "price": _round_to_nse_tick(target),
                     },
                 ],
             )

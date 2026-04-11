@@ -324,3 +324,68 @@ class SignalQualityFilter:
             "quality_score": round(score, 1),
             "pass_filter": pass_filter,
         }
+
+
+# ============================================================================
+# CUSUM Structural Break Detector (adapted from mlfinlab)
+# ============================================================================
+
+class CUSUMBreakDetector:
+    """Detect intraday regime shifts using the CUSUM (cumulative sum) method.
+
+    Monitors cumulative deviations of returns from their mean. When the
+    cumulative sum exceeds a threshold, a structural break is detected —
+    meaning the market regime has likely changed (e.g., morning rally →
+    afternoon sell-off).
+
+    Adapted from López de Prado / mlfinlab's structural_breaks/cusum.py.
+
+    Usage:
+        detector = CUSUMBreakDetector(threshold=0.02)
+        is_break, direction = detector.detect(recent_5min_returns)
+        # is_break=True, direction='down' → regime shifted bearish
+    """
+
+    def __init__(self, threshold: float = 0.05):
+        """Args:
+            threshold: CUSUM threshold as a fraction (0.05 = 5% cumulative deviation).
+                       Tuned via backtest: 0.02 was too trigger-happy on 5-min candles.
+        """
+        self.threshold = threshold
+
+    def detect(self, returns: np.ndarray) -> Tuple[bool, str, float]:
+        """Run CUSUM on a series of returns.
+
+        Args:
+            returns: Array of period returns (e.g., 5-min returns).
+
+        Returns:
+            (break_detected, direction, cusum_value)
+            direction is 'up', 'down', or 'none'.
+        """
+        if len(returns) < 5:
+            return False, "none", 0.0
+
+        mean_ret = float(np.mean(returns))
+        s_pos = 0.0  # positive CUSUM (detects upward shift)
+        s_neg = 0.0  # negative CUSUM (detects downward shift)
+
+        for r in returns:
+            s_pos = max(0.0, s_pos + (r - mean_ret))
+            s_neg = min(0.0, s_neg + (r - mean_ret))
+
+        if s_neg < -self.threshold:
+            return True, "down", round(s_neg, 6)
+        if s_pos > self.threshold:
+            return True, "up", round(s_pos, 6)
+        return False, "none", round(s_pos + s_neg, 6)
+
+    def should_exit_long(self, returns: np.ndarray) -> Tuple[bool, str]:
+        """Check if a long position should exit due to bearish regime shift.
+
+        Returns (should_exit, reason).
+        """
+        is_break, direction, cusum_val = self.detect(returns)
+        if is_break and direction == "down":
+            return True, f"CUSUM bearish break ({cusum_val:.4f})"
+        return False, ""
