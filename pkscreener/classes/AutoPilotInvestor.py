@@ -28,6 +28,35 @@ import pandas as pd
 from PKDevTools.classes import Archiver
 from PKDevTools.classes.OutputControls import OutputControls
 from PKDevTools.classes.PKDateUtilities import PKDateUtilities
+
+def _env_truthy(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name, "")
+    if raw == "":
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name, "")
+    if raw == "":
+        return default
+    try:
+        return float(raw)
+    except Exception:
+        return default
+
+
+def _env_time_min(name: str, default_min: int) -> int:
+    raw = os.environ.get(name, "")
+    if raw == "":
+        return default_min
+    try:
+        parts = str(raw).strip().split(":")
+        if len(parts) != 2:
+            return default_min
+        return int(parts[0]) * 60 + int(parts[1])
+    except Exception:
+        return default_min
 from PKDevTools.classes.log import default_logger
 
 from pkscreener.classes.PaperTradeTracker import PaperTradeTracker
@@ -58,6 +87,13 @@ class AutoPilotConfig:
     blind_buy_min_score: float = 0.0    # score is NOT a quality filter (inverted edge)
     blind_buy_max_score: float = 40.0   # SCORE CAP: high score = oversold trap
 
+    # Optional stricter mode (disabled by default)
+    strict_mode: bool = False
+    morning_start_min: int = 9 * 60 + 20
+    morning_end_min: int = 11 * 60 + 30
+    afternoon_start_min: int = 13 * 60 + 30
+    afternoon_end_min: int = 14 * 60 + 30
+
     # Sell monitoring
     auto_exit_on_sell: bool = True
     auto_exit_on_stop: bool = True
@@ -74,12 +110,24 @@ class AutoPilotConfig:
     max_buy_alerts_per_cycle: int = 3
 
     def normalized(self) -> "AutoPilotConfig":
+        strict_mode = bool(self.strict_mode or _env_truthy("ASSISTANT_STRICT_MODE", False))
+        min_volume_ratio = max(0.0, float(self.min_volume_ratio if self.min_volume_ratio is not None else 5.0))
+        if strict_mode:
+            min_volume_ratio = max(min_volume_ratio, _env_float("ASSISTANT_STRICT_MIN_VOL_RATIO", 8.0))
+        morning_start_min = _env_time_min("ASSISTANT_STRICT_MORNING_START", self.morning_start_min)
+        morning_end_min = _env_time_min("ASSISTANT_STRICT_MORNING_END", self.morning_end_min)
+        afternoon_start_min = _env_time_min("ASSISTANT_STRICT_AFTERNOON_START", self.afternoon_start_min)
+        afternoon_end_min = _env_time_min("ASSISTANT_STRICT_AFTERNOON_END", self.afternoon_end_min)
+        if strict_mode and _env_truthy("ASSISTANT_STRICT_NO_AFTERNOON", True):
+            afternoon_start_min = -1
+            afternoon_end_min = -1
+
         return AutoPilotConfig(
             universe=str(self.universe or "nifty50").strip().lower(),
             account_name=str(self.account_name or "main").strip().lower().replace(" ", "_"),
             min_confidence=max(0.0, float(self.min_confidence if self.min_confidence is not None else 5.0)),
             min_trade_value=max(0.0, float(self.min_trade_value if self.min_trade_value is not None else 0.0)),
-            min_volume_ratio=max(0.0, float(self.min_volume_ratio if self.min_volume_ratio is not None else 5.0)),
+            min_volume_ratio=min_volume_ratio,
             max_entry_gap_pct=max(0.0, float(self.max_entry_gap_pct if self.max_entry_gap_pct is not None else 5.0)),
             blind_buy_min_score=max(0.0, float(self.blind_buy_min_score if self.blind_buy_min_score is not None else 0.0)),
             blind_buy_max_score=max(0.0, float(self.blind_buy_max_score if self.blind_buy_max_score is not None else 40.0)),
@@ -92,6 +140,11 @@ class AutoPilotConfig:
             alert_channels=str(self.alert_channels or "discord").strip().lower(),
             cycle_interval_sec=max(10, int(self.cycle_interval_sec or 60)),
             max_buy_alerts_per_cycle=max(1, int(self.max_buy_alerts_per_cycle or 5)),
+            strict_mode=strict_mode,
+            morning_start_min=morning_start_min,
+            morning_end_min=morning_end_min,
+            afternoon_start_min=afternoon_start_min,
+            afternoon_end_min=afternoon_end_min,
         )
 
 
@@ -3677,12 +3730,20 @@ class AutoPilotInvestor:
             _ist_tw = _pytz_tw.timezone("Asia/Kolkata")
             _now_tw = datetime.now(_ist_tw)
             _min_of_day = _now_tw.hour * 60 + _now_tw.minute
-            _in_morning_window = (9 * 60 + 20) <= _min_of_day <= (11 * 60 + 30)
-            _in_afternoon_window = (13 * 60 + 30) <= _min_of_day <= (14 * 60 + 30)
+            _in_morning_window = (
+                self.config.morning_start_min >= 0
+                and self.config.morning_end_min >= 0
+                and self.config.morning_start_min <= _min_of_day <= self.config.morning_end_min
+            )
+            _in_afternoon_window = (
+                self.config.afternoon_start_min >= 0
+                and self.config.afternoon_end_min >= 0
+                and self.config.afternoon_start_min <= _min_of_day <= self.config.afternoon_end_min
+            )
             if not (_in_morning_window or _in_afternoon_window):
                 self._log(
                     f"Trading window gate: {_now_tw.strftime('%H:%M')} IST outside "
-                    f"prime windows (9:20-11:30, 13:30-14:30) — skipping batch"
+                    f"prime windows — skipping batch"
                 )
                 return []
         except Exception:
