@@ -26,6 +26,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Tuple
 
+import pandas as pd
 import warnings
 warnings.filterwarnings("ignore")
 
@@ -46,9 +47,20 @@ FADE_DROP_FROM_ENTRY_PCT = 2.0
 FADE_DROP_FROM_HIGH_PCT = 4.0
 FADE_COOLDOWN_MIN = 10
 
-# Scorer thresholds
-SCORE_BLIND_BUY = 65          # Definitely buy
-SCORE_CONFIRM_MIN = 52        # Minimum to confirm
+# Scorer thresholds — aligned with live AutoPilotConfig
+SCORE_BLIND_BUY = 65          # Legacy — no longer used as floor
+SCORE_CONFIRM_MIN = 52        # Minimum to confirm (low price stocks)
+SCORE_MAX = 40                # Score CAP: high score = oversold trap (live: blind_buy_max_score)
+MIN_VOL_RATIO = 5.0           # Live: min_volume_ratio = 5.0 (backtest-validated #1 predictor)
+MAX_GAP_PCT = 5.0             # Live: max_entry_gap_pct = 5.0 (distance to buy trigger)
+MIN_CONFIDENCE = 15.0         # Live: min_confidence = 15.0
+MIN_RR2 = 2.0                 # Live: reward-to-risk floor at Target2
+VWAP_ENTRY_BUFFER = 0.995     # Live: price must be above VWAP within 0.5%
+NEAR_HIGH_BUFFER = 0.97       # Live: price must be within 3% of day high
+MORNING_WINDOW_START = 9 * 60 + 20
+MORNING_WINDOW_END = 11 * 60 + 30
+AFTERNOON_WINDOW_START = 13 * 60 + 30
+AFTERNOON_WINDOW_END = 14 * 60 + 30
 
 # Stop loss
 SL_ATR_MULTIPLIER = 1.5
@@ -131,6 +143,220 @@ def compute_daily_turnover_cr(volume: float, close: float) -> float:
 # Minimum daily turnover (₹ Cr) — from Quantopian Volume/Slippage lecture
 # Stocks below this can't absorb ₹50K orders without significant slippage
 MIN_TURNOVER_CR = 2.0
+
+_TRADING_SIGNALS = None
+_GARCH_VOLATILITY = None
+
+
+def _rows_to_ohlcv_frame(rows: List[dict]) -> pd.DataFrame:
+    """Convert cached OHLCV dict rows into a normalized DataFrame."""
+    records = []
+    for row in rows:
+        try:
+            records.append({
+                "datetime": row.get("datetime", ""),
+                "open": float(row["open"]),
+                "high": float(row["high"]),
+                "low": float(row["low"]),
+                "close": float(row["close"]),
+                "volume": float(row["volume"]),
+            })
+        except Exception:
+            continue
+    if not records:
+        return pd.DataFrame(columns=["open", "high", "low", "close", "volume"])
+    df = pd.DataFrame(records)
+    df["datetime"] = pd.to_datetime(df["datetime"])
+    df.set_index("datetime", inplace=True)
+    return df[["open", "high", "low", "close", "volume"]]
+
+
+def _get_trading_signals():
+    global _TRADING_SIGNALS
+    if _TRADING_SIGNALS is None:
+        from pkscreener.classes.screening.signals import TradingSignals
+        _TRADING_SIGNALS = TradingSignals()
+    return _TRADING_SIGNALS
+
+
+def _get_garch_volatility():
+    global _GARCH_VOLATILITY
+    if _GARCH_VOLATILITY is None:
+        from pkscreener.classes.AdvancedFilters import GARCHVolatility
+        _GARCH_VOLATILITY = GARCHVolatility()
+    return _GARCH_VOLATILITY
+
+
+def _signal_to_action(signal_name: str) -> str:
+    """Mirror ActionableReport._signal_to_action()."""
+    normalized = str(signal_name).strip().upper()
+    if normalized in {"STRONG_BUY", "BUY"}:
+        return "BUY"
+    if normalized == "WEAK_BUY":
+        return "WATCH BUY"
+    if normalized in {"STRONG_SELL", "SELL"}:
+        return "SELL/EXIT"
+    if normalized == "WEAK_SELL":
+        return "WATCH SELL"
+    return "HOLD"
+
+
+def _build_trade_plan(close: float, atr: float, action: str, garch_atr_mult: float = 2.0) -> Tuple[float, float, float, float, float]:
+    """Mirror ActionableReport._build_trade_plan()."""
+    close = max(float(close or 0.0), 0.01)
+    atr = max(float(atr or 0.0), 0.0)
+    buffer_amt = max(close * 0.002, atr * 0.10)
+    risk_mult = max(float(garch_atr_mult or 2.0) * 0.75, 1.0)
+    risk_amt = max(close * 0.015, atr * risk_mult)
+
+    if action in {"BUY", "WATCH BUY"}:
+        entry = round(close + buffer_amt, 2)
+        stop_loss = round(max(entry - risk_amt, 0.01), 2)
+        risk = max(entry - stop_loss, 0.01)
+        target_1 = round(entry + (risk * 1.5), 2)
+        target_2 = round(entry + (risk * 2.5), 2)
+    elif action in {"SELL/EXIT", "WATCH SELL"}:
+        entry = round(max(close - buffer_amt, 0.01), 2)
+        stop_loss = round(entry + risk_amt, 2)
+        risk = max(stop_loss - entry, 0.01)
+        target_1 = round(max(entry - (risk * 1.5), 0.01), 2)
+        target_2 = round(max(entry - (risk * 2.5), 0.01), 2)
+    else:
+        return round(close, 2), 0.0, 0.0, 0.0, 0.0
+
+    risk_pct = round((risk * 100.0 / entry), 2) if entry > 0 else 0.0
+    return entry, stop_loss, target_1, target_2, risk_pct
+
+
+def _compute_intraday_vwap(candles: List[dict], upto_idx: int) -> float:
+    """Compute cumulative intraday VWAP through the given minute."""
+    pv_sum = 0.0
+    vol_sum = 0.0
+    for candle in candles[:upto_idx + 1]:
+        vol = float(candle.get("volume") or 0.0)
+        if vol <= 0:
+            continue
+        typical_price = (
+            float(candle["high"]) + float(candle["low"]) + float(candle["close"])
+        ) / 3.0
+        pv_sum += typical_price * vol
+        vol_sum += vol
+    return pv_sum / vol_sum if vol_sum > 0 else 0.0
+
+
+def _minutes_of_day(time_text: str) -> int:
+    try:
+        hh, mm = time_text.split(":")
+        return int(hh) * 60 + int(mm)
+    except Exception:
+        return -1
+
+
+def _in_prime_trading_window(time_text: str) -> bool:
+    mins = _minutes_of_day(time_text)
+    if mins < 0:
+        return False
+    in_morning = MORNING_WINDOW_START <= mins <= MORNING_WINDOW_END
+    in_afternoon = AFTERNOON_WINDOW_START <= mins <= AFTERNOON_WINDOW_END
+    return in_morning or in_afternoon
+
+
+def _build_partial_day_frame(history_frame: pd.DataFrame, date_str: str, day_open: float, candles: List[dict], upto_idx: int) -> pd.DataFrame:
+    """Append a partial current-day candle to prior daily history."""
+    high_so_far = max(float(c["high"]) for c in candles[:upto_idx + 1])
+    low_so_far = min(float(c["low"]) for c in candles[:upto_idx + 1])
+    close_now = float(candles[upto_idx]["close"])
+    cum_volume = float(sum(float(c.get("volume") or 0.0) for c in candles[:upto_idx + 1]))
+    partial = pd.DataFrame(
+        [{
+            "open": float(day_open),
+            "high": high_so_far,
+            "low": low_so_far,
+            "close": close_now,
+            "volume": cum_volume,
+        }],
+        index=[pd.Timestamp(date_str)],
+    )
+    if history_frame is None or history_frame.empty:
+        return partial
+    return pd.concat([history_frame, partial])
+
+
+def _build_live_signal_snapshot(symbol: str, date_str: str, candles: List[dict], entry_idx: int, daily_info: dict) -> Optional[dict]:
+    """Build a live-like signal row using history up to the candidate entry minute."""
+    history_frame = daily_info.get("history_frame")
+    if history_frame is None or history_frame.empty or len(history_frame) < 20:
+        return None
+
+    day_open = float(candles[0]["open"])
+    snapshot_df = _build_partial_day_frame(history_frame, date_str, day_open, candles, entry_idx)
+    if snapshot_df is None or snapshot_df.empty or len(snapshot_df) < 20:
+        return None
+
+    signal_result = _get_trading_signals().analyze(snapshot_df)
+    close_now = float(snapshot_df["close"].iloc[-1])
+    prev_close = float(history_frame["close"].iloc[-1]) if len(history_frame) else close_now
+    avg_volume_20 = float(history_frame["volume"].tail(20).mean()) if len(history_frame) else 0.0
+    current_volume = float(snapshot_df["volume"].iloc[-1]) if "volume" in snapshot_df.columns else 0.0
+    raw_volume_ratio = (current_volume / avg_volume_20) if avg_volume_20 > 0 else 0.0
+    mins_from_open = max(1, _minutes_of_day(candles[entry_idx]["time"]) - (9 * 60 + 15) + 1)
+    day_fraction = mins_from_open / 375.0
+    projected_volume_ratio = raw_volume_ratio / day_fraction if day_fraction > 0 else raw_volume_ratio
+
+    highs = snapshot_df["high"].astype(float).tolist()
+    lows = snapshot_df["low"].astype(float).tolist()
+    closes = snapshot_df["close"].astype(float).tolist()
+    atr = compute_atr(highs, lows, closes)
+    returns = snapshot_df["close"].pct_change().dropna().values
+    garch_mult = _get_garch_volatility().adaptive_atr_multiplier(returns, base_multiplier=2.0) if len(returns) else 2.0
+    action = _signal_to_action(getattr(signal_result.signal, "name", str(signal_result.signal)))
+    entry_trigger, stop_loss, _, target_2, _ = _build_trade_plan(close_now, atr, action, garch_atr_mult=garch_mult)
+    if entry_trigger <= 0:
+        return None
+
+    entry_fill_price = round(entry_trigger, 2)
+    entry_gap_pct = round((max(entry_trigger - close_now, 0.0) * 100.0 / close_now), 2) if close_now > 0 else 0.0
+    vwap = _compute_intraday_vwap(candles, entry_idx)
+    high_so_far = max(float(c["high"]) for c in candles[:entry_idx + 1])
+    cum_volume = float(sum(float(c.get("volume") or 0.0) for c in candles[:entry_idx + 1]))
+    turnover_price = vwap if vwap > 0 else close_now
+    turnover_cr = compute_daily_turnover_cr(cum_volume, turnover_price)
+    change_pct = ((entry_fill_price - prev_close) * 100.0 / prev_close) if prev_close > 0 else 0.0
+    change_from_open = ((entry_fill_price - day_open) * 100.0 / day_open) if day_open > 0 else 0.0
+    gap_pct = ((day_open - prev_close) * 100.0 / prev_close) if prev_close > 0 else 0.0
+    rr2 = 0.0
+    risk = entry_fill_price - stop_loss
+    if stop_loss > 0 and target_2 > 0 and risk > 0:
+        rr2 = (target_2 - entry_fill_price) / risk
+
+    blind_score = simplified_blind_score(
+        price=entry_fill_price,
+        change_pct=change_from_open,
+        rsi=float(signal_result.indicators.get("RSI", 50.0)),
+        cci=float(signal_result.indicators.get("CCI", 0.0)),
+        mfi=float(signal_result.indicators.get("MFI", 50.0)),
+        volume_ratio=projected_volume_ratio,
+        gap_pct=gap_pct,
+    )
+
+    return {
+        "action": action,
+        "confidence": round(float(signal_result.confidence), 1),
+        "score": int(round(float(blind_score))),
+        "score_reasons": "",
+        "entry_price": entry_fill_price,
+        "entry_trigger": round(entry_trigger, 2),
+        "entry_gap_pct": entry_gap_pct,
+        "stop_loss": round(stop_loss, 2),
+        "target_2": round(target_2, 2),
+        "rr2": round(rr2, 2),
+        "volume_ratio": round(projected_volume_ratio, 2),
+        "vwap": round(vwap, 2),
+        "turnover_cr": round(turnover_cr, 2),
+        "high_so_far": round(high_so_far, 2),
+        "prev_close": round(prev_close, 2),
+        "change_pct": round(change_pct, 2),
+    }
 
 
 def _load_float_env(name: str, default: float) -> float:
@@ -273,6 +499,7 @@ def simplified_blind_score(
 class Trade:
     symbol: str
     date: str
+    signal_action: str
     entry_time: str       # HH:MM when we entered
     entry_price: float
     exit_price: float
@@ -284,6 +511,12 @@ class Trade:
     high_after_entry: float
     low_after_entry: float
     score: int
+    confidence_pct: float
+    rr2: float
+    entry_gap_pct: float
+    stop_loss: float
+    target_2: float
+    vwap_at_entry: float
     volume_ratio: float
     gross_pnl_pct: float
     pnl_pct: float        # net-of-costs return%
@@ -350,12 +583,16 @@ def scan_daily_candidates(target_dates: List[str], top_n: int = 0) -> Dict[str, 
             if high_chg > 25.0:
                 continue  # Circuit hits — not tradeable
 
-            # Get prior rows for RSI/ATR
+            # Use only history available BEFORE the target session to avoid
+            # leaking the full day candle into pre-entry indicators.
             idx = rows.index(row)
-            prior_closes = [float(r["close"]) for r in rows[max(0, idx - 30):idx + 1]]
-            prior_highs = [float(r["high"]) for r in rows[max(0, idx - 30):idx + 1]]
-            prior_lows = [float(r["low"]) for r in rows[max(0, idx - 30):idx + 1]]
-            prior_volumes = [float(r["volume"]) for r in rows[max(0, idx - 30):idx + 1]]
+            history_rows = rows[max(0, idx - 90):idx]
+            if len(history_rows) < 20:
+                continue
+            prior_closes = [float(r["close"]) for r in history_rows]
+            prior_highs = [float(r["high"]) for r in history_rows]
+            prior_lows = [float(r["low"]) for r in history_rows]
+            prior_volumes = [float(r["volume"]) for r in history_rows]
 
             # Find prev_close for gap calculation
             prev_close = float(rows[idx - 1]["close"]) if idx > 0 else o
@@ -386,6 +623,7 @@ def scan_daily_candidates(target_dates: List[str], top_n: int = 0) -> Dict[str, 
                 "turnover_cr": round(turnover_cr, 1),
                 "faded": close_chg < high_chg * 0.5,
                 "prev_close": prev_close,
+                "history_frame": _rows_to_ohlcv_frame(history_rows),
             })
 
     # Sort and optionally limit per day
@@ -477,61 +715,93 @@ def simulate_intraday(
     if day_open <= 0:
         return None
 
-    prev_close = daily_info.get("prev_close", day_open)
-    gap_pct = (day_open - prev_close) / prev_close * 100 if prev_close > 0 else 0
-
-    # ── Find entry point ──
     entry_idx = None
-    for i, c in enumerate(candles):
-        change_from_open = (c["close"] - day_open) / day_open * 100
-        if TICK_ENTRY_PCT <= change_from_open < TICK_ALREADY_MOVED_PCT:
-            entry_idx = i
-            break
+    entry_time = None
+    entry_price = 0.0
+    change_at_entry = 0.0
+    score = 0
+    vol_ratio = 0.0
+    stop_loss = 0.0
+    confidence_pct = 0.0
+    rr2 = 0.0
+    entry_gap_pct = 0.0
+    target_2 = 0.0
+    vwap_at_entry = 0.0
+    signal_action = ""
+    high_so_far = day_open
+
+    # ── Find the first minute where a live-like buy trigger would have passed ──
+    last_eval_high = day_open
+    for i, candle in enumerate(candles):
+        candidate_time = candle["time"]
+        if not _in_prime_trading_window(candidate_time):
+            continue
+        candle_high = float(candle["high"])
+        if candle_high < day_open * (1 + TICK_ENTRY_PCT / 100.0):
+            continue
+        should_recheck = candle_high > last_eval_high or (i % 5 == 0)
+        last_eval_high = max(last_eval_high, candle_high)
+        if not should_recheck:
+            continue
+
+        signal_state = _build_live_signal_snapshot(symbol, date_str, candles, i, daily_info)
+        if signal_state is None:
+            continue
+
+        candidate_entry = float(signal_state["entry_price"])
+        if candle_high < candidate_entry:
+            continue
+
+        candidate_change = max(
+            (candidate_entry - day_open) / day_open * 100,
+            (candle_high - day_open) / day_open * 100,
+        )
+        if candidate_change >= TICK_ALREADY_MOVED_PCT:
+            continue
+
+        candidate_score = int(signal_state["score"])
+        if candidate_score < SCORE_CONFIRM_MIN and candidate_entry < OHLCV_MIN_PRICE:
+            continue
+        if candidate_score >= SCORE_MAX:
+            continue
+        if signal_state["action"] not in {"BUY", "WATCH BUY"}:
+            continue
+        if float(signal_state["confidence"]) < MIN_CONFIDENCE:
+            continue
+        if float(signal_state["volume_ratio"]) < MIN_VOL_RATIO:
+            continue
+        if float(signal_state["entry_gap_pct"]) > MAX_GAP_PCT:
+            continue
+        if float(signal_state["rr2"]) < MIN_RR2:
+            continue
+        if float(signal_state["vwap"]) > 0 and candidate_entry < float(signal_state["vwap"]) * VWAP_ENTRY_BUFFER:
+            continue
+        if float(signal_state["high_so_far"]) > 0 and candidate_entry < float(signal_state["high_so_far"]) * NEAR_HIGH_BUFFER:
+            continue
+
+        mins_from_open = _minutes_of_day(candidate_time) - (9 * 60 + 15)
+        min_turnover = 0.5 if mins_from_open <= 30 else MIN_TURNOVER_CR
+        if float(signal_state["turnover_cr"]) > 0 and float(signal_state["turnover_cr"]) < min_turnover:
+            continue
+
+        entry_idx = i
+        entry_time = candidate_time
+        entry_price = round(candidate_entry, 2)
+        change_at_entry = round(candidate_change, 2)
+        score = candidate_score
+        vol_ratio = round(float(signal_state["volume_ratio"]), 2)
+        stop_loss = round(float(signal_state["stop_loss"]), 2)
+        confidence_pct = round(float(signal_state["confidence"]), 1)
+        rr2 = round(float(signal_state["rr2"]), 2)
+        entry_gap_pct = round(float(signal_state["entry_gap_pct"]), 2)
+        target_2 = round(float(signal_state["target_2"]), 2)
+        vwap_at_entry = round(float(signal_state["vwap"]), 2)
+        signal_action = str(signal_state["action"])
+        high_so_far = float(signal_state["high_so_far"])
+        break
 
     if entry_idx is None:
-        return None  # Stock never crossed 2% or was already > 16%
-
-    entry_candle = candles[entry_idx]
-    entry_price = entry_candle["close"]
-    entry_time = entry_candle["time"]
-    change_at_entry = (entry_price - day_open) / day_open * 100
-
-    # ── Compute score at entry ──
-    rsi = daily_info.get("rsi", 50.0)
-    cci = daily_info.get("cci", 0.0)
-    mfi = daily_info.get("mfi", 50.0)
-    vol_ratio = daily_info.get("vol_ratio", 1.0)
-
-    score = simplified_blind_score(
-        price=entry_price,
-        change_pct=change_at_entry,
-        rsi=rsi,
-        cci=cci,
-        mfi=mfi,
-        volume_ratio=vol_ratio,
-        gap_pct=gap_pct,
-    )
-
-    if score < SCORE_CONFIRM_MIN and entry_price < OHLCV_MIN_PRICE:
-        return None  # Would not pass OHLCV confirmation
-
-    # Strict filters from AutoPilotInvestor "Consistent Daily Income Mode"
-    if vol_ratio < 2.5:
         return None
-
-    if vol_ratio >= 3.0 and change_at_entry > 0:
-        if (vol_ratio / change_at_entry) > 1.5:
-            return None  # Distribution block
-            
-    if score < SCORE_BLIND_BUY:
-        return None
-
-    # ── Compute stop loss ──
-    atr = daily_info.get("atr", 0)
-    if atr > 0:
-        stop_loss = entry_price - SL_ATR_MULTIPLIER * atr
-    else:
-        stop_loss = entry_price * (1 - SL_FALLBACK_PCT)
 
     # ── Monitor after entry: fade detection + exit ──
     high_after = entry_price
@@ -588,6 +858,7 @@ def simulate_intraday(
     return Trade(
         symbol=symbol,
         date=date_str,
+        signal_action=signal_action,
         entry_time=entry_time,
         entry_price=round(entry_price, 2),
         exit_price=round(exit_price, 2),
@@ -599,6 +870,12 @@ def simulate_intraday(
         high_after_entry=round(high_after, 2),
         low_after_entry=round(low_after, 2),
         score=score,
+        confidence_pct=confidence_pct,
+        rr2=rr2,
+        entry_gap_pct=entry_gap_pct,
+        stop_loss=round(stop_loss, 2),
+        target_2=target_2,
+        vwap_at_entry=vwap_at_entry,
         volume_ratio=round(vol_ratio, 2),
         gross_pnl_pct=round(gross_pnl_pct, 2),
         pnl_pct=cost_result["net_pnl_pct"],
@@ -806,7 +1083,8 @@ def export_trades_csv(trades: List[Trade], filepath: str):
         "date", "symbol", "entry_time", "entry_price", "exit_time", "exit_price",
         "exec_entry_price", "exec_exit_price",
         "exit_reason", "gross_pnl_pct", "net_pnl_pct", "max_profit_pct", "max_drawdown_pct",
-        "score", "volume_ratio", "change_at_entry", "entry_charges", "exit_charges",
+        "signal_action", "score", "confidence_pct", "rr2", "entry_gap_pct",
+        "stop_loss", "target_2", "vwap_at_entry", "volume_ratio", "change_at_entry", "entry_charges", "exit_charges",
         "slippage_cost", "faded", "fade_detected",
     ]
     with open(filepath, "w", newline="") as f:
@@ -827,7 +1105,14 @@ def export_trades_csv(trades: List[Trade], filepath: str):
                 "net_pnl_pct": t.pnl_pct,
                 "max_profit_pct": t.max_profit_pct,
                 "max_drawdown_pct": t.max_drawdown_pct,
+                "signal_action": t.signal_action,
                 "score": t.score,
+                "confidence_pct": t.confidence_pct,
+                "rr2": t.rr2,
+                "entry_gap_pct": t.entry_gap_pct,
+                "stop_loss": t.stop_loss,
+                "target_2": t.target_2,
+                "vwap_at_entry": t.vwap_at_entry,
                 "volume_ratio": t.volume_ratio,
                 "change_at_entry": t.change_at_entry,
                 "entry_charges": t.entry_charges,
@@ -909,6 +1194,8 @@ def main():
 
     if args.no_api:
         # ── Daily-only simulation (no minute candles) ──
+        # Approximation only: this mode cannot model intraday VWAP, confidence,
+        # or trigger timing with the same fidelity as minute mode.
         print(f"\n[Daily-only mode] Simulating with open/high/low/close...")
         for dt in sorted(candidates.keys()):
             for cand in candidates[dt]:
@@ -916,11 +1203,8 @@ def main():
                 entry_price = cand["open"] * (1 + TICK_ENTRY_PCT / 100)
                 if entry_price > cand["high"]:
                     continue  # Never reached entry
-                exit_price = cand["close"]
-                gross_pnl_pct = (exit_price - entry_price) / entry_price * 100
-                max_profit = (cand["high"] - entry_price) / entry_price * 100
-                max_dd = (entry_price - cand["low"]) / entry_price * 100
-
+                
+                # ── Live-aligned filters ──
                 score = simplified_blind_score(
                     price=entry_price,
                     change_pct=(entry_price - cand["open"]) / cand["open"] * 100,
@@ -930,6 +1214,21 @@ def main():
                     volume_ratio=cand["vol_ratio"],
                     gap_pct=cand["gap_pct"],
                 )
+                
+                # Score cap: high score = oversold trap
+                if score >= SCORE_MAX:
+                    continue
+                # Volume ratio: #1 edge predictor
+                if cand["vol_ratio"] < MIN_VOL_RATIO:
+                    continue
+                # Overnight-gap approximation only
+                if cand["gap_pct"] > MAX_GAP_PCT:
+                    continue
+
+                exit_price = cand["close"]
+                gross_pnl_pct = (exit_price - entry_price) / entry_price * 100
+                max_profit = (cand["high"] - entry_price) / entry_price * 100
+                max_dd = (entry_price - cand["low"]) / entry_price * 100
 
                 # Fade simulation from daily: did low drop 4%+ from high?
                 drop_from_high = (cand["high"] - cand["close"]) / cand["high"] * 100
@@ -956,6 +1255,7 @@ def main():
                 trade = Trade(
                     symbol=cand["symbol"],
                     date=dt,
+                    signal_action="BUY",
                     entry_time="~09:20",
                     entry_price=round(entry_price, 2),
                     exit_price=round(exit_price, 2),
@@ -967,6 +1267,12 @@ def main():
                     high_after_entry=round(cand["high"], 2),
                     low_after_entry=round(cand["low"], 2),
                     score=score,
+                    confidence_pct=0.0,
+                    rr2=0.0,
+                    entry_gap_pct=0.0,
+                    stop_loss=round(sl, 2),
+                    target_2=0.0,
+                    vwap_at_entry=0.0,
                     volume_ratio=cand["vol_ratio"],
                     gross_pnl_pct=round(gross_pnl_pct, 2),
                     pnl_pct=cost_result["net_pnl_pct"],
