@@ -230,11 +230,12 @@ def _load_buynow_rows(universe: str, limit: int = 5) -> pd.DataFrame:
     """Load /buynow picks with the same quality gates as AutoPilot Discord alerts.
 
     Filters applied (same as _find_blind_buys + tick path):
-    - BlindBuyScore >= 50
-    - Volume ratio >= 1.0x (above average)
-    - R:R >= 1.5 on Target 2
+    - BlindBuyScore <= max_score (dead-cat bounce cap)
+    - Confidence >= min_confidence
+    - Volume ratio >= min_volume_ratio (time-adjusted in live scan)
+    - Entry gap <= max_entry_gap_pct
+    - R:R >= 2.0 on Target 2
     - No bearish / DO NOT BUY flags
-    - Not already overbought (RSI < 78)
     """
     path = _latest_signalmonitor_path(universe)
     if not os.path.exists(path):
@@ -253,23 +254,39 @@ def _load_buynow_rows(universe: str, limit: int = 5) -> pd.DataFrame:
         return candidates
 
     try:
-        from pkscreener.classes.AutoPilotInvestor import BlindBuyScorer
+        from pkscreener.classes.AutoPilotInvestor import BlindBuyScorer, AutoPilotConfig
+        _cfg = AutoPilotConfig()
     except Exception:
         # If scorer unavailable, fall back to unfiltered
         return _load_signal_rows(universe, list(buy_actions), limit)
 
+    min_confidence = float(getattr(_cfg, "min_confidence", 15.0) or 15.0)
+    min_volume_ratio = float(getattr(_cfg, "min_volume_ratio", 5.0) or 5.0)
+    max_entry_gap_pct = float(getattr(_cfg, "max_entry_gap_pct", 5.0) or 5.0)
+    max_blind_score = float(getattr(_cfg, "blind_buy_max_score", 40.0) or 40.0)
+    strong_buy_min_conf = max(min_confidence + 10.0, 25.0)
+    strong_buy_max_gap = 0.25
+
     results = []
     for _, row in candidates.iterrows():
         blind_score, blind_reasons = BlindBuyScorer.score(row)
-        if blind_score < 50:
+        if max_blind_score > 0 and blind_score >= max_blind_score:
             continue
 
         reasons_lower = blind_reasons.lower()
         if "do not buy" in reasons_lower or "bearish" in reasons_lower:
             continue
 
+        confidence = float(row.get("Signal Strength %", row.get("ConfidencePct", 0)) or 0)
+        if confidence < min_confidence:
+            continue
+
+        entry_gap = float(row.get("Entry Gap %", row.get("EntryGapPct", 0)) or 0)
+        if entry_gap > max_entry_gap_pct:
+            continue
+
         vol_ratio = float(row.get("Volume Ratio", row.get("VolumeRatio", 0)) or 0)
-        if vol_ratio > 0 and vol_ratio < 1.0:
+        if vol_ratio < min_volume_ratio:
             continue
 
         price     = float(row.get("Price Now", row.get("PriceNow", 0)) or 0)
@@ -279,12 +296,12 @@ def _load_buynow_rows(universe: str, limit: int = 5) -> pd.DataFrame:
         if stop_loss > 0 and target2 > 0 and price > stop_loss:
             risk = price - stop_loss
             rr2 = (target2 - price) / risk if risk > 0 else 0
-            if rr2 < 1.5:
+            if rr2 < 2.0:
                 continue
 
         row = row.copy()
         row["__blind_score"] = blind_score
-        row["What To Do"] = "Buy Now" if blind_score < 70 else "Strong Buy Now"
+        row["What To Do"] = "Strong Buy Now" if confidence >= strong_buy_min_conf and entry_gap <= strong_buy_max_gap else "Buy Now"
         results.append(row)
 
     if not results:

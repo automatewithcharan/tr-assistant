@@ -1155,7 +1155,44 @@ def main():
     parser.add_argument("--buy-cost-pct", type=float, default=DEFAULT_BUY_COST_PCT, help="Estimated buy-side cost percentage")
     parser.add_argument("--sell-cost-pct", type=float, default=DEFAULT_SELL_COST_PCT, help="Estimated sell-side cost percentage")
     parser.add_argument("--slippage-bps", type=float, default=DEFAULT_SLIPPAGE_BPS, help="Estimated slippage in basis points per side")
+    parser.add_argument("--min-vol-ratio", type=float, default=None, help="Override min volume ratio filter")
+    parser.add_argument("--morning-start", type=str, default=None, help="Morning window start HH:MM (override)")
+    parser.add_argument("--morning-end", type=str, default=None, help="Morning window end HH:MM (override)")
+    parser.add_argument("--afternoon-start", type=str, default=None, help="Afternoon window start HH:MM (override)")
+    parser.add_argument("--afternoon-end", type=str, default=None, help="Afternoon window end HH:MM (override)")
+    parser.add_argument("--no-afternoon", action="store_true", help="Disable afternoon window (morning-only)")
     args = parser.parse_args()
+
+    global MIN_VOL_RATIO, MORNING_WINDOW_START, MORNING_WINDOW_END, AFTERNOON_WINDOW_START, AFTERNOON_WINDOW_END
+    if args.min_vol_ratio is not None:
+        MIN_VOL_RATIO = max(0.0, float(args.min_vol_ratio))
+    if args.morning_start:
+        try:
+            hh, mm = args.morning_start.split(":")
+            MORNING_WINDOW_START = int(hh) * 60 + int(mm)
+        except Exception:
+            pass
+    if args.morning_end:
+        try:
+            hh, mm = args.morning_end.split(":")
+            MORNING_WINDOW_END = int(hh) * 60 + int(mm)
+        except Exception:
+            pass
+    if args.afternoon_start:
+        try:
+            hh, mm = args.afternoon_start.split(":")
+            AFTERNOON_WINDOW_START = int(hh) * 60 + int(mm)
+        except Exception:
+            pass
+    if args.afternoon_end:
+        try:
+            hh, mm = args.afternoon_end.split(":")
+            AFTERNOON_WINDOW_END = int(hh) * 60 + int(mm)
+        except Exception:
+            pass
+    if args.no_afternoon:
+        AFTERNOON_WINDOW_START = -1
+        AFTERNOON_WINDOW_END = -1
     cost_model = CostModel(
         buy_cost_pct=max(0.0, float(args.buy_cost_pct)),
         sell_cost_pct=max(0.0, float(args.sell_cost_pct)),
