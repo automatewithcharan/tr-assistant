@@ -1711,7 +1711,7 @@ DIVISLAB x2 | buy 5,835.00 | now 5,821.00 | net P/L -53.88 | exit costs 12.11 | 
 
 
 {Attachments}
-https://cdn.discordapp.com/attachments/1488777695750914060/1490918636540661770/image0.jpg?ex=69d9c22e&is=69d870ae&hm=c58b034d6d737f6e459eaa27b0e594b7e5b8ff7db3487094b5c167d03457c08c&
+https://cdn.discordapp.com/attachments/1488777695750914060/1490918636540661770/image0.jpg?ex=69ddb6ae&is=69dc652e&hm=f955fd1cf5762e557ae29914e0cbed331dee0bcbe358b97486e91a47cbae780a&
 
 
 [07-04-2026 09:09] CharanScreener#5664
@@ -1727,7 +1727,7 @@ https://cdn.discordapp.com/attachments/1488777695750914060/1490918636540661770/i
 
 
 {Attachments}
-https://cdn.discordapp.com/attachments/1488777695750914060/1490919030050132110/image0.jpg?ex=69d9c28c&is=69d8710c&hm=9611ca85ff257f01a8502afab9b830e70530dade55b4f5a3c445710a8b164da6&
+https://cdn.discordapp.com/attachments/1488777695750914060/1490919030050132110/image0.jpg?ex=69ddb70c&is=69dc658c&hm=38c30fd158f0d421623be88e616b58f7eb55f9397a6d142fef844049a4b5419b&
 
 
 [07-04-2026 09:25] CharanScreener#5664
@@ -22225,7 +22225,7 @@ _Open Groww → Buy → then use `/buy ICICIAMC 1 3270` to record_
 
 
 {Attachments}
-https://cdn.discordapp.com/attachments/1488777695750914060/1491728984331911179/image0.jpg?ex=69da11e0&is=69d8c060&hm=702fbbee078dbbd71a05bafdf689d8b35369b261305d049e11ef1a3aeb27b8a6&
+https://cdn.discordapp.com/attachments/1488777695750914060/1491728984331911179/image0.jpg?ex=69dd5da0&is=69dc0c20&hm=d71a85d2eac3e1f8825a37c8623ce2a67d68b4dc5dc5eca2cf46919f9346d0df&
 
 
 [09-04-2026 14:50] Spidey Bot
@@ -24914,6 +24914,2308 @@ Buy **12 shares** (≈ ₹3,866)
 _Open Groww → Buy → then use `/buy RBLBANK 12 322` to record_
 
 
+[10-04-2026 16:10] Spidey Bot
+⚠️ **Trade Assistant restarted** at 16:10 IST — was down (DB shows not running)
+
+
+[11-04-2026 09:16] CharanScreener#5664
+⚠️ No live price for `RELIANCE` — is the ticker running?
+
+
+[11-04-2026 17:03] Spidey Bot
+🧪 **TEST ALERT** (Paper Trading Validation — Apr 11, 2026)
+
+If you see this, Discord alerts are working.
+Mode: PAPER TRADING (no real orders)
+KITE_AUTO_TRADE=0 | KITE_DRY_RUN=1
+
+_This is a test. Delete this message._
+
+
+[13-04-2026 08:00] Spidey Bot
+🔄 **Daily prewarm started** — refreshing cache for NSE+BSE stocks (8 AM IST)
+
+
+[13-04-2026 08:00] Spidey Bot
+⚠️ **Kite session expired** (24h old) — prewarm may fail. Re-login required.
+
+
+[13-04-2026 08:30] Spidey Bot
+⚠️ **Trade Assistant restarted** at 08:30 IST — was down (DB shows not running)
+
+
+[13-04-2026 08:35] Spidey Bot
+🧹 **Data cleanup completed** at 08:35 IST — archived 0 and deleted 2 old files
+
+
+[13-04-2026 08:45] Spidey Bot
+**📋 PRE-MARKET WATCHLIST — 13 Apr 2026**
+Top **6** setups from yesterday's close. Be ready at 9:15 AM.
+
+✅ **EMMVEE** — Score 67/100 | R:R 1:2.4 | Vol 3.1x
+   Buy above `231.34` | Stop `212.79` | T1 `259.17` | T2 `277.72`
+✅ **ENERGY** — Score 65/100 | R:R 1:1.5 | Vol 0.3x
+   Buy above `36.96` | Stop `36.00` | T1 `38.40` | T2 `39.36`
+✅ **ATHERENERG** — Score 62/100 | R:R 1:2.4 | Vol 2.6x
+   Buy above `862.02` | Stop `801.77` | T1 `952.39` | T2 `1012.64`
+✅ **PAISALO** — Score 57/100 | R:R 1:2.4 | Vol 1.8x
+   Buy above `39.19` | Stop `36.46` | T1 `43.28` | T2 `46.01`
+✅ **KTKBANK** — Score 57/100 | R:R 1:2.4 | Vol 0.8x
+   Buy above `242.59` | Stop `227.00` | T1 `265.98` | T2 `281.56`
+✅ **METAL** — Score 57/100 | R:R 1:2.1 | Vol 0.4x
+   Buy above `12.34` | Stop `11.73` | T1 `13.25` | T2 `13.86`
+
+_These are setups to act on IF price breaks above 'Buy above' level with volume in the first 15 minutes._
+_Tick scanner is live — BUY alerts will fire automatically when entry conditions are met._
+
+
+[13-04-2026 09:15] Spidey Bot
+**🟢 OPENING SCAN — 09:15 IST** | **1** top picks from 1 confirmed stocks
+_Ranked by conviction score. Focus on top 3-5 picks._
+
+
+**1. ✅ `EIEL`** Score **57**/100 | `₹191.67` (+10.7%) | Vol `4.0x`
+   SL `₹182.19` → T1 `₹199.27` → T2 `₹208.76` (+8.9%) | Buy **19 shares**
+
+
+_Open Groww → Buy your top picks_
+
+
+[13-04-2026 09:16] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔮 DMCC — Buyers are pushing this stock up steadily**
+Quality: **C-Grade** (Weak — low conviction, smallest size)
+📈 **Demand-confirmed setup target: +8.0% from alert price** (current day move: +5.4% | moved +3.5% from our detect price in 1 min)
+
+👥 Buyers vs sellers: `13.6x` more buyers than sellers (strong demand)
+📊 Trading volume: `5.1x` higher than normal (real interest, not fake)
+
+**What to do:**
+⚠️ RISKY — only if you accept higher risk
+Buy **91 shares** at ~`₹236` (costs ≈ ₹21,475)
+🔴 EXIT if price drops to `₹229` (limits your loss to 3%)
+🟢 SELL near `₹255` if momentum continues (fixed demand-watch target: +8.0% from alert price)
+💰 You risk `₹7` per share to gain `₹19` per share (2.7x reward vs risk)
+
+_Open Groww → Buy → then use `/buy DMCC 91 236` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 09:18] Spidey Bot
+**🟢 OPENING SCAN — 09:18 IST** | **2** top picks from 2 confirmed stocks
+_Ranked by conviction score. Focus on top 3-5 picks._
+
+
+**1. ⭐ `CIANAGRO`** Score **72**/100 | `₹907.70` (+5.0%) | Vol `0.7x`
+   SL `₹871.39` → T1 `₹953.09` → T2 `₹998.47` (+10.0%) | Buy **5 shares**
+
+**2. ⭐ `CONFIPET`** Score **62**/100 | `₹57.90` (+3.4%) | Vol `1.8x`
+   SL `₹55.58` → T1 `₹60.80` → T2 `₹63.69` (+10.0%) | Buy **72 shares**
+
+
+_Open Groww → Buy your top picks_
+
+
+[13-04-2026 09:18] Spidey Bot
+**🟢 OPENING SCAN — 09:18 IST** | **2** top picks (1 strong buy) from 2 confirmed stocks
+_Ranked by conviction score. Focus on top 3-5 picks._
+
+
+**1. 🔥 `DEEPINDS`** Score **57**/100 | `₹479.45` (+4.9%) | Vol `2.2x`
+   SL `₹461.28` → T1 `₹504.53` → T2 `₹528.55` (+10.2%) | Buy **7 shares**
+
+**2. ✅ `ACMESOLAR`** Score **52**/100 | `₹281.75` (+4.9%) | Vol `2.9x`
+   SL `₹270.48` → T1 `₹295.84` → T2 `₹309.93` (+10.0%) | Buy **11 shares**
+
+
+_Open Groww → Buy your top picks_
+
+
+[13-04-2026 09:19] Spidey Bot
+**🟢 OPENING SCAN — 09:19 IST** | **1** top picks (1 strong buy) from 1 confirmed stocks
+_Ranked by conviction score. Focus on top 3-5 picks._
+
+
+**1. 🔥 `JINDRILL`** Score **57**/100 | `₹559.45` (+4.2%) | Vol `2.5x`
+   SL `₹537.07` → T1 `₹587.42` → T2 `₹615.40` (+10.0%) | Buy **6 shares**
+
+
+_Open Groww → Buy your top picks_
+
+
+[13-04-2026 09:19] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔮 ANTELOPUS — Buyers are pushing this stock up steadily**
+Quality: **B-Grade** (Good — moderate conviction, reduced size)
+📈 **Demand-confirmed setup target: +8.0% from alert price** (current day move: +4.6% | moved +1.9% from our detect price in 4 min)
+
+👥 Buyers vs sellers: `3.3x` more buyers than sellers (strong demand)
+📊 Trading volume: `2.0x` higher than normal (real interest, not fake)
+
+**What to do:**
+✅ BUY NOW
+Buy **56 shares** at ~`₹630` (costs ≈ ₹35,280)
+🔴 EXIT if price drops to `₹611` (limits your loss to 3%)
+🟢 SELL near `₹680` if momentum continues (fixed demand-watch target: +8.0% from alert price)
+💰 You risk `₹19` per share to gain `₹50` per share (2.7x reward vs risk)
+
+_Open Groww → Buy → then use `/buy ANTELOPUS 56 630` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 09:20] Spidey Bot
+**🟢 OPENING SCAN — 09:20 IST** | **1** top picks from 1 confirmed stocks
+_Ranked by conviction score. Focus on top 3-5 picks._
+
+
+**1. 📝 `GALLANTT`** Score **37**/100 | `₹684.90` (+4.0%) | Vol `0.7x`
+   SL `₹657.50` → T1 `₹719.14` → T2 `₹753.39` (+10.0%) | Buy **3 shares**
+
+
+_Open Groww → Buy your top picks_
+
+
+[13-04-2026 09:20] Spidey Bot
+**🟢 OPENING SCAN — 09:20 IST** | **1** top picks from 1 confirmed stocks
+_Ranked by conviction score. Focus on top 3-5 picks._
+
+
+**1. 📝 `MTARTECH`** Score **30**/100 | `₹4286.10` (+2.7%) | Vol `2.6x`
+   SL `₹3859.07` → T1 `₹4612.62` → T2 `₹4914.04` (+14.7%) | Buy **1 shares**
+
+
+_Open Groww → Buy your top picks_
+
+
+[13-04-2026 09:21] Spidey Bot
+**🟢 OPENING SCAN — 09:21 IST** | **3** top picks from 3 confirmed stocks
+_Ranked by conviction score. Focus on top 3-5 picks._
+
+
+**1. ⭐ `ZYDUSWELL`** Score **72**/100 | `₹524.15` (+7.0%) | Vol `1.0x`
+   SL `₹503.18` → T1 `₹550.36` → T2 `₹576.57` (+10.0%) | Buy **9 shares**
+
+**2. 📝 `JBMA`** Score **39**/100 | `₹633.05` (+3.5%) | Vol `2.3x`
+   SL `₹607.73` → T1 `₹664.70` → T2 `₹696.36` (+10.0%) | Buy **3 shares**
+
+**3. 📝 `AVADHSUGAR`** Score **6**/100 | `₹477.35` (+2.0%) | Vol `1.1x`
+   SL `₹463.90` → T1 `₹502.16` → T2 `₹526.08` (+10.2%) | Buy **10 shares**
+
+
+_Open Groww → Buy your top picks_
+
+
+[13-04-2026 09:22] Spidey Bot
+**🟢 OPENING SCAN — 09:22 IST** | **1** top picks (1 strong buy) from 1 confirmed stocks
+_Ranked by conviction score. Focus on top 3-5 picks._
+
+
+**1. 🔥 `STLTECH`** Score **72**/100 | `₹240.47` (+4.0%) | Vol `2.5x`
+   SL `₹230.85` → T1 `₹252.49` → T2 `₹264.52` (+10.0%) | Buy **20 shares**
+
+
+_Open Groww → Buy your top picks_
+
+
+[13-04-2026 09:24] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔮 EBGNG — Buyers are pushing this stock up steadily**
+Quality: **C-Grade** (Weak — low conviction, smallest size)
+📈 **Demand-confirmed setup target: +8.0% from alert price** (current day move: +2.2% | moved +1.2% from our detect price in 1 min)
+
+👥 Buyers vs sellers: `3.0x` more buyers than sellers (strong demand)
+📊 Trading volume: `3.8x` higher than normal (real interest, not fake)
+
+**What to do:**
+⚠️ RISKY — only if you accept higher risk
+Buy **51 shares** at ~`₹418` (costs ≈ ₹21,303)
+🔴 EXIT if price drops to `₹405` (limits your loss to 3%)
+🟢 SELL near `₹451` if momentum continues (fixed demand-watch target: +8.0% from alert price)
+💰 You risk `₹13` per share to gain `₹33` per share (2.7x reward vs risk)
+
+_Open Groww → Buy → then use `/buy EBGNG 51 418` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 09:24] Spidey Bot
+**🟢 OPENING SCAN — 09:24 IST** | **1** top picks from 1 confirmed stocks
+_Ranked by conviction score. Focus on top 3-5 picks._
+
+
+**1. ✅ `KRN`** Score **55**/100 | `₹1004.15` (+3.6%) | Vol `0.8x`
+   SL `₹883.48` → T1 `₹1066.48` → T2 `₹1139.68` (+13.5%) | Buy **5 shares**
+
+
+_Open Groww → Buy your top picks_
+
+
+[13-04-2026 09:24] Spidey Bot
+**🟢 OPENING SCAN — 09:24 IST** | **2** top picks from 2 confirmed stocks
+_Ranked by conviction score. Focus on top 3-5 picks._
+
+
+**1. 📝 `OLECTRA`** Score **39**/100 | `₹1226.45` (+3.6%) | Vol `5.9x`
+   SL `₹1177.39` → T1 `₹1287.77` → T2 `₹1349.10` (+10.0%) | Buy **2 shares**
+
+**2. 📝 `ATHERENERG`** Score **32**/100 | `₹886.30` (+2.7%) | Vol `5.2x`
+   SL `₹850.85` → T1 `₹930.62` → T2 `₹974.93` (+10.0%) | Buy **2 shares**
+
+
+_Open Groww → Buy your top picks_
+
+
+[13-04-2026 09:26] Spidey Bot
+**🟢 OPENING SCAN — 09:26 IST** | **1** top picks (1 strong buy) from 1 confirmed stocks
+_Ranked by conviction score. Focus on top 3-5 picks._
+
+
+**1. 🔥 `EMMVEE`** Score **72**/100 | `₹239.57` (+3.4%) | Vol `2.9x`
+   SL `₹229.99` → T1 `₹251.55` → T2 `₹263.53` (+10.0%) | Buy **20 shares**
+
+
+_Open Groww → Buy your top picks_
+
+
+[13-04-2026 09:26] Spidey Bot
+**⚠️ `DEEPINDS` WEAKENING — watch closely**
+Price dropped 2.8% from your entry ₹479.45
+Now `₹466.05` (+2.0% for the day) | Sell pressure `2.4x`
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 09:26] Spidey Bot
+**⚠️ `JINDRILL` WEAKENING — watch closely**
+Price dropped 2.4% from your entry ₹559.45
+Now `₹545.90` (+1.7% for the day) | Sell pressure `3.5x`
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 09:27] Spidey Bot
+**🔴 EXIT `CONFIPET` — FADING from high**
+Dropped `4.4%` from today's high `₹58.98` → now `₹56.36` | Sell pressure `3.2x`
+Entry `₹57.90` → Loss `₹1.54/share` (`-2.7%`)
+Sellers are dominating the order book. This gap-up is fading.
+**Sell now to limit damage or lock remaining profit.**
+
+
+[13-04-2026 09:28] Spidey Bot
+**🟢 OPENING SCAN — 09:28 IST** | **1** top picks from 1 confirmed stocks
+_Ranked by conviction score. Focus on top 3-5 picks._
+
+
+**1. ⭐ `AARTIPHARM`** Score **61**/100 | `₹703.00` (+2.0%) | Vol `1.2x`
+   SL `₹660.72` → T1 `₹722.66` → T2 `₹757.08` (+7.7%) | Buy **1 shares**
+
+
+_Open Groww → Buy your top picks_
+
+
+[13-04-2026 09:28] Spidey Bot
+**🟢 OPENING SCAN — 09:28 IST** | **1** top picks from 1 confirmed stocks
+_Ranked by conviction score. Focus on top 3-5 picks._
+
+
+**1. 📝 `NTPCGREEN`** Score **39**/100 | `₹100.19` (+3.1%) | Vol `1.9x`
+   SL `₹96.18` → T1 `₹105.20` → T2 `₹110.21` (+10.0%) | Buy **24 shares**
+
+
+_Open Groww → Buy your top picks_
+
+
+[13-04-2026 09:31] Spidey Bot
+**🔥 STRONG BUY — `PRECAM`** — Quality ✅ **52/100**
+✅ All checks passed: price ✓ | volume 3.4x above normal ✓ | 27% indicators agree ✓
+📈 **Expected to grow +10.0% today** | Price now: `₹146.91` (+2.55% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `3.4x` above normal | `27%` indicators agree
+
+**What to do:**
+Buy **23 shares** (≈ ₹3,379)
+🔴 EXIT if price drops to `₹141.03` (you lose ₹6/share)
+🟢 SELL at `₹154.26` (safe profit) or `₹161.60` (max profit — ₹15/share gain) | R:R `1:2.5`
+
+**Why this stock:**
+  • 📊 Volume burst +4.1% in last 60s (smart money moving)
+  • 🚀 +2.55% for the day
+oscillators elevated (94) [momentum-confirmed] | Big volume spike — strong interest | hist signal +3.1% | Buy trigger price reached | Multiple indicators agree — buy | Price above buy level ✅
+
+_Open Groww → Buy → then use `/buy PRECAM 23 147` to record_
+
+
+[13-04-2026 09:32] Spidey Bot
+**🟢 BUY — `WAAREERTL`** — Quality ✅ **56/100**
+📈 **Expected to grow +10.0% today** | Price now: `₹937.85` (+2.07% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `0.9x` above normal | `20%` indicators agree
+
+**What to do:**
+Buy **1 shares** (≈ ₹893)
+🔴 EXIT if price drops to `₹857.38` (you lose ₹80/share)
+🟢 SELL at `₹984.74` (safe profit) or `₹1031.64` (max profit — ₹94/share gain) | R:R `1:1.2`
+
+**Why this stock:**
+  • 📊 Volume burst +5.1% in last 60s (smart money moving)
+  • 🚀 +2.07% for the day
+oscillators warming (71) | Big volume spike — strong interest | Gap-up at open — positive sentiment | hist signal +4.2% | Almost at buy trigger | Price above buy level ✅
+
+_Open Groww → Buy → then use `/buy WAAREERTL 1 938` to record_
+
+
+[13-04-2026 09:33] Spidey Bot
+**🟢 BUY — `TIMKEN`** — Quality ✅ **36/100**
+📈 **Expected to grow +12.1% today** | Price now: `₹3559.90` (+2.04% so far) | **Profit potential: +6.1% to first target | +12.1% to max target**
+📊 Volume: `1.1x` above normal | `37%` indicators agree
+
+**What to do:**
+Buy **1 shares** (≈ ₹3,445)
+🔴 EXIT if price drops to `₹3246.87` (you lose ₹313/share)
+🟢 SELL at `₹3777.32` (safe profit) or `₹3989.50` (max profit — ₹430/share gain) | R:R `1:1.4`
+
+**Why this stock:**
+  • 🚀 +2.04% for the day
+Big volume spike — strong interest | Gap-up at open — positive sentiment | Stock moving up | Close to buy trigger | Multiple indicators agree — buy | Strong breakout move | Price just below buy level
+
+_Open Groww → Buy → then use `/buy TIMKEN 1 3560` to record_
+
+
+[13-04-2026 09:33] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔮 PITTIENG — Buyers are pushing this stock up steadily**
+Quality: **B-Grade** (Good — moderate conviction, reduced size)
+📈 **Demand-confirmed setup target: +8.0% from alert price** (current day move: +1.5% | moved +1.0% from our detect price in 4 min)
+
+👥 Buyers vs sellers: `3.6x` more buyers than sellers (strong demand)
+📊 Trading volume: `3.3x` higher than normal (real interest, not fake)
+
+**What to do:**
+✅ BUY NOW
+Buy **41 shares** at ~`₹851` (costs ≈ ₹34,891)
+🔴 EXIT if price drops to `₹825` (limits your loss to 3%)
+🟢 SELL near `₹919` if momentum continues (fixed demand-watch target: +8.0% from alert price)
+💰 You risk `₹26` per share to gain `₹68` per share (2.7x reward vs risk)
+
+_Open Groww → Buy → then use `/buy PITTIENG 41 851` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 09:33] Spidey Bot
+**🟢 BUY — `YASHHV`** — Quality ✅ **68/100**
+📈 **Expected to grow +10.0% today** | Price now: `₹526.00` (+2.38% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `0.6x` above normal | `18%` indicators agree
+
+**What to do:**
+Buy **8 shares** (≈ ₹4,208)
+🔴 EXIT if price drops to `₹504.96` (you lose ₹21/share)
+🟢 SELL at `₹552.30` (safe profit) or `₹578.60` (max profit — ₹53/share gain) | R:R `1:2.5`
+
+**Why this stock:**
+  • 🚀 +2.38% for the day
+Big volume spike — strong interest | Gap-up at open — positive sentiment | hist signal +6.0% | Buy trigger price reached | Price above buy level ✅
+
+_Open Groww → Buy → then use `/buy YASHHV 8 526` to record_
+
+
+[13-04-2026 09:34] Spidey Bot
+**🟢 BUY — `HERANBA`** — Quality ✅ **58/100**
+📈 **Expected to grow +10.0% today** | Price now: `₹199.00` (+4.19% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `0.9x` above normal | `18%` indicators agree
+
+**What to do:**
+Buy **5 shares** (≈ ₹944)
+🔴 EXIT if price drops to `₹181.20` (you lose ₹18/share)
+🟢 SELL at `₹208.95` (safe profit) or `₹218.90` (max profit — ₹20/share gain) | R:R `1:1.1`
+
+**Why this stock:**
+  • 🚀 +4.19% for the day
+Big volume spike — strong interest | Strong gap-up at open — overnight demand | hist signal +5.1% | Almost at buy trigger
+
+_Open Groww → Buy → then use `/buy HERANBA 5 199` to record_
+
+
+[13-04-2026 09:34] Spidey Bot
+**🚀 `EIEL` STILL RUNNING — hold and trail your stop!**
+📈 Now `+14.0%` (was `+10.7%` when you entered) | From entry: `+3.0%`
+Price `₹197.45` | Vol `12.8x`
+
+**What to do now:**
+✅ DON'T sell yet — momentum is still strong
+🔴 Move your stop-loss UP to `₹189.55` (locks in most of your profit)
+_If price drops to ₹189.55, sell immediately to keep your gains._
+
+
+[13-04-2026 09:34] Spidey Bot
+**🔥 STRONG BUY — `DEEDEV`** — Quality ✅ **59/100**
+✅ All checks passed: price ✓ | volume 5.8x above normal ✓ | 42% indicators agree ✓
+📈 **Expected to grow +10.0% today** | Price now: `₹356.00` (+3.64% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `5.8x` above normal | `42%` indicators agree
+
+**What to do:**
+Buy **10 shares** (≈ ₹3,560)
+🔴 EXIT if price drops to `₹341.76` (you lose ₹14/share)
+🟢 SELL at `₹373.80` (safe profit) or `₹391.60` (max profit — ₹36/share gain) | R:R `1:2.5`
+
+**Why this stock:**
+  • 🚀 +3.64% for the day
+oscillators elevated (93) [momentum-confirmed] | Big volume spike — strong interest | hist signal +3.6% | Uptrend intact | Close to buy trigger | Multiple indicators agree — buy
+
+_Open Groww → Buy → then use `/buy DEEDEV 10 356` to record_
+
+
+[13-04-2026 09:36] Spidey Bot
+**🔥 STRONG BUY — `TATACHEM`** — Quality ✅ **47/100**
+✅ All checks passed: price ✓ | volume 8.9x above normal ✓ | 27% indicators agree ✓
+📈 **Expected to grow +10.0% today** | Price now: `₹729.65` (+5.76% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `8.9x` above normal | `27%` indicators agree
+
+**What to do:**
+Buy **3 shares** (≈ ₹2,189)
+🔴 EXIT if price drops to `₹700.46` (you lose ₹29/share)
+🟢 SELL at `₹766.13` (safe profit) or `₹802.62` (max profit — ₹73/share gain) | R:R `1:2.5`
+
+**Why this stock:**
+  • 🚀 +5.76% for the day
+oscillators elevated (85) [momentum-confirmed] | Big volume spike — strong interest | hist signal +5.8% | Buy trigger price reached | Multiple indicators agree — buy
+
+_Open Groww → Buy → then use `/buy TATACHEM 3 730` to record_
+
+
+[13-04-2026 09:36] Spidey Bot
+**🟢 BUY — `TATVA`** — Quality ✅ **61/100**
+📈 **Expected to grow +7.8% today** | Price now: `₹1226.90` (+2.05% so far) | **Profit potential: +2.9% to first target | +7.8% to max target**
+📊 Volume: `0.9x` above normal | `18%` indicators agree
+
+**What to do:**
+Buy **3 shares** (≈ ₹3,607)
+🔴 EXIT if price drops to `₹1154.21` (you lose ₹73/share)
+🟢 SELL at `₹1262.41` (safe profit) or `₹1322.53` (max profit — ₹96/share gain) | R:R `1:1.3`
+
+**Why this stock:**
+  • 🚀 +2.05% for the day
+Big volume spike — strong interest | Gap-up at open — positive sentiment | hist signal +5.0% | Almost at buy trigger | Price above buy level ✅
+
+_Open Groww → Buy → then use `/buy TATVA 3 1227` to record_
+
+
+[13-04-2026 09:36] Spidey Bot
+**🔥 STRONG BUY — `VIDYAWIRES`** — Quality ✅ **59/100**
+✅ All checks passed: price ✓ | volume 6.5x above normal ✓ | 30% indicators agree ✓
+📈 **Expected to grow +10.0% today** | Price now: `₹65.11` (+3.40% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `6.5x` above normal | `30%` indicators agree
+
+**What to do:**
+Buy **59 shares** (≈ ₹3,841)
+🔴 EXIT if price drops to `₹62.51` (you lose ₹3/share)
+🟢 SELL at `₹68.37` (safe profit) or `₹71.62` (max profit — ₹7/share gain) | R:R `1:2.5`
+
+**Why this stock:**
+  • 🚀 +3.40% for the day
+oscillators elevated (94) [momentum-confirmed] | Big volume spike — strong interest | hist signal +3.4% | Uptrend intact | Close to buy trigger | Multiple indicators agree — buy
+
+_Open Groww → Buy → then use `/buy VIDYAWIRES 59 65` to record_
+
+
+[13-04-2026 09:36] Spidey Bot
+**🔴 EXIT `DEEPINDS` — FADING from high**
+Dropped `4.1%` from today's high `₹484.95` → now `₹465.00` | Sell pressure `2.2x`
+Entry `₹479.45` → Loss `₹14.45/share` (`-3.0%`)
+Sellers are dominating the order book. This gap-up is fading.
+**Sell now to limit damage or lock remaining profit.**
+
+
+[13-04-2026 09:36] Spidey Bot
+**⚠️ `KRN` WEAKENING — watch closely**
+Price dropped 2.0% from your entry ₹1004.15
+Now `₹983.70` (+1.5% for the day) | Sell pressure `2.5x`
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 09:37] Spidey Bot
+**🚨 STOP HIT — EXIT `CONFIPET` NOW**
+Price `₹55.37` hit your stop loss `₹55.58`
+Entry was `₹57.90` → Loss `₹2.53/share` (`-4.4%`)
+**Sell immediately. Do not hope for recovery.**
+
+
+[13-04-2026 09:37] Spidey Bot
+**⚠️ `JINDRILL` WEAKENING — watch closely**
+Price dropped 2.5% from your entry ₹559.45
+Now `₹545.30` (+1.6% for the day) | Sell pressure `3.2x`
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 09:38] Spidey Bot
+**⚠️ `AARTIPHARM` WEAKENING — watch closely**
+Price dropped 2.1% from your entry ₹703.00
+Now `₹688.00` (-0.2% for the day)
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 09:41] Spidey Bot
+**🟢 BUY — `EVERESTIND`** — Quality ✅ **53/100**
+⏰ **SWING ONLY** — already +8.5% today. Do NOT enter for intraday — swing trade only (hold 2-5 days).
+📈 **Expected to grow +10.0% today** | Price now: `₹363.30` (+8.46% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `1.4x` above normal | `10%` indicators agree
+
+**What to do:**
+Buy **2 shares** (≈ ₹678)
+🔴 EXIT if price drops to `₹325.49` (you lose ₹38/share)
+🟢 SELL at `₹381.47` (safe profit) or `₹399.63` (max profit — ₹36/share gain) | R:R `1:1.0`
+
+**Why this stock:**
+  • 🚀 +8.46% for the day
+Big volume spike — strong interest | Strong gap-up at open — overnight demand | hist signal +8.5% | Almost at buy trigger
+
+_Open Groww → Buy → then use `/buy EVERESTIND 2 363` to record_
+
+
+[13-04-2026 09:41] Spidey Bot
+**🟢 BUY — `YASHO`** — Quality ✅ **53/100**
+📈 **Expected to grow +6.7% today** | Price now: `₹1514.00` (+3.06% so far) | **Profit potential: +1.9% to first target | +6.7% to max target**
+📊 Volume: `0.9x` above normal | `18%` indicators agree
+
+**What to do:**
+Buy **2 shares** (≈ ₹2,938)
+🔴 EXIT if price drops to `₹1410.24` (you lose ₹104/share)
+🟢 SELL at `₹1542.45` (safe profit) or `₹1615.90` (max profit — ₹102/share gain) | R:R `1:1.0`
+
+**Why this stock:**
+  • 🚀 +3.06% for the day
+Big volume spike — strong interest | Gap-up at open — positive sentiment | hist signal +3.1% | Almost at buy trigger
+
+_Open Groww → Buy → then use `/buy YASHO 2 1514` to record_
+
+
+[13-04-2026 09:42] Spidey Bot
+**🟢 BUY — `MPSLTD`** — Quality ✅ **53/100**
+📈 **Expected to grow +8.1% today** | Price now: `₹1767.00` (+2.17% so far) | **Profit potential: +3.2% to first target | +8.1% to max target**
+📊 Volume: `0.5x` above normal | `29%` indicators agree
+
+**What to do:**
+Buy **1 shares** (≈ ₹1,736)
+🔴 EXIT if price drops to `₹1666.75` (you lose ₹100/share)
+🟢 SELL at `₹1823.01` (safe profit) or `₹1909.82` (max profit — ₹143/share gain) | R:R `1:1.4`
+
+**Why this stock:**
+  • 🚀 +2.17% for the day
+oscillators warming (68) | Big volume spike — strong interest | hist signal +3.5% | Almost at buy trigger | Multiple indicators agree — buy | Price above buy level ✅
+
+_Open Groww → Buy → then use `/buy MPSLTD 1 1767` to record_
+
+
+[13-04-2026 09:43] Spidey Bot
+**🟢 BUY — `TATAINVEST`** — Quality ✅ **44/100**
+📈 **Expected to grow +10.0% today** | Price now: `₹689.85` (+3.64% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `8.5x` above normal | `27%` indicators agree
+
+**What to do:**
+Buy **3 shares** (≈ ₹2,070)
+🔴 EXIT if price drops to `₹662.26` (you lose ₹28/share)
+🟢 SELL at `₹724.34` (safe profit) or `₹758.84` (max profit — ₹69/share gain) | R:R `1:2.5`
+
+**Why this stock:**
+  • 🚀 +3.64% for the day
+oscillators elevated (83) [momentum-confirmed] | Big volume spike — strong interest | hist signal +3.6% | Buy trigger price reached | Multiple indicators agree — buy
+
+_Open Groww → Buy → then use `/buy TATAINVEST 3 690` to record_
+
+
+[13-04-2026 09:43] Spidey Bot
+**🔥 STRONG BUY — `INA`** — Quality ✅ **57/100**
+✅ All checks passed: price ✓ | volume 2.6x above normal ✓ | 27% indicators agree ✓
+📈 **Expected to grow +10.0% today** | Price now: `₹123.98` (+4.15% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `2.6x` above normal | `27%` indicators agree
+
+**What to do:**
+Buy **30 shares** (≈ ₹3,719)
+🔴 EXIT if price drops to `₹119.02` (you lose ₹5/share)
+🟢 SELL at `₹130.18` (safe profit) or `₹136.38` (max profit — ₹12/share gain) | R:R `1:2.5`
+
+**Why this stock:**
+  • 🚀 +4.15% for the day
+Big volume spike — strong interest | Gap-up at open — positive sentiment | hist signal +4.2% | Buy trigger price reached | Multiple indicators agree — buy
+
+_Open Groww → Buy → then use `/buy INA 30 124` to record_
+
+
+[13-04-2026 09:44] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔮 SEJALLTD — Buyers are pushing this stock up steadily**
+Quality: **C-Grade** (Weak — low conviction, smallest size)
+📈 **Demand-confirmed setup target: +8.0% from alert price** (current day move: +5.0% | moved +3.4% from our detect price in 18 min)
+
+👥 Buyers vs sellers: `641.3x` more buyers than sellers (strong demand)
+📊 Trading volume: `4.0x` higher than normal (real interest, not fake)
+
+**What to do:**
+⚠️ RISKY — only if you accept higher risk
+Buy **33 shares** at ~`₹649` (costs ≈ ₹21,407)
+🔴 EXIT if price drops to `₹629` (limits your loss to 3%)
+🟢 SELL near `₹701` if momentum continues (fixed demand-watch target: +8.0% from alert price)
+💰 You risk `₹19` per share to gain `₹52` per share (2.7x reward vs risk)
+
+_Open Groww → Buy → then use `/buy SEJALLTD 33 649` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 09:45] Spidey Bot
+**🟢 BUY — `SMARTWORKS`** — Quality ✅ **61/100**
+📈 **Expected to grow +7.8% today** | Price now: `₹413.35` (+2.02% so far) | **Profit potential: +2.9% to first target | +7.8% to max target**
+📊 Volume: `0.6x` above normal | `21%` indicators agree
+
+**What to do:**
+Buy **2 shares** (≈ ₹810)
+🔴 EXIT if price drops to `₹388.99` (you lose ₹24/share)
+🟢 SELL at `₹425.46` (safe profit) or `₹445.72` (max profit — ₹32/share gain) | R:R `1:1.3`
+
+**Why this stock:**
+  • 🚀 +2.02% for the day
+Big volume spike — strong interest | Gap-up at open — positive sentiment | hist signal +5.8% | Almost at buy trigger | Price above buy level ✅
+
+_Open Groww → Buy → then use `/buy SMARTWORKS 2 413` to record_
+
+
+[13-04-2026 09:47] Spidey Bot
+**🚀 `PRECAM` STILL RUNNING — hold and trail your stop!**
+📈 Now `+6.2%` (was `+2.6%` when you entered) | From entry: `+3.5%`
+Price `₹152.09` | Vol `4.4x`
+
+**What to do now:**
+✅ DON'T sell yet — momentum is still strong
+🔴 Move your stop-loss UP to `₹146.01` (locks in most of your profit)
+_If price drops to ₹146.01, sell immediately to keep your gains._
+
+
+[13-04-2026 09:47] Spidey Bot
+**🔴 EXIT `DEEPINDS` — FADING from high**
+Dropped `4.1%` from today's high `₹484.95` → now `₹464.85` | Sell pressure `2.1x`
+Entry `₹479.45` → Loss `₹14.60/share` (`-3.0%`)
+Sellers are dominating the order book. This gap-up is fading.
+**Sell now to limit damage or lock remaining profit.**
+
+
+[13-04-2026 09:48] Spidey Bot
+**🚨 STOP HIT — EXIT `CONFIPET` NOW**
+Price `₹54.70` hit your stop loss `₹55.58`
+Entry was `₹57.90` → Loss `₹3.20/share` (`-5.5%`)
+**Sell immediately. Do not hope for recovery.**
+
+
+[13-04-2026 09:50] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔮 DYNPRO — Buyers are pushing this stock up steadily**
+Quality: **B-Grade** (Good — moderate conviction, reduced size)
+📈 **Demand-confirmed setup target: +8.0% from alert price** (current day move: +2.9% | moved +1.3% from our detect price in 7 min)
+
+👥 Buyers vs sellers: `3.4x` more buyers than sellers (strong demand)
+📊 Trading volume: `3.1x` higher than normal (real interest, not fake)
+
+**What to do:**
+✅ BUY NOW
+Buy **156 shares** at ~`₹228` (costs ≈ ₹35,537)
+🔴 EXIT if price drops to `₹221` (limits your loss to 3%)
+🟢 SELL near `₹246` if momentum continues (fixed demand-watch target: +8.0% from alert price)
+💰 You risk `₹7` per share to gain `₹18` per share (2.7x reward vs risk)
+
+_Open Groww → Buy → then use `/buy DYNPRO 156 228` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 09:51] Spidey Bot
+**🚀 `TATACHEM` STILL RUNNING — hold and trail your stop!**
+📈 Now `+11.5%` (was `+5.8%` when you entered) | From entry: `+5.4%`
+Price `₹769.40` | Vol `13.3x`
+
+**What to do now:**
+✅ DON'T sell yet — momentum is still strong
+🔴 Move your stop-loss UP to `₹738.62` (locks in most of your profit)
+_If price drops to ₹738.62, sell immediately to keep your gains._
+
+
+[13-04-2026 09:51] Spidey Bot
+**⚠️ `EVERESTIND` WEAKENING — watch closely**
+Price dropped 2.0% from your entry ₹363.30
+Now `₹356.00` (+6.3% for the day)
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 09:54] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔮 WAAREEINDO — Buyers are pushing this stock up steadily**
+Quality: **B-Grade** (Good — moderate conviction, reduced size)
+📈 **Demand-confirmed setup target: +8.0% from alert price** (current day move: +2.2% | moved +1.1% from our detect price in 5 min)
+
+👥 Buyers vs sellers: `3.1x` more buyers than sellers (strong demand)
+📊 Trading volume: `2.6x` higher than normal (real interest, not fake)
+
+**What to do:**
+✅ BUY NOW
+Buy **82 shares** at ~`₹433` (costs ≈ ₹35,531)
+🔴 EXIT if price drops to `₹420` (limits your loss to 3%)
+🟢 SELL near `₹468` if momentum continues (fixed demand-watch target: +8.0% from alert price)
+💰 You risk `₹13` per share to gain `₹35` per share (2.7x reward vs risk)
+
+_Open Groww → Buy → then use `/buy WAAREEINDO 82 433` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 09:57] Spidey Bot
+**⚠️ `DEEPINDS` WEAKENING — watch closely**
+Price dropped 2.8% from your entry ₹479.45
+Now `₹466.00` (+1.9% for the day) | Sell pressure `2.0x`
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 09:58] Spidey Bot
+**🚀 `TATAINVEST` STILL RUNNING — hold and trail your stop!**
+📈 Now `+6.9%` (was `+3.6%` when you entered) | From entry: `+3.1%`
+Price `₹711.55` | Vol `7.8x`
+
+**What to do now:**
+✅ DON'T sell yet — momentum is still strong
+🔴 Move your stop-loss UP to `₹683.09` (locks in most of your profit)
+_If price drops to ₹683.09, sell immediately to keep your gains._
+
+
+[13-04-2026 09:58] Spidey Bot
+**🚨 STOP HIT — EXIT `CONFIPET` NOW**
+Price `₹54.98` hit your stop loss `₹55.58`
+Entry was `₹57.90` → Loss `₹2.92/share` (`-5.0%`)
+**Sell immediately. Do not hope for recovery.**
+
+
+[13-04-2026 09:59] Spidey Bot
+**🚀 `DEEDEV` STILL RUNNING — hold and trail your stop!**
+📈 Now `+6.8%` (was `+3.6%` when you entered) | From entry: `+3.1%`
+Price `₹367.00` | Vol `8.3x`
+
+**What to do now:**
+✅ DON'T sell yet — momentum is still strong
+🔴 Move your stop-loss UP to `₹352.32` (locks in most of your profit)
+_If price drops to ₹352.32, sell immediately to keep your gains._
+
+
+[13-04-2026 10:00] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔮 BIRLACABLE — Buyers are pushing this stock up steadily**
+Quality: **C-Grade** (Weak — low conviction, smallest size)
+📈 **Demand-confirmed setup target: +8.0% from alert price** (current day move: +3.3% | moved +1.9% from our detect price in 5 min)
+
+👥 Buyers vs sellers: `2.8x` more buyers than sellers (strong demand)
+📊 Trading volume: `4.9x` higher than normal (real interest, not fake)
+
+**What to do:**
+⚠️ RISKY — only if you accept higher risk
+Buy **159 shares** at ~`₹135` (costs ≈ ₹21,465)
+🔴 EXIT if price drops to `₹131` (limits your loss to 3%)
+🟢 SELL near `₹146` if momentum continues (fixed demand-watch target: +8.0% from alert price)
+💰 You risk `₹4` per share to gain `₹11` per share (2.7x reward vs risk)
+
+_Open Groww → Buy → then use `/buy BIRLACABLE 159 135` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 10:01] Spidey Bot
+**🚀 `VIDYAWIRES` STILL RUNNING — hold and trail your stop!**
+📈 Now `+6.6%` (was `+3.4%` when you entered) | From entry: `+3.1%`
+Price `₹67.13` | Vol `7.2x`
+
+**What to do now:**
+✅ DON'T sell yet — momentum is still strong
+🔴 Move your stop-loss UP to `₹64.44` (locks in most of your profit)
+_If price drops to ₹64.44, sell immediately to keep your gains._
+
+
+[13-04-2026 10:05] Spidey Bot
+**⚠️ `EVERESTIND` WEAKENING — watch closely**
+Price dropped 2.3% from your entry ₹363.30
+Now `₹354.80` (+5.9% for the day)
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 10:06] Spidey Bot
+**⚠️ `YASHO` WEAKENING — watch closely**
+Price dropped 2.3% from your entry ₹1514.00
+Now `₹1478.70` (+0.7% for the day)
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 10:07] Spidey Bot
+**🔴 EXIT `DEEPINDS` — FADING from high**
+Dropped `4.1%` from today's high `₹484.95` → now `₹465.00` | Sell pressure `2.2x`
+Entry `₹479.45` → Loss `₹14.45/share` (`-3.0%`)
+Sellers are dominating the order book. This gap-up is fading.
+**Sell now to limit damage or lock remaining profit.**
+
+
+[13-04-2026 10:08] Spidey Bot
+**🚀 `INA` STILL RUNNING — hold and trail your stop!**
+📈 Now `+7.5%` (was `+4.1%` when you entered) | From entry: `+3.2%`
+Price `₹128.00` | Vol `3.6x`
+
+**What to do now:**
+✅ DON'T sell yet — momentum is still strong
+🔴 Move your stop-loss UP to `₹122.88` (locks in most of your profit)
+_If price drops to ₹122.88, sell immediately to keep your gains._
+
+
+[13-04-2026 10:08] Spidey Bot
+**🚨 STOP HIT — EXIT `CONFIPET` NOW**
+Price `₹54.45` hit your stop loss `₹55.58`
+Entry was `₹57.90` → Loss `₹3.45/share` (`-6.0%`)
+**Sell immediately. Do not hope for recovery.**
+
+
+[13-04-2026 10:16] Spidey Bot
+**⚠️ `GALLANTT` WEAKENING — watch closely**
+Price dropped 2.2% from your entry ₹684.90
+Now `₹669.50` (+1.7% for the day) | Sell pressure `2.6x`
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 10:16] Spidey Bot
+**⚠️ `EVERESTIND` WEAKENING — watch closely**
+Price dropped 2.5% from your entry ₹363.30
+Now `₹354.05` (+5.7% for the day)
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 10:17] Spidey Bot
+**⚠️ `YASHO` WEAKENING — watch closely**
+Price dropped 2.6% from your entry ₹1514.00
+Now `₹1475.00` (+0.4% for the day)
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 10:17] Spidey Bot
+**🔴 EXIT `TATAINVEST` — FADING from high**
+Dropped `4.3%` from today's high `₹722.40` → now `₹691.45` | Sell pressure `2.4x`
+Entry `₹689.85` → Gain `₹1.60/share` (`+0.2%`)
+Sellers are dominating the order book. This gap-up is fading.
+**Sell now to limit damage or lock remaining profit.**
+
+
+[13-04-2026 10:17] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔮 UNICHEMLAB — Buyers are pushing this stock up steadily**
+Quality: **B-Grade** (Good — moderate conviction, reduced size)
+📈 **Demand-confirmed setup target: +8.0% from alert price** (current day move: +2.6% | moved +0.9% from our detect price in 5 min)
+
+👥 Buyers vs sellers: `3.0x` more buyers than sellers (strong demand)
+📊 Trading volume: `6.3x` higher than normal (real interest, not fake)
+
+**What to do:**
+✅ BUY NOW
+Buy **103 shares** at ~`₹344` (costs ≈ ₹35,478)
+🔴 EXIT if price drops to `₹334` (limits your loss to 3%)
+🟢 SELL near `₹372` if momentum continues (fixed demand-watch target: +8.0% from alert price)
+💰 You risk `₹10` per share to gain `₹28` per share (2.7x reward vs risk)
+
+_Open Groww → Buy → then use `/buy UNICHEMLAB 103 344` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 10:18] Spidey Bot
+**🔴 EXIT `DEEPINDS` — FADING from high**
+Dropped `4.6%` from today's high `₹484.95` → now `₹462.50` | Sell pressure `2.4x`
+Entry `₹479.45` → Loss `₹16.95/share` (`-3.5%`)
+Sellers are dominating the order book. This gap-up is fading.
+**Sell now to limit damage or lock remaining profit.**
+
+
+[13-04-2026 10:18] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔮 SRHHYPOLTD — Buyers are pushing this stock up steadily**
+Quality: **B-Grade** (Good — moderate conviction, reduced size)
+📈 **Demand-confirmed setup target: +8.0% from alert price** (current day move: +2.7% | moved +1.3% from our detect price in 2 min)
+
+👥 Buyers vs sellers: `4.1x` more buyers than sellers (strong demand)
+📊 Trading volume: `7.8x` higher than normal (real interest, not fake)
+
+**What to do:**
+✅ BUY NOW
+Buy **76 shares** at ~`₹464` (costs ≈ ₹35,264)
+🔴 EXIT if price drops to `₹450` (limits your loss to 3%)
+🟢 SELL near `₹501` if momentum continues (fixed demand-watch target: +8.0% from alert price)
+💰 You risk `₹14` per share to gain `₹37` per share (2.7x reward vs risk)
+
+_Open Groww → Buy → then use `/buy SRHHYPOLTD 76 464` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 10:19] Spidey Bot
+**🚨 STOP HIT — EXIT `CONFIPET` NOW**
+Price `₹54.40` hit your stop loss `₹55.58`
+Entry was `₹57.90` → Loss `₹3.50/share` (`-6.0%`)
+**Sell immediately. Do not hope for recovery.**
+
+
+[13-04-2026 10:21] Spidey Bot
+**🚀 `WAAREERTL` STILL RUNNING — hold and trail your stop!**
+📈 Now `+5.9%` (was `+2.1%` when you entered) | From entry: `+3.7%`
+Price `₹973.00`
+
+**What to do now:**
+✅ DON'T sell yet — momentum is still strong
+🔴 Move your stop-loss UP to `₹934.08` (locks in most of your profit)
+_If price drops to ₹934.08, sell immediately to keep your gains._
+
+
+[13-04-2026 10:23] Spidey Bot
+**🚀 `NTPCGREEN` STILL RUNNING — hold and trail your stop!**
+📈 Now `+6.1%` (was `+3.1%` when you entered) | From entry: `+2.9%`
+Price `₹103.14` | Vol `6.4x`
+
+**What to do now:**
+✅ DON'T sell yet — momentum is still strong
+🔴 Move your stop-loss UP to `₹99.01` (locks in most of your profit)
+_If price drops to ₹99.01, sell immediately to keep your gains._
+
+
+[13-04-2026 10:26] Spidey Bot
+**⚠️ `EVERESTIND` WEAKENING — watch closely**
+Price dropped 3.3% from your entry ₹363.30
+Now `₹351.15` (+4.8% for the day)
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 10:27] Spidey Bot
+**⚠️ `YASHO` WEAKENING — watch closely**
+Price dropped 2.3% from your entry ₹1514.00
+Now `₹1478.80` (+0.7% for the day)
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 10:28] Spidey Bot
+**⚠️ `DEEPINDS` WEAKENING — watch closely**
+Price dropped 2.9% from your entry ₹479.45
+Now `₹465.65` (+1.9% for the day) | Sell pressure `2.3x`
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 10:29] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔮 LOKESHMACH — Buyers are pushing this stock up steadily**
+Quality: **B-Grade** (Good — moderate conviction, reduced size)
+📈 **Demand-confirmed setup target: +8.0% from alert price** (current day move: +3.1% | moved +1.7% from our detect price in 11 min)
+
+👥 Buyers vs sellers: `3.6x` more buyers than sellers (strong demand)
+📊 Trading volume: `5.3x` higher than normal (real interest, not fake)
+
+**What to do:**
+✅ BUY NOW
+Buy **148 shares** at ~`₹241` (costs ≈ ₹35,665)
+🔴 EXIT if price drops to `₹234` (limits your loss to 3%)
+🟢 SELL near `₹260` if momentum continues (fixed demand-watch target: +8.0% from alert price)
+💰 You risk `₹7` per share to gain `₹19` per share (2.7x reward vs risk)
+
+_Open Groww → Buy → then use `/buy LOKESHMACH 148 241` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 10:29] Spidey Bot
+**🚨 STOP HIT — EXIT `CONFIPET` NOW**
+Price `₹54.94` hit your stop loss `₹55.58`
+Entry was `₹57.90` → Loss `₹2.96/share` (`-5.1%`)
+**Sell immediately. Do not hope for recovery.**
+
+
+[13-04-2026 10:29] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔮 ALICON — Buyers are pushing this stock up steadily**
+Quality: **A-Grade** (Strong — highest conviction, full size)
+📈 **Demand-confirmed setup target: +8.0% from alert price** (current day move: +2.4% | moved +1.2% from our detect price in 2 min)
+
+👥 Buyers vs sellers: `5.0x` more buyers than sellers (strong demand)
+📊 Trading volume: `6.5x` higher than normal (real interest, not fake)
+
+**What to do:**
+✅ BUY NOW
+Buy **90 shares** at ~`₹662` (costs ≈ ₹59,580)
+🔴 EXIT if price drops to `₹642` (limits your loss to 3%)
+🟢 SELL near `₹715` if momentum continues (fixed demand-watch target: +8.0% from alert price)
+💰 You risk `₹20` per share to gain `₹53` per share (2.7x reward vs risk)
+
+_Open Groww → Buy → then use `/buy ALICON 90 662` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 10:32] Spidey Bot
+**🔴 EXIT `TATACHEM` — FADING from high**
+Dropped `4.7%` from today's high `₹773.70` → now `₹737.15` | Sell pressure `1.5x`
+Entry `₹729.65` → Gain `₹7.50/share` (`+1.0%`)
+Sellers are dominating the order book. This gap-up is fading.
+**Sell now to limit damage or lock remaining profit.**
+
+
+[13-04-2026 10:36] Spidey Bot
+**⚠️ `EVERESTIND` WEAKENING — watch closely**
+Price dropped 2.6% from your entry ₹363.30
+Now `₹354.00` (+5.7% for the day)
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 10:37] Spidey Bot
+**⚠️ `YASHO` WEAKENING — watch closely**
+Price dropped 2.2% from your entry ₹1514.00
+Now `₹1481.00` (+0.8% for the day)
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 10:38] Spidey Bot
+**🔴 EXIT `DEEPINDS` — FADING from high**
+Dropped `4.0%` from today's high `₹484.95` → now `₹465.55` | Sell pressure `2.1x`
+Entry `₹479.45` → Loss `₹13.90/share` (`-2.9%`)
+Sellers are dominating the order book. This gap-up is fading.
+**Sell now to limit damage or lock remaining profit.**
+
+
+[13-04-2026 10:39] Spidey Bot
+**🟢 BUY — `RELAXO`** — Quality ✅ **45/100**
+📈 **Expected to grow +10.0% today** | Price now: `₹296.00` (+2.03% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `1.3x` above normal | `22%` indicators agree
+
+**What to do:**
+Buy **17 shares** (≈ ₹4,762)
+🔴 EXIT if price drops to `₹271.73` (you lose ₹24/share)
+🟢 SELL at `₹310.80` (safe profit) or `₹325.60` (max profit — ₹30/share gain) | R:R `1:1.2`
+
+**Why this stock:**
+  • 🚀 +2.03% for the day
+oscillators mid (RSI 45 | CCI 8 | MFI 48) | Big volume spike — strong interest | hist signal +3.8% | Almost at buy trigger | Strong breakout move | Price above buy level ✅
+
+_Open Groww → Buy → then use `/buy RELAXO 17 296` to record_
+
+
+[13-04-2026 10:39] Spidey Bot
+**🚨 STOP HIT — EXIT `CONFIPET` NOW**
+Price `₹54.90` hit your stop loss `₹55.58`
+Entry was `₹57.90` → Loss `₹3.00/share` (`-5.2%`)
+**Sell immediately. Do not hope for recovery.**
+
+
+[13-04-2026 10:41] Spidey Bot
+**⚠️ `JINDRILL` WEAKENING — watch closely**
+Price dropped 2.2% from your entry ₹559.45
+Now `₹547.25` (+1.9% for the day) | Sell pressure `2.9x`
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 10:41] Spidey Bot
+**🟢 BUY — `PVP`** — Quality ✅ **57/100**
+📈 **Expected to grow +10.0% today** | Price now: `₹34.75` (+5.27% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `9.6x` above normal | `29%` indicators agree
+
+**What to do:**
+Buy **107 shares** (≈ ₹3,718)
+🔴 EXIT if price drops to `₹33.36` (you lose ₹1/share)
+🟢 SELL at `₹36.49` (safe profit) or `₹38.23` (max profit — ₹3/share gain) | R:R `1:2.5`
+
+**Why this stock:**
+  • 🚀 +5.27% for the day
+oscillators elevated (96) [momentum-confirmed] | Big volume spike — strong interest | Strong gap-up at open — overnight demand | hist signal +8.8% | Buy trigger price reached | Multiple indicators agree — buy
+
+_Open Groww → Buy → then use `/buy PVP 107 35` to record_
+
+
+[13-04-2026 10:42] Spidey Bot
+**🟢 BUY — `DCW`** — Quality ✅ **52/100**
+📈 **Expected to grow +10.0% today** | Price now: `₹46.77` (+5.08% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `2.6x` above normal | `18%` indicators agree
+
+**What to do:**
+Buy **72 shares** (≈ ₹3,367)
+🔴 EXIT if price drops to `₹44.90` (you lose ₹2/share)
+🟢 SELL at `₹49.11` (safe profit) or `₹51.45` (max profit — ₹5/share gain) | R:R `1:2.5`
+
+**Why this stock:**
+  • 🚀 +5.08% for the day
+Big volume spike — strong interest | Gap-up at open — positive sentiment | hist signal +5.1% | Buy trigger price reached
+
+_Open Groww → Buy → then use `/buy DCW 72 47` to record_
+
+
+[13-04-2026 10:42] Spidey Bot
+**🔴 EXIT `TATACHEM` — FADING from high**
+Dropped `4.8%` from today's high `₹773.70` → now `₹736.45` | Sell pressure `1.5x`
+Entry `₹729.65` → Gain `₹6.80/share` (`+0.9%`)
+Sellers are dominating the order book. This gap-up is fading.
+**Sell now to limit damage or lock remaining profit.**
+
+
+[13-04-2026 10:46] Spidey Bot
+**⚠️ `EVERESTIND` WEAKENING — watch closely**
+Price dropped 2.2% from your entry ₹363.30
+Now `₹355.25` (+6.1% for the day)
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 10:47] Spidey Bot
+**⚠️ `YASHO` WEAKENING — watch closely**
+Price dropped 2.1% from your entry ₹1514.00
+Now `₹1482.10` (+0.9% for the day)
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 10:48] Spidey Bot
+**🟢 BUY — `DSSL`** — Quality 🔥 **71/100**
+📈 **Expected to grow +10.0% today** | Price now: `₹1077.00` (+2.07% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `3.6x` above normal | `26%` indicators agree
+
+**What to do:**
+Buy **4 shares** (≈ ₹4,018)
+🔴 EXIT if price drops to `₹964.37` (you lose ₹113/share)
+🟢 SELL at `₹1130.85` (safe profit) or `₹1184.70` (max profit — ₹108/share gain) | R:R `1:1.0`
+
+**Why this stock:**
+  • 🚀 +2.07% for the day
+Big volume spike — strong interest | Strong gap-up at open — overnight demand | hist signal +9.4% | Almost at buy trigger | Multiple indicators agree — buy | Price above buy level ✅
+
+_Open Groww → Buy → then use `/buy DSSL 4 1077` to record_
+
+
+[13-04-2026 10:48] Spidey Bot
+**⚠️ `DEEPINDS` WEAKENING — watch closely**
+Price dropped 2.7% from your entry ₹479.45
+Now `₹466.60` (+2.1% for the day) | Sell pressure `2.0x`
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 10:48] Spidey Bot
+**⚠️ `PVP` WEAKENING — watch closely**
+Price dropped 2.4% from your entry ₹34.75
+Now `₹33.92` (+2.8% for the day) | Sell pressure `3.2x`
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 10:50] Spidey Bot
+**🚨 STOP HIT — EXIT `CONFIPET` NOW**
+Price `₹54.83` hit your stop loss `₹55.58`
+Entry was `₹57.90` → Loss `₹3.07/share` (`-5.3%`)
+**Sell immediately. Do not hope for recovery.**
+
+
+[13-04-2026 10:51] Spidey Bot
+**🚀 `YASHHV` STILL RUNNING — hold and trail your stop!**
+📈 Now `+7.2%` (was `+2.4%` when you entered) | From entry: `+4.7%`
+Price `₹550.95` | Vol `1.6x`
+
+**What to do now:**
+✅ DON'T sell yet — momentum is still strong
+🔴 Move your stop-loss UP to `₹528.91` (locks in most of your profit)
+_If price drops to ₹528.91, sell immediately to keep your gains._
+
+
+[13-04-2026 10:51] Spidey Bot
+**🔥 STRONG BUY — `PNBGILTS`** — Quality ✅ **66/100**
+✅ All checks passed: price ✓ | volume 2.3x above normal ✓ | 31% indicators agree ✓
+📈 **Expected to grow +12.8% today** | Price now: `₹73.20` (+4.07% so far) | **Profit potential: +6.2% to first target | +12.8% to max target**
+📊 Volume: `2.3x` above normal | `31%` indicators agree
+
+**What to do:**
+Buy **71 shares** (≈ ₹4,988)
+🔴 EXIT if price drops to `₹65.79` (you lose ₹7/share)
+🟢 SELL at `₹77.76` (safe profit) or `₹82.55` (max profit — ₹9/share gain) | R:R `1:1.3`
+
+**Why this stock:**
+  • 🚀 +4.07% for the day
+Big volume spike — strong interest | Strong gap-up at open — overnight demand | hist signal +8.4% | Close to buy trigger | Multiple indicators agree — buy | Strong breakout move
+
+_Open Groww → Buy → then use `/buy PNBGILTS 71 73` to record_
+
+
+[13-04-2026 10:51] Spidey Bot
+**🔥 STRONG BUY — `JAYNECOIND`** — Quality ✅ **55/100**
+✅ All checks passed: price ✓ | volume 7.8x above normal ✓ | 31% indicators agree ✓
+📈 **Expected to grow +10.0% today** | Price now: `₹85.80` (+5.03% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `7.8x` above normal | `31%` indicators agree
+
+**What to do:**
+Buy **42 shares** (≈ ₹3,604)
+🔴 EXIT if price drops to `₹82.37` (you lose ₹3/share)
+🟢 SELL at `₹90.09` (safe profit) or `₹94.38` (max profit — ₹9/share gain) | R:R `1:2.5`
+
+**Why this stock:**
+  • 🚀 +5.03% for the day
+oscillators elevated (82) [momentum-confirmed] | Big volume spike — strong interest | Gap-up at open — positive sentiment | hist signal +5.0% | Close to buy trigger | Multiple indicators agree — buy
+
+_Open Groww → Buy → then use `/buy JAYNECOIND 42 86` to record_
+
+
+[13-04-2026 10:53] Spidey Bot
+**🔥 STRONG BUY — `EXICOM`** — Quality ✅ **52/100**
+✅ All checks passed: price ✓ | volume 7.9x above normal ✓ | 29% indicators agree ✓
+📈 **Expected to grow +10.0% today** | Price now: `₹109.50` (+5.23% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `7.9x` above normal | `29%` indicators agree
+
+**What to do:**
+Buy **30 shares** (≈ ₹3,285)
+🔴 EXIT if price drops to `₹105.12` (you lose ₹4/share)
+🟢 SELL at `₹114.98` (safe profit) or `₹120.45` (max profit — ₹11/share gain) | R:R `1:2.5`
+
+**Why this stock:**
+  • 🚀 +5.23% for the day
+oscillators elevated (84) [momentum-confirmed] | Big volume spike — strong interest | Gap-up at open — positive sentiment | hist signal +5.2% | Buy trigger price reached | Multiple indicators agree — buy
+
+_Open Groww → Buy → then use `/buy EXICOM 30 110` to record_
+
+
+[13-04-2026 10:57] Spidey Bot
+**⚠️ `EVERESTIND` WEAKENING — watch closely**
+Price dropped 2.2% from your entry ₹363.30
+Now `₹355.15` (+6.0% for the day)
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 10:59] Spidey Bot
+**⚠️ `DEEPINDS` WEAKENING — watch closely**
+Price dropped 2.8% from your entry ₹479.45
+Now `₹465.95` (+1.9% for the day) | Sell pressure `2.0x`
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 11:00] Spidey Bot
+**📊 MID-DAY SCAN (11 AM) — 13 Apr 2026**
+No consolidation breakout setups found right now.
+_Tick scanner remains active for any new signals_
+
+
+[13-04-2026 11:00] Spidey Bot
+**🚨 STOP HIT — EXIT `CONFIPET` NOW**
+Price `₹54.89` hit your stop loss `₹55.58`
+Entry was `₹57.90` → Loss `₹3.01/share` (`-5.2%`)
+**Sell immediately. Do not hope for recovery.**
+
+
+[13-04-2026 11:01] Spidey Bot
+**🚀 `INA` STILL RUNNING — hold and trail your stop!**
+📈 Now `+10.7%` (was `+7.5%` when you entered) | From entry: `+6.3%`
+Price `₹131.80` | Vol `6.1x`
+
+**What to do now:**
+✅ DON'T sell yet — momentum is still strong
+🔴 Move your stop-loss UP to `₹126.53` (locks in most of your profit)
+_If price drops to ₹126.53, sell immediately to keep your gains._
+
+
+[13-04-2026 11:02] Spidey Bot
+**⚠️ `JINDRILL` WEAKENING — watch closely**
+Price dropped 2.1% from your entry ₹559.45
+Now `₹547.95` (+2.0% for the day) | Sell pressure `2.8x`
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 11:03] Spidey Bot
+**🚀 `ATHERENERG` STILL RUNNING — hold and trail your stop!**
+📈 Now `+5.8%` (was `+2.7%` when you entered) | From entry: `+3.0%`
+Price `₹912.80` | Vol `11.9x`
+
+**What to do now:**
+✅ DON'T sell yet — momentum is still strong
+🔴 Move your stop-loss UP to `₹876.29` (locks in most of your profit)
+_If price drops to ₹876.29, sell immediately to keep your gains._
+
+
+[13-04-2026 11:09] Spidey Bot
+**⚠️ `DEEPINDS` WEAKENING — watch closely**
+Price dropped 2.8% from your entry ₹479.45
+Now `₹466.25` (+2.0% for the day) | Sell pressure `1.9x`
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 11:10] Spidey Bot
+**🚨 STOP HIT — EXIT `CONFIPET` NOW**
+Price `₹55.06` hit your stop loss `₹55.58`
+Entry was `₹57.90` → Loss `₹2.84/share` (`-4.9%`)
+**Sell immediately. Do not hope for recovery.**
+
+
+[13-04-2026 11:12] Spidey Bot
+**⚠️ `JINDRILL` WEAKENING — watch closely**
+Price dropped 2.1% from your entry ₹559.45
+Now `₹547.50` (+2.0% for the day) | Sell pressure `3.0x`
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 11:13] Spidey Bot
+**🟢 BUY — `SIGACHI`** — Quality ✅ **52/100**
+📈 **Expected to grow +10.0% today** | Price now: `₹23.06` (+5.01% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `7.6x` above normal | `27%` indicators agree
+
+**What to do:**
+Buy **146 shares** (≈ ₹3,367)
+🔴 EXIT if price drops to `₹22.14` (you lose ₹1/share)
+🟢 SELL at `₹24.21` (safe profit) or `₹25.37` (max profit — ₹2/share gain) | R:R `1:2.5`
+
+**Why this stock:**
+  • 🚀 +5.01% for the day
+oscillators elevated (81) [momentum-confirmed] | Big volume spike — strong interest | Gap-up at open — positive sentiment | hist signal +5.0% | Buy trigger price reached | Multiple indicators agree — buy
+
+_Open Groww → Buy → then use `/buy SIGACHI 146 23` to record_
+
+
+[13-04-2026 11:14] Spidey Bot
+**🚀 `KRN` STILL RUNNING — hold and trail your stop!**
+📈 Now `+6.7%` (was `+3.6%` when you entered) | From entry: `+3.0%`
+Price `₹1034.00`
+
+**What to do now:**
+✅ DON'T sell yet — momentum is still strong
+🔴 Move your stop-loss UP to `₹992.64` (locks in most of your profit)
+_If price drops to ₹992.64, sell immediately to keep your gains._
+
+
+[13-04-2026 11:19] Spidey Bot
+**⚠️ `DEEPINDS` WEAKENING — watch closely**
+Price dropped 2.9% from your entry ₹479.45
+Now `₹465.75` (+1.9% for the day) | Sell pressure `2.0x`
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 11:19] Spidey Bot
+**🔥 STRONG BUY — `HFCL`** — Quality ✅ **67/100**
+✅ All checks passed: price ✓ | volume 11.2x above normal ✓ | 42% indicators agree ✓
+📈 **Expected to grow +10.0% today** | Price now: `₹88.73` (+5.13% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `11.2x` above normal | `42%` indicators agree
+
+**What to do:**
+Buy **52 shares** (≈ ₹4,614)
+🔴 EXIT if price drops to `₹85.18` (you lose ₹4/share)
+🟢 SELL at `₹93.17` (safe profit) or `₹97.60` (max profit — ₹9/share gain) | R:R `1:2.5`
+
+**Why this stock:**
+  • 🚀 +5.13% for the day
+oscillators elevated (93) [momentum-confirmed] | Big volume spike — strong interest | Gap-up at open — positive sentiment | hist signal +5.8% | Uptrend intact | Close to buy trigger | Multiple indicators agree — buy
+
+_Open Groww → Buy → then use `/buy HFCL 52 89` to record_
+
+
+[13-04-2026 11:20] Spidey Bot
+**🟢 BUY — `RISHABH`** — Quality ✅ **66/100**
+📈 **Expected to grow +13.0% today** | Price now: `₹455.45` (+3.42% so far) | **Profit potential: +6.1% to first target | +13.0% to max target**
+📊 Volume: `3.5x` above normal | `31%` indicators agree
+
+**What to do:**
+Buy **11 shares** (≈ ₹4,781)
+🔴 EXIT if price drops to `₹405.63` (you lose ₹50/share)
+🟢 SELL at `₹483.36` (safe profit) or `₹514.45` (max profit — ₹59/share gain) | R:R `1:1.2`
+
+**Why this stock:**
+  • 🚀 +3.42% for the day
+Big volume spike — strong interest | Strong gap-up at open — overnight demand | hist signal +6.7% | Close to buy trigger | Multiple indicators agree — buy | Strong breakout move
+
+_Open Groww → Buy → then use `/buy RISHABH 11 455` to record_
+
+
+[13-04-2026 11:20] Spidey Bot
+**🔴 EXIT `CONFIPET` — FADING from high**
+Dropped `5.6%` from today's high `₹58.98` → now `₹55.67` | Sell pressure `3.1x`
+Entry `₹57.90` → Loss `₹2.23/share` (`-3.9%`)
+Sellers are dominating the order book. This gap-up is fading.
+**Sell now to limit damage or lock remaining profit.**
+
+
+[13-04-2026 11:22] Spidey Bot
+**⚠️ `JINDRILL` WEAKENING — watch closely**
+Price dropped 2.2% from your entry ₹559.45
+Now `₹547.00` (+1.9% for the day) | Sell pressure `3.0x`
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 11:26] Spidey Bot
+**🔴 EXIT `TATACHEM` — FADING from high**
+Dropped `5.1%` from today's high `₹773.70` → now `₹734.05` | Sell pressure `1.6x`
+Entry `₹729.65` → Gain `₹4.40/share` (`+0.6%`)
+Sellers are dominating the order book. This gap-up is fading.
+**Sell now to limit damage or lock remaining profit.**
+
+
+[13-04-2026 11:27] Spidey Bot
+**🔥 STRONG BUY — `ASIANTILES`** — Quality ✅ **67/100**
+✅ All checks passed: price ✓ | volume 9.9x above normal ✓ | 43% indicators agree ✓
+📈 **Expected to grow +10.0% today** | Price now: `₹73.02` (+5.02% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `9.9x` above normal | `43%` indicators agree
+
+**What to do:**
+Buy **63 shares** (≈ ₹4,600)
+🔴 EXIT if price drops to `₹70.10` (you lose ₹3/share)
+🟢 SELL at `₹76.67` (safe profit) or `₹80.32` (max profit — ₹7/share gain) | R:R `1:2.5`
+
+**Why this stock:**
+  • 🚀 +5.02% for the day
+oscillators elevated (85) [momentum-confirmed] | Big volume spike — strong interest | Gap-up at open — positive sentiment | hist signal +5.8% | Uptrend intact | Close to buy trigger | Multiple indicators agree — buy
+
+_Open Groww → Buy → then use `/buy ASIANTILES 63 73` to record_
+
+
+[13-04-2026 11:28] Spidey Bot
+**🚀 `ZYDUSWELL` STILL RUNNING — hold and trail your stop!**
+📈 Now `+10.1%` (was `+7.0%` when you entered) | From entry: `+2.8%`
+Price `₹539.00` | Vol `8.1x`
+
+**What to do now:**
+✅ DON'T sell yet — momentum is still strong
+🔴 Move your stop-loss UP to `₹517.44` (locks in most of your profit)
+_If price drops to ₹517.44, sell immediately to keep your gains._
+
+
+[13-04-2026 11:30] Spidey Bot
+**🔴 EXIT `DEEPINDS` — FADING from high**
+Dropped `4.6%` from today's high `₹484.95` → now `₹462.40` | Sell pressure `2.3x`
+Entry `₹479.45` → Loss `₹17.05/share` (`-3.6%`)
+Sellers are dominating the order book. This gap-up is fading.
+**Sell now to limit damage or lock remaining profit.**
+
+
+[13-04-2026 11:31] Spidey Bot
+**🔴 EXIT `CONFIPET` — FADING from high**
+Dropped `4.2%` from today's high `₹58.98` → now `₹56.52` | Sell pressure `2.9x`
+Entry `₹57.90` → Loss `₹1.38/share` (`-2.4%`)
+Sellers are dominating the order book. This gap-up is fading.
+**Sell now to limit damage or lock remaining profit.**
+
+
+[13-04-2026 11:33] Spidey Bot
+**⚠️ `JINDRILL` WEAKENING — watch closely**
+Price dropped 2.1% from your entry ₹559.45
+Now `₹547.80` (+2.0% for the day) | Sell pressure `2.9x`
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 11:33] Spidey Bot
+**⚠️ `EVERESTIND` WEAKENING — watch closely**
+Price dropped 2.2% from your entry ₹363.30
+Now `₹355.20` (+6.0% for the day)
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 11:36] Spidey Bot
+**🔴 EXIT `TATACHEM` — FADING from high**
+Dropped `5.7%` from today's high `₹773.70` → now `₹729.25` | Sell pressure `2.3x`
+Entry `₹729.65` → Loss `₹0.40/share` (`-0.1%`)
+Sellers are dominating the order book. This gap-up is fading.
+**Sell now to limit damage or lock remaining profit.**
+
+
+[13-04-2026 11:40] Spidey Bot
+**🔴 EXIT `DEEPINDS` — FADING from high**
+Dropped `4.6%` from today's high `₹484.95` → now `₹462.65` | Sell pressure `2.2x`
+Entry `₹479.45` → Loss `₹16.80/share` (`-3.5%`)
+Sellers are dominating the order book. This gap-up is fading.
+**Sell now to limit damage or lock remaining profit.**
+
+
+[13-04-2026 11:41] Spidey Bot
+**🔴 EXIT `CONFIPET` — FADING from high**
+Dropped `4.6%` from today's high `₹58.98` → now `₹56.24` | Sell pressure `3.1x`
+Entry `₹57.90` → Loss `₹1.66/share` (`-2.9%`)
+Sellers are dominating the order book. This gap-up is fading.
+**Sell now to limit damage or lock remaining profit.**
+
+
+[13-04-2026 11:41] Spidey Bot
+**⚠️ `YASHO` WEAKENING — watch closely**
+Price dropped 2.2% from your entry ₹1514.00
+Now `₹1480.00` (+0.7% for the day)
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 11:43] Spidey Bot
+**⚠️ `EVERESTIND` WEAKENING — watch closely**
+Price dropped 2.3% from your entry ₹363.30
+Now `₹354.90` (+6.0% for the day)
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 11:44] Spidey Bot
+**🟢 BUY — `RPOWER`** — Quality ✅ **52/100**
+📈 **Expected to grow +10.0% today** | Price now: `₹26.49` (+5.08% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `5.6x` above normal | `27%` indicators agree
+
+**What to do:**
+Buy **127 shares** (≈ ₹3,364)
+🔴 EXIT if price drops to `₹25.43` (you lose ₹1/share)
+🟢 SELL at `₹27.81` (safe profit) or `₹29.14` (max profit — ₹3/share gain) | R:R `1:2.5`
+
+**Why this stock:**
+  • 🚀 +5.08% for the day
+oscillators elevated (80) [momentum-confirmed] | Big volume spike — strong interest | Gap-up at open — positive sentiment | hist signal +5.1% | Buy trigger price reached | Multiple indicators agree — buy
+
+_Open Groww → Buy → then use `/buy RPOWER 127 26` to record_
+
+
+[13-04-2026 11:46] Spidey Bot
+**🔴 EXIT `TATACHEM` — FADING from high**
+Dropped `5.8%` from today's high `₹773.70` → now `₹729.20` | Sell pressure `2.1x`
+Entry `₹729.65` → Loss `₹0.45/share` (`-0.1%`)
+Sellers are dominating the order book. This gap-up is fading.
+**Sell now to limit damage or lock remaining profit.**
+
+
+[13-04-2026 11:46] Spidey Bot
+**🟢 BUY — `NETWORK18`** — Quality ✅ **52/100**
+📈 **Expected to grow +10.0% today** | Price now: `₹34.92` (+5.05% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `7.6x` above normal | `27%` indicators agree
+
+**What to do:**
+Buy **97 shares** (≈ ₹3,387)
+🔴 EXIT if price drops to `₹33.52` (you lose ₹1/share)
+🟢 SELL at `₹36.67` (safe profit) or `₹38.41` (max profit — ₹3/share gain) | R:R `1:2.5`
+
+**Why this stock:**
+  • 🚀 +5.05% for the day
+oscillators elevated (83) [momentum-confirmed] | Big volume spike — strong interest | Gap-up at open — positive sentiment | hist signal +5.1% | Buy trigger price reached | Multiple indicators agree — buy
+
+_Open Groww → Buy → then use `/buy NETWORK18 97 35` to record_
+
+
+[13-04-2026 11:48] Spidey Bot
+**🚀 `EXICOM` STILL RUNNING — hold and trail your stop!**
+📈 Now `+8.5%` (was `+5.2%` when you entered) | From entry: `+3.1%`
+Price `₹112.90`
+
+**What to do now:**
+✅ DON'T sell yet — momentum is still strong
+🔴 Move your stop-loss UP to `₹108.38` (locks in most of your profit)
+_If price drops to ₹108.38, sell immediately to keep your gains._
+
+
+[13-04-2026 11:50] Spidey Bot
+**🔴 EXIT `DEEPINDS` — FADING from high**
+Dropped `4.5%` from today's high `₹484.95` → now `₹463.35` | Sell pressure `2.0x`
+Entry `₹479.45` → Loss `₹16.10/share` (`-3.4%`)
+Sellers are dominating the order book. This gap-up is fading.
+**Sell now to limit damage or lock remaining profit.**
+
+
+[13-04-2026 11:51] Spidey Bot
+**🔴 EXIT `CONFIPET` — FADING from high**
+Dropped `5.1%` from today's high `₹58.98` → now `₹56.00` | Sell pressure `3.4x`
+Entry `₹57.90` → Loss `₹1.90/share` (`-3.3%`)
+Sellers are dominating the order book. This gap-up is fading.
+**Sell now to limit damage or lock remaining profit.**
+
+
+[13-04-2026 11:52] Spidey Bot
+**⚠️ `YASHO` WEAKENING — watch closely**
+Price dropped 2.1% from your entry ₹1514.00
+Now `₹1481.80` (+0.9% for the day)
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 11:54] Spidey Bot
+**⚠️ `JINDRILL` WEAKENING — watch closely**
+Price dropped 2.0% from your entry ₹559.45
+Now `₹548.25` (+2.1% for the day) | Sell pressure `2.9x`
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 11:56] Spidey Bot
+**🔥 STRONG BUY — `ADANIPOWER`** — Quality ✅ **67/100**
+✅ All checks passed: price ✓ | volume 11.0x above normal ✓ | 42% indicators agree ✓
+📈 **Expected to grow +10.0% today** | Price now: `₹184.00` (+4.66% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `11.0x` above normal | `42%` indicators agree
+
+**What to do:**
+Buy **25 shares** (≈ ₹4,602)
+🔴 EXIT if price drops to `₹176.72` (you lose ₹7/share)
+🟢 SELL at `₹193.28` (safe profit) or `₹202.49` (max profit — ₹18/share gain) | R:R `1:2.5`
+
+**Why this stock:**
+  • 🚀 +4.70% for the day
+oscillators elevated (95) [momentum-confirmed] | Big volume spike — strong interest | Gap-up at open — positive sentiment | hist signal +5.2% | Uptrend intact | Close to buy trigger | Multiple indicators agree — buy
+
+_Open Groww → Buy → then use `/buy ADANIPOWER 25 184` to record_
+
+
+[13-04-2026 11:57] Spidey Bot
+**🔥 STRONG BUY — `ADANIPOWER`** — Quality ✅ **67/100**
+✅ All checks passed: price ✓ | volume 11.0x above normal ✓ | 42% indicators agree ✓
+📈 **Expected to grow +10.1% today** | Price now: `₹183.98` (+4.65% so far) | **Profit potential: +5.1% to first target | +10.1% to max target**
+📊 Volume: `11.0x` above normal | `42%` indicators agree
+
+**What to do:**
+Buy **25 shares** (≈ ₹4,602)
+🔴 EXIT if price drops to `₹176.72` (you lose ₹7/share)
+🟢 SELL at `₹193.28` (safe profit) or `₹202.49` (max profit — ₹19/share gain) | R:R `1:2.5`
+
+**Why this stock:**
+  • 🚀 +4.70% for the day
+oscillators elevated (95) [momentum-confirmed] | Big volume spike — strong interest | Gap-up at open — positive sentiment | hist signal +5.2% | Uptrend intact | Close to buy trigger | Multiple indicators agree — buy
+
+_Open Groww → Buy → then use `/buy ADANIPOWER 25 184` to record_
+
+
+[13-04-2026 11:58] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔵 MOMENTUM BUY [B] — `CLEANMAX`**
+📈 Price `₹910.95` | +5.7% today | Score **50/100**
+Turnover `₹21Cr` | Above VWAP
+
+🔴 Stop Loss `₹884` | 🟡 Target 1 `₹920` | 🟢 Target 2 `₹929` | R:R `1:0.7`
+Why: Moving +5.7% | Good liquidity ₹21Cr | Above VWAP ✅ | Near day's high
+
+**What to do (medium conviction):**
+Buy **37 shares** (≈ ₹33,705)
+_Open Groww → Buy → then use `/buy CLEANMAX 37 911` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 11:58] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔵 MOMENTUM BUY [B] — `CLEANMAX`**
+📈 Price `₹910.95` | +5.7% today | Score **50/100**
+Turnover `₹21Cr` | Above VWAP
+
+🔴 Stop Loss `₹884` | 🟡 Target 1 `₹920` | 🟢 Target 2 `₹929` | R:R `1:0.7`
+Why: Moving +5.7% | Good liquidity ₹21Cr | Above VWAP ✅ | Near day's high
+
+**What to do (medium conviction):**
+Buy **37 shares** (≈ ₹33,705)
+_Open Groww → Buy → then use `/buy CLEANMAX 37 911` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 12:13] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔮 SHRIPISTON — Buyers are pushing this stock up steadily**
+Quality: **A-Grade** (Strong — highest conviction, full size)
+📈 **Demand-confirmed setup target: +8.0% from alert price** (current day move: +1.6% | moved +1.1% from our detect price in 9 min)
+
+👥 Buyers vs sellers: `8.8x` more buyers than sellers (strong demand)
+📊 Trading volume: `13.2x` higher than normal (real interest, not fake)
+
+**What to do:**
+✅ BUY NOW
+Buy **16 shares** at ~`₹3666` (costs ≈ ₹58,648)
+🔴 EXIT if price drops to `₹3556` (limits your loss to 3%)
+🟢 SELL near `₹3959` if momentum continues (fixed demand-watch target: +8.0% from alert price)
+💰 You risk `₹110` per share to gain `₹293` per share (2.7x reward vs risk)
+
+_Open Groww → Buy → then use `/buy SHRIPISTON 16 3666` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 12:14] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔮 SHRIPISTON — Buyers are pushing this stock up steadily**
+Quality: **A-Grade** (Strong — highest conviction, full size)
+📈 **Demand-confirmed setup target: +8.0% from alert price** (current day move: +1.9% | moved +1.4% from our detect price in 10 min)
+
+👥 Buyers vs sellers: `9.0x` more buyers than sellers (strong demand)
+📊 Trading volume: `13.7x` higher than normal (real interest, not fake)
+
+**What to do:**
+✅ BUY NOW
+Buy **16 shares** at ~`₹3676` (costs ≈ ₹58,821)
+🔴 EXIT if price drops to `₹3566` (limits your loss to 3%)
+🟢 SELL near `₹3970` if momentum continues (fixed demand-watch target: +8.0% from alert price)
+💰 You risk `₹110` per share to gain `₹294` per share (2.7x reward vs risk)
+
+_Open Groww → Buy → then use `/buy SHRIPISTON 16 3676` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 12:15] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔮 MAHEPC — Buyers are pushing this stock up steadily**
+Quality: **B-Grade** (Good — moderate conviction, reduced size)
+📈 **Demand-confirmed setup target: +8.0% from alert price** (current day move: +3.8% | moved +1.5% from our detect price in 11 min)
+
+👥 Buyers vs sellers: `3.6x` more buyers than sellers (strong demand)
+📊 Trading volume: `3.9x` higher than normal (real interest, not fake)
+
+**What to do:**
+✅ BUY NOW
+Buy **305 shares** at ~`₹117` (costs ≈ ₹35,594)
+🔴 EXIT if price drops to `₹113` (limits your loss to 3%)
+🟢 SELL near `₹126` if momentum continues (fixed demand-watch target: +8.0% from alert price)
+💰 You risk `₹4` per share to gain `₹9` per share (2.7x reward vs risk)
+
+_Open Groww → Buy → then use `/buy MAHEPC 305 117` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 12:15] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔮 MAHEPC — Buyers are pushing this stock up steadily**
+Quality: **B-Grade** (Good — moderate conviction, reduced size)
+📈 **Demand-confirmed setup target: +8.0% from alert price** (current day move: +3.8% | moved +1.5% from our detect price in 11 min)
+
+👥 Buyers vs sellers: `3.6x` more buyers than sellers (strong demand)
+📊 Trading volume: `3.9x` higher than normal (real interest, not fake)
+
+**What to do:**
+✅ BUY NOW
+Buy **305 shares** at ~`₹117` (costs ≈ ₹35,594)
+🔴 EXIT if price drops to `₹113` (limits your loss to 3%)
+🟢 SELL near `₹126` if momentum continues (fixed demand-watch target: +8.0% from alert price)
+💰 You risk `₹4` per share to gain `₹9` per share (2.7x reward vs risk)
+
+_Open Groww → Buy → then use `/buy MAHEPC 305 117` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 12:19] Spidey Bot
+**🟢 BUY — `TARIL`** — Quality ✅ **52/100**
+📈 **Expected to grow +10.0% today** | Price now: `₹296.10` (+5.21% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `9.9x` above normal | `18%` indicators agree
+
+**What to do:**
+Buy **10 shares** (≈ ₹2,961)
+🔴 EXIT if price drops to `₹284.26` (you lose ₹12/share)
+🟢 SELL at `₹310.91` (safe profit) or `₹325.71` (max profit — ₹30/share gain) | R:R `1:2.5`
+
+**Why this stock:**
+  • 🚀 +5.21% for the day
+Big volume spike — strong interest | Gap-up at open — positive sentiment | hist signal +5.2% | Buy trigger price reached
+
+_Open Groww → Buy → then use `/buy TARIL 10 296` to record_
+
+
+[13-04-2026 12:19] Spidey Bot
+**🟢 BUY — `TARIL`** — Quality ✅ **52/100**
+📈 **Expected to grow +10.0% today** | Price now: `₹296.10` (+5.21% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `9.9x` above normal | `18%` indicators agree
+
+**What to do:**
+Buy **10 shares** (≈ ₹2,961)
+🔴 EXIT if price drops to `₹284.26` (you lose ₹12/share)
+🟢 SELL at `₹310.91` (safe profit) or `₹325.71` (max profit — ₹30/share gain) | R:R `1:2.5`
+
+**Why this stock:**
+  • 🚀 +5.21% for the day
+Big volume spike — strong interest | Gap-up at open — positive sentiment | hist signal +5.2% | Buy trigger price reached
+
+_Open Groww → Buy → then use `/buy TARIL 10 296` to record_
+
+
+[13-04-2026 12:24] Spidey Bot
+**🟢 BUY — `SURAJLTD`** — Quality ✅ **53/100**
+⏰ **SWING ONLY** — already +10.7% today. Do NOT enter for intraday — swing trade only (hold 2-5 days).
+📈 **Expected to grow +7.3% today** | Price now: `₹268.00` (+10.69% so far) | **Profit potential: +2.4% to first target | +7.3% to max target**
+📊 Volume: `10.4x` above normal | `26%` indicators agree
+
+**What to do:**
+Buy **3 shares** (≈ ₹784)
+🔴 EXIT if price drops to `₹250.97` (you lose ₹17/share)
+🟢 SELL at `₹274.50` (safe profit) or `₹287.57` (max profit — ₹20/share gain) | R:R `1:1.1`
+
+**Why this stock:**
+  • 📥 Buy orders 3.8x sell orders (heavy accumulation)
+  • 🚀 +10.69% for the day
+oscillators elevated (82) [momentum-confirmed] | Big volume spike — strong interest | Gap-up at open — positive sentiment | hist signal +10.7% | Almost at buy trigger | Multiple indicators agree — buy
+
+_Open Groww → Buy → then use `/buy SURAJLTD 3 268` to record_
+
+
+[13-04-2026 12:24] Spidey Bot
+**🟢 BUY — `SURAJLTD`** — Quality ✅ **53/100**
+⏰ **SWING ONLY** — already +10.7% today. Do NOT enter for intraday — swing trade only (hold 2-5 days).
+📈 **Expected to grow +7.3% today** | Price now: `₹268.00` (+10.69% so far) | **Profit potential: +2.4% to first target | +7.3% to max target**
+📊 Volume: `10.4x` above normal | `26%` indicators agree
+
+**What to do:**
+Buy **3 shares** (≈ ₹784)
+🔴 EXIT if price drops to `₹250.97` (you lose ₹17/share)
+🟢 SELL at `₹274.50` (safe profit) or `₹287.57` (max profit — ₹20/share gain) | R:R `1:1.1`
+
+**Why this stock:**
+  • 📥 Buy orders 3.8x sell orders (heavy accumulation)
+  • 🚀 +10.69% for the day
+oscillators elevated (82) [momentum-confirmed] | Big volume spike — strong interest | Gap-up at open — positive sentiment | hist signal +10.7% | Almost at buy trigger | Multiple indicators agree — buy
+
+_Open Groww → Buy → then use `/buy SURAJLTD 3 268` to record_
+
+
+[13-04-2026 12:30] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔮 MANGLMCEM — Buyers are pushing this stock up steadily**
+Quality: **B-Grade** (Good — moderate conviction, reduced size)
+📈 **Demand-confirmed setup target: +8.0% from alert price** (current day move: +2.1% | moved +1.7% from our detect price in 22 min)
+
+👥 Buyers vs sellers: `4.4x` more buyers than sellers (strong demand)
+📊 Trading volume: `9.8x` higher than normal (real interest, not fake)
+
+**What to do:**
+✅ BUY NOW
+Buy **39 shares** at ~`₹884` (costs ≈ ₹34,476)
+🔴 EXIT if price drops to `₹857` (limits your loss to 3%)
+🟢 SELL near `₹955` if momentum continues (fixed demand-watch target: +8.0% from alert price)
+💰 You risk `₹27` per share to gain `₹71` per share (2.7x reward vs risk)
+
+_Open Groww → Buy → then use `/buy MANGLMCEM 39 884` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 12:30] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔮 MANGLMCEM — Buyers are pushing this stock up steadily**
+Quality: **B-Grade** (Good — moderate conviction, reduced size)
+📈 **Demand-confirmed setup target: +8.0% from alert price** (current day move: +2.1% | moved +1.7% from our detect price in 22 min)
+
+👥 Buyers vs sellers: `4.4x` more buyers than sellers (strong demand)
+📊 Trading volume: `9.8x` higher than normal (real interest, not fake)
+
+**What to do:**
+✅ BUY NOW
+Buy **39 shares** at ~`₹884` (costs ≈ ₹34,476)
+🔴 EXIT if price drops to `₹857` (limits your loss to 3%)
+🟢 SELL near `₹955` if momentum continues (fixed demand-watch target: +8.0% from alert price)
+💰 You risk `₹27` per share to gain `₹71` per share (2.7x reward vs risk)
+
+_Open Groww → Buy → then use `/buy MANGLMCEM 39 884` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 12:43] Spidey Bot
+**🔥 STRONG BUY — `WEL`** — Quality 🔥 **70/100**
+✅ All checks passed: price ✓ | volume 2.9x above normal ✓ | 29% indicators agree ✓
+📈 **Expected to grow +10.0% today** | Price now: `₹86.74` (+4.24% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `2.9x` above normal | `29%` indicators agree
+
+**What to do:**
+Buy **57 shares** (≈ ₹4,944)
+🔴 EXIT if price drops to `₹83.27` (you lose ₹3/share)
+🟢 SELL at `₹91.08` (safe profit) or `₹95.41` (max profit — ₹9/share gain) | R:R `1:2.5`
+
+**Why this stock:**
+  • 🚀 +4.24% for the day
+oscillators near oversold (RSI 26 | CCI -72 | MFI 20) | Big volume spike — strong interest | Gap-up at open — positive sentiment | hist signal +5.0% | Buy trigger price reached | Multiple indicators agree — buy
+
+_Open Groww → Buy → then use `/buy WEL 57 87` to record_
+
+
+[13-04-2026 12:43] Spidey Bot
+**🔥 STRONG BUY — `WEL`** — Quality 🔥 **70/100**
+✅ All checks passed: price ✓ | volume 2.9x above normal ✓ | 29% indicators agree ✓
+📈 **Expected to grow +10.0% today** | Price now: `₹86.74` (+4.24% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `2.9x` above normal | `29%` indicators agree
+
+**What to do:**
+Buy **57 shares** (≈ ₹4,944)
+🔴 EXIT if price drops to `₹83.27` (you lose ₹3/share)
+🟢 SELL at `₹91.08` (safe profit) or `₹95.41` (max profit — ₹9/share gain) | R:R `1:2.5`
+
+**Why this stock:**
+  • 🚀 +4.24% for the day
+oscillators near oversold (RSI 26 | CCI -72 | MFI 20) | Big volume spike — strong interest | Gap-up at open — positive sentiment | hist signal +5.0% | Buy trigger price reached | Multiple indicators agree — buy
+
+_Open Groww → Buy → then use `/buy WEL 57 87` to record_
+
+
+[13-04-2026 12:43] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔵 MOMENTUM BUY [B] — `HIIL`**
+📈 Price `₹732.45` | +10.0% today | Score **55/100** | 👥 35.8x more buyers than sellers
+Turnover `₹3Cr` | Above VWAP
+
+🔴 Stop Loss `₹710` | 🟡 Target 1 `₹751` | 🟢 Target 2 `₹769` | R:R `1:1.7`
+Why: Strong momentum +10.0% | Heavy buyer demand 35.8x | Above VWAP ✅ | Near day's high
+
+**What to do (medium conviction):**
+Buy **51 shares** (≈ ₹37,355)
+_Open Groww → Buy → then use `/buy HIIL 51 732` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 12:43] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔵 MOMENTUM BUY [B] — `HIIL`**
+📈 Price `₹732.45` | +10.0% today | Score **55/100** | 👥 35.8x more buyers than sellers
+Turnover `₹3Cr` | Above VWAP
+
+🔴 Stop Loss `₹710` | 🟡 Target 1 `₹751` | 🟢 Target 2 `₹769` | R:R `1:1.7`
+Why: Strong momentum +10.0% | Heavy buyer demand 35.8x | Above VWAP ✅ | Near day's high
+
+**What to do (medium conviction):**
+Buy **51 shares** (≈ ₹37,355)
+_Open Groww → Buy → then use `/buy HIIL 51 732` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 12:52] Spidey Bot
+**🔥 STRONG BUY — `STALLION`** — Quality ✅ **52/100**
+✅ All checks passed: price ✓ | volume 8.5x above normal ✓ | 27% indicators agree ✓
+📈 **Expected to grow +10.0% today** | Price now: `₹143.87` (+5.08% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `8.5x` above normal | `27%` indicators agree
+
+**What to do:**
+Buy **23 shares** (≈ ₹3,309)
+🔴 EXIT if price drops to `₹138.12` (you lose ₹6/share)
+🟢 SELL at `₹151.06` (safe profit) or `₹158.26` (max profit — ₹14/share gain) | R:R `1:2.5`
+
+**Why this stock:**
+  • 🚀 +5.08% for the day
+oscillators elevated (88) [momentum-confirmed] | Big volume spike — strong interest | Gap-up at open — positive sentiment | hist signal +5.1% | Buy trigger price reached | Multiple indicators agree — buy
+
+_Open Groww → Buy → then use `/buy STALLION 23 144` to record_
+
+
+[13-04-2026 12:52] Spidey Bot
+**🔥 STRONG BUY — `STALLION`** — Quality ✅ **52/100**
+✅ All checks passed: price ✓ | volume 8.5x above normal ✓ | 27% indicators agree ✓
+📈 **Expected to grow +10.0% today** | Price now: `₹143.87` (+5.08% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `8.5x` above normal | `27%` indicators agree
+
+**What to do:**
+Buy **23 shares** (≈ ₹3,309)
+🔴 EXIT if price drops to `₹138.12` (you lose ₹6/share)
+🟢 SELL at `₹151.06` (safe profit) or `₹158.26` (max profit — ₹14/share gain) | R:R `1:2.5`
+
+**Why this stock:**
+  • 🚀 +5.08% for the day
+oscillators elevated (88) [momentum-confirmed] | Big volume spike — strong interest | Gap-up at open — positive sentiment | hist signal +5.1% | Buy trigger price reached | Multiple indicators agree — buy
+
+_Open Groww → Buy → then use `/buy STALLION 23 144` to record_
+
+
+[13-04-2026 12:59] Spidey Bot
+**⚠️ `HIIL` WEAKENING — watch closely**
+Price dropped 2.2% from your entry ₹732.45
+Now `₹716.10` (+7.5% for the day)
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 13:00] Spidey Bot
+**⚠️ `SURAJLTD` WEAKENING — watch closely**
+Dropped 4.2% from high ₹274.48
+Now `₹263.05` (+8.6% for the day)
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 13:00] Spidey Bot
+**⚠️ `SURAJLTD` WEAKENING — watch closely**
+Dropped 4.2% from high ₹274.48
+Now `₹263.05` (+8.6% for the day)
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 13:07] Spidey Bot
+**⚠️ `HIIL` WEAKENING — watch closely**
+Price dropped 2.4% from your entry ₹732.45
+Now `₹715.15` (+7.4% for the day)
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 13:09] Spidey Bot
+**⚠️ `HIIL` WEAKENING — watch closely**
+Price dropped 2.1% from your entry ₹732.45
+Now `₹717.05` (+7.7% for the day)
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 13:10] Spidey Bot
+**⚠️ `SURAJLTD` WEAKENING — watch closely**
+Dropped 4.0% from high ₹274.48
+Now `₹263.41` (+8.8% for the day)
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 13:11] Spidey Bot
+**⚠️ `SURAJLTD` WEAKENING — watch closely**
+Dropped 4.0% from high ₹274.48
+Now `₹263.41` (+8.8% for the day)
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 13:11] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔮 PUNJABCHEM — Buyers are pushing this stock up steadily**
+Quality: **B-Grade** (Good — moderate conviction, reduced size)
+📈 **Demand-confirmed setup target: +8.0% from alert price** (current day move: +3.7% | moved +2.0% from our detect price in 52 min)
+
+👥 Buyers vs sellers: `3.2x` more buyers than sellers (strong demand)
+📊 Trading volume: `7.8x` higher than normal (real interest, not fake)
+
+**What to do:**
+✅ BUY NOW
+Buy **32 shares** at ~`₹1076` (costs ≈ ₹34,430)
+🔴 EXIT if price drops to `₹1044` (limits your loss to 3%)
+🟢 SELL near `₹1162` if momentum continues (fixed demand-watch target: +8.0% from alert price)
+💰 You risk `₹32` per share to gain `₹86` per share (2.7x reward vs risk)
+
+_Open Groww → Buy → then use `/buy PUNJABCHEM 32 1076` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 13:11] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔮 PUNJABCHEM — Buyers are pushing this stock up steadily**
+Quality: **B-Grade** (Good — moderate conviction, reduced size)
+📈 **Demand-confirmed setup target: +8.0% from alert price** (current day move: +3.7% | moved +2.0% from our detect price in 52 min)
+
+👥 Buyers vs sellers: `3.2x` more buyers than sellers (strong demand)
+📊 Trading volume: `7.8x` higher than normal (real interest, not fake)
+
+**What to do:**
+✅ BUY NOW
+Buy **32 shares** at ~`₹1076` (costs ≈ ₹34,430)
+🔴 EXIT if price drops to `₹1044` (limits your loss to 3%)
+🟢 SELL near `₹1162` if momentum continues (fixed demand-watch target: +8.0% from alert price)
+💰 You risk `₹32` per share to gain `₹86` per share (2.7x reward vs risk)
+
+_Open Groww → Buy → then use `/buy PUNJABCHEM 32 1076` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 13:13] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔮 PAUSHAKLTD — Buyers are pushing this stock up steadily**
+Quality: **B-Grade** (Good — moderate conviction, reduced size)
+📈 **Demand-confirmed setup target: +8.0% from alert price** (current day move: +4.3% | moved +1.4% from our detect price in 0 min)
+
+👥 Buyers vs sellers: `8.7x` more buyers than sellers (strong demand)
+📊 Trading volume: `2.5x` higher than normal (real interest, not fake)
+
+**What to do:**
+✅ BUY NOW
+Buy **70 shares** at ~`₹503` (costs ≈ ₹35,210)
+🔴 EXIT if price drops to `₹488` (limits your loss to 3%)
+🟢 SELL near `₹543` if momentum continues (fixed demand-watch target: +8.0% from alert price)
+💰 You risk `₹15` per share to gain `₹40` per share (2.7x reward vs risk)
+
+_Open Groww → Buy → then use `/buy PAUSHAKLTD 70 503` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 13:13] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔮 PAUSHAKLTD — Buyers are pushing this stock up steadily**
+Quality: **B-Grade** (Good — moderate conviction, reduced size)
+📈 **Demand-confirmed setup target: +8.0% from alert price** (current day move: +4.3% | moved +1.4% from our detect price in 0 min)
+
+👥 Buyers vs sellers: `8.7x` more buyers than sellers (strong demand)
+📊 Trading volume: `2.5x` higher than normal (real interest, not fake)
+
+**What to do:**
+✅ BUY NOW
+Buy **70 shares** at ~`₹503` (costs ≈ ₹35,210)
+🔴 EXIT if price drops to `₹488` (limits your loss to 3%)
+🟢 SELL near `₹543` if momentum continues (fixed demand-watch target: +8.0% from alert price)
+💰 You risk `₹15` per share to gain `₹40` per share (2.7x reward vs risk)
+
+_Open Groww → Buy → then use `/buy PAUSHAKLTD 70 503` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 13:16] Spidey Bot
+**🔥 STRONG BUY — `APOLLOPIPE`** — Quality 🔥 **72/100**
+✅ All checks passed: price ✓ | volume 2.6x above normal ✓ | 46% indicators agree ✓
+📈 **Expected to grow +10.0% today** | Price now: `₹462.00` (+5.34% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `2.6x` above normal | `46%` indicators agree
+
+**What to do:**
+Buy **10 shares** (≈ ₹4,620)
+🔴 EXIT if price drops to `₹443.52` (you lose ₹18/share)
+🟢 SELL at `₹485.10` (safe profit) or `₹508.20` (max profit — ₹46/share gain) | R:R `1:2.5`
+
+**Why this stock:**
+  • 🚀 +5.34% for the day
+oscillators elevated (85) [momentum-confirmed] | Big volume spike — strong interest | Gap-up at open — positive sentiment | hist signal +5.6% | Uptrend intact | Trend turning bullish | Close to buy trigger | Multiple indicators agree — buy
+
+_Open Groww → Buy → then use `/buy APOLLOPIPE 10 462` to record_
+
+
+[13-04-2026 13:16] Spidey Bot
+**🔥 STRONG BUY — `APOLLOPIPE`** — Quality 🔥 **72/100**
+✅ All checks passed: price ✓ | volume 2.6x above normal ✓ | 46% indicators agree ✓
+📈 **Expected to grow +10.0% today** | Price now: `₹462.00` (+5.34% so far) | **Profit potential: +5.0% to first target | +10.0% to max target**
+📊 Volume: `2.6x` above normal | `46%` indicators agree
+
+**What to do:**
+Buy **10 shares** (≈ ₹4,620)
+🔴 EXIT if price drops to `₹443.52` (you lose ₹18/share)
+🟢 SELL at `₹485.10` (safe profit) or `₹508.20` (max profit — ₹46/share gain) | R:R `1:2.5`
+
+**Why this stock:**
+  • 🚀 +5.34% for the day
+oscillators elevated (85) [momentum-confirmed] | Big volume spike — strong interest | Gap-up at open — positive sentiment | hist signal +5.6% | Uptrend intact | Trend turning bullish | Close to buy trigger | Multiple indicators agree — buy
+
+_Open Groww → Buy → then use `/buy APOLLOPIPE 10 462` to record_
+
+
+[13-04-2026 13:17] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔮 ENTERO — Buyers are pushing this stock up steadily**
+Quality: **C-Grade** (Weak — low conviction, smallest size)
+📈 **Demand-confirmed setup target: +8.0% from alert price** (current day move: +2.8% | moved +1.3% from our detect price in 6 min)
+
+👥 Buyers vs sellers: `2.9x` more buyers than sellers (strong demand)
+📊 Trading volume: `9.6x` higher than normal (real interest, not fake)
+
+**What to do:**
+⚠️ RISKY — only if you accept higher risk
+Buy **17 shares** at ~`₹1231` (costs ≈ ₹20,929)
+🔴 EXIT if price drops to `₹1194` (limits your loss to 3%)
+🟢 SELL near `₹1330` if momentum continues (fixed demand-watch target: +8.0% from alert price)
+💰 You risk `₹37` per share to gain `₹98` per share (2.7x reward vs risk)
+
+_Open Groww → Buy → then use `/buy ENTERO 17 1231` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 13:17] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔮 ENTERO — Buyers are pushing this stock up steadily**
+Quality: **C-Grade** (Weak — low conviction, smallest size)
+📈 **Demand-confirmed setup target: +8.0% from alert price** (current day move: +2.8% | moved +1.3% from our detect price in 6 min)
+
+👥 Buyers vs sellers: `2.9x` more buyers than sellers (strong demand)
+📊 Trading volume: `9.6x` higher than normal (real interest, not fake)
+
+**What to do:**
+⚠️ RISKY — only if you accept higher risk
+Buy **17 shares** at ~`₹1231` (costs ≈ ₹20,929)
+🔴 EXIT if price drops to `₹1194` (limits your loss to 3%)
+🟢 SELL near `₹1330` if momentum continues (fixed demand-watch target: +8.0% from alert price)
+💰 You risk `₹37` per share to gain `₹98` per share (2.7x reward vs risk)
+
+_Open Groww → Buy → then use `/buy ENTERO 17 1231` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 13:19] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔮 MUFIN — Buyers are pushing this stock up steadily**
+Quality: **B-Grade** (Good — moderate conviction, reduced size)
+📈 **Demand-confirmed setup target: +8.0% from alert price** (current day move: +3.0% | moved +1.4% from our detect price in 15 min)
+
+👥 Buyers vs sellers: `4.4x` more buyers than sellers (strong demand)
+📊 Trading volume: `11.2x` higher than normal (real interest, not fake)
+
+**What to do:**
+✅ BUY NOW
+Buy **326 shares** at ~`₹109` (costs ≈ ₹35,599)
+🔴 EXIT if price drops to `₹106` (limits your loss to 3%)
+🟢 SELL near `₹118` if momentum continues (fixed demand-watch target: +8.0% from alert price)
+💰 You risk `₹3` per share to gain `₹9` per share (2.7x reward vs risk)
+
+_Open Groww → Buy → then use `/buy MUFIN 326 109` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 13:19] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔮 MUFIN — Buyers are pushing this stock up steadily**
+Quality: **B-Grade** (Good — moderate conviction, reduced size)
+📈 **Demand-confirmed setup target: +8.0% from alert price** (current day move: +3.0% | moved +1.4% from our detect price in 15 min)
+
+👥 Buyers vs sellers: `4.4x` more buyers than sellers (strong demand)
+📊 Trading volume: `11.2x` higher than normal (real interest, not fake)
+
+**What to do:**
+✅ BUY NOW
+Buy **326 shares** at ~`₹109` (costs ≈ ₹35,599)
+🔴 EXIT if price drops to `₹106` (limits your loss to 3%)
+🟢 SELL near `₹118` if momentum continues (fixed demand-watch target: +8.0% from alert price)
+💰 You risk `₹3` per share to gain `₹9` per share (2.7x reward vs risk)
+
+_Open Groww → Buy → then use `/buy MUFIN 326 109` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 13:20] Spidey Bot
+**⚠️ `SURAJLTD` WEAKENING — watch closely**
+Dropped 4.2% from high ₹274.48
+Now `₹263.01` (+8.6% for the day)
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 13:21] Spidey Bot
+**⚠️ `SURAJLTD` WEAKENING — watch closely**
+Dropped 4.2% from high ₹274.48
+Now `₹263.01` (+8.6% for the day)
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 13:27] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔮 GALAPREC — Buyers are pushing this stock up steadily**
+Quality: **A-Grade** (Strong — highest conviction, full size)
+📈 **Demand-confirmed setup target: +8.0% from alert price** (current day move: +3.4% | moved +1.9% from our detect price in 16 min)
+
+👥 Buyers vs sellers: `5.1x` more buyers than sellers (strong demand)
+📊 Trading volume: `9.7x` higher than normal (real interest, not fake)
+
+**What to do:**
+✅ BUY NOW
+Buy **78 shares** at ~`₹764` (costs ≈ ₹59,580)
+🔴 EXIT if price drops to `₹741` (limits your loss to 3%)
+🟢 SELL near `₹825` if momentum continues (fixed demand-watch target: +8.0% from alert price)
+💰 You risk `₹23` per share to gain `₹61` per share (2.7x reward vs risk)
+
+_Open Groww → Buy → then use `/buy GALAPREC 78 764` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 13:27] Spidey Bot
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+**🔮 GALAPREC — Buyers are pushing this stock up steadily**
+Quality: **A-Grade** (Strong — highest conviction, full size)
+📈 **Demand-confirmed setup target: +8.0% from alert price** (current day move: +3.4% | moved +1.9% from our detect price in 16 min)
+
+👥 Buyers vs sellers: `5.1x` more buyers than sellers (strong demand)
+📊 Trading volume: `9.7x` higher than normal (real interest, not fake)
+
+**What to do:**
+✅ BUY NOW
+Buy **78 shares** at ~`₹764` (costs ≈ ₹59,580)
+🔴 EXIT if price drops to `₹741` (limits your loss to 3%)
+🟢 SELL near `₹825` if momentum continues (fixed demand-watch target: +8.0% from alert price)
+💰 You risk `₹23` per share to gain `₹61` per share (2.7x reward vs risk)
+
+_Open Groww → Buy → then use `/buy GALAPREC 78 764` to record_
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+
+[13-04-2026 13:34] Spidey Bot
+**🔥 STRONG BUY — `BALAJITELE`** — Quality ✅ **57/100**
+✅ All checks passed: price ✓ | volume 4.9x above normal ✓ | 31% indicators agree ✓
+📈 **Expected to grow +23.4% today** | Price now: `₹95.38` (+3.25% so far) | **Profit potential: +13.4% to first target | +23.4% to max target**
+📊 Volume: `4.9x` above normal | `31%` indicators agree
+
+**What to do:**
+Buy **53 shares** (≈ ₹4,940)
+🔴 EXIT if price drops to `₹84.28` (you lose ₹11/share)
+🟢 SELL at `₹108.18` (safe profit) or `₹117.74` (max profit — ₹22/share gain) | R:R `1:2.0`
+
+**Why this stock:**
+  • 🚀 +3.25% for the day
+Big volume spike — strong interest | Strong gap-up at open — overnight demand | hist signal +9.6% | Multiple indicators agree — buy
+
+_Open Groww → Buy → then use `/buy BALAJITELE 53 95` to record_
+
+
+[13-04-2026 13:34] Spidey Bot
+**🔥 STRONG BUY — `BALAJITELE`** — Quality ✅ **57/100**
+✅ All checks passed: price ✓ | volume 4.9x above normal ✓ | 31% indicators agree ✓
+📈 **Expected to grow +23.4% today** | Price now: `₹95.38` (+3.25% so far) | **Profit potential: +13.4% to first target | +23.4% to max target**
+📊 Volume: `4.9x` above normal | `31%` indicators agree
+
+**What to do:**
+Buy **53 shares** (≈ ₹4,940)
+🔴 EXIT if price drops to `₹84.28` (you lose ₹11/share)
+🟢 SELL at `₹108.18` (safe profit) or `₹117.74` (max profit — ₹22/share gain) | R:R `1:2.0`
+
+**Why this stock:**
+  • 🚀 +3.25% for the day
+Big volume spike — strong interest | Strong gap-up at open — overnight demand | hist signal +9.6% | Multiple indicators agree — buy
+
+_Open Groww → Buy → then use `/buy BALAJITELE 53 95` to record_
+
+
+[13-04-2026 13:37] Spidey Bot
+**⚠️ `SURAJLTD` WEAKENING — watch closely**
+Dropped 4.2% from high ₹274.48
+Now `₹263.06` (+8.7% for the day)
+Consider exiting — momentum is dying.
+
+
+[13-04-2026 13:37] Spidey Bot
+**⚠️ `SURAJLTD` WEAKENING — watch closely**
+Dropped 4.2% from high ₹274.48
+Now `₹263.06` (+8.7% for the day)
+Consider exiting — momentum is dying.
+
+
 ==============================================================
-Exported 2,023 message(s)
+Exported 2,209 message(s)
 ==============================================================
