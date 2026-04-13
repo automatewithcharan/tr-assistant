@@ -1437,7 +1437,8 @@ class AutoPilotInvestor:
                 )
                 candidate_grade, _ = self._grade_candidate(temp_candidate)
                 candidate_rank = self._candidate_rank(temp_candidate)
-                if self._eligible_for_live_auto_buy(temp_candidate, candidate_grade):
+                auto_eligible = self._eligible_for_live_auto_buy(temp_candidate, candidate_grade)
+                if auto_eligible:
                     _auto_result = self._try_auto_buy(
                         sym, live_price, stop_loss, target1, target2, blind_score, blind_reasons
                     )
@@ -1462,6 +1463,7 @@ class AutoPilotInvestor:
                     rr2=rr2,
                     grade=candidate_grade,
                     rank_score=candidate_rank,
+                    auto_eligible=auto_eligible,
                     auto_result=_auto_result,
                 )
             self._already_alerted_buys.add(sym)
@@ -5008,6 +5010,7 @@ class AutoPilotInvestor:
         rr2: float,
         grade: str,
         rank_score: float,
+        auto_eligible: bool,
         auto_result: Optional[str],
     ) -> None:
         """Persist clean engine-confirmed buy candidates for later model training."""
@@ -5016,6 +5019,7 @@ class AutoPilotInvestor:
             f"engine_confirmed_buys_{self.config.account_name}.csv",
         )
         outcome = str(auto_result or "").strip()
+        auto_status, auto_reason = self._classify_auto_buy_outcome(outcome, auto_eligible)
         row = {
             "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
             "Symbol": symbol,
@@ -5031,6 +5035,9 @@ class AutoPilotInvestor:
             "RR2": round(float(rr2 or 0), 2),
             "Grade": grade,
             "RankScore": round(float(rank_score or 0), 2),
+            "AutoEligible": bool(auto_eligible),
+            "AutoStatus": auto_status,
+            "AutoReason": auto_reason,
             "AutoBuyOutcome": outcome,
         }
         row_df = pd.DataFrame([row])
@@ -5038,3 +5045,32 @@ class AutoPilotInvestor:
             row_df.to_csv(log_path, mode="a", header=False, index=False)
         else:
             row_df.to_csv(log_path, index=False)
+
+    @staticmethod
+    def _classify_auto_buy_outcome(outcome: str, auto_eligible: bool) -> Tuple[str, str]:
+        """Convert human-facing auto-buy text into stable analysis fields."""
+        text = str(outcome or "").strip()
+        lower = text.lower()
+        if not auto_eligible:
+            return "INELIGIBLE", "setup_not_tight"
+        if not text:
+            return "NO_ACTION", ""
+        if "auto-bought" in lower:
+            return "BOUGHT", "placed"
+        if "pending" in lower or "retry queued" in lower or "funds/margin" in lower:
+            return "PENDING", "funds_short"
+        if "unavailable" in lower and "order manager" in lower:
+            return "ERROR", "order_manager_unavailable"
+        if "disabled" in lower:
+            return "SKIPPED", "auto_trade_disabled"
+        if "starter position exceeds limit" in lower:
+            return "SKIPPED", "position_too_large"
+        if "already" in lower and "holding" in lower:
+            return "SKIPPED", "already_holding"
+        if "max open positions" in lower:
+            return "SKIPPED", "max_open_positions"
+        if "market is closed" in lower:
+            return "SKIPPED", "market_closed"
+        if "skip" in lower:
+            return "SKIPPED", "execution_skipped"
+        return "ERROR", "execution_error"
