@@ -245,6 +245,7 @@ class KiteTickerStreamRunner:
 
     def _resolve_tokens(self, symbols: List[str]) -> Tuple[List[int], List[str]]:
         """Map symbol list to official NSE and BSE instrument tokens."""
+        self.session_manager.ensure_fresh_session()
         client = self.session_manager._build_client()
         symbol_to_token: Dict[str, int] = {}
 

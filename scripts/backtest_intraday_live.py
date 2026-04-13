@@ -33,6 +33,7 @@ warnings.filterwarnings("ignore")
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, BASE_DIR)
 DATA_DIR = os.path.join(BASE_DIR, "results", "Data", "kite_history_cache", "day")
+MINUTE_CACHE_DIR = os.path.join(BASE_DIR, "results", "Data", "kite_history_cache", "minute")
 
 # ──────────────────────────────────────────────────────────────────────
 # Thresholds (match AutoPilotInvestor.py)
@@ -46,6 +47,7 @@ MIN_VOLUME_DAILY = 100_000    # Minimum daily volume for candidate scan
 FADE_DROP_FROM_ENTRY_PCT = 2.0
 FADE_DROP_FROM_HIGH_PCT = 4.0
 FADE_COOLDOWN_MIN = 10
+FADE_MODE = "standard"  # standard | off | loss-only
 
 # Scorer thresholds — aligned with live AutoPilotConfig
 SCORE_BLIND_BUY = 65          # Legacy — no longer used as floor
@@ -259,6 +261,75 @@ def _in_prime_trading_window(time_text: str) -> bool:
     in_morning = MORNING_WINDOW_START <= mins <= MORNING_WINDOW_END
     in_afternoon = AFTERNOON_WINDOW_START <= mins <= AFTERNOON_WINDOW_END
     return in_morning or in_afternoon
+
+
+def _should_take_fade_exit(
+    entry_price: float,
+    current_price: float,
+    high_after: float,
+    current_idx: int,
+    last_fade_alert_idx: int,
+) -> bool:
+    """Evaluate whether the configured fade mode should force an exit."""
+    if FADE_MODE == "off":
+        return False
+    if high_after <= 0 or (current_idx - last_fade_alert_idx) < FADE_COOLDOWN_MIN:
+        return False
+    drop_from_high = (high_after - current_price) / high_after * 100
+    if drop_from_high < FADE_DROP_FROM_HIGH_PCT:
+        return False
+    if FADE_MODE == "loss-only" and current_price >= entry_price:
+        return False
+    return True
+
+
+def _minute_cache_path(symbol: str, date_str: str) -> str:
+    cache_dir = os.path.join(MINUTE_CACHE_DIR, date_str)
+    os.makedirs(cache_dir, exist_ok=True)
+    return os.path.join(cache_dir, f"{str(symbol).strip().upper()}.csv")
+
+
+def _load_cached_minute_candles(symbol: str, date_str: str) -> Optional[List[dict]]:
+    cache_path = _minute_cache_path(symbol, date_str)
+    if not os.path.exists(cache_path):
+        return None
+    candles: List[dict] = []
+    try:
+        with open(cache_path, "r", newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            for row in reader:
+                candles.append({
+                    "time": str(row.get("time", "")).strip(),
+                    "open": float(row["open"]),
+                    "high": float(row["high"]),
+                    "low": float(row["low"]),
+                    "close": float(row["close"]),
+                    "volume": int(float(row["volume"])),
+                })
+    except Exception:
+        return None
+    return candles if len(candles) >= 5 else None
+
+
+def _save_cached_minute_candles(symbol: str, date_str: str, candles: List[dict]) -> None:
+    if not candles:
+        return
+    cache_path = _minute_cache_path(symbol, date_str)
+    try:
+        with open(cache_path, "w", newline="", encoding="utf-8") as handle:
+            writer = csv.DictWriter(handle, fieldnames=["time", "open", "high", "low", "close", "volume"])
+            writer.writeheader()
+            for candle in candles:
+                writer.writerow({
+                    "time": candle["time"],
+                    "open": candle["open"],
+                    "high": candle["high"],
+                    "low": candle["low"],
+                    "close": candle["close"],
+                    "volume": candle["volume"],
+                })
+    except Exception:
+        pass
 
 
 def _build_partial_day_frame(history_frame: pd.DataFrame, date_str: str, day_open: float, candles: List[dict], upto_idx: int) -> pd.DataFrame:
@@ -639,7 +710,7 @@ def scan_daily_candidates(target_dates: List[str], top_n: int = 0) -> Dict[str, 
 # Step 2: Pull minute candles from Kite API
 # ──────────────────────────────────────────────────────────────────────
 
-def pull_minute_candles(symbols: List[str], date_str: str) -> Dict[str, list]:
+def pull_minute_candles(symbols: List[str], date_str: str, force_refresh: bool = False) -> Dict[str, list]:
     """
     Pull minute candles for a list of symbols for a single date.
     Returns {symbol: [(datetime, open, high, low, close, volume), ...]}.
@@ -654,8 +725,16 @@ def pull_minute_candles(symbols: List[str], date_str: str) -> Dict[str, list]:
 
     minute_data = {}
     total = len(symbols)
+    cached_hits = 0
+    fetched_hits = 0
 
     for i, sym in enumerate(symbols):
+        if not force_refresh:
+            cached = _load_cached_minute_candles(sym, date_str)
+            if cached is not None:
+                minute_data[sym] = cached
+                cached_hits += 1
+                continue
         try:
             df = provider.get_history_range(
                 sym, interval="minute",
@@ -679,6 +758,8 @@ def pull_minute_candles(symbols: List[str], date_str: str) -> Dict[str, list]:
                     })
                 if len(candles) >= 5:  # Need at least 5 minute candles
                     minute_data[sym] = candles
+                    _save_cached_minute_candles(sym, date_str, candles)
+                    fetched_hits += 1
                 if (i + 1) % 10 == 0:
                     print(f"  Pulled {i + 1}/{total} symbols...")
             time.sleep(0.35)  # ~3 req/sec rate limit
@@ -686,6 +767,8 @@ def pull_minute_candles(symbols: List[str], date_str: str) -> Dict[str, list]:
             print(f"  Failed {sym}: {exc}")
             time.sleep(0.5)
 
+    if cached_hits or fetched_hits:
+        print(f"  Minute cache: {cached_hits} cached, {fetched_hits} fetched")
     return minute_data
 
 
@@ -826,16 +909,13 @@ def simulate_intraday(
             fade_detected = True
             break
 
-        # Check FADE EXIT: drop from high >= 4%
-        if high_after > 0:
-            drop_from_high = (high_after - price) / high_after * 100
-            if drop_from_high >= FADE_DROP_FROM_HIGH_PCT and (j - last_fade_alert_idx) >= FADE_COOLDOWN_MIN:
-                exit_price = price
-                exit_time = c["time"]
-                exit_reason = "FADE_EXIT"
-                fade_detected = True
-                last_fade_alert_idx = j
-                break
+        if _should_take_fade_exit(entry_price, price, high_after, j, last_fade_alert_idx):
+            exit_price = price
+            exit_time = c["time"]
+            exit_reason = "FADE_EXIT"
+            fade_detected = True
+            last_fade_alert_idx = j
+            break
 
         # Check FADE WARNING: drop from entry >= 2%
         drop_from_entry = (entry_price - price) / entry_price * 100
@@ -931,6 +1011,7 @@ def print_report(all_trades: List[Trade], candidates_per_day: Dict[str, int], co
         f"sell {cost_model.sell_cost_pct*100:.3f}% | "
         f"slippage {cost_model.slippage_bps:.1f} bps/side"
     )
+    print(f"  Fade Mode:               {FADE_MODE} @ {FADE_DROP_FROM_HIGH_PCT:.1f}% from high")
     print(f"  Gross Win Rate:          {gross_win_rate:.1f}%")
     print(f"  Net Win Rate:            {win_rate:.1f}% ({len(winners)}W / {len(losers)}L)")
     print(f"  Avg Gross P&L/Trade:     {avg_gross_pnl:+.2f}%")
@@ -1161,9 +1242,12 @@ def main():
     parser.add_argument("--afternoon-start", type=str, default=None, help="Afternoon window start HH:MM (override)")
     parser.add_argument("--afternoon-end", type=str, default=None, help="Afternoon window end HH:MM (override)")
     parser.add_argument("--no-afternoon", action="store_true", help="Disable afternoon window (morning-only)")
+    parser.add_argument("--fade-mode", choices=["standard", "off", "loss-only"], default=None, help="Fade exit mode")
+    parser.add_argument("--fade-drop-high-pct", type=float, default=None, help="Fade exit threshold from peak high")
+    parser.add_argument("--force-minute-refresh", action="store_true", help="Ignore cached minute candles and refetch from Kite")
     args = parser.parse_args()
 
-    global MIN_VOL_RATIO, MORNING_WINDOW_START, MORNING_WINDOW_END, AFTERNOON_WINDOW_START, AFTERNOON_WINDOW_END
+    global MIN_VOL_RATIO, MORNING_WINDOW_START, MORNING_WINDOW_END, AFTERNOON_WINDOW_START, AFTERNOON_WINDOW_END, FADE_MODE, FADE_DROP_FROM_HIGH_PCT
     if args.min_vol_ratio is not None:
         MIN_VOL_RATIO = max(0.0, float(args.min_vol_ratio))
     if args.morning_start:
@@ -1193,6 +1277,10 @@ def main():
     if args.no_afternoon:
         AFTERNOON_WINDOW_START = -1
         AFTERNOON_WINDOW_END = -1
+    if args.fade_mode:
+        FADE_MODE = str(args.fade_mode).strip().lower()
+    if args.fade_drop_high_pct is not None:
+        FADE_DROP_FROM_HIGH_PCT = max(0.1, float(args.fade_drop_high_pct))
     cost_model = CostModel(
         buy_cost_pct=max(0.0, float(args.buy_cost_pct)),
         sell_cost_pct=max(0.0, float(args.sell_cost_pct)),
@@ -1267,9 +1355,14 @@ def main():
                 max_profit = (cand["high"] - entry_price) / entry_price * 100
                 max_dd = (entry_price - cand["low"]) / entry_price * 100
 
-                # Fade simulation from daily: did low drop 4%+ from high?
+                # Daily-only fade approximation. "loss-only" only exits when the
+                # day closes below entry; "off" disables fade exits completely.
                 drop_from_high = (cand["high"] - cand["close"]) / cand["high"] * 100
-                fade_detected = drop_from_high >= FADE_DROP_FROM_HIGH_PCT
+                fade_detected = False
+                if FADE_MODE == "standard":
+                    fade_detected = drop_from_high >= FADE_DROP_FROM_HIGH_PCT
+                elif FADE_MODE == "loss-only":
+                    fade_detected = drop_from_high >= FADE_DROP_FROM_HIGH_PCT and cand["close"] < entry_price
 
                 if fade_detected:
                     # Conservative: exit at high - 4%
@@ -1330,7 +1423,7 @@ def main():
             symbols = [c["symbol"] for c in cands]
             print(f"\n  {dt}: pulling {len(symbols)} symbols...")
 
-            minute_data = pull_minute_candles(symbols, dt)
+            minute_data = pull_minute_candles(symbols, dt, force_refresh=args.force_minute_refresh)
             print(f"  Got minute data for {len(minute_data)}/{len(symbols)} symbols")
 
             for cand in cands:

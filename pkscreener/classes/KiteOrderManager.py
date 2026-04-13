@@ -233,6 +233,7 @@ class KiteOrderManager:
             return self._client
         from pkscreener.classes.KiteConnectManager import KiteConnectSessionManager
         mgr = KiteConnectSessionManager()
+        mgr.ensure_fresh_session()
         self._client = mgr._build_client()
         return self._client
 

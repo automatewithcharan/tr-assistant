@@ -235,6 +235,7 @@ class KiteHistoricalDataProvider:
 
     def _get_client(self):
         if self._client is None:
+            self.session_manager.ensure_fresh_session()
             self._client = self.session_manager._build_client()
         return self._client
 
