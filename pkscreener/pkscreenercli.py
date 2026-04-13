@@ -156,9 +156,9 @@ try:
     _env_dev = _repo_root / ".env.dev"
     _env_file = _repo_root / ".env"
     if _env_dev.exists():
-        _load_dotenv(_env_dev, override=False)
+        _load_dotenv(_env_dev, override=True)
     elif _env_file.exists():
-        _load_dotenv(_env_file, override=False)
+        _load_dotenv(_env_file, override=True)
 except Exception:
     pass
 

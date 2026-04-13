@@ -85,7 +85,7 @@ class AutoPilotConfig:
     min_volume_ratio: float = 5.0       # 5x avg vol — backtest-validated edge threshold
     max_entry_gap_pct: float = 5.0      # gaps >= 5% reverse 73% of the time — toxic
     blind_buy_min_score: float = 0.0    # score is NOT a quality filter (inverted edge)
-    blind_buy_max_score: float = 40.0   # SCORE CAP: high score = oversold trap
+    blind_buy_max_score: float = 70.0   # SCORE CAP: allow most candidates, overbought penalty handles extremes
 
     # Optional stricter mode (disabled by default)
     strict_mode: bool = False
@@ -661,6 +661,7 @@ class AutoPilotInvestor:
         # 5 × ₹50K = ₹2.5L = full MIS margin. Diversification ensures even if
         # 1 trade loses, the other 4 cover it. Most days: ₹5K-₹20K income.
         self._TOP_N_DAILY_BATCH = 5             # 5 trades per day for consistency
+        self._AUTO_BUY_TOP_N = 2                # auto-execute only the tightest 1-2 confirmed setups/day
         self._daily_batch_alert_count: int = 0  # counter of batch buy alerts sent today
 
         # Tick-only fast scanner state (no OHLCV, fires in < 1 second)
@@ -748,9 +749,13 @@ class AutoPilotInvestor:
         try:
             from pkscreener.classes.KiteOrderManager import KiteOrderManager
             mgr = KiteOrderManager(output_dir=self.output_dir)
-            if mgr.auto_trade or mgr.dry_run:
-                self._order_manager = mgr
-                self._log(f"Kite order manager active (dry_run={mgr.dry_run})")
+            self._order_manager = mgr
+            if mgr.auto_trade:
+                self._log(f"Kite order manager active (LIVE auto-trade ON, dry_run={mgr.dry_run})")
+            elif mgr.dry_run:
+                self._log("Kite order manager active (DRY RUN mode)")
+            else:
+                self._log("Kite order manager active but auto-trade is OFF (set KITE_AUTO_TRADE=1 to place real buys)")
         except Exception:
             pass  # Kite trading not configured — alert-only mode
 
@@ -762,7 +767,7 @@ class AutoPilotInvestor:
         Returns a Discord-ready status line, or None if auto-trade is off.
         """
         if self._order_manager is None:
-            return None
+            return "⚠️ Kite auto-buy unavailable: order manager not initialized"
         result = self._order_manager.auto_buy_from_candidate(
             symbol=symbol, live_price=price, stop_loss=stop_loss,
             target1=target1, target2=target2,
@@ -800,6 +805,27 @@ class AutoPilotInvestor:
                     f"Order ID: {r.order_id} | P/L: ₹{pnl:+,.0f}"
                 )
 
+    def _run_pending_buy_retries(self) -> None:
+        """Retry queued auto-buys, mainly after temporary funds/margin failures."""
+        if self._order_manager is None:
+            return
+        try:
+            results = self._order_manager.retry_pending_buys()
+        except Exception as exc:
+            self._log(f"Pending auto-buy retry failed: {exc}")
+            return
+        for r in results:
+            if r.success:
+                self._send_to_channels(
+                    f"✅ Auto-bought `{r.symbol}` x{r.qty} via Kite on retry (ID: {r.order_id})"
+                )
+            elif r.status == "FUNDS_SHORT":
+                self._send_to_channels(f"⚠️ Auto-buy pending for `{r.symbol}`: {r.message}")
+            elif r.status == "EXPIRED":
+                self._send_to_channels(f"⌛ Auto-buy expired for `{r.symbol}`: {r.message}")
+            else:
+                self._send_to_channels(f"⚠️ Auto-buy retry skipped for `{r.symbol}`: {r.message}")
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -830,6 +856,10 @@ class AutoPilotInvestor:
             # Only re-evaluate once per cycle during market hours
             if self._is_market_open():
                 self._nifty_crash_pause = self._check_nifty_crash(signal_state)
+
+            # 2c. Retry queued auto-buys before scanning for new ones.
+            if not result.buy_paused:
+                self._run_pending_buy_retries()
 
             # 3. Find blind-buy candidates
             if not result.buy_paused:
@@ -1242,6 +1272,8 @@ class AutoPilotInvestor:
             sym = str(row.get("Stock", "")).strip()
             if not sym or sym in self._already_alerted_buys:
                 continue
+            current_action = str(row.get("What To Do", "")).strip()
+            is_engine_confirmed_buy = current_action in buy_actions
 
             # Exclude ETFs and non-equity instruments
             if self._is_excluded_symbol(sym):
@@ -1365,9 +1397,15 @@ class AutoPilotInvestor:
             if scope_t2 > 0:
                 _scope_parts.append(f"+{scope_t2:.1f}% to max target")
             _scope_str = f" | **Profit potential: {' | '.join(_scope_parts)}**" if _scope_parts else ""
+            header = "🔍 MISSED EARLIER, NOW STRONG" if is_engine_confirmed_buy else "👀 WATCHLIST IMPROVING"
+            auto_note = (
+                "_Auto-buy eligible if Kite execution checks pass._"
+                if is_engine_confirmed_buy
+                else "_Alert-only for now: engine has not upgraded this to Buy Now yet._"
+            )
             msg = (
                 f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"**🔍 MISSED EARLIER, NOW STRONG — `{sym}`** — Quality {score_label}\n"
+                f"**{header} — `{sym}`** — Quality {score_label}\n"
                 f"📈 **Expected to grow {_expected_growth:+.1f}% today** | Price now: `₹{live_price:.2f}` (+{daily_change:.1f}% so far){_scope_str}\n"
                 f"📊 Volume: `{vol_ratio:.1f}x` above normal | `{confidence:.0f}%` indicators agree\n\n"
                 f"**What to do:**\n"
@@ -1375,22 +1413,63 @@ class AutoPilotInvestor:
                 f"🔴 EXIT if price drops to `₹{stop_loss:.2f}` (you lose ₹{_risk_ps:.0f}/share)\n"
                 f"🟢 SELL at `₹{target1:.2f}` (safe profit) or `₹{target2:.2f}` (max profit — ₹{_reward_ps:.0f}/share gain)\n\n"
                 f"**Why:** {self._simplify_blind_reasons(blind_reasons)}\n"
+                f"{auto_note}\n"
                 f"_Open Groww → Buy → then use `/buy {sym} {suggested_qty} {live_price:.0f}` to record_"
             )
 
             self._send_to_channels(msg)
-            # Auto-buy via Kite if enabled
-            _auto_result = self._try_auto_buy(
-                sym, live_price, stop_loss, target1, target2, blind_score, blind_reasons
-            )
-            if _auto_result:
-                self._send_to_channels(_auto_result)
+            # Auto-buy via Kite only for tighter engine-confirmed buys.
+            _auto_result = None
+            if is_engine_confirmed_buy:
+                temp_candidate = BlindBuyCandidate(
+                    symbol=sym,
+                    price=live_price,
+                    buy_above=live_price,
+                    stop_loss=stop_loss,
+                    target1=target1,
+                    target2=target2,
+                    confidence=confidence,
+                    volume_ratio=vol_ratio,
+                    change_pct=daily_change,
+                    blind_score=blind_score,
+                    original_action=current_action,
+                    reasons=blind_reasons,
+                )
+                candidate_grade, _ = self._grade_candidate(temp_candidate)
+                candidate_rank = self._candidate_rank(temp_candidate)
+                if self._eligible_for_live_auto_buy(temp_candidate, candidate_grade):
+                    _auto_result = self._try_auto_buy(
+                        sym, live_price, stop_loss, target1, target2, blind_score, blind_reasons
+                    )
+                else:
+                    _auto_result = (
+                        f"⚠️ Auto-buy skipped for `{sym}`: confirmed buy, but setup is not tight enough "
+                        f"(conf {confidence:.0f}%, RR {rr2:.1f}, gap {self._candidate_entry_gap_pct(temp_candidate):.1f}%)."
+                    )
+                if _auto_result:
+                    self._send_to_channels(_auto_result)
+                self._log_engine_confirmed_buy_candidate(
+                    symbol=sym,
+                    action=current_action,
+                    live_price=live_price,
+                    stop_loss=stop_loss,
+                    target1=target1,
+                    target2=target2,
+                    blind_score=blind_score,
+                    confidence=confidence,
+                    volume_ratio=vol_ratio,
+                    daily_change=daily_change,
+                    rr2=rr2,
+                    grade=candidate_grade,
+                    rank_score=candidate_rank,
+                    auto_result=_auto_result,
+                )
             self._already_alerted_buys.add(sym)
             self._save_daily_alerted(sym)
             self._rescan_alert_count += 1
             self._log(
-                f"🔍 RESCAN CATCH: {sym} score={blind_score:.0f} vol={vol_ratio:.1f}x "
-                f"conf={confidence:.0f}% change=+{daily_change:.1f}% — was missed earlier"
+                f"🔍 RESCAN CATCH: {sym} action='{current_action}' score={blind_score:.0f} vol={vol_ratio:.1f}x "
+                f"conf={confidence:.0f}% change=+{daily_change:.1f}%"
             )
             _rescan_count += 1
             if _rescan_count >= _max_rescan_alerts:
@@ -2131,7 +2210,7 @@ class AutoPilotInvestor:
 
         # ---- DECISION ----
         # Tier 1: score >= 50 in opening window OR score >= 60 after
-        _min_score = 45 if _is_opening else 55
+        _min_score = 35 if _is_opening else 38
         if _score < _min_score:
             self._log(
                 f"Tick-only reject {sym}: score {_score:.0f} < {_min_score} "
@@ -2965,19 +3044,19 @@ class AutoPilotInvestor:
             _is_buy_for_gate = "buy" in _now_action_for_gate
             _high_vol_buy = _is_buy_for_gate and _vol_ratio_live >= 2.0
             if _is_broad_rally and _relative_outperformance >= 5.0:
-                effective_min = max(48.0, self.config.blind_buy_min_score)
+                effective_min = max(35.0, self.config.blind_buy_min_score)
                 self._log(
                     f"Broad rally mode: {sym} +{daily_change:.1f}% vs Nifty +{_nifty_chg:.1f}% "
                     f"(outperform +{_relative_outperformance:.1f}%), effective_min={effective_min:.0f}"
                 )
             elif _high_vol_buy:
-                effective_min = max(48.0, self.config.blind_buy_min_score)
+                effective_min = max(35.0, self.config.blind_buy_min_score)
                 self._log(
                     f"High-vol Buy fast-track: {sym} vol {_vol_ratio_live:.1f}x + Buy Now "
                     f"→ effective_min={effective_min:.0f}"
                 )
             else:
-                effective_min = max(52.0, self.config.blind_buy_min_score)
+                effective_min = max(38.0, self.config.blind_buy_min_score)
         elif _entry_confirmed and _no_hard_blockers:
             # Price just crossed entry trigger (fresh breakout, stock hasn't run much yet).
             # Standard threshold is fine here.
@@ -4384,14 +4463,65 @@ class AutoPilotInvestor:
             if elapsed < self._FOLLOWUP_COOLDOWN_SEC:
                 return  # Not yet — keep buffering
         # Cooldown elapsed — send all buffered picks as one message
-        # Sort buffered by score descending
-        self._pending_followups.sort(key=lambda c: c.blind_score, reverse=True)
+        # Sort buffered by improved execution-aware ranking.
+        self._pending_followups.sort(key=self._candidate_rank, reverse=True)
         self._do_send_buy_alert(self._pending_followups, is_followup=True)
         self._last_buy_alert_time = datetime.now()
         self._pending_followups = []
 
     @staticmethod
-    def _grade_candidate(c: 'BlindBuyCandidate') -> Tuple[str, str]:
+    def _candidate_rr2(c: 'BlindBuyCandidate') -> float:
+        return _compute_long_rr(c.price, c.stop_loss, c.target2)
+
+    @staticmethod
+    def _candidate_entry_gap_pct(c: 'BlindBuyCandidate') -> float:
+        if c.price <= 0 or c.buy_above <= 0:
+            return 0.0
+        return round(((c.buy_above - c.price) / c.price) * 100, 2)
+
+    @classmethod
+    def _candidate_rank(cls, c: 'BlindBuyCandidate') -> float:
+        """Execution-aware ranking for alert ordering.
+
+        Historical ledger hint: confidence helps a bit, good RR helps, and
+        larger entry gaps hurt because the setup is less immediate/actionable.
+        """
+        rr2 = max(0.0, cls._candidate_rr2(c))
+        gap_pct = max(0.0, cls._candidate_entry_gap_pct(c))
+        vol_bonus = min(c.volume_ratio, 12.0) * 1.4
+        change_bonus = min(max(c.change_pct, 0.0), 12.0) * 0.5
+        return (
+            (c.confidence * 1.2)
+            + (min(rr2, 4.0) * 10.0)
+            + vol_bonus
+            + change_bonus
+            - (gap_pct * 2.0)
+            - (max(c.blind_score - 70.0, 0.0) * 0.15)
+        )
+
+    @classmethod
+    def _eligible_for_live_auto_buy(cls, c: 'BlindBuyCandidate', grade: str = "") -> bool:
+        """Return True only for tighter engine-confirmed setups.
+
+        Historical buy-ledger hint is modest but directionally clear:
+        tighter entry gap + decent RR + stronger confidence beats broad execution.
+        """
+        rr2 = cls._candidate_rr2(c)
+        gap_pct = cls._candidate_entry_gap_pct(c)
+        if grade not in ("A+", "A"):
+            return False
+        if c.confidence < 35:
+            return False
+        if rr2 < 1.5:
+            return False
+        if gap_pct > 1.0:
+            return False
+        if c.volume_ratio < 1.6:
+            return False
+        return True
+
+    @classmethod
+    def _grade_candidate(cls, c: 'BlindBuyCandidate') -> Tuple[str, str]:
         """Assign a conviction grade (A+, A, B) and risk flag.
 
         Returns (grade, risk_flag) where risk_flag may be empty or a warning.
@@ -4408,19 +4538,27 @@ class AutoPilotInvestor:
         """
         momentum = c.volume_ratio * abs(c.change_pct) if c.change_pct > 0 else 0
         vol_efficiency = (c.volume_ratio / c.change_pct) if c.change_pct > 0 else 99
+        rr2 = cls._candidate_rr2(c)
+        entry_gap_pct = cls._candidate_entry_gap_pct(c)
         risk_flag = ""
 
         # Distribution risk: lots of volume but modest move = selling into strength
         if vol_efficiency > 1.5 and c.volume_ratio >= 3.0:
             risk_flag = "⚠️ GAP-FADE RISK — high volume relative to move (possible distribution)"
+        elif entry_gap_pct > 1.0:
+            risk_flag = "⚠️ ENTRY NOT TIGHT — price is still meaningfully below trigger"
 
         # A+ = Best of the best — auto-buy immediately
+        if c.confidence >= 45 and rr2 >= 1.8 and entry_gap_pct <= 0.6 and c.volume_ratio >= 2.0:
+            return "A+", risk_flag
         if c.blind_score >= 75 and c.volume_ratio >= 3.0 and c.change_pct >= 3.0 and vol_efficiency <= 1.5:
             return "A+", risk_flag
         if c.blind_score >= 80 and c.volume_ratio >= 2.5:
             return "A+", risk_flag
 
         # A = Strong conviction — auto-buy
+        if c.confidence >= 35 and rr2 >= 1.5 and entry_gap_pct <= 1.0 and c.volume_ratio >= 1.6:
+            return "A", risk_flag
         if c.blind_score >= 65 and c.volume_ratio >= 2.5 and c.change_pct >= 2.0:
             return "A", risk_flag
         if c.blind_score >= 70 and c.volume_ratio >= 2.0:
@@ -4457,9 +4595,9 @@ class AutoPilotInvestor:
             grade, risk_flag = self._grade_candidate(c)
             momentum = c.volume_ratio * abs(c.change_pct) if c.change_pct > 0 else 0
             graded.append((c, grade, momentum, risk_flag))
-        # Sort: A+ first, then A, then B; within tier by score desc (not raw momentum)
+        # Sort: A+ first, then A, then B; within tier by execution-aware rank.
         _grade_order = {"A+": 0, "A": 1, "B": 2}
-        graded.sort(key=lambda x: (_grade_order.get(x[1], 9), -x[0].blind_score, -x[2]))
+        graded.sort(key=lambda x: (_grade_order.get(x[1], 9), -self._candidate_rank(x[0]), -x[2]))
 
         # Split into main (top 10) and overflow
         _MAX_MAIN = 10
@@ -4500,17 +4638,21 @@ class AutoPilotInvestor:
         message = "\n\n".join(sections)
         self._send_to_channels(message)
 
-        # Auto-buy A+ and A grade candidates — consistent daily income
+        # Auto-buy only the tightest A+/A grade candidates — keep execution selective.
         if not is_post_market and self._order_manager is not None:
             _auto_lines = []
+            auto_sent = 0
             for c, grade, _, _ in main_picks:
-                if grade in ("A+", "A"):
+                if auto_sent >= self._AUTO_BUY_TOP_N:
+                    break
+                if self._eligible_for_live_auto_buy(c, grade):
                     _ar = self._try_auto_buy(
                         c.symbol, c.price, c.stop_loss, c.target1, c.target2,
                         c.blind_score, c.reasons
                     )
                     if _ar:
                         _auto_lines.append(_ar)
+                    auto_sent += 1
             if _auto_lines:
                 self._send_to_channels("\n".join(_auto_lines))
 
@@ -4844,6 +4986,52 @@ class AutoPilotInvestor:
             "OpenPositions": result.open_positions,
             "BuyPaused": result.buy_paused,
             "Error": result.error or "",
+        }
+        row_df = pd.DataFrame([row])
+        if os.path.isfile(log_path):
+            row_df.to_csv(log_path, mode="a", header=False, index=False)
+        else:
+            row_df.to_csv(log_path, index=False)
+
+    def _log_engine_confirmed_buy_candidate(
+        self,
+        symbol: str,
+        action: str,
+        live_price: float,
+        stop_loss: float,
+        target1: float,
+        target2: float,
+        blind_score: float,
+        confidence: float,
+        volume_ratio: float,
+        daily_change: float,
+        rr2: float,
+        grade: str,
+        rank_score: float,
+        auto_result: Optional[str],
+    ) -> None:
+        """Persist clean engine-confirmed buy candidates for later model training."""
+        log_path = os.path.join(
+            self.output_dir,
+            f"engine_confirmed_buys_{self.config.account_name}.csv",
+        )
+        outcome = str(auto_result or "").strip()
+        row = {
+            "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "Symbol": symbol,
+            "Action": action,
+            "Price": round(float(live_price or 0), 2),
+            "StopLoss": round(float(stop_loss or 0), 2),
+            "Target1": round(float(target1 or 0), 2),
+            "Target2": round(float(target2 or 0), 2),
+            "BlindScore": round(float(blind_score or 0), 2),
+            "ConfidencePct": round(float(confidence or 0), 2),
+            "VolumeRatio": round(float(volume_ratio or 0), 2),
+            "DailyChangePct": round(float(daily_change or 0), 2),
+            "RR2": round(float(rr2 or 0), 2),
+            "Grade": grade,
+            "RankScore": round(float(rank_score or 0), 2),
+            "AutoBuyOutcome": outcome,
         }
         row_df = pd.DataFrame([row])
         if os.path.isfile(log_path):

@@ -199,6 +199,7 @@ class KiteOrderManager:
         self.output_dir = output_dir or Archiver.get_user_outputs_dir()
         self._positions_file = Path(self.output_dir) / "kite_tracked_positions.json"
         self._orders_log_file = Path(self.output_dir) / "kite_orders_log.csv"
+        self._pending_buys_file = Path(self.output_dir) / "kite_pending_buys.json"
         self._lock = threading.Lock()
 
         # Config from env
@@ -218,10 +219,12 @@ class KiteOrderManager:
         self.product_type = _product if _product in ("MIS", "CNC", "NRML") else "MIS"
 
         self._positions: Dict[str, TrackedPosition] = {}
+        self._pending_buys: Dict[str, Dict[str, Any]] = {}
         self._daily_order_count = 0
         self._daily_order_date = ""
         self._client = None
         self._load_positions()
+        self._load_pending_buys()
 
     # ------------------------------------------------------------------
     # Kite client
@@ -262,6 +265,25 @@ class KiteOrderManager:
         except Exception as exc:
             _log.warning("Failed to save positions: %s", exc)
 
+    def _load_pending_buys(self):
+        try:
+            if self._pending_buys_file.exists():
+                self._pending_buys = json.loads(
+                    self._pending_buys_file.read_text(encoding="utf-8")
+                )
+        except Exception as exc:
+            _log.warning("Failed to load pending buys: %s", exc)
+            self._pending_buys = {}
+
+    def _save_pending_buys(self):
+        try:
+            self._pending_buys_file.parent.mkdir(parents=True, exist_ok=True)
+            self._pending_buys_file.write_text(
+                json.dumps(self._pending_buys, indent=2, default=str), encoding="utf-8"
+            )
+        except Exception as exc:
+            _log.warning("Failed to save pending buys: %s", exc)
+
     def _log_order(self, result: OrderResult):
         """Append order to CSV log."""
         try:
@@ -271,6 +293,164 @@ class KiteOrderManager:
             df.to_csv(self._orders_log_file, mode="a", header=header, index=False)
         except Exception as exc:
             _log.warning("Failed to log order: %s", exc)
+
+    def _return_logged_result(self, result: OrderResult) -> OrderResult:
+        """Log and return a non-position-mutating order result."""
+        self._log_order(result)
+        return result
+
+    def _looks_like_funds_shortage(self, message: str) -> bool:
+        text = str(message or "").lower()
+        patterns = (
+            "insufficient funds",
+            "insufficient margin",
+            "margin",
+            "rms",
+            "available margin",
+            "available cash",
+            "funds are insufficient",
+            "not enough balance",
+            "insufficient balance",
+        )
+        return any(p in text for p in patterns)
+
+    def _extract_available_funds(self) -> float:
+        try:
+            client = self._get_client()
+            margins = client.margins() or {}
+            equity = margins.get("equity", {}) if isinstance(margins, dict) else {}
+            available = equity.get("available", {}) if isinstance(equity, dict) else {}
+            keys = (
+                "live_balance",
+                "cash",
+                "opening_balance",
+                "adhoc_margin",
+                "collateral",
+                "utilised_debits",
+                "net",
+            )
+            for key in keys:
+                try:
+                    value = float(available.get(key, 0) or 0)
+                    if value > 0:
+                        return value
+                except Exception:
+                    continue
+            # Last fallback: equity net if available
+            try:
+                value = float(equity.get("net", 0) or 0)
+                if value > 0:
+                    return value
+            except Exception:
+                pass
+        except Exception as exc:
+            _log.debug("Funds lookup failed: %s", exc)
+        return 0.0
+
+    def _queue_pending_buy(
+        self,
+        symbol: str,
+        qty: int,
+        live_price: float,
+        stop_loss: float = 0.0,
+        target1: float = 0.0,
+        target2: float = 0.0,
+        blind_score: float = 0.0,
+        reasons: str = "",
+        error_message: str = "",
+        retry_minutes: int = 20,
+    ) -> None:
+        now = _ist_now()
+        payload = {
+            "symbol": symbol,
+            "qty": int(qty),
+            "live_price": float(live_price),
+            "stop_loss": float(stop_loss or 0),
+            "target1": float(target1 or 0),
+            "target2": float(target2 or 0),
+            "blind_score": float(blind_score or 0),
+            "reasons": str(reasons or ""),
+            "last_error": str(error_message or ""),
+            "queued_at": now.isoformat(timespec="seconds"),
+            "retry_after": now.isoformat(timespec="seconds"),
+            "retry_until": (now + timedelta(minutes=retry_minutes)).isoformat(timespec="seconds"),
+            "attempts": int(self._pending_buys.get(symbol, {}).get("attempts", 0) or 0),
+        }
+        self._pending_buys[symbol] = payload
+        self._save_pending_buys()
+
+    def _drop_pending_buy(self, symbol: str) -> None:
+        if symbol in self._pending_buys:
+            self._pending_buys.pop(symbol, None)
+            self._save_pending_buys()
+
+    def retry_pending_buys(self, max_per_cycle: int = 2) -> List[OrderResult]:
+        results: List[OrderResult] = []
+        if not self._pending_buys or not _is_market_open():
+            return results
+        now = _ist_now()
+        symbols = sorted(self._pending_buys.keys())
+        for symbol in symbols:
+            if len(results) >= max_per_cycle:
+                break
+            item = self._pending_buys.get(symbol) or {}
+            try:
+                retry_until = datetime.fromisoformat(str(item.get("retry_until", "")))
+            except Exception:
+                retry_until = now + timedelta(minutes=10)
+            try:
+                retry_after = datetime.fromisoformat(str(item.get("retry_after", "")))
+            except Exception:
+                retry_after = now
+            if now < retry_after:
+                continue
+            if now > retry_until:
+                result = self._return_logged_result(
+                    OrderResult(
+                        False,
+                        symbol=symbol,
+                        side="BUY",
+                        qty=int(item.get("qty", 0) or 0),
+                        price=float(item.get("live_price", 0) or 0),
+                        status="EXPIRED",
+                        message="Pending auto-buy expired before funds became available",
+                    )
+                )
+                self._drop_pending_buy(symbol)
+                results.append(result)
+                continue
+
+            live_price = float(item.get("live_price", 0) or 0)
+            qty = int(item.get("qty", 0) or 0)
+            result = self.place_buy_order(
+                symbol=symbol,
+                qty=qty,
+                price=0.0,
+                stop_loss=float(item.get("stop_loss", 0) or 0),
+                target1=float(item.get("target1", 0) or 0),
+                target2=float(item.get("target2", 0) or 0),
+                blind_score=float(item.get("blind_score", 0) or 0),
+                reasons=str(item.get("reasons", "")),
+                order_type="MARKET",
+            )
+            if result.success:
+                self._drop_pending_buy(symbol)
+            elif self._looks_like_funds_shortage(result.message):
+                item["attempts"] = int(item.get("attempts", 0) or 0) + 1
+                item["retry_after"] = (now + timedelta(seconds=45)).isoformat(timespec="seconds")
+                self._pending_buys[symbol] = item
+                self._save_pending_buys()
+                result.status = "FUNDS_SHORT"
+                if live_price > 0:
+                    needed = max(0.0, qty * live_price - self._extract_available_funds())
+                    if needed > 0:
+                        result.message = f"Still short on funds/margin. Add about ₹{needed:,.0f}; retry queued automatically."
+                    else:
+                        result.message = "Still short on funds/margin; retry queued automatically."
+            else:
+                self._drop_pending_buy(symbol)
+            results.append(result)
+        return results
 
     # ------------------------------------------------------------------
     # Daily order count
@@ -378,52 +558,127 @@ class KiteOrderManager:
 
         # Safety checks
         if not self.auto_trade:
-            return OrderResult(False, message="Auto-trade is disabled (set KITE_AUTO_TRADE=1)")
+            return self._return_logged_result(
+                OrderResult(
+                    False,
+                    symbol=symbol,
+                    side="BUY",
+                    qty=qty,
+                    price=price,
+                    status="DISABLED",
+                    message="Auto-trade is disabled (set KITE_AUTO_TRADE=1)",
+                )
+            )
 
         if not _is_market_open():
-            return OrderResult(False, symbol=symbol, message="Market is closed")
+            return self._return_logged_result(
+                OrderResult(
+                    False,
+                    symbol=symbol,
+                    side="BUY",
+                    qty=qty,
+                    price=price,
+                    status="SKIPPED",
+                    message="Market is closed",
+                )
+            )
 
         if not self._check_daily_limit():
-            return OrderResult(
-                False, symbol=symbol,
-                message=f"Daily order limit reached ({self.max_daily_orders})"
+            return self._return_logged_result(
+                OrderResult(
+                    False,
+                    symbol=symbol,
+                    side="BUY",
+                    qty=qty,
+                    price=price,
+                    status="SKIPPED",
+                    message=f"Daily order limit reached ({self.max_daily_orders})",
+                )
             )
 
         open_count = sum(1 for p in self._positions.values() if p.status == "open")
         if open_count >= self.max_open_positions:
-            return OrderResult(
-                False, symbol=symbol,
-                message=f"Max open positions reached ({self.max_open_positions})"
+            return self._return_logged_result(
+                OrderResult(
+                    False,
+                    symbol=symbol,
+                    side="BUY",
+                    qty=qty,
+                    price=price,
+                    status="SKIPPED",
+                    message=f"Max open positions reached ({self.max_open_positions})",
+                )
             )
 
         if symbol in self._positions and self._positions[symbol].status == "open":
-            return OrderResult(False, symbol=symbol, message="Already holding this stock")
+            return self._return_logged_result(
+                OrderResult(
+                    False,
+                    symbol=symbol,
+                    side="BUY",
+                    qty=qty,
+                    price=price,
+                    status="SKIPPED",
+                    message="Already holding this stock",
+                )
+            )
 
         # Circuit limit check — avoid orders on locked stocks
         circuit_blocked, circuit_reason = self._is_at_circuit_limit(symbol)
         if circuit_blocked:
-            return OrderResult(
-                False, symbol=symbol,
-                message=f"Circuit limit: {circuit_reason}"
+            return self._return_logged_result(
+                OrderResult(
+                    False,
+                    symbol=symbol,
+                    side="BUY",
+                    qty=qty,
+                    price=price,
+                    status="SKIPPED",
+                    message=f"Circuit limit: {circuit_reason}",
+                )
             )
 
         # Sector concentration check — avoid correlated positions
         sector_blocked, sector_reason = self._check_sector_concentration(symbol)
         if sector_blocked:
-            return OrderResult(
-                False, symbol=symbol,
-                message=f"Blocked: {sector_reason}"
+            return self._return_logged_result(
+                OrderResult(
+                    False,
+                    symbol=symbol,
+                    side="BUY",
+                    qty=qty,
+                    price=price,
+                    status="SKIPPED",
+                    message=f"Blocked: {sector_reason}",
+                )
             )
 
         order_value = qty * (price if price > 0 else 0)
         if price > 0 and order_value > self.max_order_value * 1.1:
-            return OrderResult(
-                False, symbol=symbol,
-                message=f"Order value ₹{order_value:,.0f} exceeds limit ₹{self.max_order_value:,.0f}"
+            return self._return_logged_result(
+                OrderResult(
+                    False,
+                    symbol=symbol,
+                    side="BUY",
+                    qty=qty,
+                    price=price,
+                    status="SKIPPED",
+                    message=f"Order value ₹{order_value:,.0f} exceeds limit ₹{self.max_order_value:,.0f}",
+                )
             )
 
         if qty <= 0:
-            return OrderResult(False, symbol=symbol, message="Invalid quantity")
+            return self._return_logged_result(
+                OrderResult(
+                    False,
+                    symbol=symbol,
+                    side="BUY",
+                    qty=qty,
+                    price=price,
+                    status="FAILED",
+                    message="Invalid quantity",
+                )
+            )
 
         # Dry run mode
         if self.dry_run:
@@ -473,8 +728,9 @@ class KiteOrderManager:
                 False, symbol=symbol, side="BUY", qty=qty, price=price,
                 status="FAILED", message=str(exc)
             )
-            self._log_order(result)
-            return result
+            if self._looks_like_funds_shortage(result.message):
+                return result
+            return self._return_logged_result(result)
 
     def place_sell_order(
         self,
@@ -738,7 +994,16 @@ class KiteOrderManager:
         matches the quantity shown to the user.
         """
         if live_price <= 0:
-            return OrderResult(False, symbol=symbol, message="Invalid price")
+            return self._return_logged_result(
+                OrderResult(
+                    False,
+                    symbol=symbol,
+                    side="BUY",
+                    price=live_price,
+                    status="FAILED",
+                    message="Invalid price",
+                )
+            )
 
         try:
             from pkscreener.classes.AutoPilotInvestor import _compute_suggested_qty
@@ -752,17 +1017,46 @@ class KiteOrderManager:
         except Exception:
             qty = int(self.max_order_value // live_price) if live_price > 0 else 0
         if qty <= 0:
-            return OrderResult(
-                False,
-                symbol=symbol,
-                message=f"Starter position exceeds limit ₹{self.max_order_value:,.0f}",
+            return self._return_logged_result(
+                OrderResult(
+                    False,
+                    symbol=symbol,
+                    side="BUY",
+                    price=live_price,
+                    status="SKIPPED",
+                    message=f"Starter position exceeds limit ₹{self.max_order_value:,.0f}",
+                )
             )
-        return self.place_buy_order(
+        result = self.place_buy_order(
             symbol=symbol, qty=qty, price=0.0,  # market order
             stop_loss=stop_loss, target1=target1, target2=target2,
             blind_score=blind_score, reasons=reasons,
             order_type="MARKET",
         )
+        if (not result.success) and self._looks_like_funds_shortage(result.message):
+            available = self._extract_available_funds()
+            needed = max(0.0, qty * live_price - available)
+            self._queue_pending_buy(
+                symbol=symbol,
+                qty=qty,
+                live_price=live_price,
+                stop_loss=stop_loss,
+                target1=target1,
+                target2=target2,
+                blind_score=blind_score,
+                reasons=reasons,
+                error_message=result.message,
+            )
+            result.status = "FUNDS_SHORT"
+            if needed > 0:
+                result.message = (
+                    f"Insufficient funds/margin. Add about ₹{needed:,.0f}; "
+                    f"auto-retry queued for the next 20 minutes."
+                )
+            else:
+                result.message = "Insufficient funds/margin; auto-retry queued for the next 20 minutes."
+            self._log_order(result)
+        return result
 
     # ------------------------------------------------------------------
     # Query helpers

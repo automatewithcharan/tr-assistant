@@ -239,17 +239,21 @@ class SignalPerformanceTracker:
             return row
 
         history_df = history_map.get(symbol)
-        observed_df = history_df[history_df.index >= alert_time] if history_df is not None and not history_df.empty else pd.DataFrame()
+        observed_df = pd.DataFrame()
+        aligned_alert_time = alert_time
+        if history_df is not None and not history_df.empty:
+            aligned_alert_time = self._align_alert_time(alert_time, history_df.index)
+            observed_df = history_df[history_df.index >= aligned_alert_time]
 
         current_price = self._current_price(symbol, observed_df)
         if current_price is not None:
             row["CurrentPrice"] = current_price
             row["CurrentReturnPct"] = self._directional_return(entry_price, current_price, direction)
 
-        row["Return15mPct"] = self._horizon_return(observed_df, alert_time + timedelta(minutes=15), entry_price, direction, row.get("Return15mPct"))
-        row["Return60mPct"] = self._horizon_return(observed_df, alert_time + timedelta(minutes=60), entry_price, direction, row.get("Return60mPct"))
-        row["ReturnEODPct"] = self._eod_return(observed_df, alert_time, entry_price, direction, row.get("ReturnEODPct"))
-        row["ReturnNextDayPct"] = self._next_day_return(observed_df, alert_time, entry_price, direction, row.get("ReturnNextDayPct"))
+        row["Return15mPct"] = self._horizon_return(observed_df, aligned_alert_time + timedelta(minutes=15), entry_price, direction, row.get("Return15mPct"))
+        row["Return60mPct"] = self._horizon_return(observed_df, aligned_alert_time + timedelta(minutes=60), entry_price, direction, row.get("Return60mPct"))
+        row["ReturnEODPct"] = self._eod_return(observed_df, aligned_alert_time, entry_price, direction, row.get("ReturnEODPct"))
+        row["ReturnNextDayPct"] = self._next_day_return(observed_df, aligned_alert_time, entry_price, direction, row.get("ReturnNextDayPct"))
 
         stop_hit, target1_hit, target2_hit = self._evaluate_hits(
             observed_df,
@@ -269,6 +273,23 @@ class SignalPerformanceTracker:
         )
         row["LastEvaluatedAt"] = self.run_at_str
         return row
+
+    def _align_alert_time(self, alert_time: pd.Timestamp, history_index: pd.Index) -> pd.Timestamp:
+        """Align alert timestamps to the timezone awareness of the candle index."""
+        if history_index is None or len(history_index) == 0:
+            return alert_time
+        index_tz = getattr(history_index, "tz", None)
+        if index_tz is None:
+            try:
+                return alert_time.tz_localize(None) if getattr(alert_time, "tzinfo", None) is not None else alert_time
+            except Exception:
+                return alert_time
+        try:
+            if getattr(alert_time, "tzinfo", None) is None:
+                return alert_time.tz_localize(index_tz)
+            return alert_time.tz_convert(index_tz)
+        except Exception:
+            return alert_time
 
     def _current_price(self, symbol: str, observed_df: pd.DataFrame) -> Optional[float]:
         """Resolve the latest available price, preferring live tick snapshots when enabled."""
