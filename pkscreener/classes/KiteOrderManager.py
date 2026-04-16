@@ -708,6 +708,9 @@ class KiteOrderManager:
             if kite_order_type == "LIMIT" and price > 0:
                 order_params["price"] = _round_to_nse_tick(price)
 
+            if kite_order_type == "MARKET":
+                order_params["market_protection"] = 2
+                
             order_id = client.place_order(**order_params)
             order_id = str(order_id or "")
 
