@@ -7,6 +7,7 @@ freshly changes into Buy Now or Sell Now.
 """
 
 import html
+import json
 import os
 import subprocess
 from typing import Dict, List, Optional, Set, Tuple
@@ -1388,6 +1389,10 @@ class SignalMonitorRunner:
         if not self.alert_channels or alerts_df is None or alerts_df.empty:
             return
 
+        alerts_df = self._filter_alerts_for_portfolio(alerts_df)
+        if alerts_df is None or alerts_df.empty:
+            return
+
         summary = summary_df.iloc[0].to_dict() if summary_df is not None and not summary_df.empty else {}
         event_lines = self._build_plain_event_lines(alerts_df, max_alerts=8)
         if self.last_guardrail_status is not None and self.last_guardrail_status.buy_paused:
@@ -1418,6 +1423,39 @@ class SignalMonitorRunner:
             self._send_discord_alert(
                 self._build_discord_monitor_message(alerts_df, summary)
             )
+
+    def _load_tracked_portfolio_symbols(self) -> Set[str]:
+        """Load open tracked Kite symbols so generic market monitor sells stay portfolio-aware."""
+        tracked_file = os.path.join(self.output_dir, "kite_tracked_positions.json")
+        if not os.path.exists(tracked_file):
+            return set()
+        try:
+            raw = json.loads(open(tracked_file, "r", encoding="utf-8").read())
+        except Exception:
+            return set()
+        symbols: Set[str] = set()
+        if not isinstance(raw, dict):
+            return symbols
+        for sym, payload in raw.items():
+            if not isinstance(payload, dict):
+                continue
+            if str(payload.get("status", "")).lower() != "open":
+                continue
+            symbols.add(str(sym or payload.get("symbol", "")).strip().upper())
+        return symbols
+
+    def _filter_alerts_for_portfolio(self, alerts_df: pd.DataFrame) -> pd.DataFrame:
+        """Suppress generic market sell alerts for symbols not in the tracked portfolio."""
+        if alerts_df is None or alerts_df.empty or "NowAction" not in alerts_df.columns:
+            return alerts_df
+        tracked_symbols = self._load_tracked_portfolio_symbols()
+        if not tracked_symbols:
+            sell_mask = alerts_df["NowAction"].astype(str).eq("Sell / Exit")
+            return alerts_df[~sell_mask].copy()
+        symbol_series = alerts_df["Symbol"].astype(str).str.upper() if "Symbol" in alerts_df.columns else pd.Series("", index=alerts_df.index)
+        sell_mask = alerts_df["NowAction"].astype(str).eq("Sell / Exit")
+        keep_mask = (~sell_mask) | (symbol_series.isin(tracked_symbols))
+        return alerts_df[keep_mask].copy()
 
     def _build_plain_event_lines(self, alerts_df: pd.DataFrame, max_alerts: int = 8) -> List[str]:
         """Build short single-line alert summaries for desktop and log output."""
