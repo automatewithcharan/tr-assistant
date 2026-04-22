@@ -694,7 +694,16 @@ class KiteOrderManager:
         # Place real order via Kite
         try:
             client = self._get_client()
-            kite_order_type = "MARKET" if order_type == "MARKET" or price <= 0 else "LIMIT"
+            # Some brokers/accounts reject API MARKET buys without market protection.
+            # For live auto-buys we nearly always have a reference price, so prefer an
+            # aggressive LIMIT order slightly above the observed price to preserve fill
+            # probability while staying API-compatible.
+            aggressive_limit_price = 0.0
+            if price > 0 and order_type == "MARKET":
+                aggressive_limit_price = _round_to_nse_tick(price * 1.003)
+                kite_order_type = "LIMIT"
+            else:
+                kite_order_type = "MARKET" if order_type == "MARKET" or price <= 0 else "LIMIT"
 
             order_params = {
                 "tradingsymbol": symbol,
@@ -706,12 +715,19 @@ class KiteOrderManager:
                 "variety": "regular",
             }
             if kite_order_type == "LIMIT" and price > 0:
-                order_params["price"] = _round_to_nse_tick(price)
+                order_params["price"] = aggressive_limit_price or _round_to_nse_tick(price)
 
             order_id = client.place_order(**order_params)
             order_id = str(order_id or "")
 
-            _log.info("BUY order placed: %s x%d, order_id=%s", symbol, qty, order_id)
+            _log.info(
+                "BUY order placed: %s x%d, order_id=%s, type=%s%s",
+                symbol,
+                qty,
+                order_id,
+                kite_order_type,
+                f", price={order_params.get('price')}" if "price" in order_params else "",
+            )
 
             result = OrderResult(
                 True, order_id=order_id, symbol=symbol, side="BUY",
