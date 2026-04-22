@@ -13,10 +13,45 @@ fi
 LOG=/tmp/trade_watchdog.log
 WEBHOOK=$(grep DISCORD_WEBHOOK_URL $REPO/.env.dev 2>/dev/null | cut -d= -f2- || echo '')
 CLEANUP_STAMP=/tmp/trade_data_cleanup_last_date
+DISK_STATE_STAMP=/tmp/trade_disk_guard_state
+LOGS_DIR="$REPO/results/Data/assistant_logs"
+DISK_WARN_GB=$(grep '^TRADE_DISK_WARN_GB=' "$REPO/.env.dev" 2>/dev/null | tail -1 | cut -d= -f2- || echo '8')
+DISK_CRITICAL_GB=$(grep '^TRADE_DISK_CRITICAL_GB=' "$REPO/.env.dev" 2>/dev/null | tail -1 | cut -d= -f2- || echo '4')
+DISK_GUARD_STOPPED=0
 
 send_discord() {
     [ -z "$WEBHOOK" ] && return
     curl -s -X POST "$WEBHOOK"          -H 'Content-Type: application/json'          -d "{\"content\": \"$1\"}" > /dev/null 2>&1 || true
+}
+
+get_free_kb() {
+    df -Pk "$REPO" 2>/dev/null | awk 'NR==2 {print $4}'
+}
+
+kb_to_gb() {
+    awk -v kb="$1" 'BEGIN { printf "%.1f", kb/1024/1024 }'
+}
+
+send_discord_on_disk_state_change() {
+    NEW_STATE="$1"
+    MESSAGE="$2"
+    LAST_STATE=""
+    [ -f "$DISK_STATE_STAMP" ] && LAST_STATE=$(cat "$DISK_STATE_STAMP" 2>/dev/null || echo "")
+    if [ "$NEW_STATE" != "$LAST_STATE" ]; then
+        echo "$NEW_STATE" > "$DISK_STATE_STAMP"
+        send_discord "$MESSAGE"
+    fi
+}
+
+run_aggressive_disk_cleanup() {
+    CLEANUP_OUT=$(cd "$REPO" && "$PYTHON" scripts/cleanup_results_data.py --apply --keep-days 7 --archive-instead-of-delete 2>&1)
+    CLEANUP_RC=$?
+    if [ -d "$LOGS_DIR" ]; then
+        find "$LOGS_DIR" -type f -name 'session_*.log' -mtime +14 ! -name '*.gz' -exec gzip -f {} \; >/dev/null 2>&1 || true
+        find "$LOGS_DIR" -type f -name 'session_*.log.gz' -mtime +60 -delete >/dev/null 2>&1 || true
+    fi
+    echo "$CLEANUP_OUT"
+    return "$CLEANUP_RC"
 }
 
 run_daily_data_cleanup() {
@@ -49,7 +84,43 @@ run_daily_data_cleanup() {
     fi
 }
 
+run_disk_guard() {
+    WARN_KB=$((DISK_WARN_GB * 1024 * 1024))
+    CRIT_KB=$((DISK_CRITICAL_GB * 1024 * 1024))
+    FREE_KB=$(get_free_kb)
+    [ -z "$FREE_KB" ] && return
+
+    if [ "$FREE_KB" -gt "$WARN_KB" ]; then
+        send_discord_on_disk_state_change "normal" "✅ **Disk space healthy again** — free space is back to $(kb_to_gb "$FREE_KB") GB."
+        echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Watchdog: disk healthy (free=$(kb_to_gb "$FREE_KB")G)" >> "$LOG"
+        return
+    fi
+
+    BEFORE_GB=$(kb_to_gb "$FREE_KB")
+    echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Watchdog: low disk detected (free=${BEFORE_GB}G), running aggressive cleanup" >> "$LOG"
+    AGGR_CLEANUP_OUT=$(run_aggressive_disk_cleanup)
+    AGGR_CLEANUP_RC=$?
+    [ "$AGGR_CLEANUP_RC" -ne 0 ] && echo "$AGGR_CLEANUP_OUT" >> "$LOG"
+
+    FREE_KB=$(get_free_kb)
+    [ -z "$FREE_KB" ] && return
+    AFTER_GB=$(kb_to_gb "$FREE_KB")
+
+    if [ "$FREE_KB" -le "$CRIT_KB" ]; then
+        echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Watchdog: disk CRITICAL after cleanup (free=${AFTER_GB}G), stopping assistant to protect machine" >> "$LOG"
+        $PYTHON -m pkscreener.pkscreenercli --assistantstop all >> "$LOG" 2>&1 || true
+        DISK_GUARD_STOPPED=1
+        send_discord_on_disk_state_change "critical" "🚨 **Disk critically low** — only ${AFTER_GB} GB free after aggressive cleanup. Assistant was stopped to protect login/session stability."
+        return
+    fi
+
+    send_discord_on_disk_state_change "warning" "⚠️ **Disk space low** — free space is ${AFTER_GB} GB after aggressive cleanup. The assistant is still running, but storage should be checked."
+    echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Watchdog: disk warning persists (free=${AFTER_GB}G)" >> "$LOG"
+}
+
 cd $REPO
+run_disk_guard
+[ "$DISK_GUARD_STOPPED" -eq 1 ] && exit 0
 
 # --- Check 1: DB status says running ---
 STATUS=$($PYTHON -m pkscreener.pkscreenercli --assistantstatus 2>/dev/null | head -20)
