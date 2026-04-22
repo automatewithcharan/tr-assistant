@@ -973,10 +973,25 @@ class AutoPilotInvestor:
         if stop_loss <= 0 or target2 <= 0:
             return False, "missing stop/target"
         rr2 = _compute_long_rr(price, stop_loss, target2)
-        if rr2 < 1.2:
-            return False, f"R:R 1:{rr2:.1f} < 1:1.2"
-        if volume_ratio < 0.8 and imbalance < 3.5:
-            return False, f"vol {volume_ratio:.1f}x and imbalance {imbalance:.1f}x too weak"
+        micro_open = self._is_micro_open_fast_lane_active()
+        if micro_open:
+            if blind_score < 58:
+                return False, f"score {blind_score:.0f} < 58 for 9:15 fast-lane"
+            if confidence < 30:
+                return False, f"confidence {confidence:.0f}% < 30% for 9:15 fast-lane"
+            if not (0.6 <= daily_change <= 3.8):
+                return False, f"move {daily_change:.1f}% outside 9:15 fast-lane zone"
+            if turnover_cr < 1.5:
+                return False, f"turnover ₹{turnover_cr:.1f}Cr < ₹1.5Cr for 9:15 fast-lane"
+            if rr2 < 1.8:
+                return False, f"R:R 1:{rr2:.1f} < 1:1.8 for 9:15 fast-lane"
+            if volume_ratio < 1.5 and imbalance < 4.0:
+                return False, f"vol {volume_ratio:.1f}x and imbalance {imbalance:.1f}x too weak for 9:15 fast-lane"
+        else:
+            if rr2 < 1.2:
+                return False, f"R:R 1:{rr2:.1f} < 1:1.2"
+            if volume_ratio < 0.8 and imbalance < 3.5:
+                return False, f"vol {volume_ratio:.1f}x and imbalance {imbalance:.1f}x too weak"
 
         if tick_high > 0 and price > 0:
             pct_from_high = ((tick_high - price) / tick_high) * 100
@@ -991,6 +1006,7 @@ class AutoPilotInvestor:
             return False, "not enough opening urgency"
 
         return True, (
+            f"{'9:15 elite lane | ' if micro_open else ''}"
             f"score {blind_score:.0f}, conf {confidence:.0f}%, vol {volume_ratio:.1f}x, "
             f"imbalance {imbalance:.1f}x, turnover ₹{turnover_cr:.1f}Cr"
         )
@@ -4749,6 +4765,23 @@ class AutoPilotInvestor:
         now_min = now_ist.hour * 60 + now_ist.minute
         return (9 * 60 + 15) <= now_min <= (9 * 60 + 30)
 
+    def _is_micro_open_fast_lane_active(self) -> bool:
+        """Return True only during the first 5 minutes after open (9:15-9:20 IST).
+
+        This is the elite early-entry lane where we allow only the cleanest,
+        highest-urgency opening setups to bypass the usual 9:20 intraday wait.
+        """
+        try:
+            import pytz
+            ist = pytz.timezone("Asia/Kolkata")
+            now_ist = datetime.now(ist)
+        except Exception:
+            from datetime import timezone, timedelta
+            ist_offset = timezone(timedelta(hours=5, minutes=30))
+            now_ist = datetime.now(ist_offset)
+        now_min = now_ist.hour * 60 + now_ist.minute
+        return (9 * 60 + 15) <= now_min < (9 * 60 + 20)
+
     def _flush_opening_buffer(self) -> None:
         """Flush buffered opening alerts as a ranked summary message.
 
@@ -5105,7 +5138,25 @@ class AutoPilotInvestor:
         _late_swing_window = 13 * 60 + 30 < now_min <= 14 * 60 + 15
 
         if c.holding_horizon == "intraday":
-            if not (9 * 60 + 20 <= now_min <= 10 * 60 + 0):
+            micro_open = 9 * 60 + 15 <= now_min < 9 * 60 + 20
+            if micro_open:
+                if entry_lane != "early":
+                    return False, "9:15 intraday auto-buy is reserved for early breakout entries only"
+                if grade != "A+":
+                    return False, "9:15 intraday auto-buy needs A+ grade"
+                if c.blind_score < 72:
+                    return False, f"score {c.blind_score:.0f} is below 72 for the 9:15 lane"
+                if c.confidence < 48:
+                    return False, f"confidence {c.confidence:.0f}% is below 48% for the 9:15 lane"
+                if c.volume_ratio < 6.0:
+                    return False, f"volume {c.volume_ratio:.1f}x is below 6.0x for the 9:15 lane"
+                if rr2 < 2.2:
+                    return False, f"R:R 1:{rr2:.1f} is below 1:2.2 for the 9:15 lane"
+                if gap_pct > 0.5:
+                    return False, f"entry is {gap_pct:.1f}% below trigger for the 9:15 lane"
+                if c.change_pct < 0.6 or c.change_pct > 3.8:
+                    return False, f"day move {c.change_pct:.1f}% is outside the 9:15 lane zone"
+            elif not (9 * 60 + 20 <= now_min <= 10 * 60 + 0):
                 return False, "intraday auto-buy is only allowed during the opening window"
             if entry_lane != "early":
                 return False, "intraday auto-buy is reserved for early breakout entries only"
@@ -5197,6 +5248,8 @@ class AutoPilotInvestor:
                 return False, f"R:R 1:{rr2:.1f} is below the A+ floor"
             if _avoid_horizon:
                 return False, "horizon model tagged this as avoid despite passing the A+ intraday gate"
+            if micro_open:
+                return True, "eligible now as an elite 9:15 intraday auto-buy"
             return True, "eligible now as an A+ intraday auto-buy"
         if grade == "A":
             if c.blind_score < 62:
