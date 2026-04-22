@@ -10,6 +10,7 @@ import html
 import json
 import os
 import subprocess
+from datetime import datetime
 from typing import Dict, List, Optional, Set, Tuple
 
 import pandas as pd
@@ -38,6 +39,8 @@ class SignalMonitorRunner:
     VOLUME_BURST_FRACTION = 0.025      # Pre-jump: 2.5% of accumulated day vol traded in last 60s
     MAX_BUY_DAILY_CHANGE_PCT = 3.0    # Skip buy alerts if stock already moved this much % today (already-ran filter)
     MIN_MOMENTUM_EXTENSION_PCT = 3.0  # Minimum daily gain to qualify as a momentum extension alert (3% → 20% chaser)
+    MARKET_OPEN_MINUTES_IST = 9 * 60 + 15
+    MARKET_CLOSE_MINUTES_IST = 15 * 60 + 30
 
     SUMMARY_COLUMNS = [
         "Universe",
@@ -1388,6 +1391,8 @@ class SignalMonitorRunner:
         """Send desktop / Telegram / Discord alerts for fresh Buy Now / Sell Now changes."""
         if not self.alert_channels or alerts_df is None or alerts_df.empty:
             return
+        if not self._is_regular_market_hours():
+            return
 
         alerts_df = self._filter_alerts_for_portfolio(alerts_df)
         if alerts_df is None or alerts_df.empty:
@@ -1423,6 +1428,15 @@ class SignalMonitorRunner:
             self._send_discord_alert(
                 self._build_discord_monitor_message(alerts_df, summary)
             )
+
+    def _is_regular_market_hours(self) -> bool:
+        """Only send live monitor alerts during NSE regular market hours."""
+        try:
+            now_ist = PKDateUtilities.currentDateTime()
+        except Exception:
+            now_ist = datetime.now()
+        minute_of_day = int(now_ist.hour) * 60 + int(now_ist.minute)
+        return self.MARKET_OPEN_MINUTES_IST <= minute_of_day <= self.MARKET_CLOSE_MINUTES_IST
 
     def _load_tracked_portfolio_symbols(self) -> Set[str]:
         """Load open tracked Kite symbols so generic market monitor sells stay portfolio-aware."""
