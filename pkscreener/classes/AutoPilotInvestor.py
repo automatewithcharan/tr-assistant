@@ -167,6 +167,10 @@ class BlindBuyCandidate:
     reasons: str = ""
     checks: str = ""
     suggested_qty: int = 0
+    holding_horizon: str = "avoid"
+    product_preference: str = ""
+    max_hold_days: int = 0
+    horizon_reason: str = ""
 
 
 @dataclass
@@ -775,7 +779,9 @@ class AutoPilotInvestor:
 
     def _try_auto_buy(self, symbol: str, price: float, stop_loss: float = 0.0,
                       target1: float = 0.0, target2: float = 0.0,
-                      blind_score: float = 0.0, reasons: str = "") -> Optional[str]:
+                      blind_score: float = 0.0, reasons: str = "",
+                      product_preference: str = "", holding_horizon: str = "",
+                      max_hold_days: int = 0) -> Optional[str]:
         """Attempt to auto-buy via Kite if order manager is active.
 
         Returns a Discord-ready status line, or None if auto-trade is off.
@@ -786,6 +792,9 @@ class AutoPilotInvestor:
             symbol=symbol, live_price=price, stop_loss=stop_loss,
             target1=target1, target2=target2,
             blind_score=blind_score, reasons=reasons,
+            product_type=product_preference,
+            holding_horizon=holding_horizon,
+            max_hold_days=max_hold_days,
         )
         if result.success:
             status = f"✅ Auto-bought `{symbol}` x{result.qty} via Kite (ID: {result.order_id})"
@@ -866,7 +875,7 @@ class AutoPilotInvestor:
             )
             return None
 
-        candidate = BlindBuyCandidate(
+        candidate = self._enrich_candidate_horizon(BlindBuyCandidate(
             symbol=symbol,
             price=price,
             buy_above=price,
@@ -879,7 +888,7 @@ class AutoPilotInvestor:
             blind_score=blind_score,
             original_action=original_action,
             reasons=reasons,
-        )
+        ))
         grade, _ = self._grade_candidate(candidate)
         if not self._eligible_for_live_auto_buy(candidate, grade):
             self._log(
@@ -890,7 +899,10 @@ class AutoPilotInvestor:
             return None
 
         result = self._try_auto_buy(
-            symbol, price, stop_loss, target1, target2, blind_score, reasons
+            symbol, price, stop_loss, target1, target2, blind_score, reasons,
+            product_preference=candidate.product_preference,
+            holding_horizon=candidate.holding_horizon,
+            max_hold_days=candidate.max_hold_days,
         )
         if result and result.startswith("✅"):
             self._tick_confirmed_auto_buy_count += 1
@@ -1565,7 +1577,7 @@ class AutoPilotInvestor:
             # Auto-buy via Kite only for tighter engine-confirmed buys.
             _auto_result = None
             if is_engine_confirmed_buy:
-                temp_candidate = BlindBuyCandidate(
+                temp_candidate = self._enrich_candidate_horizon(BlindBuyCandidate(
                     symbol=sym,
                     price=live_price,
                     buy_above=live_price,
@@ -1578,13 +1590,16 @@ class AutoPilotInvestor:
                     blind_score=blind_score,
                     original_action=current_action,
                     reasons=blind_reasons,
-                )
+                ))
                 candidate_grade, _ = self._grade_candidate(temp_candidate)
                 candidate_rank = self._candidate_rank(temp_candidate)
                 auto_eligible = self._eligible_for_live_auto_buy(temp_candidate, candidate_grade)
                 if auto_eligible:
                     _auto_result = self._try_auto_buy(
-                        sym, live_price, stop_loss, target1, target2, blind_score, blind_reasons
+                        sym, live_price, stop_loss, target1, target2, blind_score, blind_reasons,
+                        product_preference=temp_candidate.product_preference,
+                        holding_horizon=temp_candidate.holding_horizon,
+                        max_hold_days=temp_candidate.max_hold_days,
                     )
                 else:
                     _auto_result = (
@@ -4365,7 +4380,7 @@ class AutoPilotInvestor:
                     max_position=_max_pos,
                 )
 
-            candidates.append(BlindBuyCandidate(
+            candidates.append(self._enrich_candidate_horizon(BlindBuyCandidate(
                 symbol=symbol,
                 price=price,
                 buy_above=float(row.get("Entry", row.get("BuyAbove", row.get("Buy Above", 0))) or 0),
@@ -4380,7 +4395,7 @@ class AutoPilotInvestor:
                 reasons=blind_reasons,
                 checks=str(row.get("QualityChecks", row.get("Checks", ""))).strip(),
                 suggested_qty=_suggested_qty,
-            ))
+            )))
 
         # Sort by volume_ratio descending (primary) then blind_score (tiebreaker).
         # Backtest shows top-10 by volume yield +5.43% avg vs +1.09% all-trades.
@@ -4917,6 +4932,55 @@ class AutoPilotInvestor:
         return round(((c.buy_above - c.price) / c.price) * 100, 2)
 
     @classmethod
+    def _classify_holding_horizon(cls, c: 'BlindBuyCandidate') -> Tuple[str, str, int, str]:
+        """Classify each alert into the horizon it historically fits best."""
+        rr2 = cls._candidate_rr2(c)
+        gap_pct = cls._candidate_entry_gap_pct(c)
+
+        if c.price <= 0 or c.blind_score < 38 or c.confidence < 25 or rr2 < 1.4:
+            return ("avoid", "", 0, "Below minimum quality for evidence-backed execution")
+        if c.volume_ratio < 1.4:
+            return ("avoid", "", 0, "Participation is too weak for either intraday or swing execution")
+
+        intraday_ready = (
+            1.8 <= c.change_pct <= 5.5
+            and c.blind_score >= 62
+            and c.confidence >= 40
+            and c.volume_ratio >= 4.5
+            and rr2 >= 1.9
+            and gap_pct <= 1.0
+        )
+        if intraday_ready:
+            return ("intraday", "MIS", 1, "Rare same-day momentum profile with strong participation")
+
+        if (
+            c.blind_score >= 55
+            and c.confidence >= 34
+            and c.volume_ratio >= 2.0
+            and rr2 >= 1.8
+        ):
+            return ("5-day swing", "CNC", 5, "Historically stronger as a multi-session continuation")
+
+        if (
+            c.blind_score >= 40
+            and c.confidence >= 28
+            and c.volume_ratio >= 1.8
+            and rr2 >= 1.5
+        ):
+            return ("2-day swing", "CNC", 2, "Good continuation candidate, but not an elite same-day setup")
+
+        return ("avoid", "", 0, "Alert-quality only; not strong enough for auto execution")
+
+    @classmethod
+    def _enrich_candidate_horizon(cls, c: 'BlindBuyCandidate') -> 'BlindBuyCandidate':
+        horizon, product, max_hold_days, horizon_reason = cls._classify_holding_horizon(c)
+        c.holding_horizon = horizon
+        c.product_preference = product
+        c.max_hold_days = max_hold_days
+        c.horizon_reason = horizon_reason
+        return c
+
+    @classmethod
     def _candidate_rank(cls, c: 'BlindBuyCandidate') -> float:
         """Execution-aware ranking for alert ordering.
 
@@ -4954,6 +5018,8 @@ class AutoPilotInvestor:
         """
         rr2 = cls._candidate_rr2(c)
         gap_pct = cls._candidate_entry_gap_pct(c)
+        if c.holding_horizon == "avoid":
+            return False
         try:
             import pytz
             _ist = pytz.timezone("Asia/Kolkata")
@@ -4963,9 +5029,39 @@ class AutoPilotInvestor:
             _now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
         now_min = _now_ist.hour * 60 + _now_ist.minute
 
-        # Auto-buys should remain an opening-session tactic, not an all-day chase.
-        if not (9 * 60 + 20 <= now_min <= 10 * 60 + 30):
-            return False
+        # Intraday auto-buys should stay near the open. Swing-style CNC entries
+        # can remain eligible longer because the multi-horizon replay shows the
+        # edge is mostly in 2-5 day holds rather than same-day exits.
+        if c.holding_horizon == "intraday":
+            if not (9 * 60 + 20 <= now_min <= 10 * 60 + 30):
+                return False
+        else:
+            if not (9 * 60 + 20 <= now_min <= 13 * 60 + 30):
+                return False
+
+        if c.holding_horizon == "5-day swing":
+            if c.price < 20:
+                return False
+            if rr2 < 1.8 or gap_pct > 1.2:
+                return False
+            if c.change_pct < 1.8 or c.change_pct > 7.8:
+                return False
+            if c.blind_score < 50 or c.confidence < 27 or c.volume_ratio < 2.0:
+                return False
+            return True
+
+        if c.holding_horizon == "2-day swing":
+            if c.price < 20:
+                return False
+            if rr2 < 1.5 or gap_pct > 1.2:
+                return False
+            if c.change_pct < 1.8 or c.change_pct > 6.8:
+                return False
+            if c.blind_score < 40 or c.confidence < 28 or c.volume_ratio < 1.8:
+                return False
+            return True
+
+        # Legacy opening-session intraday gate.
         if c.price < 20:
             return False
         if rr2 < 1.4:
@@ -4982,7 +5078,7 @@ class AutoPilotInvestor:
                 return False
             if c.confidence < 30:
                 return False
-            if c.volume_ratio < 5.0:
+            if c.volume_ratio < 2.0:
                 return False
             if rr2 < 1.6:
                 return False
@@ -5141,7 +5237,10 @@ class AutoPilotInvestor:
                 if auto_eligible:
                     _ar = self._try_auto_buy(
                         c.symbol, c.price, c.stop_loss, c.target1, c.target2,
-                        c.blind_score, c.reasons
+                        c.blind_score, c.reasons,
+                        product_preference=c.product_preference,
+                        holding_horizon=c.holding_horizon,
+                        max_hold_days=c.max_hold_days,
                     )
                     self._log(f"Batch auto-buy result {c.symbol}: {_ar}")
                     if _ar:
@@ -5211,6 +5310,14 @@ class AutoPilotInvestor:
         trade_tag = ""
         if is_swing_only:
             trade_tag = "\n⏰ **SWING ONLY** — already +{:.1f}%, hold 2-5 days for targets.".format(c.change_pct)
+        horizon_tag = ""
+        if c.holding_horizon in {"2-day swing", "5-day swing"}:
+            horizon_tag = (
+                f"\n⏰ **{c.holding_horizon.upper()}** — route as "
+                f"`{c.product_preference or 'CNC'}` and avoid same-day forced exits."
+            )
+        elif c.holding_horizon == "intraday":
+            horizon_tag = "\n⚡ **INTRADAY** — one of the rare same-day momentum profiles."
 
         # Simplify reasons to plain English
         simple_reasons = self._simplify_blind_reasons(c.reasons)
@@ -5223,7 +5330,7 @@ class AutoPilotInvestor:
             ]
         else:
             block = [
-                f"**BUY `{c.symbol}`** [{grade_badge}] Score {score_label}{top_marker}{trade_tag}",
+                f"**BUY `{c.symbol}`** [{grade_badge}] Score {score_label}{top_marker}{trade_tag}{horizon_tag}",
                 f"Price `{c.price:.2f}` ({pct}) | Buy Above `{c.buy_above:.2f}` | Volume `{c.volume_ratio:.1f}x avg`{f' | {mom_label}' if mom_label else ''}",
                 f"Stop Loss `{c.stop_loss:.2f}` | Target 1 `{c.target1:.2f}` | Target 2 `{c.target2:.2f}`{risk_reward}",
                 f"Why: {simple_reasons}",

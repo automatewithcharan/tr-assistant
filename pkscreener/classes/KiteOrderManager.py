@@ -119,7 +119,9 @@ class TrackedPosition:
     def __init__(self, symbol: str, qty: int, buy_price: float,
                  buy_order_id: str = "", stop_loss: float = 0.0,
                  target1: float = 0.0, target2: float = 0.0,
-                 blind_score: float = 0.0, reasons: str = ""):
+                 blind_score: float = 0.0, reasons: str = "",
+                 product_type: str = "MIS", holding_horizon: str = "intraday",
+                 max_hold_days_override: int = 0):
         self.symbol = symbol
         self.qty = qty
         self.buy_price = buy_price
@@ -129,6 +131,9 @@ class TrackedPosition:
         self.target2 = target2
         self.blind_score = blind_score
         self.reasons = reasons
+        self.product_type = str(product_type or "MIS").upper()
+        self.holding_horizon = str(holding_horizon or "intraday")
+        self.max_hold_days_override = int(max_hold_days_override or 0)
         self.buy_time = _ist_now().isoformat(timespec="seconds")
         self.highest_price = buy_price
         self.trailing_stop = 0.0
@@ -152,6 +157,9 @@ class TrackedPosition:
             target2=d.get("target2", 0.0),
             blind_score=d.get("blind_score", 0.0),
             reasons=d.get("reasons", ""),
+            product_type=d.get("product_type", "MIS"),
+            holding_horizon=d.get("holding_horizon", "intraday"),
+            max_hold_days_override=d.get("max_hold_days_override", 0),
         )
         pos.buy_time = d.get("buy_time", pos.buy_time)
         pos.highest_price = d.get("highest_price", pos.buy_price)
@@ -357,6 +365,9 @@ class KiteOrderManager:
         target2: float = 0.0,
         blind_score: float = 0.0,
         reasons: str = "",
+        product_type: str = "",
+        holding_horizon: str = "",
+        max_hold_days: int = 0,
         error_message: str = "",
         retry_minutes: int = 20,
     ) -> None:
@@ -370,6 +381,9 @@ class KiteOrderManager:
             "target2": float(target2 or 0),
             "blind_score": float(blind_score or 0),
             "reasons": str(reasons or ""),
+            "product_type": str(product_type or ""),
+            "holding_horizon": str(holding_horizon or ""),
+            "max_hold_days": int(max_hold_days or 0),
             "last_error": str(error_message or ""),
             "queued_at": now.isoformat(timespec="seconds"),
             "retry_after": now.isoformat(timespec="seconds"),
@@ -425,13 +439,16 @@ class KiteOrderManager:
             result = self.place_buy_order(
                 symbol=symbol,
                 qty=qty,
-                price=0.0,
+                price=live_price,
                 stop_loss=float(item.get("stop_loss", 0) or 0),
                 target1=float(item.get("target1", 0) or 0),
                 target2=float(item.get("target2", 0) or 0),
                 blind_score=float(item.get("blind_score", 0) or 0),
                 reasons=str(item.get("reasons", "")),
                 order_type="MARKET",
+                product_type_override=str(item.get("product_type", "") or ""),
+                holding_horizon=str(item.get("holding_horizon", "") or ""),
+                max_hold_days_override=int(item.get("max_hold_days", 0) or 0),
             )
             if result.success:
                 self._drop_pending_buy(symbol)
@@ -540,6 +557,9 @@ class KiteOrderManager:
         blind_score: float = 0.0,
         reasons: str = "",
         order_type: str = "MARKET",
+        product_type_override: str = "",
+        holding_horizon: str = "",
+        max_hold_days_override: int = 0,
     ) -> OrderResult:
         """Place a buy order on NSE via Kite Connect.
 
@@ -688,7 +708,12 @@ class KiteOrderManager:
                 symbol=symbol, side="BUY", qty=qty, price=price,
                 status="COMPLETE", message="Dry run — no real order placed"
             )
-            self._record_buy(result, stop_loss, target1, target2, blind_score, reasons)
+            self._record_buy(
+                result, stop_loss, target1, target2, blind_score, reasons,
+                product_type=product_type_override or self.product_type,
+                holding_horizon=holding_horizon,
+                max_hold_days_override=max_hold_days_override,
+            )
             return result
 
         # Place real order via Kite
@@ -711,7 +736,7 @@ class KiteOrderManager:
                 "transaction_type": "BUY",
                 "quantity": qty,
                 "order_type": kite_order_type,
-                "product": self.product_type,  # MIS=intraday margin (5x), CNC=delivery
+                "product": order_product,  # MIS=intraday margin (5x), CNC=delivery
                 "variety": "regular",
             }
             if kite_order_type == "LIMIT" and price > 0:
@@ -734,7 +759,12 @@ class KiteOrderManager:
                 qty=qty, price=price, status="PLACED",
                 message=f"Order placed successfully (ID: {order_id})"
             )
-            self._record_buy(result, stop_loss, target1, target2, blind_score, reasons)
+            self._record_buy(
+                result, stop_loss, target1, target2, blind_score, reasons,
+                product_type=order_product,
+                holding_horizon=holding_horizon,
+                max_hold_days_override=max_hold_days_override,
+            )
             self._daily_order_count += 1
             return result
 
@@ -804,7 +834,7 @@ class KiteOrderManager:
                 "transaction_type": "SELL",
                 "quantity": sell_qty,
                 "order_type": kite_order_type,
-                "product": self.product_type,
+                "product": getattr(pos, "product_type", self.product_type),
                 "variety": "regular",
             }
             if kite_order_type == "LIMIT" and price > 0:
@@ -837,13 +867,18 @@ class KiteOrderManager:
     # ------------------------------------------------------------------
 
     def _record_buy(self, result: OrderResult, stop_loss: float,
-                    target1: float, target2: float, blind_score: float, reasons: str):
+                    target1: float, target2: float, blind_score: float, reasons: str,
+                    product_type: str = "", holding_horizon: str = "",
+                    max_hold_days_override: int = 0):
         with self._lock:
             pos = TrackedPosition(
                 symbol=result.symbol, qty=result.qty,
                 buy_price=result.price, buy_order_id=result.order_id,
                 stop_loss=stop_loss, target1=target1, target2=target2,
                 blind_score=blind_score, reasons=reasons,
+                product_type=product_type or self.product_type,
+                holding_horizon=holding_horizon or ("intraday" if (product_type or self.product_type) == "MIS" else "swing"),
+                max_hold_days_override=max_hold_days_override,
             )
             self._positions[result.symbol] = pos
             self._save_positions()
@@ -899,6 +934,8 @@ class KiteOrderManager:
                 pos.highest_price = live_price
 
             pnl_pct = ((live_price - pos.buy_price) / pos.buy_price * 100) if pos.buy_price > 0 else 0
+            is_intraday = getattr(pos, "product_type", self.product_type) == "MIS" or getattr(pos, "holding_horizon", "") == "intraday"
+            hold_days_limit = int(getattr(pos, "max_hold_days_override", 0) or 0) or self.max_hold_days
 
             # 1. Stop loss hit
             if pos.stop_loss > 0 and live_price <= pos.stop_loss:
@@ -938,14 +975,14 @@ class KiteOrderManager:
             try:
                 buy_date = datetime.fromisoformat(pos.buy_time).date()
                 days_held = (now.date() - buy_date).days
-                if days_held >= self.max_hold_days and pnl_pct < 2.0:
+                if days_held >= hold_days_limit and pnl_pct < 2.0:
                     signals.append((sym, SellReason.TIME_DECAY, live_price, 0))
                     continue
             except Exception:
                 pass
 
             # 6. Intraday reversal — stock was up >3% but reversed to negative
-            if pnl_pct < -1.0 and pos.highest_price > pos.buy_price * 1.03:
+            if is_intraday and pnl_pct < -1.0 and pos.highest_price > pos.buy_price * 1.03:
                 signals.append((sym, SellReason.REVERSAL, live_price, 0))
                 continue
 
@@ -954,7 +991,7 @@ class KiteOrderManager:
             #    Threshold 0.05 tuned via backtest sweep (0.02 was too trigger-happy)
             tick_data = tick.get("depth", {})
             ohlc = tick.get("ohlc", {})
-            if ohlc and pnl_pct > 1.5:  # only check when solidly profitable (>1.5%)
+            if is_intraday and ohlc and pnl_pct > 1.5:  # only check when solidly profitable (>1.5%)
                 try:
                     from pkscreener.classes.AdvancedFilters import CUSUMBreakDetector
                     from pkscreener.classes.KiteHistoricalData import KiteHistoricalDataProvider
@@ -1008,6 +1045,9 @@ class KiteOrderManager:
         target2: float = 0.0,
         blind_score: float = 0.0,
         reasons: str = "",
+        product_type: str = "",
+        holding_horizon: str = "",
+        max_hold_days: int = 0,
     ) -> OrderResult:
         """Auto-buy a stock from a blind-buy candidate alert.
 
@@ -1049,10 +1089,13 @@ class KiteOrderManager:
                 )
             )
         result = self.place_buy_order(
-            symbol=symbol, qty=qty, price=0.0,  # market order
+            symbol=symbol, qty=qty, price=live_price,
             stop_loss=stop_loss, target1=target1, target2=target2,
             blind_score=blind_score, reasons=reasons,
             order_type="MARKET",
+            product_type_override=product_type,
+            holding_horizon=holding_horizon,
+            max_hold_days_override=max_hold_days,
         )
         if (not result.success) and self._looks_like_funds_shortage(result.message):
             available = self._extract_available_funds()
@@ -1066,6 +1109,9 @@ class KiteOrderManager:
                 target2=target2,
                 blind_score=blind_score,
                 reasons=reasons,
+                product_type=product_type,
+                holding_horizon=holding_horizon,
+                max_hold_days=max_hold_days,
                 error_message=result.message,
             )
             result.status = "FUNDS_SHORT"
@@ -1123,10 +1169,11 @@ class KiteOrderManager:
             total_pnl += pnl
             emoji = "🟢" if pnl >= 0 else "🔴"
             trail_info = f" | trail ₹{p.trailing_stop:.0f}" if p.trailing_stop > 0 else ""
+            horizon_info = f" | {getattr(p, 'holding_horizon', 'intraday')}/{getattr(p, 'product_type', self.product_type)}"
             lines.append(
                 f"{emoji} `{p.symbol}` x{p.qty} | buy ₹{p.buy_price:.0f} → ₹{live:.0f} "
                 f"| P/L ₹{pnl:+,.0f} ({pnl_pct:+.1f}%)"
-                f" | SL ₹{p.stop_loss:.0f}{trail_info}"
+                f" | SL ₹{p.stop_loss:.0f}{trail_info}{horizon_info}"
             )
         emoji = "🟢" if total_pnl >= 0 else "🔴"
         lines.append(f"\n{emoji} **Total running P/L: ₹{total_pnl:+,.0f}**")
@@ -1352,3 +1399,6 @@ class KiteOrderManager:
         except Exception as exc:
             _log.error("get_gtts failed: %s", exc)
             return []
+        order_product = str(product_type_override or self.product_type or "MIS").upper()
+        if order_product not in ("MIS", "CNC", "NRML"):
+            order_product = self.product_type
