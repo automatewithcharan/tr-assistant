@@ -812,6 +812,31 @@ class AutoPilotInvestor:
         else:
             return f"⚠️ Auto-buy skipped for `{symbol}`: {result.message}"
 
+    def _cap_suggested_qty_to_broker(
+        self,
+        price: float,
+        desired_qty: int,
+        product_preference: str = "",
+        holding_horizon: str = "",
+    ) -> Tuple[int, float]:
+        """Cap suggested quantity to something the connected broker can afford."""
+        if desired_qty <= 0 or price <= 0:
+            return 0, 0.0
+        if self._order_manager is None:
+            return desired_qty, round(desired_qty * price, 0)
+
+        inferred_product = str(product_preference or "").upper()
+        if not inferred_product:
+            inferred_product = "MIS" if str(holding_horizon or "").lower() == "intraday" else "CNC"
+        try:
+            return self._order_manager.estimate_affordable_qty(
+                price=price,
+                desired_qty=desired_qty,
+                product_type=inferred_product,
+            )
+        except Exception:
+            return desired_qty, round(desired_qty * price, 0)
+
     def _run_sell_monitor(self) -> None:
         """Check tracked Kite positions for sell signals and execute."""
         if self._order_manager is None:
@@ -1582,6 +1607,12 @@ class AutoPilotInvestor:
                 candidate_rank = self._candidate_rank(temp_candidate)
                 auto_eligible = self._eligible_for_live_auto_buy(temp_candidate, candidate_grade)
                 auto_status_line = self._format_auto_buy_status_line(temp_candidate, candidate_grade)
+                suggested_qty, approx_cost = self._cap_suggested_qty_to_broker(
+                    live_price,
+                    suggested_qty,
+                    product_preference=temp_candidate.product_preference,
+                    holding_horizon=temp_candidate.holding_horizon,
+                )
             hold_product_line = self._format_hold_product_line(temp_candidate) if temp_candidate is not None else ""
             msg = (
                 f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
@@ -2445,6 +2476,12 @@ class AutoPilotInvestor:
             score=_score,
             size_mult=_size_mult,
         )
+        _suggested_qty, _approx_cost = self._cap_suggested_qty_to_broker(
+            price,
+            _suggested_qty,
+            product_preference="MIS",
+            holding_horizon="intraday",
+        )
         if _suggested_qty <= 0:
             self._log(
                 f"Tick-only skip {sym}: starter position exceeds ₹5000 cap at ₹{price:.2f}"
@@ -2725,6 +2762,12 @@ class AutoPilotInvestor:
                 stop_loss=_sl_price,
                 score=60 if _demand_grade == "A" else 52 if _demand_grade == "B" else 45,
                 size_mult=_size_mult,
+            )
+            _suggested_qty, _approx_cost = self._cap_suggested_qty_to_broker(
+                price,
+                _suggested_qty,
+                product_preference="CNC",
+                holding_horizon="2-day swing" if _demand_grade in ("A", "B") else "avoid",
             )
             if _suggested_qty <= 0:
                 self._log(
@@ -3682,6 +3725,13 @@ class AutoPilotInvestor:
                 reasons=blind_reasons,
                 suggested_qty=suggested_qty,
             ))
+            suggested_qty, _invest_amt = self._cap_suggested_qty_to_broker(
+                _price_now,
+                suggested_qty,
+                product_preference=_alert_candidate.product_preference,
+                holding_horizon=_alert_candidate.holding_horizon,
+            )
+            _alert_candidate.suggested_qty = suggested_qty
             _alert_grade, _ = self._grade_candidate(_alert_candidate)
             _hold_product_line = self._format_hold_product_line(_alert_candidate)
             _auto_status_line = self._format_auto_buy_status_line(_alert_candidate, _alert_grade)
@@ -4450,7 +4500,7 @@ class AutoPilotInvestor:
                     max_position=_max_pos,
                 )
 
-            candidates.append(self._enrich_candidate_horizon(BlindBuyCandidate(
+            _candidate = self._enrich_candidate_horizon(BlindBuyCandidate(
                 symbol=symbol,
                 price=price,
                 buy_above=float(row.get("Entry", row.get("BuyAbove", row.get("Buy Above", 0))) or 0),
@@ -4465,7 +4515,14 @@ class AutoPilotInvestor:
                 reasons=blind_reasons,
                 checks=str(row.get("QualityChecks", row.get("Checks", ""))).strip(),
                 suggested_qty=_suggested_qty,
-            )))
+            ))
+            _candidate.suggested_qty, _ = self._cap_suggested_qty_to_broker(
+                price,
+                _candidate.suggested_qty,
+                product_preference=_candidate.product_preference,
+                holding_horizon=_candidate.holding_horizon,
+            )
+            candidates.append(_candidate)
 
         # Sort by volume_ratio descending (primary) then blind_score (tiebreaker).
         # Backtest shows top-10 by volume yield +5.43% avg vs +1.09% all-trades.

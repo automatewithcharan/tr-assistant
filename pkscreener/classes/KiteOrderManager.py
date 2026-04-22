@@ -365,6 +365,48 @@ class KiteOrderManager:
                 total += float(getattr(pos, "buy_price", 0.0) or 0.0) * int(getattr(pos, "qty", 0) or 0)
         return round(total, 2)
 
+    def estimate_affordable_qty(
+        self,
+        price: float,
+        desired_qty: int,
+        product_type: str = "",
+    ) -> Tuple[int, float]:
+        """Estimate a broker-affordable quantity for the given product type.
+
+        For CNC/NRML we cap quantity to effective free cash after open delivery
+        exposure. For MIS we keep the desired quantity unchanged because the
+        actual broker margin varies by instrument and leverage policy.
+        """
+        try:
+            price = float(price or 0.0)
+        except Exception:
+            price = 0.0
+        try:
+            desired_qty = int(desired_qty or 0)
+        except Exception:
+            desired_qty = 0
+        if price <= 0 or desired_qty <= 0:
+            return 0, 0.0
+
+        order_product = str(product_type or self.product_type or "MIS").upper()
+        if order_product not in ("MIS", "CNC", "NRML"):
+            order_product = self.product_type
+        if order_product == "MIS":
+            return desired_qty, round(desired_qty * price, 0)
+
+        available_cash = self._extract_available_funds()
+        if available_cash <= 0:
+            return desired_qty, round(desired_qty * price, 0)
+
+        open_delivery_value = self._current_open_delivery_value()
+        if open_delivery_value > 0 and available_cash >= open_delivery_value:
+            free_delivery_cash = max(0.0, available_cash - open_delivery_value)
+        else:
+            free_delivery_cash = available_cash
+        affordable_qty = int(free_delivery_cash // price) if free_delivery_cash > 0 else 0
+        capped_qty = min(desired_qty, affordable_qty) if affordable_qty > 0 else 0
+        return capped_qty, round(capped_qty * price, 0)
+
     def _queue_pending_buy(
         self,
         symbol: str,
