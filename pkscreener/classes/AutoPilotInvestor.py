@@ -5116,11 +5116,12 @@ class AutoPilotInvestor:
     def _format_hold_product_line(cls, c: 'BlindBuyCandidate') -> str:
         horizon = str(getattr(c, "holding_horizon", "") or "avoid")
         product = str(getattr(c, "product_preference", "") or ("MIS" if horizon == "intraday" else "CNC"))
+        if horizon == "avoid":
+            return "🧭 Hold: `alert-only`"
         hold_label = {
             "intraday": "intraday",
             "2-day swing": "2-day swing",
             "5-day swing": "5-day swing",
-            "avoid": "avoid / alert-only",
         }.get(horizon, horizon)
         return f"🧭 Hold: `{hold_label}` | Product: `{product}`"
 
