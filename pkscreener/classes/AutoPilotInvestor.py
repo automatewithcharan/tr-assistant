@@ -1613,6 +1613,7 @@ class AutoPilotInvestor:
                     product_preference=temp_candidate.product_preference,
                     holding_horizon=temp_candidate.holding_horizon,
                 )
+            entry_timing_line = self._format_entry_timing_line(temp_candidate) if temp_candidate is not None else ""
             growth_line = (
                 f"📈 **Expected swing upside {_expected_growth:+.1f}% from alert price** | "
                 f"Price now: `₹{live_price:.2f}` (+{daily_change:.1f}% so far){_scope_str}\n"
@@ -1632,6 +1633,7 @@ class AutoPilotInvestor:
                 f"🟢 SELL at `₹{target1:.2f}` (safe profit) or `₹{target2:.2f}` (max profit — ₹{_reward_ps:.0f}/share gain)\n\n"
                 f"**Why:** {self._simplify_blind_reasons(blind_reasons)}\n"
                 f"{auto_note}"
+                f"{f'\\n{entry_timing_line}' if entry_timing_line else ''}"
                 f"{f'\\n{hold_product_line}' if hold_product_line else ''}"
                 f"{f'\\n{auto_status_line}' if auto_status_line else ''}"
             )
@@ -3740,6 +3742,7 @@ class AutoPilotInvestor:
             )
             _alert_candidate.suggested_qty = suggested_qty
             _alert_grade, _ = self._grade_candidate(_alert_candidate)
+            _entry_timing_line = self._format_entry_timing_line(_alert_candidate)
             _hold_product_line = self._format_hold_product_line(_alert_candidate)
             _auto_status_line = self._format_auto_buy_status_line(_alert_candidate, _alert_grade)
             _growth_line = (
@@ -3759,6 +3762,7 @@ class AutoPilotInvestor:
                 f"🟢 SELL at `₹{target1:.2f}` (safe profit) or `₹{target2:.2f}` (max profit — ₹{_reward_per_share:.0f}/share gain){risk_reward}\n\n"
                 f"**Why this stock:**\n{reasons_text}\n"
                 f"{_ohlcv_reasons_text}\n\n"
+                f"{_entry_timing_line}\n"
                 f"{_hold_product_line}\n"
                 f"{_auto_status_line}"
             )
@@ -5072,10 +5076,23 @@ class AutoPilotInvestor:
         return round(((c.buy_above - c.price) / c.price) * 100, 2)
 
     @classmethod
+    def _classify_entry_timing_lane(cls, c: 'BlindBuyCandidate') -> Tuple[str, str]:
+        rr2 = cls._candidate_rr2(c)
+        gap_pct = cls._candidate_entry_gap_pct(c)
+        if str(getattr(c, "holding_horizon", "") or "") == "avoid":
+            return "alert_only", "entry timing is not actionable because the setup is alert-only"
+        if c.change_pct <= 2.6 and gap_pct <= 0.8 and c.volume_ratio >= 1.8 and rr2 >= 1.5:
+            return "early", "early breakout — one of the cleaner early entry windows"
+        if c.change_pct <= 6.2 and gap_pct <= 1.0 and c.volume_ratio >= 2.0 and rr2 >= 1.8:
+            return "continuation", "late but still actionable continuation setup"
+        return "stretched", "entry is already stretched — alert-only unless manually justified"
+
+    @classmethod
     def _live_auto_buy_gate_detail(cls, c: 'BlindBuyCandidate', grade: str = "") -> Tuple[bool, str]:
         """Return auto-buy eligibility plus a human-readable reason."""
         rr2 = cls._candidate_rr2(c)
         gap_pct = cls._candidate_entry_gap_pct(c)
+        entry_lane, entry_reason = cls._classify_entry_timing_lane(c)
         _avoid_horizon = c.holding_horizon == "avoid"
         try:
             import pytz
@@ -5115,6 +5132,9 @@ class AutoPilotInvestor:
                 if _avoid_horizon:
                     return False, "horizon model tagged this late setup as avoid"
                 return True, "eligible now as an exceptional late-day swing auto-buy"
+
+        if entry_lane == "stretched":
+            return False, entry_reason
 
         if c.holding_horizon == "5-day swing":
             if c.price < 20:
@@ -5205,6 +5225,17 @@ class AutoPilotInvestor:
         eligible, reason = cls._live_auto_buy_gate_detail(c, grade)
         prefix = "🤖 Auto-buy: yes" if eligible else "🤖 Auto-buy: no"
         return f"{prefix} — {reason}"
+
+    @classmethod
+    def _format_entry_timing_line(cls, c: 'BlindBuyCandidate') -> str:
+        lane, reason = cls._classify_entry_timing_lane(c)
+        label = {
+            "early": "⚡ Entry: `early breakout`",
+            "continuation": "🟡 Entry: `late but still actionable`",
+            "stretched": "🔴 Entry: `too late / alert-only`",
+            "alert_only": "📝 Entry: `alert-only`",
+        }.get(lane, "📝 Entry: `alert-only`")
+        return f"{label} — {reason}"
 
     @classmethod
     def _format_hold_product_line(cls, c: 'BlindBuyCandidate') -> str:
@@ -5514,6 +5545,7 @@ class AutoPilotInvestor:
                 f"`{c.symbol}` [{grade_badge}] Score {c.blind_score:.0f} | `{c.price:.2f}` ({pct}) | Vol `{c.volume_ratio:.1f}x` | SL `{c.stop_loss:.2f}` → T1 `{c.target1:.2f}` T2 `{c.target2:.2f}`{_risk}",
             ]
         else:
+            entry_timing_line = self._format_entry_timing_line(c)
             auto_status_line = self._format_auto_buy_status_line(c, grade)
             hold_product_line = self._format_hold_product_line(c)
             block = [
@@ -5521,6 +5553,7 @@ class AutoPilotInvestor:
                 f"Price `{c.price:.2f}` ({pct}) | Buy Above `{c.buy_above:.2f}` | Volume `{c.volume_ratio:.1f}x avg`{f' | {mom_label}' if mom_label else ''}",
                 f"Stop Loss `{c.stop_loss:.2f}` | Target 1 `{c.target1:.2f}` | Target 2 `{c.target2:.2f}`{risk_reward}",
                 f"Why: {simple_reasons}",
+                entry_timing_line,
                 hold_product_line,
                 auto_status_line,
             ]
