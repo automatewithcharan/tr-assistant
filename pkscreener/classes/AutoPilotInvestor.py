@@ -1555,10 +1555,33 @@ class AutoPilotInvestor:
             _scope_str = f" | **Profit potential: {' | '.join(_scope_parts)}**" if _scope_parts else ""
             header = "🔍 MISSED EARLIER, NOW STRONG" if is_engine_confirmed_buy else "👀 WATCHLIST IMPROVING"
             auto_note = (
-                "_Auto-buy eligible if Kite execution checks pass._"
+                "_Auto-buy status will be shown explicitly below._"
                 if is_engine_confirmed_buy
                 else "_Alert-only for now: engine has not upgraded this to Buy Now yet._"
             )
+            temp_candidate = self._enrich_candidate_horizon(BlindBuyCandidate(
+                symbol=sym,
+                price=live_price,
+                buy_above=live_price,
+                stop_loss=stop_loss,
+                target1=target1,
+                target2=target2,
+                confidence=confidence,
+                volume_ratio=vol_ratio,
+                change_pct=daily_change,
+                blind_score=blind_score,
+                original_action=current_action,
+                reasons=blind_reasons,
+            )) if is_engine_confirmed_buy else None
+            candidate_grade = ""
+            candidate_rank = 0.0
+            auto_status_line = ""
+            auto_eligible = False
+            if temp_candidate is not None:
+                candidate_grade, _ = self._grade_candidate(temp_candidate)
+                candidate_rank = self._candidate_rank(temp_candidate)
+                auto_eligible = self._eligible_for_live_auto_buy(temp_candidate, candidate_grade)
+                auto_status_line = self._format_auto_buy_status_line(temp_candidate, candidate_grade)
             msg = (
                 f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"**{header} — `{sym}`** — Quality {score_label}\n"
@@ -1569,31 +1592,14 @@ class AutoPilotInvestor:
                 f"🔴 EXIT if price drops to `₹{stop_loss:.2f}` (you lose ₹{_risk_ps:.0f}/share)\n"
                 f"🟢 SELL at `₹{target1:.2f}` (safe profit) or `₹{target2:.2f}` (max profit — ₹{_reward_ps:.0f}/share gain)\n\n"
                 f"**Why:** {self._simplify_blind_reasons(blind_reasons)}\n"
-                f"{auto_note}\n"
-                f"_Kite auto-buy will be attempted for eligible setups. If no `✅ Auto-bought` message appears, place manually in your broker and use `/buy {sym} {suggested_qty} {live_price:.0f}` to record._"
+                f"{auto_note}"
+                f"{f'\\n{auto_status_line}' if auto_status_line else ''}"
             )
 
             self._send_to_channels(msg)
             # Auto-buy via Kite only for tighter engine-confirmed buys.
             _auto_result = None
             if is_engine_confirmed_buy:
-                temp_candidate = self._enrich_candidate_horizon(BlindBuyCandidate(
-                    symbol=sym,
-                    price=live_price,
-                    buy_above=live_price,
-                    stop_loss=stop_loss,
-                    target1=target1,
-                    target2=target2,
-                    confidence=confidence,
-                    volume_ratio=vol_ratio,
-                    change_pct=daily_change,
-                    blind_score=blind_score,
-                    original_action=current_action,
-                    reasons=blind_reasons,
-                ))
-                candidate_grade, _ = self._grade_candidate(temp_candidate)
-                candidate_rank = self._candidate_rank(temp_candidate)
-                auto_eligible = self._eligible_for_live_auto_buy(temp_candidate, candidate_grade)
                 if auto_eligible:
                     _auto_result = self._try_auto_buy(
                         sym, live_price, stop_loss, target1, target2, blind_score, blind_reasons,
@@ -1602,10 +1608,7 @@ class AutoPilotInvestor:
                         max_hold_days=temp_candidate.max_hold_days,
                     )
                 else:
-                    _auto_result = (
-                        f"⚠️ Auto-buy skipped for `{sym}`: confirmed buy, but setup is not tight enough "
-                        f"(conf {confidence:.0f}%, RR {rr2:.1f}, gap {self._candidate_entry_gap_pct(temp_candidate):.1f}%)."
-                    )
+                    _auto_result = f"⚠️ Auto-buy skipped for `{sym}`: {self._live_auto_buy_gate_detail(temp_candidate, candidate_grade)[1]}"
                 if _auto_result:
                     self._send_to_channels(_auto_result)
                 self._log_engine_confirmed_buy_candidate(
@@ -2448,7 +2451,7 @@ class AutoPilotInvestor:
             f"Why: {score_reasons_str}\n\n"
             f"**What to do ({_conviction} conviction):**\n"
             f"Buy **{_suggested_qty} shares** (≈ ₹{_approx_cost:,.0f})\n"
-            f"_Kite auto-buy will be attempted for eligible setups. If no `✅ Auto-bought` message appears, place manually in your broker and use `/buy {sym} {_suggested_qty} {price:.0f}` to record._\n"
+            f"🤖 Auto-buy: no — momentum-only alert, not a live auto-buy setup.\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         )
         self._send_to_channels(msg)
@@ -2735,7 +2738,7 @@ class AutoPilotInvestor:
                 f"🔴 EXIT if price drops to `₹{_sl_price:.0f}` (limits your loss to 3%)\n"
                 f"🟢 SELL near `₹{_target_price:.0f}` if momentum continues (fixed demand-watch target: +{_scope_pct:.1f}% from alert price)\n"
                 f"💰 You risk `₹{price - _sl_price:.0f}` per share to gain `₹{_target_price - price:.0f}` per share ({_rr:.1f}x reward vs risk)\n\n"
-                f"_Kite auto-buy will be attempted for eligible setups. If no `✅ Auto-bought` message appears, place manually in your broker and use `/buy {sym} {_suggested_qty} {price:.0f}` to record._\n"
+                f"🤖 Auto-buy: no — demand-watch alert, not a live auto-buy setup.\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             )
             self._send_to_channels(msg)
@@ -3648,6 +3651,23 @@ class AutoPilotInvestor:
             _risk_per_share = round(_price_now - stop_loss, 2) if stop_loss > 0 else 0
             _reward_per_share = round(target2 - _price_now, 2) if target2 > 0 else 0
             _expected_growth_pct = round(((target2 - _price_now) / _price_now) * 100, 1) if target2 > 0 and _price_now > 0 else 0
+            _alert_candidate = self._enrich_candidate_horizon(BlindBuyCandidate(
+                symbol=sym,
+                price=_price_now,
+                buy_above=_price_now,
+                stop_loss=stop_loss,
+                target1=target1,
+                target2=target2,
+                confidence=confidence,
+                volume_ratio=volume_ratio,
+                change_pct=daily_change,
+                blind_score=blind_score,
+                original_action=_now_action,
+                reasons=blind_reasons,
+                suggested_qty=suggested_qty,
+            ))
+            _alert_grade, _ = self._grade_candidate(_alert_candidate)
+            _auto_status_line = self._format_auto_buy_status_line(_alert_candidate, _alert_grade)
             message = (
                 f"{alert_header}\n"
                 f"📈 **Expected to grow {_expected_growth_pct:+.1f}% today** | Price now: `₹{_price_now:.2f}` ({direction}{daily_change:.2f}% so far){_scope_line}\n"
@@ -3658,7 +3678,7 @@ class AutoPilotInvestor:
                 f"🟢 SELL at `₹{target1:.2f}` (safe profit) or `₹{target2:.2f}` (max profit — ₹{_reward_per_share:.0f}/share gain){risk_reward}\n\n"
                 f"**Why this stock:**\n{reasons_text}\n"
                 f"{_ohlcv_reasons_text}\n\n"
-                f"_Kite auto-buy will be attempted for eligible setups. If no `✅ Auto-bought` message appears, place manually in your broker and use `/buy {sym} {suggested_qty} {_price_now:.0f}` to record._"
+                f"{_auto_status_line}"
             )
             # For re-alerts: only send if it's a DEFINITELY BUY upgrade
             if _is_re_alert and not _is_definitely_buy:
@@ -4723,7 +4743,6 @@ class AutoPilotInvestor:
                 "stop_loss": sl,
             }
 
-        lines.append("\n_Kite auto-buy will be attempted for eligible picks. If no `✅ Auto-bought` messages appear, place manually in your broker._")
         self._send_to_channels("\n\n".join(lines))
         self._log(f"Opening buffer flushed: {n_total} picks sent (top {self._MAX_OPENING_ALERTS}), {len(overflow)} overflow")
 
@@ -4964,6 +4983,107 @@ class AutoPilotInvestor:
         return round(((c.buy_above - c.price) / c.price) * 100, 2)
 
     @classmethod
+    def _live_auto_buy_gate_detail(cls, c: 'BlindBuyCandidate', grade: str = "") -> Tuple[bool, str]:
+        """Return auto-buy eligibility plus a human-readable reason."""
+        rr2 = cls._candidate_rr2(c)
+        gap_pct = cls._candidate_entry_gap_pct(c)
+        if c.holding_horizon == "avoid":
+            return False, "setup quality is below the auto-buy floor"
+        try:
+            import pytz
+            _ist = pytz.timezone("Asia/Kolkata")
+            _now_ist = datetime.now(_ist)
+        except Exception:
+            from datetime import timezone, timedelta
+            _now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+        now_min = _now_ist.hour * 60 + _now_ist.minute
+
+        if c.holding_horizon == "intraday":
+            if not (9 * 60 + 20 <= now_min <= 10 * 60 + 30):
+                return False, "intraday auto-buy is only allowed during the opening window"
+        else:
+            if not (9 * 60 + 20 <= now_min <= 13 * 60 + 30):
+                return False, "swing auto-buy is paused after 1:30 PM IST"
+
+        if c.holding_horizon == "5-day swing":
+            if c.price < 20:
+                return False, "price is below the ₹20 floor"
+            if rr2 < 1.8:
+                return False, f"R:R 1:{rr2:.1f} is below the 5-day swing floor"
+            if gap_pct > 1.2:
+                return False, f"entry is {gap_pct:.1f}% below trigger"
+            if c.change_pct < 1.8 or c.change_pct > 7.8:
+                return False, f"day move {c.change_pct:.1f}% is outside the 5-day swing zone"
+            if c.blind_score < 50:
+                return False, f"score {c.blind_score:.0f} is below 50"
+            if c.confidence < 27:
+                return False, f"confidence {c.confidence:.0f}% is below 27%"
+            if c.volume_ratio < 2.0:
+                return False, f"volume {c.volume_ratio:.1f}x is below 2.0x"
+            return True, "eligible now as a 5-day swing auto-buy"
+
+        if c.holding_horizon == "2-day swing":
+            if c.price < 20:
+                return False, "price is below the ₹20 floor"
+            if rr2 < 1.5:
+                return False, f"R:R 1:{rr2:.1f} is below the 2-day swing floor"
+            if gap_pct > 1.2:
+                return False, f"entry is {gap_pct:.1f}% below trigger"
+            if c.change_pct < 1.8 or c.change_pct > 6.8:
+                return False, f"day move {c.change_pct:.1f}% is outside the 2-day swing zone"
+            if c.blind_score < 40:
+                return False, f"score {c.blind_score:.0f} is below 40"
+            if c.confidence < 28:
+                return False, f"confidence {c.confidence:.0f}% is below 28%"
+            if c.volume_ratio < 1.8:
+                return False, f"volume {c.volume_ratio:.1f}x is below 1.8x"
+            return True, "eligible now as a 2-day swing auto-buy"
+
+        if c.price < 20:
+            return False, "price is below the ₹20 floor"
+        if rr2 < 1.4:
+            return False, f"R:R 1:{rr2:.1f} is below the intraday floor"
+        if gap_pct > 1.2:
+            return False, f"entry is {gap_pct:.1f}% below trigger"
+        if c.change_pct < 1.8 or c.change_pct > 8.5:
+            return False, f"day move {c.change_pct:.1f}% is outside the intraday zone"
+        if grade == "A+":
+            if c.blind_score < 40:
+                return False, f"score {c.blind_score:.0f} is below 40"
+            if c.confidence < 30:
+                return False, f"confidence {c.confidence:.0f}% is below 30%"
+            if c.volume_ratio < 2.0:
+                return False, f"volume {c.volume_ratio:.1f}x is below 2.0x"
+            if rr2 < 1.6:
+                return False, f"R:R 1:{rr2:.1f} is below the A+ floor"
+            return True, "eligible now as an A+ intraday auto-buy"
+        if c.blind_score < 48:
+            return False, f"score {c.blind_score:.0f} is below 48"
+        if grade == "A":
+            if c.confidence < 30:
+                return False, f"confidence {c.confidence:.0f}% is below 30%"
+            if c.volume_ratio < 1.0:
+                return False, f"volume {c.volume_ratio:.1f}x is below 1.0x"
+            return True, "eligible now as an A-grade auto-buy"
+        if grade == "B":
+            if c.confidence < 28:
+                return False, f"confidence {c.confidence:.0f}% is below 28%"
+            if c.volume_ratio < 2.0:
+                return False, f"volume {c.volume_ratio:.1f}x is below 2.0x"
+            if rr2 < 1.8:
+                return False, f"R:R 1:{rr2:.1f} is below the B-grade floor"
+            if c.change_pct > 7.5:
+                return False, f"day move {c.change_pct:.1f}% is too extended for B-grade intraday auto-buy"
+            return True, "eligible now as a selective B-grade auto-buy"
+        return False, "grade is below the live auto-buy floor"
+
+    @classmethod
+    def _format_auto_buy_status_line(cls, c: 'BlindBuyCandidate', grade: str = "") -> str:
+        eligible, reason = cls._live_auto_buy_gate_detail(c, grade)
+        prefix = "🤖 Auto-buy: yes" if eligible else "🤖 Auto-buy: no"
+        return f"{prefix} — {reason}"
+
+    @classmethod
     def _classify_holding_horizon(cls, c: 'BlindBuyCandidate') -> Tuple[str, str, int, str]:
         """Classify each alert into the horizon it historically fits best."""
         rr2 = cls._candidate_rr2(c)
@@ -5034,111 +5154,9 @@ class AutoPilotInvestor:
 
     @classmethod
     def _eligible_for_live_auto_buy(cls, c: 'BlindBuyCandidate', grade: str = "") -> bool:
-        """Return True for execution-grade intraday setups.
-
-        We still want live auto-buys to be selective, but the previous gate was
-        so tight that Discord was emitting many actionable-looking buys while
-        Kite placed none. The live gate now has two lanes:
-
-        1. A/A+ continuation lane:
-           - allows stronger but not necessarily "elite" opening names
-           - accepts moderate confidence / volume if grade quality is high
-
-        2. B-grade momentum lane:
-           - reserved for strong live movers with better volume and R:R
-           - keeps weaker B-grade names alert-only
-        """
-        rr2 = cls._candidate_rr2(c)
-        gap_pct = cls._candidate_entry_gap_pct(c)
-        if c.holding_horizon == "avoid":
-            return False
-        try:
-            import pytz
-            _ist = pytz.timezone("Asia/Kolkata")
-            _now_ist = datetime.now(_ist)
-        except Exception:
-            from datetime import timezone, timedelta
-            _now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
-        now_min = _now_ist.hour * 60 + _now_ist.minute
-
-        # Intraday auto-buys should stay near the open. Swing-style CNC entries
-        # can remain eligible longer because the multi-horizon replay shows the
-        # edge is mostly in 2-5 day holds rather than same-day exits.
-        if c.holding_horizon == "intraday":
-            if not (9 * 60 + 20 <= now_min <= 10 * 60 + 30):
-                return False
-        else:
-            if not (9 * 60 + 20 <= now_min <= 13 * 60 + 30):
-                return False
-
-        if c.holding_horizon == "5-day swing":
-            if c.price < 20:
-                return False
-            if rr2 < 1.8 or gap_pct > 1.2:
-                return False
-            if c.change_pct < 1.8 or c.change_pct > 7.8:
-                return False
-            if c.blind_score < 50 or c.confidence < 27 or c.volume_ratio < 2.0:
-                return False
-            return True
-
-        if c.holding_horizon == "2-day swing":
-            if c.price < 20:
-                return False
-            if rr2 < 1.5 or gap_pct > 1.2:
-                return False
-            if c.change_pct < 1.8 or c.change_pct > 6.8:
-                return False
-            if c.blind_score < 40 or c.confidence < 28 or c.volume_ratio < 1.8:
-                return False
-            return True
-
-        # Legacy opening-session intraday gate.
-        if c.price < 20:
-            return False
-        if rr2 < 1.4:
-            return False
-        if gap_pct > 1.2:
-            return False
-        if c.change_pct < 1.8 or c.change_pct > 8.5:
-            return False
-        # Higher-grade setups can run with moderate confirmation. For A+ names,
-        # allow a slightly lower score floor if live participation is strong;
-        # these are the "good, not elite" opening names we still want to trust.
-        if grade == "A+":
-            if c.blind_score < 40:
-                return False
-            if c.confidence < 30:
-                return False
-            if c.volume_ratio < 2.0:
-                return False
-            if rr2 < 1.6:
-                return False
-            return True
-
-        if c.blind_score < 48:
-            return False
-
-        if grade == "A":
-            if c.confidence < 30:
-                return False
-            if c.volume_ratio < 1.0:
-                return False
-            return True
-
-        # B-grade names need stronger live confirmation to earn auto-execution.
-        if grade == "B":
-            if c.confidence < 28:
-                return False
-            if c.volume_ratio < 2.0:
-                return False
-            if rr2 < 1.8:
-                return False
-            if c.change_pct > 7.5:
-                return False
-            return True
-
-        return False
+        """Return True when the live auto-buy gate says yes."""
+        eligible, _ = cls._live_auto_buy_gate_detail(c, grade)
+        return eligible
 
     @classmethod
     def _grade_candidate(cls, c: 'BlindBuyCandidate') -> Tuple[str, str]:
@@ -5254,7 +5272,6 @@ class AutoPilotInvestor:
         for rank, (c, grade, momentum, risk_flag) in enumerate(main_picks, 1):
             self._format_candidate_block(sections, c, grade, momentum, rank, len(main_picks), risk_flag=risk_flag)
 
-        sections.append("_Kite auto-buy will be attempted for eligible picks. If no `✅ Auto-bought` message appears, place manually in your broker and use `/buy SYMBOL QTY PRICE` to record._")
         message = "\n\n".join(sections)
         self._send_to_channels(message)
 
@@ -5361,11 +5378,13 @@ class AutoPilotInvestor:
                 f"`{c.symbol}` [{grade_badge}] Score {c.blind_score:.0f} | `{c.price:.2f}` ({pct}) | Vol `{c.volume_ratio:.1f}x` | SL `{c.stop_loss:.2f}` → T1 `{c.target1:.2f}` T2 `{c.target2:.2f}`{_risk}",
             ]
         else:
+            auto_status_line = self._format_auto_buy_status_line(c, grade)
             block = [
                 f"**BUY `{c.symbol}`** [{grade_badge}] Score {score_label}{top_marker}{trade_tag}{horizon_tag}",
                 f"Price `{c.price:.2f}` ({pct}) | Buy Above `{c.buy_above:.2f}` | Volume `{c.volume_ratio:.1f}x avg`{f' | {mom_label}' if mom_label else ''}",
                 f"Stop Loss `{c.stop_loss:.2f}` | Target 1 `{c.target1:.2f}` | Target 2 `{c.target2:.2f}`{risk_reward}",
                 f"Why: {simple_reasons}",
+                auto_status_line,
             ]
             if risk_flag:
                 block.append(risk_flag)
