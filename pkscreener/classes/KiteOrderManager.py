@@ -1367,6 +1367,9 @@ class KiteOrderManager:
                         "quantity": qty,
                         "order_type": "MARKET",
                         "product": self.product_type,
+                        # The installed Kite client validates `price` on every GTT leg,
+                        # even for MARKET orders.
+                        "price": _round_to_nse_tick(stop_loss),
                     },
                     # Leg 2: target — fires when price >= target
                     {
