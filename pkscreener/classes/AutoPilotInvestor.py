@@ -3289,6 +3289,13 @@ class AutoPilotInvestor:
                 and price >= 20.0
                 and _vol_ratio_live >= 2.0
             )
+            _strong_live_override = (
+                daily_change >= 3.0
+                and _item_turnover_cr >= 8.0
+                and price >= 50.0
+                and _vol_ratio_live >= 2.0
+                and confidence >= 28
+            )
             if not _is_buy_action and _rsi_val >= 45 and not is_early_mover and not _is_opening_window and not _momentum_override:
                 self._tick_rejected.add(sym)  # 30-min cooldown
                 self._log(
@@ -3300,6 +3307,12 @@ class AutoPilotInvestor:
                     _item_reasons, f"engine='{_now_action}', RSI={_rsi_val:.0f}"
                 )
                 return
+            if not _is_buy_action and _strong_live_override and not _momentum_override:
+                self._log(
+                    f"Strong live override: {sym} +{daily_change:.1f}% with "
+                    f"₹{_item_turnover_cr:.1f}Cr turnover, conf {confidence:.0f}% and vol {_vol_ratio_live:.1f}x "
+                    f"— overriding stale engine '{_now_action}'"
+                )
             if not _is_buy_action and _momentum_override:
                 self._log(
                     f"Momentum override: {sym} +{daily_change:.1f}% with "
@@ -3737,20 +3750,28 @@ class AutoPilotInvestor:
                     self._definitely_buy_alerted.add(sym)
                 self._save_daily_alerted(sym)
                 self._send_to_channels(message)
-                auto_result = self._attempt_tick_confirmed_auto_buy(
-                    symbol=sym,
-                    price=_price_now,
-                    stop_loss=stop_loss,
-                    target1=target1,
-                    target2=target2,
-                    blind_score=blind_score,
-                    confidence=confidence,
-                    volume_ratio=volume_ratio,
-                    daily_change=daily_change,
-                    reasons=blind_reasons,
-                    original_action=_now_action,
-                    source="tick-confirmed live alert",
+                self._log(
+                    f"Tick-confirmed auto-buy check: {sym} score={blind_score:.0f} "
+                    f"conf={confidence:.0f}% vol={volume_ratio:.1f}x change={daily_change:.1f}%"
                 )
+                try:
+                    auto_result = self._attempt_tick_confirmed_auto_buy(
+                        symbol=sym,
+                        price=_price_now,
+                        stop_loss=stop_loss,
+                        target1=target1,
+                        target2=target2,
+                        blind_score=blind_score,
+                        confidence=confidence,
+                        volume_ratio=volume_ratio,
+                        daily_change=daily_change,
+                        reasons=blind_reasons,
+                        original_action=_now_action,
+                        source="tick-confirmed live alert",
+                    )
+                except Exception as exc:
+                    auto_result = f"⚠️ Auto-buy failed for `{sym}`: {exc}"
+                    self._log(f"Tick-confirmed auto-buy crash {sym}: {exc}")
                 if auto_result:
                     self._send_to_channels(auto_result)
             # Track for momentum continuation re-alerts
