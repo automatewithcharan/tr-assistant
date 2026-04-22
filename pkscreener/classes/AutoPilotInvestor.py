@@ -4987,8 +4987,7 @@ class AutoPilotInvestor:
         """Return auto-buy eligibility plus a human-readable reason."""
         rr2 = cls._candidate_rr2(c)
         gap_pct = cls._candidate_entry_gap_pct(c)
-        if c.holding_horizon == "avoid":
-            return False, "setup quality is below the auto-buy floor"
+        _avoid_horizon = c.holding_horizon == "avoid"
         try:
             import pytz
             _ist = pytz.timezone("Asia/Kolkata")
@@ -5020,6 +5019,8 @@ class AutoPilotInvestor:
                 return False, f"confidence {c.confidence:.0f}% is below 27%"
             if c.volume_ratio < 2.0:
                 return False, f"volume {c.volume_ratio:.1f}x is below 2.0x"
+            if _avoid_horizon:
+                return False, "horizon model tagged this as avoid despite passing 5-day swing thresholds"
             return True, "eligible now as a 5-day swing auto-buy"
 
         if c.holding_horizon == "2-day swing":
@@ -5037,6 +5038,8 @@ class AutoPilotInvestor:
                 return False, f"confidence {c.confidence:.0f}% is below 28%"
             if c.volume_ratio < 1.8:
                 return False, f"volume {c.volume_ratio:.1f}x is below 1.8x"
+            if _avoid_horizon:
+                return False, "horizon model tagged this as avoid despite passing 2-day swing thresholds"
             return True, "eligible now as a 2-day swing auto-buy"
 
         if c.price < 20:
@@ -5056,6 +5059,8 @@ class AutoPilotInvestor:
                 return False, f"volume {c.volume_ratio:.1f}x is below 2.0x"
             if rr2 < 1.6:
                 return False, f"R:R 1:{rr2:.1f} is below the A+ floor"
+            if _avoid_horizon:
+                return False, "horizon model tagged this as avoid despite passing the A+ intraday gate"
             return True, "eligible now as an A+ intraday auto-buy"
         if c.blind_score < 48:
             return False, f"score {c.blind_score:.0f} is below 48"
@@ -5064,6 +5069,8 @@ class AutoPilotInvestor:
                 return False, f"confidence {c.confidence:.0f}% is below 30%"
             if c.volume_ratio < 1.0:
                 return False, f"volume {c.volume_ratio:.1f}x is below 1.0x"
+            if _avoid_horizon:
+                return False, "horizon model tagged this as avoid despite passing the A-grade gate"
             return True, "eligible now as an A-grade auto-buy"
         if grade == "B":
             if c.confidence < 28:
@@ -5074,7 +5081,11 @@ class AutoPilotInvestor:
                 return False, f"R:R 1:{rr2:.1f} is below the B-grade floor"
             if c.change_pct > 7.5:
                 return False, f"day move {c.change_pct:.1f}% is too extended for B-grade intraday auto-buy"
+            if _avoid_horizon:
+                return False, "horizon model tagged this as avoid despite passing the B-grade gate"
             return True, "eligible now as a selective B-grade auto-buy"
+        if _avoid_horizon:
+            return False, "horizon model tagged this setup as avoid"
         return False, "grade is below the live auto-buy floor"
 
     @classmethod
