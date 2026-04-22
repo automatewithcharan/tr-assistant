@@ -19,8 +19,10 @@ if [ -f "$ENV_FILE" ]; then
     set +a
 fi
 
-LOG=/tmp/trade_disk_guard.log
-STATE_STAMP=/tmp/trade_disk_guard_archive_state
+RUNTIME_DIR="$REPO/results/Data"
+mkdir -p "$RUNTIME_DIR"
+LOG="$RUNTIME_DIR/disk_guard.log"
+STATE_STAMP="$RUNTIME_DIR/disk_guard_state"
 WEBHOOK="${DISCORD_WEBHOOK_URL:-}"
 ARCHIVE_DIR="$REPO/results/Data/archive"
 ARCHIVE_BUCKET="${TRADE_ASSISTANT_ARCHIVE_BUCKET:-}"
