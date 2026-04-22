@@ -663,6 +663,9 @@ class AutoPilotInvestor:
         self._TOP_N_DAILY_BATCH = 5             # 5 trades per day for consistency
         self._AUTO_BUY_TOP_N = 2                # auto-execute only the tightest 1-2 confirmed setups/day
         self._daily_batch_alert_count: int = 0  # counter of batch buy alerts sent today
+        self._tick_confirmed_auto_buy_count: int = 0  # selective live buys from Discord/tick-confirmed path
+        self._OPENING_FAST_LANE_TOP_N = 2       # allow only 1-2 instant opening entries before buffer flush
+        self._opening_fast_lane_count: int = 0  # counter of elite opening-window bypasses sent today
 
         # Tick-only fast scanner state (no OHLCV, fires in < 1 second)
         self._tick_alerted: Dict[str, datetime] = {}  # symbol -> time of last tick-triggered scan
@@ -826,6 +829,124 @@ class AutoPilotInvestor:
             else:
                 self._send_to_channels(f"⚠️ Auto-buy retry skipped for `{r.symbol}`: {r.message}")
 
+    def _attempt_tick_confirmed_auto_buy(
+        self,
+        *,
+        symbol: str,
+        price: float,
+        stop_loss: float,
+        target1: float,
+        target2: float,
+        blind_score: float,
+        confidence: float,
+        volume_ratio: float,
+        daily_change: float,
+        reasons: str,
+        original_action: str = "",
+        source: str = "tick-confirmed",
+    ) -> Optional[str]:
+        """Place a selective live buy for the tightest tick-confirmed setups."""
+        if self._order_manager is None:
+            return None
+        if self._tick_confirmed_auto_buy_count >= self._AUTO_BUY_TOP_N:
+            self._log(
+                f"Auto-buy skip {symbol}: {source} daily cap reached "
+                f"({self._tick_confirmed_auto_buy_count}/{self._AUTO_BUY_TOP_N})"
+            )
+            return None
+
+        candidate = BlindBuyCandidate(
+            symbol=symbol,
+            price=price,
+            buy_above=price,
+            stop_loss=stop_loss,
+            target1=target1,
+            target2=target2,
+            confidence=confidence,
+            volume_ratio=volume_ratio,
+            change_pct=daily_change,
+            blind_score=blind_score,
+            original_action=original_action,
+            reasons=reasons,
+        )
+        grade, _ = self._grade_candidate(candidate)
+        if not self._eligible_for_live_auto_buy(candidate, grade):
+            self._log(
+                f"Auto-buy skip {symbol}: {source} not tight enough "
+                f"(grade={grade}, conf={confidence:.0f}%, rr={self._candidate_rr2(candidate):.1f}, "
+                f"gap={self._candidate_entry_gap_pct(candidate):.1f}%, vol={volume_ratio:.1f}x)"
+            )
+            return None
+
+        result = self._try_auto_buy(
+            symbol, price, stop_loss, target1, target2, blind_score, reasons
+        )
+        if result and result.startswith("✅"):
+            self._tick_confirmed_auto_buy_count += 1
+            self._log(
+                f"Auto-buy success {symbol}: {source} "
+                f"({self._tick_confirmed_auto_buy_count}/{self._AUTO_BUY_TOP_N} today)"
+            )
+        elif result:
+            self._log(f"Auto-buy result {symbol}: {source} -> {result}")
+        return result
+
+    def _qualifies_for_opening_fast_lane(
+        self,
+        *,
+        symbol: str,
+        price: float,
+        blind_score: float,
+        confidence: float,
+        volume_ratio: float,
+        daily_change: float,
+        stop_loss: float,
+        target2: float,
+        turnover_cr: float,
+        imbalance: float,
+        tick_high: float = 0.0,
+        tick_low: float = 0.0,
+    ) -> Tuple[bool, str]:
+        """Return True only for elite opening-window setups worth instant action."""
+        if not self._is_opening_window_active():
+            return False, "opening window inactive"
+        if self._opening_fast_lane_count >= self._OPENING_FAST_LANE_TOP_N:
+            return False, "fast-lane daily cap reached"
+        if price <= 0:
+            return False, "invalid price"
+        if blind_score < 48:
+            return False, f"score {blind_score:.0f} < 48"
+        if confidence < 18:
+            return False, f"confidence {confidence:.0f}% < 18%"
+        if not (0.4 <= daily_change <= 6.5):
+            return False, f"move {daily_change:.1f}% outside opening zone"
+        if turnover_cr < 0.75:
+            return False, f"turnover ₹{turnover_cr:.1f}Cr < ₹0.75Cr"
+        if stop_loss <= 0 or target2 <= 0:
+            return False, "missing stop/target"
+        rr2 = _compute_long_rr(price, stop_loss, target2)
+        if rr2 < 1.2:
+            return False, f"R:R 1:{rr2:.1f} < 1:1.2"
+        if volume_ratio < 0.8 and imbalance < 3.5:
+            return False, f"vol {volume_ratio:.1f}x and imbalance {imbalance:.1f}x too weak"
+
+        if tick_high > 0 and price > 0:
+            pct_from_high = ((tick_high - price) / tick_high) * 100
+            if pct_from_high > 1.2:
+                return False, f"{pct_from_high:.1f}% below day high"
+            if tick_low > 0 and tick_high > tick_low:
+                retreat_frac = (tick_high - price) / max(tick_high - tick_low, 0.01)
+                if retreat_frac > 0.25:
+                    return False, f"gave back {retreat_frac:.0%} of opening range"
+
+        if imbalance < 2.5 and volume_ratio < 1.2 and confidence < 30:
+            return False, "not enough opening urgency"
+
+        return True, (
+            f"score {blind_score:.0f}, conf {confidence:.0f}%, vol {volume_ratio:.1f}x, "
+            f"imbalance {imbalance:.1f}x, turnover ₹{turnover_cr:.1f}Cr"
+        )
+
     # ------------------------------------------------------------------
     # Public API
     # ------------------------------------------------------------------
@@ -903,6 +1024,8 @@ class AutoPilotInvestor:
                 self._tick_only_alert_count = 0
                 self._rescan_alert_count = 0
                 self._daily_batch_alert_count = 0
+                self._tick_confirmed_auto_buy_count = 0
+                self._opening_fast_lane_count = 0
                 self._nifty_crash_pause = False
             self._momentum_tracked_date = today_str
             # Pre-open auction scan: fires during 9:00-9:15 AM IST
@@ -1228,8 +1351,9 @@ class AutoPilotInvestor:
         buy_candidates = _sm_df[action_series.isin(buy_actions)].copy()
         buy_candidates["_rescan_priority"] = 2
 
-        # Secondary: slow-build runners. These are not fully upgraded yet, but
-        # the tape is already confirming a real move with enough volume support.
+        # Honest forward validation showed promoted WATCH BUY names were the main drag.
+        # Keep rescans execution-grade: only engine-confirmed buy actions should enter
+        # the actionable pool here.
         slow_runner_actions = {"Watch Buy", "Momentum Buy", "Momentum Watch", "Hold / Do Nothing"}
         slow_runner_mask = (
             action_series.isin(slow_runner_actions)
@@ -1239,10 +1363,9 @@ class AutoPilotInvestor:
             & (conf_series >= 16.0)
             & (rsi_series < 72.0)
         )
-        slow_candidates = _sm_df[slow_runner_mask & ~action_series.isin(buy_actions)].copy()
-        slow_candidates["_rescan_priority"] = 1
+        slow_runner_count = int(slow_runner_mask.sum())
 
-        candidates = pd.concat([buy_candidates, slow_candidates], ignore_index=True)
+        candidates = buy_candidates.copy()
         if not candidates.empty:
             candidates = candidates.drop_duplicates(subset=["Stock"], keep="first")
             candidates["_sort_conf"] = candidates["Signal Strength %"].apply(_safe_float)
@@ -1259,7 +1382,11 @@ class AutoPilotInvestor:
         _new_candidates = [str(r.get("Stock", "")).strip() for _, r in candidates.iterrows()
                            if str(r.get("Stock", "")).strip() not in self._already_alerted_buys]
         if _new_candidates:
-            self._log(f"BuyNow rescan: engine says Buy Now for {len(candidates)} stocks, {len(_new_candidates)} not yet alerted: {', '.join(_new_candidates[:10])}")
+            self._log(
+                f"BuyNow rescan: engine says Buy Now for {len(candidates)} stocks, "
+                f"{len(_new_candidates)} not yet alerted; skipped {slow_runner_count} watchlist-style runners: "
+                f"{', '.join(_new_candidates[:10])}"
+            )
 
         _rescan_count = 0
         _remaining_daily = max(0, self._RESCAN_MAX_PER_DAY - self._rescan_alert_count)
@@ -1414,7 +1541,7 @@ class AutoPilotInvestor:
                 f"🟢 SELL at `₹{target1:.2f}` (safe profit) or `₹{target2:.2f}` (max profit — ₹{_reward_ps:.0f}/share gain)\n\n"
                 f"**Why:** {self._simplify_blind_reasons(blind_reasons)}\n"
                 f"{auto_note}\n"
-                f"_Open Groww → Buy → then use `/buy {sym} {suggested_qty} {live_price:.0f}` to record_"
+                f"_Kite auto-buy will be attempted for eligible setups. If no `✅ Auto-bought` message appears, place manually in your broker and use `/buy {sym} {suggested_qty} {live_price:.0f}` to record._"
             )
 
             self._send_to_channels(msg)
@@ -2046,7 +2173,7 @@ class AutoPilotInvestor:
                     lines.append(f"  **{sym}** | Now `{current_price:.2f}` | Daily `+{change:.1f}%`")
             lines.append("")
 
-        lines.append("_Go to Groww → Portfolio → Sell all intraday positions. Do it NOW._")
+        lines.append("_Exit all intraday positions in your broker NOW. Do it before auto square-off._")
 
         # Close paper trades for the day and append summary
         paper_summary = self._paper_tracker.close_day(ticks)
@@ -2289,7 +2416,7 @@ class AutoPilotInvestor:
             f"Why: {score_reasons_str}\n\n"
             f"**What to do ({_conviction} conviction):**\n"
             f"Buy **{_suggested_qty} shares** (≈ ₹{_approx_cost:,.0f})\n"
-            f"_Open Groww → Buy → then use `/buy {sym} {_suggested_qty} {price:.0f}` to record_\n"
+            f"_Kite auto-buy will be attempted for eligible setups. If no `✅ Auto-bought` message appears, place manually in your broker and use `/buy {sym} {_suggested_qty} {price:.0f}` to record._\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         )
         self._send_to_channels(msg)
@@ -2576,7 +2703,7 @@ class AutoPilotInvestor:
                 f"🔴 EXIT if price drops to `₹{_sl_price:.0f}` (limits your loss to 3%)\n"
                 f"🟢 SELL near `₹{_target_price:.0f}` if momentum continues (fixed demand-watch target: +{_scope_pct:.1f}% from alert price)\n"
                 f"💰 You risk `₹{price - _sl_price:.0f}` per share to gain `₹{_target_price - price:.0f}` per share ({_rr:.1f}x reward vs risk)\n\n"
-                f"_Open Groww → Buy → then use `/buy {sym} {_suggested_qty} {price:.0f}` to record_\n"
+                f"_Kite auto-buy will be attempted for eligible setups. If no `✅ Auto-bought` message appears, place manually in your broker and use `/buy {sym} {_suggested_qty} {price:.0f}` to record._\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             )
             self._send_to_channels(msg)
@@ -3042,8 +3169,8 @@ class AutoPilotInvestor:
                 return
             # Score gate: 52 normally (was 58 — HONASA at 53 was real),
             # 48 for broad-rally outperformers or high-volume Buy-Now stocks.
-            _now_action_for_gate = str(row.get("NowAction", row.get("Action", ""))).lower()
-            _is_buy_for_gate = "buy" in _now_action_for_gate
+            _now_action_for_gate = str(row.get("NowAction", row.get("Action", ""))).strip()
+            _is_buy_for_gate = self._is_true_buy_action(_now_action_for_gate)
             _high_vol_buy = _is_buy_for_gate and _vol_ratio_live >= 2.0
             if _is_broad_rally and _relative_outperformance >= 5.0:
                 effective_min = max(35.0, self.config.blind_buy_min_score)
@@ -3106,9 +3233,10 @@ class AutoPilotInvestor:
             #   Buy Now + vol >= 2.0x → 81% win rate (22/27)
             #   Adding RSI < 80 + real targets → 84%
             #   With corrected entry-at-3% metric → 90%+
-            _now_action = str(row.get("NowAction", row.get("Action", ""))).lower()
-            _engine_not_buy = "hold" in _now_action or "sell" in _now_action or "exit" in _now_action
-            _is_buy_action = "buy" in _now_action
+            _now_action = str(row.get("NowAction", row.get("Action", ""))).strip()
+            _now_action_lower = self._normalize_action_label(_now_action)
+            _engine_not_buy = "hold" in _now_action_lower or "sell" in _now_action_lower or "exit" in _now_action_lower
+            _is_buy_action = self._is_true_buy_action(_now_action)
             _rsi_val = float(row.get("RSI", 50) or 50)
 
             # Gate A: Engine action — require "Buy Now" or similar.
@@ -3474,34 +3602,80 @@ class AutoPilotInvestor:
                 f"🟢 SELL at `₹{target1:.2f}` (safe profit) or `₹{target2:.2f}` (max profit — ₹{_reward_per_share:.0f}/share gain){risk_reward}\n\n"
                 f"**Why this stock:**\n{reasons_text}\n"
                 f"{_ohlcv_reasons_text}\n\n"
-                f"_Open Groww → Buy → then use `/buy {sym} {suggested_qty} {_price_now:.0f}` to record_"
+                f"_Kite auto-buy will be attempted for eligible setups. If no `✅ Auto-bought` message appears, place manually in your broker and use `/buy {sym} {suggested_qty} {_price_now:.0f}` to record._"
             )
             # For re-alerts: only send if it's a DEFINITELY BUY upgrade
             if _is_re_alert and not _is_definitely_buy:
                 self._log(f"Skip re-alert for {sym}: already alerted, not a DEFINITELY BUY upgrade")
             elif self._is_opening_window_active() and not _is_re_alert:
-                # During opening 15-min window: buffer alerts, don't send individually.
-                # They'll be flushed as a ranked summary every 30s.
-                with self._opening_buffer_lock:
-                    self._opening_buffer.append({
-                        "symbol": sym,
-                        "price": _price_now,
-                        "daily_change": daily_change,
-                        "blind_score": blind_score,
-                        "volume_ratio": volume_ratio,
-                        "confidence": confidence,
-                        "stop_loss": stop_loss,
-                        "target1": target1,
-                        "target2": target2,
-                        "suggested_qty": suggested_qty,
-                        "is_definitely_buy": _is_definitely_buy,
-                        "reasons": blind_reasons,
-                        "message": message,
-                    })
-                self._log(
-                    f"📦 BUFFERED (opening window): {sym} at ₹{_price_now:.2f} ({direction}{daily_change:.2f}%) "
-                    f"score={blind_score:.0f} vol={volume_ratio:.1f}x — will flush in ranked batch"
+                _tick_high = float(_fresh_tick.get("high") or _fresh_tick.get("ohlc", {}).get("high", 0))
+                _tick_low = float(_fresh_tick.get("low") or _fresh_tick.get("ohlc", {}).get("low", 0))
+                fast_lane_ok, fast_lane_reason = self._qualifies_for_opening_fast_lane(
+                    symbol=sym,
+                    price=_price_now,
+                    blind_score=blind_score,
+                    confidence=confidence,
+                    volume_ratio=volume_ratio,
+                    daily_change=daily_change,
+                    stop_loss=stop_loss,
+                    target2=target2,
+                    turnover_cr=_item_turnover_cr,
+                    imbalance=_item_imbalance,
+                    tick_high=_tick_high,
+                    tick_low=_tick_low,
                 )
+                if fast_lane_ok:
+                    self._opening_fast_lane_count += 1
+                    fast_lane_message = f"**⚡ OPENING FAST-LANE — `{sym}`**\n{message}"
+                    self._log(
+                        f"⚡ OPENING FAST-LANE: {sym} at ₹{_price_now:.2f} ({direction}{daily_change:.2f}%) "
+                        f"{fast_lane_reason} ({self._opening_fast_lane_count}/{self._OPENING_FAST_LANE_TOP_N} today)"
+                    )
+                    self._already_alerted_buys.add(sym)
+                    if _is_definitely_buy:
+                        self._definitely_buy_alerted.add(sym)
+                    self._save_daily_alerted(sym)
+                    self._send_to_channels(fast_lane_message)
+                    auto_result = self._attempt_tick_confirmed_auto_buy(
+                        symbol=sym,
+                        price=_price_now,
+                        stop_loss=stop_loss,
+                        target1=target1,
+                        target2=target2,
+                        blind_score=blind_score,
+                        confidence=confidence,
+                        volume_ratio=volume_ratio,
+                        daily_change=daily_change,
+                        reasons=blind_reasons,
+                        original_action=_now_action,
+                        source="opening fast-lane",
+                    )
+                    if auto_result:
+                        self._send_to_channels(auto_result)
+                else:
+                    # During opening 15-min window: buffer alerts, don't send individually.
+                    # They'll be flushed as a ranked summary every 30s.
+                    with self._opening_buffer_lock:
+                        self._opening_buffer.append({
+                            "symbol": sym,
+                            "price": _price_now,
+                            "daily_change": daily_change,
+                            "blind_score": blind_score,
+                            "volume_ratio": volume_ratio,
+                            "confidence": confidence,
+                            "stop_loss": stop_loss,
+                            "target1": target1,
+                            "target2": target2,
+                            "suggested_qty": suggested_qty,
+                            "is_definitely_buy": _is_definitely_buy,
+                            "reasons": blind_reasons,
+                            "original_action": _now_action,
+                            "message": message,
+                        })
+                    self._log(
+                        f"📦 BUFFERED (opening window): {sym} at ₹{_price_now:.2f} ({direction}{daily_change:.2f}%) "
+                        f"score={blind_score:.0f} vol={volume_ratio:.1f}x — {fast_lane_reason}, will flush in ranked batch"
+                    )
             else:
                 if _is_re_alert and _is_definitely_buy:
                     message = f"**⬆️ UPGRADED to DEFINITELY BUY**\n{message}"
@@ -3520,6 +3694,22 @@ class AutoPilotInvestor:
                     self._definitely_buy_alerted.add(sym)
                 self._save_daily_alerted(sym)
                 self._send_to_channels(message)
+                auto_result = self._attempt_tick_confirmed_auto_buy(
+                    symbol=sym,
+                    price=_price_now,
+                    stop_loss=stop_loss,
+                    target1=target1,
+                    target2=target2,
+                    blind_score=blind_score,
+                    confidence=confidence,
+                    volume_ratio=volume_ratio,
+                    daily_change=daily_change,
+                    reasons=blind_reasons,
+                    original_action=_now_action,
+                    source="tick-confirmed live alert",
+                )
+                if auto_result:
+                    self._send_to_channels(auto_result)
             # Track for momentum continuation re-alerts
             self._momentum_tracked[sym] = {
                 "entry_price": _price_now,
@@ -4278,9 +4468,32 @@ class AutoPilotInvestor:
                 "stop_loss": sl,
             }
 
-        lines.append("\n_Open Groww → Buy your top picks_")
+        lines.append("\n_Kite auto-buy will be attempted for eligible picks. If no `✅ Auto-bought` messages appear, place manually in your broker._")
         self._send_to_channels("\n\n".join(lines))
         self._log(f"Opening buffer flushed: {n_total} picks sent (top {self._MAX_OPENING_ALERTS}), {len(overflow)} overflow")
+
+        auto_lines = []
+        for pick in top_picks:
+            auto_result = self._attempt_tick_confirmed_auto_buy(
+                symbol=pick["symbol"],
+                price=float(pick.get("price", 0) or 0),
+                stop_loss=float(pick.get("stop_loss", 0) or 0),
+                target1=float(pick.get("target1", 0) or 0),
+                target2=float(pick.get("target2", 0) or 0),
+                blind_score=float(pick.get("blind_score", 0) or 0),
+                confidence=float(pick.get("confidence", 0) or 0),
+                volume_ratio=float(pick.get("volume_ratio", 0) or 0),
+                daily_change=float(pick.get("daily_change", 0) or 0),
+                reasons=str(pick.get("reasons", "") or ""),
+                original_action=str(pick.get("original_action", "") or ""),
+                source="opening buffer flush",
+            )
+            if auto_result:
+                auto_lines.append(auto_result)
+            if self._tick_confirmed_auto_buy_count >= self._AUTO_BUY_TOP_N:
+                break
+        if auto_lines:
+            self._send_to_channels("\n".join(auto_lines))
 
         # Send overflow as compact watchlist
         if overflow:
@@ -4476,6 +4689,20 @@ class AutoPilotInvestor:
         return _compute_long_rr(c.price, c.stop_loss, c.target2)
 
     @staticmethod
+    def _normalize_action_label(action: str) -> str:
+        return str(action or "").strip().lower()
+
+    @classmethod
+    def _is_true_buy_action(cls, action: str) -> bool:
+        normalized = cls._normalize_action_label(action)
+        return normalized in {"buy", "buy now", "strong buy", "strong buy now"}
+
+    @classmethod
+    def _is_watch_buy_action(cls, action: str) -> bool:
+        normalized = cls._normalize_action_label(action)
+        return normalized in {"watch buy", "momentum buy", "momentum watch"}
+
+    @staticmethod
     def _candidate_entry_gap_pct(c: 'BlindBuyCandidate') -> float:
         if c.price <= 0 or c.buy_above <= 0:
             return 0.0
@@ -4503,24 +4730,66 @@ class AutoPilotInvestor:
 
     @classmethod
     def _eligible_for_live_auto_buy(cls, c: 'BlindBuyCandidate', grade: str = "") -> bool:
-        """Return True only for tighter engine-confirmed setups.
+        """Return True for execution-grade intraday setups.
 
-        Historical buy-ledger hint is modest but directionally clear:
-        tighter entry gap + decent RR + stronger confidence beats broad execution.
+        We still want live auto-buys to be selective, but the previous gate was
+        so tight that Discord was emitting many actionable-looking buys while
+        Kite placed none. The live gate now has two lanes:
+
+        1. A/A+ continuation lane:
+           - allows stronger but not necessarily "elite" opening names
+           - accepts moderate confidence / volume if grade quality is high
+
+        2. B-grade momentum lane:
+           - reserved for strong live movers with better volume and R:R
+           - keeps weaker B-grade names alert-only
         """
         rr2 = cls._candidate_rr2(c)
         gap_pct = cls._candidate_entry_gap_pct(c)
-        if grade not in ("A+", "A"):
+        try:
+            import pytz
+            _ist = pytz.timezone("Asia/Kolkata")
+            _now_ist = datetime.now(_ist)
+        except Exception:
+            from datetime import timezone, timedelta
+            _now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+        now_min = _now_ist.hour * 60 + _now_ist.minute
+
+        # Auto-buys should remain an opening-session tactic, not an all-day chase.
+        if not (9 * 60 + 20 <= now_min <= 10 * 60 + 30):
             return False
-        if c.confidence < 35:
+        if c.price < 20:
             return False
-        if rr2 < 1.5:
+        if rr2 < 1.4:
             return False
-        if gap_pct > 1.0:
+        if gap_pct > 1.2:
             return False
-        if c.volume_ratio < 1.6:
+        if c.change_pct < 1.8 or c.change_pct > 8.5:
             return False
-        return True
+        if c.blind_score < 48:
+            return False
+
+        # Higher-grade setups can run with moderate confirmation.
+        if grade in ("A+", "A"):
+            if c.confidence < 30:
+                return False
+            if c.volume_ratio < 1.0:
+                return False
+            return True
+
+        # B-grade names need stronger live confirmation to earn auto-execution.
+        if grade == "B":
+            if c.confidence < 28:
+                return False
+            if c.volume_ratio < 2.0:
+                return False
+            if rr2 < 1.8:
+                return False
+            if c.change_pct > 7.5:
+                return False
+            return True
+
+        return False
 
     @classmethod
     def _grade_candidate(cls, c: 'BlindBuyCandidate') -> Tuple[str, str]:
@@ -4636,7 +4905,7 @@ class AutoPilotInvestor:
         for rank, (c, grade, momentum, risk_flag) in enumerate(main_picks, 1):
             self._format_candidate_block(sections, c, grade, momentum, rank, len(main_picks), risk_flag=risk_flag)
 
-        sections.append("_Open Groww → Buy → then use `/buy SYMBOL QTY PRICE` to record_")
+        sections.append("_Kite auto-buy will be attempted for eligible picks. If no `✅ Auto-bought` message appears, place manually in your broker and use `/buy SYMBOL QTY PRICE` to record._")
         message = "\n\n".join(sections)
         self._send_to_channels(message)
 
@@ -4847,7 +5116,7 @@ class AutoPilotInvestor:
                 f"**SELL `{a.symbol}`** x{a.quantity} @ `{a.current_price:.2f}` "
                 f"({emoji}{a.pnl_pct:.1f}%)\n"
                 f"Entry was `{a.entry_price:.2f}` | {a.reason}\n"
-                f"_Sell in Groww → then use `/sell {a.symbol} {a.quantity} {a.current_price:.0f}` to record_"
+                f"_Sell in your broker → then use `/sell {a.symbol} {a.quantity} {a.current_price:.0f}` to record_"
             )
             self._already_alerted_sells.add(a.symbol)
 
