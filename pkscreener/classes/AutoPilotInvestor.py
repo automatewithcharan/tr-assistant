@@ -1582,6 +1582,7 @@ class AutoPilotInvestor:
                 candidate_rank = self._candidate_rank(temp_candidate)
                 auto_eligible = self._eligible_for_live_auto_buy(temp_candidate, candidate_grade)
                 auto_status_line = self._format_auto_buy_status_line(temp_candidate, candidate_grade)
+            hold_product_line = self._format_hold_product_line(temp_candidate) if temp_candidate is not None else ""
             msg = (
                 f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"**{header} — `{sym}`** — Quality {score_label}\n"
@@ -1593,6 +1594,7 @@ class AutoPilotInvestor:
                 f"🟢 SELL at `₹{target1:.2f}` (safe profit) or `₹{target2:.2f}` (max profit — ₹{_reward_ps:.0f}/share gain)\n\n"
                 f"**Why:** {self._simplify_blind_reasons(blind_reasons)}\n"
                 f"{auto_note}"
+                f"{f'\\n{hold_product_line}' if hold_product_line else ''}"
                 f"{f'\\n{auto_status_line}' if auto_status_line else ''}"
             )
 
@@ -2065,6 +2067,15 @@ class AutoPilotInvestor:
         now = datetime.now()
 
         for sym, tracked in list(self._momentum_tracked.items()):
+            live_position = None
+            if self._order_manager is not None:
+                try:
+                    live_position = self._order_manager.get_position(sym)
+                except Exception:
+                    live_position = None
+            if live_position is None or getattr(live_position, "status", "") != "open":
+                continue
+
             # Cooldown: don't spam EXIT alerts
             last_fade_alert = self._fade_alerted.get(sym)
             if isinstance(last_fade_alert, datetime):
@@ -2109,6 +2120,11 @@ class AutoPilotInvestor:
             elif drop_from_high_pct >= self._FADE_DROP_FROM_HIGH_PCT and drop_from_entry_pct >= 1.0:
                 # Large drop from high + underwater from entry = fading
                 alert_level = "WARNING"
+
+            # If the position is already protected with a stop, don't spam softer
+            # "weakening" warnings. Let STOP_HIT / EXIT_NOW remain actionable.
+            if alert_level == "WARNING" and float(getattr(live_position, "stop_loss", 0.0) or 0.0) > 0:
+                continue
 
             if not alert_level:
                 continue
@@ -3667,6 +3683,7 @@ class AutoPilotInvestor:
                 suggested_qty=suggested_qty,
             ))
             _alert_grade, _ = self._grade_candidate(_alert_candidate)
+            _hold_product_line = self._format_hold_product_line(_alert_candidate)
             _auto_status_line = self._format_auto_buy_status_line(_alert_candidate, _alert_grade)
             message = (
                 f"{alert_header}\n"
@@ -3678,6 +3695,7 @@ class AutoPilotInvestor:
                 f"🟢 SELL at `₹{target1:.2f}` (safe profit) or `₹{target2:.2f}` (max profit — ₹{_reward_per_share:.0f}/share gain){risk_reward}\n\n"
                 f"**Why this stock:**\n{reasons_text}\n"
                 f"{_ohlcv_reasons_text}\n\n"
+                f"{_hold_product_line}\n"
                 f"{_auto_status_line}"
             )
             # For re-alerts: only send if it's a DEFINITELY BUY upgrade
@@ -5095,6 +5113,18 @@ class AutoPilotInvestor:
         return f"{prefix} — {reason}"
 
     @classmethod
+    def _format_hold_product_line(cls, c: 'BlindBuyCandidate') -> str:
+        horizon = str(getattr(c, "holding_horizon", "") or "avoid")
+        product = str(getattr(c, "product_preference", "") or ("MIS" if horizon == "intraday" else "CNC"))
+        hold_label = {
+            "intraday": "intraday",
+            "2-day swing": "2-day swing",
+            "5-day swing": "5-day swing",
+            "avoid": "avoid / alert-only",
+        }.get(horizon, horizon)
+        return f"🧭 Hold: `{hold_label}` | Product: `{product}`"
+
+    @classmethod
     def _classify_holding_horizon(cls, c: 'BlindBuyCandidate') -> Tuple[str, str, int, str]:
         """Classify each alert into the horizon it historically fits best."""
         rr2 = cls._candidate_rr2(c)
@@ -5390,11 +5420,13 @@ class AutoPilotInvestor:
             ]
         else:
             auto_status_line = self._format_auto_buy_status_line(c, grade)
+            hold_product_line = self._format_hold_product_line(c)
             block = [
                 f"**BUY `{c.symbol}`** [{grade_badge}] Score {score_label}{top_marker}{trade_tag}{horizon_tag}",
                 f"Price `{c.price:.2f}` ({pct}) | Buy Above `{c.buy_above:.2f}` | Volume `{c.volume_ratio:.1f}x avg`{f' | {mom_label}' if mom_label else ''}",
                 f"Stop Loss `{c.stop_loss:.2f}` | Target 1 `{c.target1:.2f}` | Target 2 `{c.target2:.2f}`{risk_reward}",
                 f"Why: {simple_reasons}",
+                hold_product_line,
                 auto_status_line,
             ]
             if risk_flag:
