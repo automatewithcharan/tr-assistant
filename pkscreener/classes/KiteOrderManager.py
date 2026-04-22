@@ -196,6 +196,12 @@ class KiteOrderManager:
         KITE_MAX_ORDER_VALUE=5000       Max value per order (INR)
         KITE_MAX_DAILY_ORDERS=10        Max orders per day
         KITE_MAX_OPEN_POSITIONS=8       Max simultaneous open positions
+        KITE_SWING_CAPITAL=65000        Total CNC/NRML capital bucket
+        KITE_SWING_MAX_ORDER_VALUE=25000 Max CNC/NRML value per order
+        KITE_SWING_MAX_OPEN_POSITIONS=3 Max CNC/NRML simultaneous positions
+        KITE_INTRADAY_CAPITAL=25000     Total MIS notional bucket
+        KITE_INTRADAY_MAX_ORDER_VALUE=15000 Max MIS notional per order
+        KITE_INTRADAY_MAX_OPEN_POSITIONS=2 Max MIS simultaneous positions
         KITE_TRAILING_STOP_PCT=3.0      Trailing stop activation (% above buy)
         KITE_TRAILING_STOP_TRAIL=1.0    Trail distance (% below highest) — tighter for higher capture
         KITE_MAX_HOLD_DAYS=5            Max days to hold before time-decay exit
@@ -216,6 +222,20 @@ class KiteOrderManager:
         self.max_order_value = float(_get_secret("KITE_MAX_ORDER_VALUE", "5000"))
         self.max_daily_orders = int(_get_secret("KITE_MAX_DAILY_ORDERS", "10"))
         self.max_open_positions = int(_get_secret("KITE_MAX_OPEN_POSITIONS", "8"))
+        self.swing_capital = float(_get_secret("KITE_SWING_CAPITAL", "0") or 0)
+        self.swing_max_order_value = float(
+            _get_secret("KITE_SWING_MAX_ORDER_VALUE", str(self.max_order_value)) or self.max_order_value
+        )
+        self.swing_max_open_positions = int(
+            _get_secret("KITE_SWING_MAX_OPEN_POSITIONS", str(self.max_open_positions)) or self.max_open_positions
+        )
+        self.intraday_capital = float(_get_secret("KITE_INTRADAY_CAPITAL", "0") or 0)
+        self.intraday_max_order_value = float(
+            _get_secret("KITE_INTRADAY_MAX_ORDER_VALUE", str(self.max_order_value)) or self.max_order_value
+        )
+        self.intraday_max_open_positions = int(
+            _get_secret("KITE_INTRADAY_MAX_OPEN_POSITIONS", str(self.max_open_positions)) or self.max_open_positions
+        )
         self.trailing_stop_pct = float(_get_secret("KITE_TRAILING_STOP_PCT", "3.0"))
         self.trailing_trail_pct = float(_get_secret("KITE_TRAILING_STOP_TRAIL", "1.0"))
         self.max_hold_days = int(_get_secret("KITE_MAX_HOLD_DAYS", "5"))
@@ -365,6 +385,62 @@ class KiteOrderManager:
                 total += float(getattr(pos, "buy_price", 0.0) or 0.0) * int(getattr(pos, "qty", 0) or 0)
         return round(total, 2)
 
+    def _normalize_product_type(self, product_type: str = "") -> str:
+        normalized = str(product_type or self.product_type or "MIS").upper()
+        if normalized not in ("MIS", "CNC", "NRML"):
+            normalized = self.product_type
+        return normalized
+
+    def _capital_bucket_for_product(self, product_type: str = "") -> str:
+        return "intraday" if self._normalize_product_type(product_type) == "MIS" else "swing"
+
+    def _capital_limit_for_product(self, product_type: str = "") -> float:
+        return self.intraday_capital if self._capital_bucket_for_product(product_type) == "intraday" else self.swing_capital
+
+    def _per_order_limit_for_product(self, product_type: str = "") -> float:
+        return (
+            self.intraday_max_order_value
+            if self._capital_bucket_for_product(product_type) == "intraday"
+            else self.swing_max_order_value
+        )
+
+    def _max_positions_for_product(self, product_type: str = "") -> int:
+        return (
+            self.intraday_max_open_positions
+            if self._capital_bucket_for_product(product_type) == "intraday"
+            else self.swing_max_open_positions
+        )
+
+    def _current_open_value_for_product(self, product_type: str = "") -> float:
+        target_bucket = self._capital_bucket_for_product(product_type)
+        total = 0.0
+        for pos in self._positions.values():
+            if pos.status != "open":
+                continue
+            pos_product = self._normalize_product_type(getattr(pos, "product_type", self.product_type))
+            if self._capital_bucket_for_product(pos_product) != target_bucket:
+                continue
+            total += float(getattr(pos, "buy_price", 0.0) or 0.0) * int(getattr(pos, "qty", 0) or 0)
+        return round(total, 2)
+
+    def _current_open_count_for_product(self, product_type: str = "") -> int:
+        target_bucket = self._capital_bucket_for_product(product_type)
+        count = 0
+        for pos in self._positions.values():
+            if pos.status != "open":
+                continue
+            pos_product = self._normalize_product_type(getattr(pos, "product_type", self.product_type))
+            if self._capital_bucket_for_product(pos_product) == target_bucket:
+                count += 1
+        return count
+
+    def _remaining_capital_for_product(self, product_type: str = "") -> float:
+        capital_limit = self._capital_limit_for_product(product_type)
+        if capital_limit <= 0:
+            return 0.0
+        deployed = self._current_open_value_for_product(product_type)
+        return round(max(0.0, capital_limit - deployed), 2)
+
     def estimate_affordable_qty(
         self,
         price: float,
@@ -388,9 +464,21 @@ class KiteOrderManager:
         if price <= 0 or desired_qty <= 0:
             return 0, 0.0
 
-        order_product = str(product_type or self.product_type or "MIS").upper()
-        if order_product not in ("MIS", "CNC", "NRML"):
-            order_product = self.product_type
+        order_product = self._normalize_product_type(product_type)
+        per_order_limit = self._per_order_limit_for_product(order_product)
+        if per_order_limit > 0:
+            per_order_qty = int(per_order_limit // price) if price > 0 else 0
+            desired_qty = min(desired_qty, per_order_qty) if per_order_qty > 0 else 0
+        if desired_qty <= 0:
+            return 0, 0.0
+
+        capital_limit = self._capital_limit_for_product(order_product)
+        remaining_pool = self._remaining_capital_for_product(order_product)
+        if capital_limit > 0:
+            pool_qty = int(remaining_pool // price) if remaining_pool > 0 else 0
+            desired_qty = min(desired_qty, pool_qty) if pool_qty > 0 else 0
+            if desired_qty <= 0:
+                return 0, 0.0
         if order_product == "MIS":
             return desired_qty, round(desired_qty * price, 0)
 
@@ -403,6 +491,8 @@ class KiteOrderManager:
             free_delivery_cash = max(0.0, available_cash - open_delivery_value)
         else:
             free_delivery_cash = available_cash
+        if capital_limit > 0:
+            free_delivery_cash = min(free_delivery_cash, remaining_pool)
         affordable_qty = int(free_delivery_cash // price) if free_delivery_cash > 0 else 0
         capped_qty = min(desired_qty, affordable_qty) if affordable_qty > 0 else 0
         return capped_qty, round(capped_qty * price, 0)
@@ -627,9 +717,7 @@ class KiteOrderManager:
             order_type: MARKET or LIMIT
         """
         symbol = str(symbol).strip().upper()
-        order_product = str(product_type_override or self.product_type or "MIS").upper()
-        if order_product not in ("MIS", "CNC", "NRML"):
-            order_product = self.product_type
+        order_product = self._normalize_product_type(product_type_override)
 
         # Safety checks
         if not self.auto_trade:
@@ -685,6 +773,22 @@ class KiteOrderManager:
                 )
             )
 
+        bucket_open_count = self._current_open_count_for_product(order_product)
+        bucket_max_positions = self._max_positions_for_product(order_product)
+        if bucket_max_positions > 0 and bucket_open_count >= bucket_max_positions:
+            bucket_label = "intraday" if self._capital_bucket_for_product(order_product) == "intraday" else "swing"
+            return self._return_logged_result(
+                OrderResult(
+                    False,
+                    symbol=symbol,
+                    side="BUY",
+                    qty=qty,
+                    price=price,
+                    status="SKIPPED",
+                    message=f"Max {bucket_label} positions reached ({bucket_max_positions})",
+                )
+            )
+
         if symbol in self._positions and self._positions[symbol].status == "open":
             return self._return_logged_result(
                 OrderResult(
@@ -698,6 +802,38 @@ class KiteOrderManager:
                 )
             )
 
+        capital_limit = self._capital_limit_for_product(order_product)
+        remaining_pool = self._remaining_capital_for_product(order_product)
+        if capital_limit > 0 and price > 0:
+            affordable_qty_by_pool = int(remaining_pool // price) if remaining_pool > 0 else 0
+            if affordable_qty_by_pool <= 0:
+                bucket_label = "intraday" if self._capital_bucket_for_product(order_product) == "intraday" else "swing"
+                return self._return_logged_result(
+                    OrderResult(
+                        False,
+                        symbol=symbol,
+                        side="BUY",
+                        qty=qty,
+                        price=price,
+                        status="SKIPPED",
+                        message=(
+                            f"{bucket_label.title()} capital pool reached. "
+                            f"Configured ₹{capital_limit:,.0f}, already deployed ₹{self._current_open_value_for_product(order_product):,.0f}."
+                        ),
+                    )
+                )
+            if affordable_qty_by_pool < qty:
+                _log.info(
+                    "%s capital pool cap: reducing %s qty from %d to %d (remaining_pool=₹%.2f, price=₹%.2f)",
+                    self._capital_bucket_for_product(order_product),
+                    symbol,
+                    qty,
+                    affordable_qty_by_pool,
+                    remaining_pool,
+                    price,
+                )
+                qty = affordable_qty_by_pool
+
         # For CNC/NRML entries, cap delivery exposure to effective broker cash.
         # Some Kite margin responses behave like a total cash pool rather than
         # "free cash after open delivery positions", so account for already-open
@@ -710,6 +846,8 @@ class KiteOrderManager:
                     free_delivery_cash = max(0.0, available_cash - open_delivery_value)
                 else:
                     free_delivery_cash = available_cash
+                if capital_limit > 0:
+                    free_delivery_cash = min(free_delivery_cash, remaining_pool)
                 affordable_qty = int(free_delivery_cash // price) if free_delivery_cash > 0 else 0
                 if affordable_qty <= 0:
                     return self._return_logged_result(
@@ -739,6 +877,24 @@ class KiteOrderManager:
                         price,
                     )
                     qty = affordable_qty
+
+        per_order_limit = self._per_order_limit_for_product(order_product)
+        if price > 0 and per_order_limit > 0:
+            affordable_qty_by_order = int(per_order_limit // price) if per_order_limit > 0 else 0
+            if affordable_qty_by_order <= 0:
+                return self._return_logged_result(
+                    OrderResult(
+                        False,
+                        symbol=symbol,
+                        side="BUY",
+                        qty=qty,
+                        price=price,
+                        status="SKIPPED",
+                        message=f"Starter position exceeds {self._capital_bucket_for_product(order_product)} per-trade cap ₹{per_order_limit:,.0f}",
+                    )
+                )
+            if affordable_qty_by_order < qty:
+                qty = affordable_qty_by_order
 
         # Circuit limit check — avoid orders on locked stocks
         circuit_blocked, circuit_reason = self._is_at_circuit_limit(symbol)
@@ -771,7 +927,7 @@ class KiteOrderManager:
             )
 
         order_value = qty * (price if price > 0 else 0)
-        if price > 0 and order_value > self.max_order_value * 1.1:
+        if price > 0 and order_value > per_order_limit * 1.1:
             return self._return_logged_result(
                 OrderResult(
                     False,
@@ -780,7 +936,10 @@ class KiteOrderManager:
                     qty=qty,
                     price=price,
                     status="SKIPPED",
-                    message=f"Order value ₹{order_value:,.0f} exceeds limit ₹{self.max_order_value:,.0f}",
+                    message=(
+                        f"Order value ₹{order_value:,.0f} exceeds "
+                        f"{self._capital_bucket_for_product(order_product)} limit ₹{per_order_limit:,.0f}"
+                    ),
                 )
             )
 
@@ -1166,15 +1325,27 @@ class KiteOrderManager:
         try:
             from pkscreener.classes.AutoPilotInvestor import _compute_suggested_qty
 
+            order_product = self._normalize_product_type(product_type)
+            per_order_limit = self._per_order_limit_for_product(order_product)
             qty, _ = _compute_suggested_qty(
                 live_price,
                 stop_loss=stop_loss,
                 score=blind_score,
-                max_position=self.max_order_value,
+                max_position=per_order_limit,
             )
         except Exception:
-            qty = int(self.max_order_value // live_price) if live_price > 0 else 0
+            order_product = self._normalize_product_type(product_type)
+            per_order_limit = self._per_order_limit_for_product(order_product)
+            qty = int(per_order_limit // live_price) if live_price > 0 else 0
+        qty, _ = self.estimate_affordable_qty(
+            price=live_price,
+            desired_qty=qty,
+            product_type=product_type,
+        )
         if qty <= 0:
+            bucket = self._capital_bucket_for_product(product_type)
+            per_order_limit = self._per_order_limit_for_product(product_type)
+            remaining_pool = self._remaining_capital_for_product(product_type)
             return self._return_logged_result(
                 OrderResult(
                     False,
@@ -1182,7 +1353,10 @@ class KiteOrderManager:
                     side="BUY",
                     price=live_price,
                     status="SKIPPED",
-                    message=f"Starter position exceeds limit ₹{self.max_order_value:,.0f}",
+                    message=(
+                        f"No affordable {bucket} size available now. "
+                        f"Per-trade cap ₹{per_order_limit:,.0f}, remaining pool ₹{remaining_pool:,.0f}."
+                    ),
                 )
             )
         result = self.place_buy_order(
