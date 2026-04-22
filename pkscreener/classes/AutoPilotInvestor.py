@@ -1613,11 +1613,18 @@ class AutoPilotInvestor:
                     product_preference=temp_candidate.product_preference,
                     holding_horizon=temp_candidate.holding_horizon,
                 )
+            growth_line = (
+                f"📈 **Expected swing upside {_expected_growth:+.1f}% from alert price** | "
+                f"Price now: `₹{live_price:.2f}` (+{daily_change:.1f}% so far){_scope_str}\n"
+                if temp_candidate is not None and temp_candidate.holding_horizon in {"2-day swing", "5-day swing"}
+                else f"📈 **Expected to grow {_expected_growth:+.1f}% today** | "
+                f"Price now: `₹{live_price:.2f}` (+{daily_change:.1f}% so far){_scope_str}\n"
+            )
             hold_product_line = self._format_hold_product_line(temp_candidate) if temp_candidate is not None else ""
             msg = (
                 f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
                 f"**{header} — `{sym}`** — Quality {score_label}\n"
-                f"📈 **Expected to grow {_expected_growth:+.1f}% today** | Price now: `₹{live_price:.2f}` (+{daily_change:.1f}% so far){_scope_str}\n"
+                f"{growth_line}"
                 f"📊 Volume: `{vol_ratio:.1f}x` above normal | `{confidence:.0f}%` indicators agree\n\n"
                 f"**What to do:**\n"
                 f"Buy **{suggested_qty} shares** (≈ ₹{approx_cost:,.0f})\n"
@@ -3735,9 +3742,16 @@ class AutoPilotInvestor:
             _alert_grade, _ = self._grade_candidate(_alert_candidate)
             _hold_product_line = self._format_hold_product_line(_alert_candidate)
             _auto_status_line = self._format_auto_buy_status_line(_alert_candidate, _alert_grade)
+            _growth_line = (
+                f"📈 **Expected swing upside {_expected_growth_pct:+.1f}% from alert price** | "
+                f"Price now: `₹{_price_now:.2f}` ({direction}{daily_change:.2f}% so far){_scope_line}\n"
+                if _alert_candidate.holding_horizon in {"2-day swing", "5-day swing"}
+                else f"📈 **Expected to grow {_expected_growth_pct:+.1f}% today** | "
+                f"Price now: `₹{_price_now:.2f}` ({direction}{daily_change:.2f}% so far){_scope_line}\n"
+            )
             message = (
                 f"{alert_header}\n"
-                f"📈 **Expected to grow {_expected_growth_pct:+.1f}% today** | Price now: `₹{_price_now:.2f}` ({direction}{daily_change:.2f}% so far){_scope_line}\n"
+                f"{_growth_line}"
                 f"📊 Volume: `{volume_ratio:.1f}x` above normal | `{confidence:.0f}%` indicators agree\n\n"
                 f"**What to do:**\n"
                 f"Buy {f'**{suggested_qty} shares** (≈ ₹{_invest_amt:,.0f})' if suggested_qty > 0 else 'at market price'}\n"
