@@ -3,7 +3,13 @@
 # If either fails, kills stale state and restarts cleanly.
 
 REPO=/home/charan_sai/tr-assistant
-PYTHON=$REPO/venv/bin/python3
+if [ -x "$REPO/.venv/bin/python3" ]; then
+    PYTHON="$REPO/.venv/bin/python3"
+elif [ -x "$REPO/venv/bin/python3" ]; then
+    PYTHON="$REPO/venv/bin/python3"
+else
+    PYTHON="python3"
+fi
 LOG=/tmp/trade_watchdog.log
 WEBHOOK=$(grep DISCORD_WEBHOOK_URL $REPO/.env.dev 2>/dev/null | cut -d= -f2- || echo '')
 CLEANUP_STAMP=/tmp/trade_data_cleanup_last_date

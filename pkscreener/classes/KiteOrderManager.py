@@ -717,9 +717,6 @@ class KiteOrderManager:
             if kite_order_type == "LIMIT" and price > 0:
                 order_params["price"] = aggressive_limit_price or _round_to_nse_tick(price)
 
-            if kite_order_type == "MARKET":
-                order_params["market_protection"] = 2
-                
             order_id = client.place_order(**order_params)
             order_id = str(order_id or "")
 
@@ -794,7 +791,12 @@ class KiteOrderManager:
 
         try:
             client = self._get_client()
-            kite_order_type = "MARKET" if order_type == "MARKET" or price <= 0 else "LIMIT"
+            if price > 0 and order_type == "MARKET":
+                aggressive_limit_price = _round_to_nse_tick(max(price * 0.997, 0.05))
+                kite_order_type = "LIMIT"
+            else:
+                aggressive_limit_price = 0.0
+                kite_order_type = "MARKET" if order_type == "MARKET" or price <= 0 else "LIMIT"
 
             order_params = {
                 "tradingsymbol": symbol,
@@ -806,10 +808,7 @@ class KiteOrderManager:
                 "variety": "regular",
             }
             if kite_order_type == "LIMIT" and price > 0:
-                order_params["price"] = _round_to_nse_tick(price)
-           
-            if kite_order_type == "MARKET":
-                order_params["market_protection"] = 2
+                order_params["price"] = aggressive_limit_price or _round_to_nse_tick(price)
             
             order_id = client.place_order(**order_params)
             order_id = str(order_id or "")

@@ -19,6 +19,7 @@ direction change, ATR trailing) more heavily than lagging ones.
 
 import os
 import time
+import math
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Dict, List, Optional, Set, Tuple
@@ -204,8 +205,10 @@ def _safe_float(value, default: float = 0.0) -> float:
                 cleaned = cleaned[:-1]
             if not cleaned:
                 return default
-            return float(cleaned)
-        return float(value)
+            parsed = float(cleaned)
+            return default if math.isnan(parsed) or math.isinf(parsed) else parsed
+        parsed = float(value)
+        return default if math.isnan(parsed) or math.isinf(parsed) else parsed
     except (TypeError, ValueError):
         return default
 
@@ -666,6 +669,14 @@ class AutoPilotInvestor:
         self._tick_confirmed_auto_buy_count: int = 0  # selective live buys from Discord/tick-confirmed path
         self._OPENING_FAST_LANE_TOP_N = 2       # allow only 1-2 instant opening entries before buffer flush
         self._opening_fast_lane_count: int = 0  # counter of elite opening-window bypasses sent today
+        # Opening priority refresh: rescan a small liquid subset during the
+        # first minutes of trade so we do not wait for the slow full-universe
+        # sweep before seeing fresh breakouts.
+        self._OPENING_PRIORITY_MAX_SYMBOLS = 180
+        self._OPENING_PRIORITY_REFRESH_SEC = 30
+        self._last_opening_priority_refresh: float = 0.0
+        self._opening_priority_state_df: Optional[pd.DataFrame] = None
+        self._opening_priority_stats: Dict[str, float] = {}
 
         # Tick-only fast scanner state (no OHLCV, fires in < 1 second)
         self._tick_alerted: Dict[str, datetime] = {}  # symbol -> time of last tick-triggered scan
@@ -966,6 +977,7 @@ class AutoPilotInvestor:
                 result.error = "No signal data available. Is the signal monitor running?"
                 self._log(result.error)
                 return result
+            signal_state = self._merge_opening_priority_state(signal_state)
 
             # 2. Check risk guardrails
             guardrail_status = self._guardrails.evaluate()
@@ -1027,6 +1039,9 @@ class AutoPilotInvestor:
                 self._tick_confirmed_auto_buy_count = 0
                 self._opening_fast_lane_count = 0
                 self._nifty_crash_pause = False
+                self._last_opening_priority_refresh = 0.0
+                self._opening_priority_state_df = None
+                self._opening_priority_stats = {}
             self._momentum_tracked_date = today_str
             # Pre-open auction scan: fires during 9:00-9:15 AM IST
             self._run_preopen_auction_scan()
@@ -1050,6 +1065,7 @@ class AutoPilotInvestor:
             # Re-scan signal monitor "Buy Now" stocks — catches stocks that improved
             # since initial rejection (low score early → strong later in the day).
             self._run_buynow_rescan()
+            self._refresh_opening_priority_state()
             self.run_once()
 
             # During the cycle wait, run tick scans every 2s.
@@ -1071,6 +1087,7 @@ class AutoPilotInvestor:
                 _buynow_counter += _tick_poll_interval
                 if _buynow_counter >= 30:
                     self._run_buynow_rescan()
+                    self._refresh_opening_priority_state()
                     _buynow_counter = 0
             if _remaining > 0:
                 time.sleep(_remaining)
@@ -3202,7 +3219,7 @@ class AutoPilotInvestor:
             stop_loss = float(row.get("SellIfBelow", row.get("Sell If Below", 0)) or 0)
             target1 = float(row.get("TakeProfit1", row.get("Take Profit 1", 0)) or 0)
             target2 = float(row.get("TakeProfit2", row.get("Take Profit 2", 0)) or 0)
-            suggested_qty = int(float(row.get("SuggestedQty", row.get("Suggested Qty", 0)) or 0))
+            suggested_qty = int(_safe_float(row.get("SuggestedQty", row.get("Suggested Qty", 0)), 0.0))
             confidence = float(row.get("ConfidencePct", row.get("Signal Strength %", 0)) or 0)
             volume_ratio = float(row.get("VolumeRatio", row.get("Volume Ratio", 0)) or 0)
             atr = float(row.get("ATR", 0) or 0)
@@ -3830,6 +3847,197 @@ class AutoPilotInvestor:
 
         return None
 
+    def _is_opening_priority_window(self) -> bool:
+        """Return True while early-session discovery speed matters most."""
+        try:
+            import pytz as _pytz_op
+            _ist_op = _pytz_op.timezone("Asia/Kolkata")
+            _now_op = datetime.now(_ist_op)
+        except Exception:
+            from datetime import timezone, timedelta
+            _now_op = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+        _min_of_day = _now_op.hour * 60 + _now_op.minute
+        return 9 * 60 + 8 <= _min_of_day <= 10 * 60 + 5
+
+    def _load_named_universe_symbols(self, universe_name: str) -> List[str]:
+        """Load a universe file directly for small priority-set fallbacks."""
+        try:
+            from pkscreener.classes.ActionableReport import ActionableReportRunner
+
+            csv_path = ActionableReportRunner.UNIVERSE_FILES.get(str(universe_name or "").strip().lower())
+            if not csv_path or not os.path.exists(csv_path):
+                return []
+            df = pd.read_csv(csv_path)
+            symbol_column = next(
+                (candidate for candidate in ["Symbol", "SYMBOL", "symbol"] if candidate in df.columns),
+                None,
+            )
+            if symbol_column is None:
+                return []
+            return [
+                str(symbol).strip().upper()
+                for symbol in df[symbol_column].tolist()
+                if str(symbol).strip()
+            ]
+        except Exception:
+            return []
+
+    def _build_opening_priority_symbols(self, signal_state: Optional[pd.DataFrame]) -> List[str]:
+        """Build a small high-value universe for fast opening rescans."""
+        selected: List[str] = []
+        seen: Set[str] = set()
+
+        def _add_many(symbols: List[str], cap: Optional[int] = None) -> None:
+            added = 0
+            for raw in symbols:
+                sym = str(raw or "").strip().upper()
+                if not sym or sym in seen or self._is_excluded_symbol(sym):
+                    continue
+                seen.add(sym)
+                selected.append(sym)
+                added += 1
+                if len(selected) >= self._OPENING_PRIORITY_MAX_SYMBOLS:
+                    return
+                if cap is not None and added >= cap:
+                    return
+
+        # Keep anything we are already watching very closely at the front.
+        if self._demand_watchlist:
+            _add_many(list(self._demand_watchlist.keys()), cap=25)
+
+        # Reuse the strongest names already visible in the last signal snapshot.
+        if signal_state is not None and not signal_state.empty and "Symbol" in signal_state.columns:
+            try:
+                ranked_rows: List[Tuple[float, float, str]] = []
+                for _, row in signal_state.iterrows():
+                    sym = str(row.get("Symbol", "")).strip().upper()
+                    if not sym or self._is_excluded_symbol(sym):
+                        continue
+                    blind_score, _ = BlindBuyScorer.score(row)
+                    confidence = _safe_float(row.get("ConfidencePct", row.get("Signal Strength %", 0)))
+                    ranked_rows.append((blind_score, confidence, sym))
+                ranked_rows.sort(key=lambda item: (item[0], item[1]), reverse=True)
+                _add_many([sym for _, _, sym in ranked_rows], cap=70)
+            except Exception:
+                pass
+
+        # Add live movers with real turnover so fresh breakouts get a chance
+        # before the full allstocks sweep reaches them.
+        ticks = self._load_ticks_snapshot() or {}
+        if ticks:
+            live_rank: List[Tuple[float, float, float, str]] = []
+            for sym, tick in ticks.items():
+                usym = str(sym or "").strip().upper()
+                if not usym or self._is_excluded_symbol(usym):
+                    continue
+                price = _safe_float(tick.get("last_price"))
+                if price < 20:
+                    continue
+                change = _safe_float(tick.get("change"))
+                volume = _safe_float(tick.get("volume"))
+                avg_px = _safe_float(tick.get("average_traded_price", tick.get("last_price")))
+                turnover_cr = (volume * avg_px) / 1e7 if avg_px > 0 else 0.0
+                if turnover_cr < 0.35:
+                    continue
+                buy_qty = _safe_float(tick.get("total_buy_quantity", tick.get("total_buy_qty")))
+                sell_qty = _safe_float(tick.get("total_sell_quantity", tick.get("total_sell_qty")))
+                imbalance = (buy_qty / sell_qty) if sell_qty > 0 else (buy_qty if buy_qty > 0 else 0.0)
+                if change < 0.2 and imbalance < 1.8:
+                    continue
+                if change > 8.5:
+                    continue
+                live_rank.append((turnover_cr, imbalance, change, usym))
+            live_rank.sort(key=lambda item: (item[0], item[1], item[2]), reverse=True)
+            _add_many([sym for _, _, _, sym in live_rank], cap=90)
+
+        # Fallback to liquid core universes so the fast lane always has enough
+        # names even before the signal monitor has warmed up.
+        _add_many(self._load_named_universe_symbols("nifty200"), cap=80)
+        if len(selected) < self._OPENING_PRIORITY_MAX_SYMBOLS:
+            _add_many(self._load_named_universe_symbols("nifty500"))
+
+        return selected[: self._OPENING_PRIORITY_MAX_SYMBOLS]
+
+    def _refresh_opening_priority_state(self) -> None:
+        """Refresh a small curated universe during the opening window."""
+        if not self._is_opening_priority_window():
+            return
+        now_ts = time.time()
+        if now_ts - self._last_opening_priority_refresh < self._OPENING_PRIORITY_REFRESH_SEC:
+            return
+
+        base_state = self._load_signal_state()
+        priority_symbols = self._build_opening_priority_symbols(base_state)
+        if not priority_symbols:
+            return
+
+        try:
+            from pkscreener.classes.ActionableReport import ActionableReportRunner
+
+            start_ts = time.time()
+            runner = ActionableReportRunner(
+                config_manager=self._get_config_manager(),
+                universe=self.config.universe,
+                limit=0,
+                min_confidence=self.config.min_confidence,
+                min_trade_value=0.0,
+                min_volume_ratio=0.0,
+                max_workers=max(2, min(self.config.max_workers * 2, 6)),
+                use_live_kite=True,
+                strong_buy_only=False,
+            )
+            priority_df, _ = runner.build_report(symbols=priority_symbols, show_progress=False)
+            self._last_opening_priority_refresh = now_ts
+            if priority_df is None or priority_df.empty or "Symbol" not in priority_df.columns:
+                return
+            priority_df = priority_df.drop_duplicates(subset=["Symbol"], keep="first").copy()
+            self._opening_priority_state_df = priority_df
+            duration_sec = round(time.time() - start_ts, 2)
+            self._opening_priority_stats = {
+                "symbols": float(len(priority_symbols)),
+                "rows": float(len(priority_df)),
+                "duration_sec": duration_sec,
+                "refreshed_at": now_ts,
+            }
+            self._log(
+                f"Opening priority refresh: rescanned {len(priority_symbols)} symbols "
+                f"in {duration_sec:.1f}s, refreshed {len(priority_df)} rows"
+            )
+        except Exception as exc:
+            self._last_opening_priority_refresh = now_ts
+            self._log(f"Opening priority refresh failed: {exc}")
+
+    def _merge_opening_priority_state(self, signal_state: pd.DataFrame) -> pd.DataFrame:
+        """Overlay fast priority-scan rows on top of the slower broad snapshot."""
+        if signal_state is None or signal_state.empty:
+            return signal_state
+        priority_df = self._opening_priority_state_df
+        if priority_df is None or priority_df.empty or "Symbol" not in priority_df.columns:
+            return signal_state
+        try:
+            merged_priority = priority_df.copy()
+            priority_symbols = {
+                str(sym).strip().upper()
+                for sym in merged_priority["Symbol"].tolist()
+                if str(sym).strip()
+            }
+            if not priority_symbols:
+                return signal_state
+            base_df = signal_state.copy()
+            base_df["Symbol"] = base_df["Symbol"].astype(str).str.strip().str.upper()
+            merged_priority["Symbol"] = merged_priority["Symbol"].astype(str).str.strip().str.upper()
+            merged = pd.concat(
+                [
+                    merged_priority,
+                    base_df[~base_df["Symbol"].isin(priority_symbols)],
+                ],
+                ignore_index=True,
+                sort=False,
+            )
+            return merged
+        except Exception:
+            return signal_state
+
     def _load_rescan_signal_state(self) -> Optional[pd.DataFrame]:
         """Load the freshest signal-monitor snapshot and normalize for rescans."""
         candidates = [
@@ -4146,7 +4354,7 @@ class AutoPilotInvestor:
             _tick_change = _safe_float(_tick_liq.get("change"), 0.0)
             _display_change = _tick_change if abs(_tick_change) > abs(_row_change) else _row_change
 
-            _suggested_qty = int(float(row.get("SuggestedQty", row.get("Suggested Qty", 0)) or 0))
+            _suggested_qty = int(_safe_float(row.get("SuggestedQty", row.get("Suggested Qty", 0)), 0.0))
             if _suggested_qty <= 0:
                 # Use KITE_MAX_ORDER_VALUE for position sizing (default 25000)
                 _max_pos = float(os.environ.get("KITE_MAX_ORDER_VALUE", "25000"))
@@ -4219,7 +4427,7 @@ class AutoPilotInvestor:
 
         for _, trade in open_trades.iterrows():
             symbol = str(trade.get("Symbol", "")).strip().upper()
-            quantity = int(float(trade.get("Quantity", 0)))
+            quantity = int(_safe_float(trade.get("Quantity", 0), 0.0))
             entry_price = float(trade.get("EntryPrice", 0))
             if not symbol or quantity <= 0:
                 continue
@@ -4766,11 +4974,24 @@ class AutoPilotInvestor:
             return False
         if c.change_pct < 1.8 or c.change_pct > 8.5:
             return False
+        # Higher-grade setups can run with moderate confirmation. For A+ names,
+        # allow a slightly lower score floor if live participation is strong;
+        # these are the "good, not elite" opening names we still want to trust.
+        if grade == "A+":
+            if c.blind_score < 40:
+                return False
+            if c.confidence < 30:
+                return False
+            if c.volume_ratio < 5.0:
+                return False
+            if rr2 < 1.6:
+                return False
+            return True
+
         if c.blind_score < 48:
             return False
 
-        # Higher-grade setups can run with moderate confirmation.
-        if grade in ("A+", "A"):
+        if grade == "A":
             if c.confidence < 30:
                 return False
             if c.volume_ratio < 1.0:
@@ -4916,14 +5137,22 @@ class AutoPilotInvestor:
             for c, grade, _, _ in main_picks:
                 if auto_sent >= self._AUTO_BUY_TOP_N:
                     break
-                if self._eligible_for_live_auto_buy(c, grade):
+                auto_eligible = self._eligible_for_live_auto_buy(c, grade)
+                if auto_eligible:
                     _ar = self._try_auto_buy(
                         c.symbol, c.price, c.stop_loss, c.target1, c.target2,
                         c.blind_score, c.reasons
                     )
+                    self._log(f"Batch auto-buy result {c.symbol}: {_ar}")
                     if _ar:
                         _auto_lines.append(_ar)
                     auto_sent += 1
+                else:
+                    self._log(
+                        f"Batch auto-buy skip {c.symbol}: grade={grade}, score={c.blind_score:.0f}, "
+                        f"conf={c.confidence:.0f}%, rr={self._candidate_rr2(c):.1f}, "
+                        f"vol={c.volume_ratio:.1f}x"
+                    )
             if _auto_lines:
                 self._send_to_channels("\n".join(_auto_lines))
 
