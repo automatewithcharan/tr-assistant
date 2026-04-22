@@ -575,6 +575,9 @@ class KiteOrderManager:
             order_type: MARKET or LIMIT
         """
         symbol = str(symbol).strip().upper()
+        order_product = str(product_type_override or self.product_type or "MIS").upper()
+        if order_product not in ("MIS", "CNC", "NRML"):
+            order_product = self.product_type
 
         # Safety checks
         if not self.auto_trade:
@@ -1399,6 +1402,3 @@ class KiteOrderManager:
         except Exception as exc:
             _log.error("get_gtts failed: %s", exc)
             return []
-        order_product = str(product_type_override or self.product_type or "MIS").upper()
-        if order_product not in ("MIS", "CNC", "NRML"):
-            order_product = self.product_type

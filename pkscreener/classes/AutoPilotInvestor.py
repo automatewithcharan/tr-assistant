@@ -3357,13 +3357,24 @@ class AutoPilotInvestor:
             # Without SL/T1/T2, the engine couldn't find support/resistance.
             # Bypass during opening window — we'll derive targets from price.
             _has_real_targets = stop_loss > 0 or target1 > 0 or target2 > 0
-            if not _has_real_targets and not is_early_mover and not _is_opening_window and not _momentum_override:
+            _strong_fallback_candidate = (
+                self._is_true_buy_action(_now_action)
+                and daily_change >= 2.0
+                and confidence >= 40
+                and volume_ratio >= 2.5
+            )
+            if not _has_real_targets and not is_early_mover and not _is_opening_window and not _momentum_override and not _strong_fallback_candidate:
                 self._log(
                     f"Suppressed {sym}: NO real targets (SL=0, T1=0, T2=0) "
                     f"+{daily_change:.1f}%, conf={confidence:.0f}%, action='{_now_action}' "
                     f"— no technical basis for entry"
                 )
                 return
+            if not _has_real_targets and _strong_fallback_candidate:
+                self._log(
+                    f"Fallback-target override for {sym}: strong '{_now_action}' setup "
+                    f"(conf={confidence:.0f}%, vol={volume_ratio:.1f}x, move={daily_change:.1f}%)"
+                )
 
             # Fallback stop/target computation.
             # Early movers: use wider targets (5%/10%) to capture the full expected move.
@@ -4962,8 +4973,8 @@ class AutoPilotInvestor:
             return ("5-day swing", "CNC", 5, "Historically stronger as a multi-session continuation")
 
         if (
-            c.blind_score >= 40
-            and c.confidence >= 28
+            c.blind_score >= 48
+            and c.confidence >= 26
             and c.volume_ratio >= 1.8
             and rr2 >= 1.5
         ):
