@@ -355,6 +355,16 @@ class KiteOrderManager:
             _log.debug("Funds lookup failed: %s", exc)
         return 0.0
 
+    def _current_open_delivery_value(self) -> float:
+        total = 0.0
+        for pos in self._positions.values():
+            if pos.status != "open":
+                continue
+            pos_product = str(getattr(pos, "product_type", self.product_type) or self.product_type).upper()
+            if pos_product in ("CNC", "NRML"):
+                total += float(getattr(pos, "buy_price", 0.0) or 0.0) * int(getattr(pos, "qty", 0) or 0)
+        return round(total, 2)
+
     def _queue_pending_buy(
         self,
         symbol: str,
@@ -645,6 +655,48 @@ class KiteOrderManager:
                     message="Already holding this stock",
                 )
             )
+
+        # For CNC/NRML entries, cap delivery exposure to effective broker cash.
+        # Some Kite margin responses behave like a total cash pool rather than
+        # "free cash after open delivery positions", so account for already-open
+        # CNC/NRML value only when that pool is larger than current deployed cash.
+        if order_product in ("CNC", "NRML") and price > 0:
+            available_cash = self._extract_available_funds()
+            if available_cash > 0:
+                open_delivery_value = self._current_open_delivery_value()
+                if open_delivery_value > 0 and available_cash >= open_delivery_value:
+                    free_delivery_cash = max(0.0, available_cash - open_delivery_value)
+                else:
+                    free_delivery_cash = available_cash
+                affordable_qty = int(free_delivery_cash // price) if free_delivery_cash > 0 else 0
+                if affordable_qty <= 0:
+                    return self._return_logged_result(
+                        OrderResult(
+                            False,
+                            symbol=symbol,
+                            side="BUY",
+                            qty=qty,
+                            price=price,
+                            status="FUNDS_SHORT",
+                            message=(
+                                f"Broker cash cap reached for delivery buys. "
+                                f"Free cash about ₹{free_delivery_cash:,.0f} after open CNC exposure "
+                                f"₹{open_delivery_value:,.0f}."
+                            ),
+                        )
+                    )
+                if affordable_qty < qty:
+                    _log.info(
+                        "CNC cash cap: reducing %s qty from %d to %d "
+                        "(available_cash=₹%.2f, open_delivery=₹%.2f, price=₹%.2f)",
+                        symbol,
+                        qty,
+                        affordable_qty,
+                        available_cash,
+                        open_delivery_value,
+                        price,
+                    )
+                    qty = affordable_qty
 
         # Circuit limit check — avoid orders on locked stocks
         circuit_blocked, circuit_reason = self._is_at_circuit_limit(symbol)
