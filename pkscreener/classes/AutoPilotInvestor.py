@@ -5105,8 +5105,12 @@ class AutoPilotInvestor:
         _late_swing_window = 13 * 60 + 30 < now_min <= 14 * 60 + 15
 
         if c.holding_horizon == "intraday":
-            if not (9 * 60 + 20 <= now_min <= 10 * 60 + 30):
+            if not (9 * 60 + 20 <= now_min <= 10 * 60 + 0):
                 return False, "intraday auto-buy is only allowed during the opening window"
+            if entry_lane != "early":
+                return False, "intraday auto-buy is reserved for early breakout entries only"
+            if grade not in {"A+", "A"}:
+                return False, "intraday auto-buy needs A or A+ grade"
         else:
             if not (9 * 60 + 20 <= now_min <= 13 * 60 + 30):
                 if not _late_swing_window:
@@ -5176,46 +5180,36 @@ class AutoPilotInvestor:
 
         if c.price < 20:
             return False, "price is below the ₹20 floor"
-        if rr2 < 1.4:
+        if rr2 < 1.8:
             return False, f"R:R 1:{rr2:.1f} is below the intraday floor"
-        if gap_pct > 1.2:
+        if gap_pct > 0.8:
             return False, f"entry is {gap_pct:.1f}% below trigger"
-        if c.change_pct < 1.8 or c.change_pct > 8.5:
+        if c.change_pct < 1.8 or c.change_pct > 4.8:
             return False, f"day move {c.change_pct:.1f}% is outside the intraday zone"
         if grade == "A+":
-            if c.blind_score < 40:
-                return False, f"score {c.blind_score:.0f} is below 40"
-            if c.confidence < 30:
-                return False, f"confidence {c.confidence:.0f}% is below 30%"
-            if c.volume_ratio < 2.0:
-                return False, f"volume {c.volume_ratio:.1f}x is below 2.0x"
-            if rr2 < 1.6:
+            if c.blind_score < 68:
+                return False, f"score {c.blind_score:.0f} is below 68"
+            if c.confidence < 44:
+                return False, f"confidence {c.confidence:.0f}% is below 44%"
+            if c.volume_ratio < 5.5:
+                return False, f"volume {c.volume_ratio:.1f}x is below 5.5x"
+            if rr2 < 2.0:
                 return False, f"R:R 1:{rr2:.1f} is below the A+ floor"
             if _avoid_horizon:
                 return False, "horizon model tagged this as avoid despite passing the A+ intraday gate"
             return True, "eligible now as an A+ intraday auto-buy"
-        if c.blind_score < 48:
-            return False, f"score {c.blind_score:.0f} is below 48"
         if grade == "A":
-            if c.confidence < 30:
-                return False, f"confidence {c.confidence:.0f}% is below 30%"
-            if c.volume_ratio < 1.0:
-                return False, f"volume {c.volume_ratio:.1f}x is below 1.0x"
+            if c.blind_score < 62:
+                return False, f"score {c.blind_score:.0f} is below 62"
+            if c.confidence < 40:
+                return False, f"confidence {c.confidence:.0f}% is below 40%"
+            if c.volume_ratio < 4.0:
+                return False, f"volume {c.volume_ratio:.1f}x is below 4.0x"
+            if rr2 < 1.9:
+                return False, f"R:R 1:{rr2:.1f} is below the A-grade intraday floor"
             if _avoid_horizon:
                 return False, "horizon model tagged this as avoid despite passing the A-grade gate"
             return True, "eligible now as an A-grade auto-buy"
-        if grade == "B":
-            if c.confidence < 28:
-                return False, f"confidence {c.confidence:.0f}% is below 28%"
-            if c.volume_ratio < 2.0:
-                return False, f"volume {c.volume_ratio:.1f}x is below 2.0x"
-            if rr2 < 1.8:
-                return False, f"R:R 1:{rr2:.1f} is below the B-grade floor"
-            if c.change_pct > 7.5:
-                return False, f"day move {c.change_pct:.1f}% is too extended for B-grade intraday auto-buy"
-            if _avoid_horizon:
-                return False, "horizon model tagged this as avoid despite passing the B-grade gate"
-            return True, "eligible now as a selective B-grade auto-buy"
         if _avoid_horizon:
             return False, "horizon model tagged this setup as avoid"
         return False, "grade is below the live auto-buy floor"
@@ -5255,6 +5249,7 @@ class AutoPilotInvestor:
         """Classify each alert into the horizon it historically fits best."""
         rr2 = cls._candidate_rr2(c)
         gap_pct = cls._candidate_entry_gap_pct(c)
+        entry_lane, _ = cls._classify_entry_timing_lane(c)
 
         if c.price <= 0 or c.blind_score < 38 or c.confidence < 25 or rr2 < 1.4:
             return ("avoid", "", 0, "Below minimum quality for evidence-backed execution")
@@ -5262,15 +5257,16 @@ class AutoPilotInvestor:
             return ("avoid", "", 0, "Participation is too weak for either intraday or swing execution")
 
         intraday_ready = (
-            1.8 <= c.change_pct <= 5.5
-            and c.blind_score >= 62
-            and c.confidence >= 40
-            and c.volume_ratio >= 4.5
-            and rr2 >= 1.9
-            and gap_pct <= 1.0
+            entry_lane == "early"
+            and 1.8 <= c.change_pct <= 4.2
+            and c.blind_score >= 68
+            and c.confidence >= 44
+            and c.volume_ratio >= 5.5
+            and rr2 >= 2.0
+            and gap_pct <= 0.6
         )
         if intraday_ready:
-            return ("intraday", "MIS", 1, "Rare same-day momentum profile with strong participation")
+            return ("intraday", "MIS", 1, "Elite opening-session same-day momentum profile")
 
         if (
             c.blind_score >= 55
