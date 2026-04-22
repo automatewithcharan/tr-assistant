@@ -5071,13 +5071,36 @@ class AutoPilotInvestor:
             from datetime import timezone, timedelta
             _now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
         now_min = _now_ist.hour * 60 + _now_ist.minute
+        _late_swing_window = 13 * 60 + 30 < now_min <= 14 * 60 + 15
 
         if c.holding_horizon == "intraday":
             if not (9 * 60 + 20 <= now_min <= 10 * 60 + 30):
                 return False, "intraday auto-buy is only allowed during the opening window"
         else:
             if not (9 * 60 + 20 <= now_min <= 13 * 60 + 30):
-                return False, "swing auto-buy is paused after 1:30 PM IST"
+                if not _late_swing_window:
+                    return False, "swing auto-buy is paused after 1:30 PM IST"
+                if c.holding_horizon not in {"2-day swing", "5-day swing"}:
+                    return False, "late auto-buy is reserved for exceptional swing setups only"
+                if grade not in {"A+", "A"}:
+                    return False, "late swing auto-buy needs A or A+ grade"
+                if c.price < 50:
+                    return False, "late swing auto-buy needs price above ₹50"
+                if rr2 < 2.2:
+                    return False, f"late swing auto-buy needs R:R at least 1:2.2 (now 1:{rr2:.1f})"
+                if gap_pct > 0.6:
+                    return False, f"late swing auto-buy needs entry within 0.6% of trigger (now {gap_pct:.1f}%)"
+                if c.change_pct < 1.8 or c.change_pct > 5.8:
+                    return False, f"late swing auto-buy needs day move between 1.8% and 5.8% (now {c.change_pct:.1f}%)"
+                if c.blind_score < 58:
+                    return False, f"late swing auto-buy needs score at least 58 (now {c.blind_score:.0f})"
+                if c.confidence < 38:
+                    return False, f"late swing auto-buy needs confidence at least 38% (now {c.confidence:.0f}%)"
+                if c.volume_ratio < 4.0:
+                    return False, f"late swing auto-buy needs volume at least 4.0x (now {c.volume_ratio:.1f}x)"
+                if _avoid_horizon:
+                    return False, "horizon model tagged this late setup as avoid"
+                return True, "eligible now as an exceptional late-day swing auto-buy"
 
         if c.holding_horizon == "5-day swing":
             if c.price < 20:
