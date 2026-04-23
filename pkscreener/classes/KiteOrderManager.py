@@ -120,6 +120,7 @@ class SellReason:
     REVERSAL = "intraday_reversal"
     REGIME_BREAK = "cusum_regime_break"
     MANUAL = "manual_sell"
+    STALE_TRACKED = "stale_tracked_position"
 
 
 # ---------------------------------------------------------------------------
@@ -1210,6 +1211,21 @@ class KiteOrderManager:
                     self._save_positions()
         self._log_order(result)
 
+    def _mark_position_stale(self, symbol: str, reason: str = SellReason.STALE_TRACKED) -> None:
+        """Close a tracked position that is no longer present at the broker."""
+        symbol = str(symbol or "").strip().upper()
+        with self._lock:
+            pos = self._positions.get(symbol)
+            if pos is None or pos.status != "open":
+                return
+            pos.sell_time = _ist_now().isoformat(timespec="seconds")
+            pos.sell_reason = reason
+            pos.status = "closed"
+            pos.gtt_status = "not_held"
+            pos.gtt_last_error = "Position missing at broker; marked stale locally"
+            pos.gtt_updated_at = _ist_now().isoformat(timespec="seconds")
+            self._save_positions()
+
     # ------------------------------------------------------------------
     # Position monitoring & sell signals
     # ------------------------------------------------------------------
@@ -1512,6 +1528,7 @@ class KiteOrderManager:
             SellReason.REVERSAL: "🔻 Intraday reversal detected",
             SellReason.REGIME_BREAK: "📉 CUSUM regime break — momentum reversed",
             SellReason.MANUAL: "👤 Manual sell",
+            SellReason.STALE_TRACKED: "🧹 Removed stale tracked position",
         }.get(reason, reason)
 
     # ------------------------------------------------------------------
@@ -1540,23 +1557,9 @@ class KiteOrderManager:
         Returns a report of any discrepancies.
         """
         try:
-            client = self._get_client()
-            kite_positions = client.positions() or {}
-            net_positions = kite_positions.get("net", []) if isinstance(kite_positions, dict) else []
+            broker_holdings = self._get_broker_exposure()
         except Exception as exc:
             return {"error": str(exc), "reconciled": False}
-
-        broker_holdings = {}
-        for p in net_positions:
-            sym = str(p.get("tradingsymbol", "")).strip().upper()
-            qty = int(p.get("quantity", 0))
-            if sym and qty != 0:
-                broker_holdings[sym] = {
-                    "qty": qty,
-                    "avg_price": float(p.get("average_price", 0)),
-                    "last_price": float(p.get("last_price", 0)),
-                    "pnl": float(p.get("pnl", 0)),
-                }
 
         report = {"broker_positions": len(broker_holdings), "tracked_positions": 0,
                   "mismatches": [], "untracked": [], "reconciled": True}
@@ -1578,6 +1581,52 @@ class KiteOrderManager:
                 report["untracked"].append(sym)
 
         return report
+
+    def _get_broker_exposure(self) -> Dict[str, Dict[str, Any]]:
+        """Return broker-side live exposure across holdings and open positions."""
+        client = self._get_client()
+        exposure: Dict[str, Dict[str, Any]] = {}
+
+        # Delivery holdings, including unsettled T1 quantity.
+        try:
+            holdings = client.holdings() or []
+            for row in holdings:
+                sym = str(row.get("tradingsymbol", "")).strip().upper()
+                qty = int(row.get("quantity", 0) or 0) + int(row.get("t1_quantity", 0) or 0)
+                if not sym or qty <= 0:
+                    continue
+                exposure[sym] = {
+                    "qty": qty,
+                    "avg_price": float(row.get("average_price", 0) or 0),
+                    "last_price": float(row.get("last_price", 0) or 0),
+                    "pnl": float(row.get("pnl", 0) or 0),
+                    "product": "CNC",
+                    "source": "holdings",
+                }
+        except Exception as exc:
+            _log.debug("Holdings lookup failed: %s", exc)
+
+        # Net positions for intraday / derivatives.
+        try:
+            kite_positions = client.positions() or {}
+            net_positions = kite_positions.get("net", []) if isinstance(kite_positions, dict) else []
+            for row in net_positions:
+                sym = str(row.get("tradingsymbol", "")).strip().upper()
+                qty = int(row.get("quantity", 0) or 0)
+                if not sym or qty == 0:
+                    continue
+                exposure[sym] = {
+                    "qty": qty,
+                    "avg_price": float(row.get("average_price", 0) or 0),
+                    "last_price": float(row.get("last_price", 0) or 0),
+                    "pnl": float(row.get("pnl", 0) or 0),
+                    "product": str(row.get("product", "") or ""),
+                    "source": "positions",
+                }
+        except Exception as exc:
+            _log.debug("Positions lookup failed: %s", exc)
+
+        return exposure
 
     # ------------------------------------------------------------------
     # Order status check
@@ -1739,6 +1788,19 @@ class KiteOrderManager:
             _log.error("get_gtt failed for %s: %s", trigger_id, exc)
             return {}
 
+    def delete_gtt(self, trigger_id: str) -> bool:
+        """Delete a broker-side GTT trigger by id."""
+        try:
+            trigger_id = str(trigger_id or "").strip()
+            if not trigger_id:
+                return False
+            client = self._get_client()
+            client.delete_gtt(trigger_id)
+            return True
+        except Exception as exc:
+            _log.error("delete_gtt failed for %s: %s", trigger_id, exc)
+            return False
+
     def audit_open_position_gtts(self, max_repairs: int = 2) -> List[Dict[str, Any]]:
         """Audit broker-side GTT protection for open swing positions.
 
@@ -1755,12 +1817,22 @@ class KiteOrderManager:
             all_gtts = self.get_gtts()
         except Exception:
             all_gtts = []
+        try:
+            broker_exposure = self._get_broker_exposure()
+        except Exception as exc:
+            _log.error("Broker exposure lookup failed during GTT audit: %s", exc)
+            broker_exposure = {}
 
         gtt_by_id = {}
+        active_by_symbol: Dict[str, List[Dict[str, Any]]] = {}
         for item in all_gtts or []:
             item_id = str(item.get("id", "") or "")
             if item_id:
                 gtt_by_id[item_id] = item
+            if str(item.get("status", "") or "").lower() == "active":
+                sym = str((item.get("condition", {}) or {}).get("tradingsymbol", "") or "").strip().upper()
+                if sym:
+                    active_by_symbol.setdefault(sym, []).append(item)
 
         for pos in open_positions:
             symbol = str(pos.symbol or "").strip().upper()
@@ -1769,11 +1841,54 @@ class KiteOrderManager:
                 continue
             if float(getattr(pos, "stop_loss", 0) or 0) <= 0 or float(getattr(pos, "target2", 0) or 0) <= 0:
                 continue
+            broker_qty = int((broker_exposure.get(symbol) or {}).get("qty", 0) or 0)
+            if broker_qty <= 0:
+                self._mark_position_stale(symbol)
+                self.update_position_gtt(
+                    symbol,
+                    status="not_held",
+                    error="Symbol not present in broker holdings/positions; skipped GTT repair",
+                )
+                actions.append({
+                    "symbol": symbol,
+                    "action": "not_held",
+                    "ok": False,
+                    "message": "Skipped GTT audit because symbol is not present in broker portfolio",
+                    "trigger_id": str(getattr(pos, "gtt_trigger_id", "") or ""),
+                })
+                continue
 
             trigger_id = str(getattr(pos, "gtt_trigger_id", "") or "")
             gtt_data = gtt_by_id.get(trigger_id) if trigger_id else {}
             if not gtt_data and trigger_id:
                 gtt_data = self.get_gtt(trigger_id)
+
+            if not gtt_data:
+                same_symbol = sorted(
+                    active_by_symbol.get(symbol, []),
+                    key=lambda x: str(x.get("updated_at", "") or x.get("created_at", "") or x.get("id", "")),
+                    reverse=True,
+                )
+                if same_symbol:
+                    adopted = same_symbol[0]
+                    adopted_id = str(adopted.get("id", "") or "")
+                    adopted_status = str(adopted.get("status", "") or "").lower()
+                    adopted_expiry = str(adopted.get("expires_at", "") or "")
+                    self.update_position_gtt(
+                        symbol,
+                        trigger_id=adopted_id,
+                        status=adopted_status,
+                        expires_at=adopted_expiry,
+                        error="",
+                    )
+                    actions.append({
+                        "symbol": symbol,
+                        "action": "adopted_existing",
+                        "ok": True,
+                        "message": f"Adopted already-active broker GTT (ID {adopted_id})",
+                        "trigger_id": adopted_id,
+                    })
+                    continue
 
             status = str(gtt_data.get("status", "") or "").lower()
             expires_at = str(gtt_data.get("expires_at", "") or "")
