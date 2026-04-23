@@ -803,10 +803,22 @@ class AutoPilotInvestor:
                 gtt = self._order_manager.place_gtt_oco(
                     symbol=symbol, qty=result.qty,
                     buy_price=price, stop_loss=stop_loss, target=target2,
+                    product_type=product_preference,
                 )
                 if gtt.get("success"):
+                    self._order_manager.update_position_gtt(
+                        symbol,
+                        trigger_id=str(gtt.get("trigger_id", "") or ""),
+                        status="active",
+                        error="",
+                    )
                     status += f"\n🔐 GTT set — SL ₹{stop_loss:.2f} | Target ₹{target2:.2f} (ID: {gtt.get('trigger_id','')})"
                 else:
+                    self._order_manager.update_position_gtt(
+                        symbol,
+                        status="failed",
+                        error=str(gtt.get("message", "") or ""),
+                    )
                     status += f"\n⚠️ GTT failed: {gtt.get('message','')}"
             return status
         else:
@@ -841,6 +853,20 @@ class AutoPilotInvestor:
         """Check tracked Kite positions for sell signals and execute."""
         if self._order_manager is None:
             return
+        try:
+            gtt_actions = self._order_manager.audit_open_position_gtts()
+        except Exception as exc:
+            self._log(f"GTT audit failed: {exc}")
+            gtt_actions = []
+        for action in gtt_actions:
+            if action.get("action") == "recreated" and action.get("ok"):
+                self._send_to_channels(
+                    f"🔐 **GTT restored for `{action['symbol']}`** — {action['message']}"
+                )
+            elif action.get("action") == "repair_failed":
+                self._send_to_channels(
+                    f"⚠️ **GTT repair failed for `{action['symbol']}`** — {action['message']}"
+                )
         results = self._order_manager.execute_sell_signals()
         for r in results:
             if r.success:

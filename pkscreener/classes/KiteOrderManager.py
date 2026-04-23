@@ -66,6 +66,19 @@ def _round_to_nse_tick(price: float) -> float:
     return round(math.ceil(price * 20) / 20, 2)
 
 
+def _normalize_gtt_trigger_id(value: Any) -> str:
+    """Normalize client GTT responses to a plain trigger id string."""
+    if isinstance(value, dict):
+        for key in ("trigger_id", "id"):
+            nested = value.get(key)
+            if nested is not None and str(nested).strip():
+                return str(nested).strip()
+        return str(value).strip()
+    if value is None:
+        return ""
+    return str(value).strip()
+
+
 # ---------------------------------------------------------------------------
 # Order result dataclass-like dict
 # ---------------------------------------------------------------------------
@@ -143,6 +156,11 @@ class TrackedPosition:
         self.sell_time = ""
         self.sell_reason = ""
         self.status = "open"  # open | pending_sell | closed
+        self.gtt_trigger_id = ""
+        self.gtt_status = ""
+        self.gtt_expires_at = ""
+        self.gtt_updated_at = ""
+        self.gtt_last_error = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return self.__dict__.copy()
@@ -170,6 +188,11 @@ class TrackedPosition:
         pos.sell_time = d.get("sell_time", "")
         pos.sell_reason = d.get("sell_reason", "")
         pos.status = d.get("status", "open")
+        pos.gtt_trigger_id = str(d.get("gtt_trigger_id", "") or "")
+        pos.gtt_status = str(d.get("gtt_status", "") or "")
+        pos.gtt_expires_at = str(d.get("gtt_expires_at", "") or "")
+        pos.gtt_updated_at = str(d.get("gtt_updated_at", "") or "")
+        pos.gtt_last_error = str(d.get("gtt_last_error", "") or "")
         return pos
 
     @property
@@ -292,6 +315,33 @@ class KiteOrderManager:
             )
         except Exception as exc:
             _log.warning("Failed to save positions: %s", exc)
+
+    def update_position_gtt(
+        self,
+        symbol: str,
+        *,
+        trigger_id: str = "",
+        status: str = "",
+        expires_at: str = "",
+        error: str = "",
+    ) -> None:
+        symbol = str(symbol or "").strip().upper()
+        if not symbol:
+            return
+        with self._lock:
+            pos = self._positions.get(symbol)
+            if pos is None:
+                return
+            if trigger_id:
+                pos.gtt_trigger_id = str(trigger_id)
+            if status:
+                pos.gtt_status = str(status)
+            if expires_at:
+                pos.gtt_expires_at = str(expires_at)
+            if error or status:
+                pos.gtt_last_error = str(error or "")
+            pos.gtt_updated_at = _ist_now().isoformat(timespec="seconds")
+            self._save_positions()
 
     def _load_pending_buys(self):
         try:
@@ -1579,6 +1629,7 @@ class KiteOrderManager:
         stop_loss: float,
         target: float,
         exchange: str = "NSE",
+        product_type: str = "",
     ) -> Dict[str, Any]:
         """Place a Kite GTT OCO (One-Cancels-Other) order for stop-loss AND target.
 
@@ -1621,8 +1672,9 @@ class KiteOrderManager:
 
         try:
             client = self._get_client()
+            order_product = self._normalize_product_type(product_type)
             # Kite OCO: trigger_values = [stop_loss, target] (ascending order required by API)
-            trigger_id = client.place_gtt(
+            trigger_response = client.place_gtt(
                 trigger_type=client.GTT_TYPE_OCO,
                 tradingsymbol=symbol,
                 exchange=exchange,
@@ -1634,7 +1686,7 @@ class KiteOrderManager:
                         "transaction_type": "SELL",
                         "quantity": qty,
                         "order_type": "MARKET",
-                        "product": self.product_type,
+                        "product": order_product,
                         # The installed Kite client validates `price` on every GTT leg,
                         # even for MARKET orders.
                         "price": _round_to_nse_tick(stop_loss),
@@ -1644,12 +1696,12 @@ class KiteOrderManager:
                         "transaction_type": "SELL",
                         "quantity": qty,
                         "order_type": "LIMIT",
-                        "product": self.product_type,
+                        "product": order_product,
                         "price": _round_to_nse_tick(target),
                     },
                 ],
             )
-            trigger_id = str(trigger_id or "")
+            trigger_id = _normalize_gtt_trigger_id(trigger_response)
             _log.info(
                 "GTT OCO placed for %s x%d: SL=%.2f TARGET=%.2f — trigger_id=%s",
                 symbol, qty, stop_loss, target, trigger_id,
@@ -1673,3 +1725,123 @@ class KiteOrderManager:
         except Exception as exc:
             _log.error("get_gtts failed: %s", exc)
             return []
+
+    def get_gtt(self, trigger_id: str) -> Dict[str, Any]:
+        """Fetch a single GTT trigger by id."""
+        try:
+            trigger_id = str(trigger_id or "").strip()
+            if not trigger_id:
+                return {}
+            client = self._get_client()
+            data = client.get_gtt(trigger_id)
+            return data or {}
+        except Exception as exc:
+            _log.error("get_gtt failed for %s: %s", trigger_id, exc)
+            return {}
+
+    def audit_open_position_gtts(self, max_repairs: int = 2) -> List[Dict[str, Any]]:
+        """Audit broker-side GTT protection for open swing positions.
+
+        Returns a list of audit actions with keys:
+            symbol, action, ok, message, trigger_id
+        """
+        actions: List[Dict[str, Any]] = []
+        repaired = 0
+        open_positions = [p for p in self._positions.values() if p.status == "open"]
+        if not open_positions:
+            return actions
+
+        try:
+            all_gtts = self.get_gtts()
+        except Exception:
+            all_gtts = []
+
+        gtt_by_id = {}
+        for item in all_gtts or []:
+            item_id = str(item.get("id", "") or "")
+            if item_id:
+                gtt_by_id[item_id] = item
+
+        for pos in open_positions:
+            symbol = str(pos.symbol or "").strip().upper()
+            product = self._normalize_product_type(getattr(pos, "product_type", ""))
+            if product == "MIS":
+                continue
+            if float(getattr(pos, "stop_loss", 0) or 0) <= 0 or float(getattr(pos, "target2", 0) or 0) <= 0:
+                continue
+
+            trigger_id = str(getattr(pos, "gtt_trigger_id", "") or "")
+            gtt_data = gtt_by_id.get(trigger_id) if trigger_id else {}
+            if not gtt_data and trigger_id:
+                gtt_data = self.get_gtt(trigger_id)
+
+            status = str(gtt_data.get("status", "") or "").lower()
+            expires_at = str(gtt_data.get("expires_at", "") or "")
+
+            if gtt_data and status == "active":
+                self.update_position_gtt(
+                    symbol,
+                    trigger_id=str(gtt_data.get("id", "") or trigger_id),
+                    status=status,
+                    expires_at=expires_at,
+                    error="",
+                )
+                actions.append({
+                    "symbol": symbol,
+                    "action": "verified",
+                    "ok": True,
+                    "message": f"Active GTT verified (ID {str(gtt_data.get('id', '') or trigger_id)})",
+                    "trigger_id": str(gtt_data.get("id", "") or trigger_id),
+                })
+                continue
+
+            if repaired >= max_repairs:
+                reason = status or "missing"
+                self.update_position_gtt(symbol, status=reason, expires_at=expires_at, error=f"GTT {reason}; repair deferred by per-cycle cap")
+                actions.append({
+                    "symbol": symbol,
+                    "action": "deferred",
+                    "ok": False,
+                    "message": f"GTT {reason}; deferred repair because max repairs reached",
+                    "trigger_id": trigger_id,
+                })
+                continue
+
+            recreate = self.place_gtt_oco(
+                symbol=symbol,
+                qty=int(getattr(pos, "qty", 0) or 0),
+                buy_price=float(getattr(pos, "buy_price", 0) or 0),
+                stop_loss=float(getattr(pos, "stop_loss", 0) or 0),
+                target=float(getattr(pos, "target2", 0) or 0),
+                product_type=product,
+            )
+            repaired += 1
+            if recreate.get("success"):
+                new_id = str(recreate.get("trigger_id", "") or "")
+                self.update_position_gtt(
+                    symbol,
+                    trigger_id=new_id,
+                    status="active",
+                    expires_at="",
+                    error="",
+                )
+                actions.append({
+                    "symbol": symbol,
+                    "action": "recreated",
+                    "ok": True,
+                    "message": f"GTT recreated successfully (ID {new_id})",
+                    "trigger_id": new_id,
+                })
+            else:
+                err = str(recreate.get("message", "") or "unknown error")
+                reason = status or "missing"
+                self.update_position_gtt(symbol, status=reason, expires_at=expires_at, error=err)
+                actions.append({
+                    "symbol": symbol,
+                    "action": "repair_failed",
+                    "ok": False,
+                    "message": f"GTT {reason}; recreate failed: {err}",
+                    "trigger_id": trigger_id,
+                })
+
+        return actions
