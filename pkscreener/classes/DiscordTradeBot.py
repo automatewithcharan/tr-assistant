@@ -1163,7 +1163,7 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
                 invest = amount if amount and amount > 0 else mgr.max_order_value
                 qty = max(1, int(invest / live_price))
                 result = mgr.place_buy_order(
-                    symbol=symbol, qty=qty, price=0.0, order_type="MARKET"
+                    symbol=symbol, qty=qty, price=live_price, order_type="MARKET"
                 )
                 if result.success:
                     message = f"✅ Bought `{symbol.upper()}` x{qty} @ market (ID: {result.order_id})"

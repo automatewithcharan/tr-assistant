@@ -426,6 +426,18 @@ class KiteOrderManager:
             _log.debug("Funds lookup failed: %s", exc)
         return 0.0
 
+    def _latest_tick_price(self, symbol: str) -> float:
+        """Best-effort live price lookup from the saved tick snapshot."""
+        symbol = str(symbol or "").strip().upper()
+        if not symbol:
+            return 0.0
+        try:
+            ticks = self._load_ticks()
+            tick = ticks.get(symbol, {}) if isinstance(ticks, dict) else {}
+            return float(tick.get("last_price") or 0.0)
+        except Exception:
+            return 0.0
+
     def _current_open_delivery_value(self) -> float:
         total = 0.0
         for pos in self._positions.values():
@@ -1026,13 +1038,16 @@ class KiteOrderManager:
         # Place real order via Kite
         try:
             client = self._get_client()
+            reference_price = float(price or 0.0)
+            if reference_price <= 0 and order_type == "MARKET":
+                reference_price = self._latest_tick_price(symbol)
             # Some brokers/accounts reject API MARKET buys without market protection.
             # For live auto-buys we nearly always have a reference price, so prefer an
             # aggressive LIMIT order slightly above the observed price to preserve fill
             # probability while staying API-compatible.
             aggressive_limit_price = 0.0
-            if price > 0 and order_type == "MARKET":
-                aggressive_limit_price = _round_to_nse_tick(price * 1.003)
+            if reference_price > 0 and order_type == "MARKET":
+                aggressive_limit_price = _round_to_nse_tick(reference_price * 1.003)
                 kite_order_type = "LIMIT"
             else:
                 kite_order_type = "MARKET" if order_type == "MARKET" or price <= 0 else "LIMIT"
@@ -1046,8 +1061,10 @@ class KiteOrderManager:
                 "product": order_product,  # MIS=intraday margin (5x), CNC=delivery
                 "variety": "regular",
             }
-            if kite_order_type == "LIMIT" and price > 0:
-                order_params["price"] = aggressive_limit_price or _round_to_nse_tick(price)
+            if kite_order_type == "LIMIT" and reference_price > 0:
+                order_params["price"] = aggressive_limit_price or _round_to_nse_tick(reference_price)
+            elif kite_order_type == "MARKET":
+                order_params["market_protection"] = -1
 
             order_id = client.place_order(**order_params)
             order_id = str(order_id or "")
@@ -1063,7 +1080,7 @@ class KiteOrderManager:
 
             result = OrderResult(
                 True, order_id=order_id, symbol=symbol, side="BUY",
-                qty=qty, price=price, status="PLACED",
+                qty=qty, price=reference_price or price, status="PLACED",
                 message=f"Order placed successfully (ID: {order_id})"
             )
             self._record_buy(
@@ -1128,8 +1145,11 @@ class KiteOrderManager:
 
         try:
             client = self._get_client()
-            if price > 0 and order_type == "MARKET":
-                aggressive_limit_price = _round_to_nse_tick(max(price * 0.997, 0.05))
+            reference_price = float(price or 0.0)
+            if reference_price <= 0 and order_type == "MARKET":
+                reference_price = self._latest_tick_price(symbol)
+            if reference_price > 0 and order_type == "MARKET":
+                aggressive_limit_price = _round_to_nse_tick(max(reference_price * 0.997, 0.05))
                 kite_order_type = "LIMIT"
             else:
                 aggressive_limit_price = 0.0
@@ -1144,8 +1164,10 @@ class KiteOrderManager:
                 "product": getattr(pos, "product_type", self.product_type),
                 "variety": "regular",
             }
-            if kite_order_type == "LIMIT" and price > 0:
-                order_params["price"] = aggressive_limit_price or _round_to_nse_tick(price)
+            if kite_order_type == "LIMIT" and reference_price > 0:
+                order_params["price"] = aggressive_limit_price or _round_to_nse_tick(reference_price)
+            elif kite_order_type == "MARKET":
+                order_params["market_protection"] = -1
             
             order_id = client.place_order(**order_params)
             order_id = str(order_id or "")
@@ -1154,7 +1176,7 @@ class KiteOrderManager:
 
             result = OrderResult(
                 True, order_id=order_id, symbol=symbol, side="SELL",
-                qty=sell_qty, price=price, status="PLACED",
+                qty=sell_qty, price=reference_price or price, status="PLACED",
                 message=f"Sell order placed (ID: {order_id}) — {reason}"
             )
             self._record_sell(result, reason)
@@ -1349,7 +1371,7 @@ class KiteOrderManager:
         results = []
 
         for sym, reason, price, qty in signals:
-            result = self.place_sell_order(symbol=sym, qty=qty, reason=reason)
+            result = self.place_sell_order(symbol=sym, qty=qty, price=price, reason=reason)
             results.append(result)
 
         return results

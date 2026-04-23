@@ -47,6 +47,16 @@ def _env_float(name: str, default: float) -> float:
         return default
 
 
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "")
+    if raw == "":
+        return default
+    try:
+        return int(raw)
+    except Exception:
+        return default
+
+
 def _env_time_min(name: str, default_min: int) -> int:
     raw = os.environ.get(name, "")
     if raw == "":
@@ -668,9 +678,11 @@ class AutoPilotInvestor:
         # 5 × ₹50K = ₹2.5L = full MIS margin. Diversification ensures even if
         # 1 trade loses, the other 4 cover it. Most days: ₹5K-₹20K income.
         self._TOP_N_DAILY_BATCH = 5             # 5 trades per day for consistency
-        self._AUTO_BUY_TOP_N = 2                # auto-execute only the tightest 1-2 confirmed setups/day
+        self._AUTO_BUY_TOP_N = max(0, _env_int("KITE_LIVE_AUTO_BUY_CAP", 0))
+        # 0 = no live-alert-side cap; rely on broker funds, position limits, and
+        # other risk checks. Positive values re-enable a hard daily cap.
         self._daily_batch_alert_count: int = 0  # counter of batch buy alerts sent today
-        self._tick_confirmed_auto_buy_count: int = 0  # selective live buys from Discord/tick-confirmed path
+        self._tick_confirmed_auto_buy_count: int = 0  # successful live auto-buys from Discord/tick-confirmed path
         self._OPENING_FAST_LANE_TOP_N = 2       # allow only 1-2 instant opening entries before buffer flush
         self._opening_fast_lane_count: int = 0  # counter of elite opening-window bypasses sent today
         # Opening priority refresh: rescan a small liquid subset during the
@@ -918,13 +930,16 @@ class AutoPilotInvestor:
     ) -> Optional[str]:
         """Place a selective live buy for the tightest tick-confirmed setups."""
         if self._order_manager is None:
-            return None
-        if self._tick_confirmed_auto_buy_count >= self._AUTO_BUY_TOP_N:
+            return f"⚠️ Auto-buy skipped for `{symbol}`: order manager not initialized"
+        if self._AUTO_BUY_TOP_N > 0 and self._tick_confirmed_auto_buy_count >= self._AUTO_BUY_TOP_N:
             self._log(
                 f"Auto-buy skip {symbol}: {source} daily cap reached "
                 f"({self._tick_confirmed_auto_buy_count}/{self._AUTO_BUY_TOP_N})"
             )
-            return None
+            return (
+                f"⚠️ Auto-buy skipped for `{symbol}`: daily auto-buy cap reached "
+                f"({self._tick_confirmed_auto_buy_count}/{self._AUTO_BUY_TOP_N} used today)"
+            )
 
         candidate = self._enrich_candidate_horizon(BlindBuyCandidate(
             symbol=symbol,
@@ -942,12 +957,13 @@ class AutoPilotInvestor:
         ))
         grade, _ = self._grade_candidate(candidate)
         if not self._eligible_for_live_auto_buy(candidate, grade):
+            gate_reason = self._live_auto_buy_gate_detail(candidate, grade)[1]
             self._log(
                 f"Auto-buy skip {symbol}: {source} not tight enough "
                 f"(grade={grade}, conf={confidence:.0f}%, rr={self._candidate_rr2(candidate):.1f}, "
                 f"gap={self._candidate_entry_gap_pct(candidate):.1f}%, vol={volume_ratio:.1f}x)"
             )
-            return None
+            return f"⚠️ Auto-buy skipped for `{symbol}`: {gate_reason}"
 
         result = self._try_auto_buy(
             symbol, price, stop_loss, target1, target2, blind_score, reasons,
@@ -957,10 +973,16 @@ class AutoPilotInvestor:
         )
         if result and result.startswith("✅"):
             self._tick_confirmed_auto_buy_count += 1
-            self._log(
-                f"Auto-buy success {symbol}: {source} "
-                f"({self._tick_confirmed_auto_buy_count}/{self._AUTO_BUY_TOP_N} today)"
-            )
+            if self._AUTO_BUY_TOP_N > 0:
+                self._log(
+                    f"Auto-buy success {symbol}: {source} "
+                    f"({self._tick_confirmed_auto_buy_count}/{self._AUTO_BUY_TOP_N} today)"
+                )
+            else:
+                self._log(
+                    f"Auto-buy success {symbol}: {source} "
+                    f"({self._tick_confirmed_auto_buy_count} auto-buys today, uncapped)"
+                )
         elif result:
             self._log(f"Auto-buy result {symbol}: {source} -> {result}")
         return result
@@ -2093,22 +2115,57 @@ class AutoPilotInvestor:
 
             # Compute profit from original entry
             profit_pct = 0.0
-            if entry_price > 0:
-                profit_pct = round((current_price - entry_price) / entry_price * 100, 1)
+            broker_position = None
+            has_open_kite_position = False
+            if self._order_manager is not None:
+                try:
+                    broker_position = self._order_manager.get_position(sym)
+                    has_open_kite_position = bool(
+                        broker_position is not None and getattr(broker_position, "status", "") == "open"
+                    )
+                except Exception:
+                    broker_position = None
+
+            reference_price = entry_price
+            if has_open_kite_position:
+                reference_price = float(getattr(broker_position, "buy_price", 0) or entry_price)
+            if reference_price > 0:
+                profit_pct = round((current_price - reference_price) / reference_price * 100, 1)
 
             vol_str = f" | Vol `{vol_ratio:.1f}x`" if vol_ratio > 0 else ""
-            profit_str = f" | From entry: `+{profit_pct:.1f}%`" if profit_pct > 0 else ""
+            if profit_pct > 0:
+                profit_label = "From entry" if has_open_kite_position else "From alert"
+                profit_str = f" | {profit_label}: `+{profit_pct:.1f}%`"
+            else:
+                profit_str = ""
             # Trailing stop suggestion: 4% below current price
             trail_stop = round(current_price * 0.96, 2)
+            basis_text = "when you entered" if has_open_kite_position else "when we first alerted it"
+            if has_open_kite_position and reference_price > 0:
+                status_line = f"📌 Position: confirmed Kite holding from `₹{reference_price:.2f}`\n\n"
+                action_line = "✅ DON'T sell yet — momentum is still strong"
+                stop_line = f"🔴 Move your stop-loss UP to `₹{trail_stop:.2f}` (locks in most of your profit)"
+                footer_line = f"_If price drops to ₹{trail_stop:.2f}, sell immediately to keep your gains._"
+                header = f"**🚀 `{sym}` STILL RUNNING — hold and trail your stop!**\n"
+            else:
+                status_line = (
+                    "📌 Position: no confirmed Kite buy is tracked right now — "
+                    "this is a follow-through alert, not proof of a fill\n\n"
+                )
+                action_line = "ℹ️ If you bought it manually, momentum is still strong"
+                stop_line = f"🔴 If you are in this trade, trail stop-loss near `₹{trail_stop:.2f}`"
+                footer_line = f"_If you are not in the trade, treat this as informational only._"
+                header = f"**🚀 `{sym}` ALERT STILL RUNNING — follow-through update**\n"
 
             message = (
-                f"**🚀 `{sym}` STILL RUNNING — hold and trail your stop!**\n"
-                f"📈 Now `+{current_change:.1f}%` (was `+{last_alert_pct:.1f}%` when you entered){profit_str}\n"
+                f"{header}"
+                f"📈 Now `+{current_change:.1f}%` (was `+{last_alert_pct:.1f}%` {basis_text}){profit_str}\n"
                 f"Price `₹{current_price:.2f}`{vol_str}\n\n"
+                f"{status_line}"
                 f"**What to do now:**\n"
-                f"✅ DON'T sell yet — momentum is still strong\n"
-                f"🔴 Move your stop-loss UP to `₹{trail_stop:.2f}` (locks in most of your profit)\n"
-                f"_If price drops to ₹{trail_stop:.2f}, sell immediately to keep your gains._"
+                f"{action_line}\n"
+                f"{stop_line}\n"
+                f"{footer_line}"
             )
             self._send_to_channels(message)
             self._log(f"Momentum continuation alert: {sym} now +{current_change:.1f}% (was +{last_alert_pct:.1f}%)")
@@ -2550,7 +2607,8 @@ class AutoPilotInvestor:
             f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
             f"**🔵 MOMENTUM BUY [{_grade_badge}] — `{sym}`**\n"
             f"📈 Price `₹{price:.2f}` | {direction}{daily_change:.1f}% today | Score **{_score:.0f}/100**{imb_str}\n"
-            f"Turnover `₹{turnover_cr:.0f}Cr` | {'Above' if above_vwap else 'Below'} VWAP\n\n"
+            f"Turnover `₹{turnover_cr:.0f}Cr` | {'Above' if above_vwap else 'Below'} VWAP\n"
+            f"ℹ️ Alert only unless a separate `✅ Auto-bought` confirmation follows.\n\n"
             f"🔴 Stop Loss `₹{_sl_price:.0f}` | 🟡 Target 1 `₹{_t1_price:.0f}` | 🟢 Target 2 `₹{_t2_price:.0f}` | R:R `1:{_rr}`\n"
             f"Why: {score_reasons_str}\n\n"
             f"**What to do ({_conviction} conviction):**\n"
@@ -3797,7 +3855,8 @@ class AutoPilotInvestor:
             message = (
                 f"{alert_header}\n"
                 f"{_growth_line}"
-                f"📊 Volume: `{volume_ratio:.1f}x` above normal | `{confidence:.0f}%` indicators agree\n\n"
+                f"📊 Volume: `{volume_ratio:.1f}x` above normal | `{confidence:.0f}%` indicators agree\n"
+                f"ℹ️ Alert only unless a separate `✅ Auto-bought` confirmation follows.\n\n"
                 f"**What to do:**\n"
                 f"Buy {f'**{suggested_qty} shares** (≈ ₹{_invest_amt:,.0f})' if suggested_qty > 0 else 'at market price'}\n"
                 f"🔴 EXIT if price drops to `₹{stop_loss:.2f}` (you lose ₹{_risk_per_share:.0f}/share)\n"
@@ -4916,7 +4975,7 @@ class AutoPilotInvestor:
             )
             if auto_result:
                 auto_lines.append(auto_result)
-            if self._tick_confirmed_auto_buy_count >= self._AUTO_BUY_TOP_N:
+            if self._AUTO_BUY_TOP_N > 0 and self._tick_confirmed_auto_buy_count >= self._AUTO_BUY_TOP_N:
                 break
         if auto_lines:
             self._send_to_channels("\n".join(auto_lines))
@@ -5517,12 +5576,12 @@ class AutoPilotInvestor:
         message = "\n\n".join(sections)
         self._send_to_channels(message)
 
-        # Auto-buy only the tightest A+/A grade candidates — keep execution selective.
+        # Auto-buy A+/A grade candidates while broker funds and risk controls allow.
         if not is_post_market and self._order_manager is not None:
             _auto_lines = []
             auto_sent = 0
             for c, grade, _, _ in main_picks:
-                if auto_sent >= self._AUTO_BUY_TOP_N:
+                if self._AUTO_BUY_TOP_N > 0 and auto_sent >= self._AUTO_BUY_TOP_N:
                     break
                 auto_eligible = self._eligible_for_live_auto_buy(c, grade)
                 if auto_eligible:
