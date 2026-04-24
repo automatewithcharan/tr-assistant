@@ -44,6 +44,19 @@ def _safe_int(value, default: int = 0) -> int:
         return default
 
 
+def _runtime_env(repo_root: Path) -> Dict[str, str]:
+    """Return an environment that can import this checkout from detached launches."""
+    env = os.environ.copy()
+    repo_path = str(repo_root)
+    existing_pythonpath = str(env.get("PYTHONPATH") or "").strip()
+    env["PYTHONPATH"] = (
+        repo_path
+        if not existing_pythonpath
+        else f"{repo_path}{os.pathsep}{existing_pythonpath}"
+    )
+    return env
+
+
 @dataclass
 class AssistantLiveSettings:
     universe: str = "nifty50"
@@ -423,7 +436,7 @@ class AssistantLiveSupervisor:
             str(self.settings.prewarm_workers),
         ]
         self.store.add_event(self.session_id, "info", "prewarm", "Starting historical prewarm before live session.")
-        subprocess.run(command, cwd=str(self.repo_root), check=False)
+        subprocess.run(command, cwd=str(self.repo_root), env=_runtime_env(self.repo_root), check=False)
 
     def _start_required_processes(self) -> None:
         from pkscreener.classes.KiteConnectManager import KiteConnectSessionManager
@@ -545,6 +558,7 @@ class AssistantLiveSupervisor:
         process = subprocess.Popen(
             command,
             cwd=str(self.repo_root),
+            env=_runtime_env(self.repo_root),
             stdout=log_handle,
             stderr=log_handle,
             creationflags=creationflags,
@@ -624,6 +638,7 @@ class AssistantLiveSupervisor:
             # os.execv replaces this process in-place — the PID changes but
             # systemd/watchdog won't notice because it's a clean exec.
             try:
+                os.environ.update(_runtime_env(self.repo_root))
                 os.execv(sys.executable, [sys.executable] + sys.argv)
             except Exception:
                 # Fallback: just restart children with new code
@@ -763,6 +778,7 @@ class AssistantLiveLauncher:
         process = subprocess.Popen(
             command,
             cwd=str(self.repo_root),
+            env=_runtime_env(self.repo_root),
             stdout=log_handle,
             stderr=log_handle,
             creationflags=creationflags,
