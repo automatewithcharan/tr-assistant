@@ -743,6 +743,7 @@ class AutoPilotInvestor:
         # Top-gainer radar: visibility layer only. It should show the full field
         # of live runners without turning every runner into an actionable BUY.
         self._runner_radar_seen: Dict[str, int] = {}  # symbol -> highest pct bucket alerted
+        self._runner_radar_auto_reviewed: Set[str] = set()
         self._runner_radar_date: Optional[str] = None
         self._runner_radar_last_summary: float = 0.0
         self._RUNNER_RADAR_MIN_CHANGE = 5.0
@@ -1164,6 +1165,7 @@ class AutoPilotInvestor:
                 self._tick_confirmed_auto_buy_count = 0
                 self._opening_fast_lane_count = 0
                 self._runner_radar_seen.clear()
+                self._runner_radar_auto_reviewed.clear()
                 self._runner_radar_date = today_str
                 self._runner_radar_last_summary = 0.0
                 self._early_radar_seen.clear()
@@ -4294,6 +4296,103 @@ class AutoPilotInvestor:
             return "WATCH", "above VWAP with acceptable turnover"
         return "RADAR ONLY", "visible runner, not clean enough yet"
 
+    def _review_top_gainer_rows_for_auto_buy(self, rows: List[Dict]) -> None:
+        """Run radar-visible names through the real auto-buy gate.
+
+        Radar itself is tick-only. This bridge only acts when the full signal
+        monitor has a real Buy Now plan with stop/targets.
+        """
+        if not rows or self._order_manager is None or self._past_buy_cutoff():
+            return
+
+        signal_df = self._load_rescan_signal_state()
+        if signal_df is None or signal_df.empty or "Stock" not in signal_df.columns:
+            return
+
+        signal_df = signal_df.copy()
+        signal_df["_sym"] = signal_df["Stock"].astype(str).str.strip().str.upper()
+        signal_map = {
+            str(row.get("_sym", "")).strip().upper(): row
+            for _, row in signal_df.iterrows()
+        }
+
+        for radar_row in rows:
+            sym = str(radar_row.get("symbol", "")).strip().upper()
+            if not sym or sym in self._runner_radar_auto_reviewed:
+                continue
+            self._runner_radar_auto_reviewed.add(sym)
+
+            row = signal_map.get(sym)
+            if row is None:
+                self._log(f"Radar auto-review skip {sym}: no signal monitor row yet")
+                continue
+
+            action = str(row.get("What To Do", "")).strip()
+            if action not in {"Strong Buy Now", "Buy Now"}:
+                self._log(f"Radar auto-review skip {sym}: signal engine says '{action}'")
+                continue
+
+            live_price = _safe_float(radar_row.get("price")) or _safe_float(row.get("Price Now"))
+            stop_loss = _safe_float(row.get("Sell If Below"))
+            target1 = _safe_float(row.get("Take Profit 1"))
+            target2 = _safe_float(row.get("Take Profit 2"))
+            stop_loss, target1, target2, _ = _normalize_long_levels(
+                live_price,
+                stop_loss,
+                target1,
+                target2,
+            )
+            if live_price <= 0 or stop_loss <= 0 or target1 <= 0 or target2 <= 0 or live_price <= stop_loss:
+                reason = "full signal row has no usable stop/targets"
+                self._log(f"Radar auto-review skip {sym}: {reason}")
+                self._send_to_channels(f"⚠️ Auto-buy skipped for `{sym}` from radar: {reason}")
+                continue
+
+            blind_score, blind_reasons = BlindBuyScorer.score(row)
+            confidence = _safe_float(row.get("Signal Strength %"))
+            volume_ratio = _safe_float(row.get("Volume vs Avg"))
+            daily_change = _safe_float(radar_row.get("change")) or _safe_float(row.get("Change %"))
+            candidate = self._enrich_candidate_horizon(BlindBuyCandidate(
+                symbol=sym,
+                price=live_price,
+                buy_above=_safe_float(row.get("Buy Above")) or live_price,
+                stop_loss=stop_loss,
+                target1=target1,
+                target2=target2,
+                confidence=confidence,
+                volume_ratio=volume_ratio,
+                change_pct=daily_change,
+                blind_score=blind_score,
+                original_action=action,
+                reasons=blind_reasons,
+            ))
+            grade, _ = self._grade_candidate(candidate)
+            eligible, reason = self._live_auto_buy_gate_detail(candidate, grade)
+            self._log(
+                f"Radar auto-review {sym}: action={action}, grade={grade}, "
+                f"score={blind_score:.0f}, conf={confidence:.0f}%, vol={volume_ratio:.1f}x, "
+                f"rr={self._candidate_rr2(candidate):.1f}, change={daily_change:.1f}% -> {reason}"
+            )
+
+            if not eligible:
+                self._send_to_channels(f"⚠️ Auto-buy skipped for `{sym}` from radar: {reason}")
+                continue
+
+            result = self._try_auto_buy(
+                sym,
+                live_price,
+                stop_loss,
+                target1,
+                target2,
+                blind_score,
+                blind_reasons,
+                product_preference=candidate.product_preference,
+                holding_horizon=candidate.holding_horizon,
+                max_hold_days=candidate.max_hold_days,
+            )
+            if result:
+                self._send_to_channels(result)
+
     def _run_top_gainer_radar(self) -> None:
         """Show live top gainers without forcing them into the buy engine.
 
@@ -4401,6 +4500,7 @@ class AutoPilotInvestor:
 
         self._runner_radar_last_summary = now_ts
         self._send_to_channels("\n".join(lines))
+        self._review_top_gainer_rows_for_auto_buy(display_rows)
 
     # ------------------------------------------------------------------
     # Signal state
