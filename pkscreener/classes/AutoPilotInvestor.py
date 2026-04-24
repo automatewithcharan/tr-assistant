@@ -740,6 +740,15 @@ class AutoPilotInvestor:
         self._DEMAND_CONFIRM_MAX_DAY_CHANGE = 5.5 # avoid late chase entries in this path
         self._DEMAND_CONFIRM_FAST_RISE_PCT = 0.7  # fast-track stronger setups earlier
         self._DEMAND_CONFIRM_FAST_IMBALANCE = 4.5 # fast-track needs very strong imbalance
+        # Top-gainer radar: visibility layer only. It should show the full field
+        # of live runners without turning every runner into an actionable BUY.
+        self._runner_radar_seen: Dict[str, int] = {}  # symbol -> highest pct bucket alerted
+        self._runner_radar_date: Optional[str] = None
+        self._runner_radar_last_summary: float = 0.0
+        self._RUNNER_RADAR_MIN_CHANGE = 5.0
+        self._RUNNER_RADAR_BUCKET_STEP = 5
+        self._RUNNER_RADAR_SUMMARY_INTERVAL_SEC = 300
+        self._RUNNER_RADAR_MAX_LINES = 12
         # NSE market hours (IST): 9:15 AM open, 3:30 PM close
         self._MARKET_OPEN_HOUR_IST = 9
         self._MARKET_OPEN_MIN_IST = 15
@@ -1142,6 +1151,9 @@ class AutoPilotInvestor:
                 self._daily_batch_alert_count = 0
                 self._tick_confirmed_auto_buy_count = 0
                 self._opening_fast_lane_count = 0
+                self._runner_radar_seen.clear()
+                self._runner_radar_date = today_str
+                self._runner_radar_last_summary = 0.0
                 self._nifty_crash_pause = False
                 self._last_opening_priority_refresh = 0.0
                 self._opening_priority_state_df = None
@@ -1164,6 +1176,8 @@ class AutoPilotInvestor:
             # Fast tick scan (zero API calls, < 1s) — catches pre-jump conditions
             # BEFORE the full OHLCV cycle would even start.
             self._run_tick_fast_scan()
+            # Visibility-only radar: show all strong runners, even if not buyable.
+            self._run_top_gainer_radar()
             # Flush opening buffer (ranked summary of buffered opening alerts)
             self._flush_opening_buffer()
             # Re-scan signal monitor "Buy Now" stocks — catches stocks that improved
@@ -4051,6 +4065,161 @@ class AutoPilotInvestor:
             return result
         except Exception:
             return {}
+
+    def _load_ticks_for_universe(self, universe: str) -> Dict[str, Dict]:
+        """Best-effort tick loader for auxiliary universes used by radar."""
+        universe = str(universe or "").strip().lower()
+        if not universe:
+            return {}
+        path = os.path.join(self.output_dir, f"kiteticker_{universe}_ticks_latest.json")
+        if not os.path.isfile(path):
+            return {}
+        try:
+            try:
+                import orjson as _ojson
+                with open(path, "rb") as handle:
+                    payload = _ojson.loads(handle.read())
+            except ImportError:
+                import json
+                with open(path, "r", encoding="utf-8") as handle:
+                    payload = json.load(handle)
+            return {str(k).strip().upper(): v for k, v in payload.items()} if isinstance(payload, dict) else {}
+        except Exception:
+            return {}
+
+    def _load_runner_radar_ticks(self) -> Dict[str, Dict]:
+        """Load the broadest available tick set for top-gainer visibility."""
+        ticks = dict(self._load_ticks_snapshot() or {})
+        # If a combined NSE+BSE stream is running, use it to improve radar coverage
+        # even when the trading engine itself is configured to allstocks/NSE.
+        if str(self.config.universe or "").strip().lower() != "all":
+            all_ticks = self._load_ticks_for_universe("all")
+            for sym, tick in all_ticks.items():
+                ticks.setdefault(sym, tick)
+        return ticks
+
+    def _classify_runner_radar_row(
+        self,
+        *,
+        price: float,
+        change: float,
+        turnover_cr: float,
+        above_vwap: bool,
+        high: float,
+        low: float,
+        total_buy: float,
+        total_sell: float,
+    ) -> Tuple[str, str]:
+        """Return (quality_label, reason) for radar-only runner display."""
+        is_circuit_like = total_sell <= 0 and total_buy > 0
+        near_high = True
+        if high > 0 and low > 0 and high > low and price > 0:
+            near_high = ((high - price) / max(high - low, 0.01)) <= 0.35
+
+        if is_circuit_like:
+            return "LOCKED/CIRCUIT RISK", "sell book empty; hard to enter/exit safely"
+        if turnover_cr < 0.50:
+            return "THIN", f"turnover only ₹{turnover_cr:.1f}Cr"
+        if change >= 10.0:
+            return "DO NOT CHASE", f"already +{change:.1f}%"
+        if price < 20:
+            return "LOW PRICE RISK", "below ₹20"
+        if turnover_cr >= 3.0 and above_vwap and near_high and 3.0 <= change <= 8.0:
+            return "TRADE CANDIDATE", "liquid, above VWAP, near high"
+        if turnover_cr >= 1.0 and above_vwap:
+            return "WATCH", "above VWAP with acceptable turnover"
+        return "RADAR ONLY", "visible runner, not clean enough yet"
+
+    def _run_top_gainer_radar(self) -> None:
+        """Show live top gainers without forcing them into the buy engine.
+
+        Goal: visibility should approach 100% of the day's big runners. Execution
+        remains selective and separate.
+        """
+        if not self._is_market_open():
+            return
+        today = datetime.now().strftime("%Y-%m-%d")
+        if self._runner_radar_date != today:
+            self._runner_radar_seen.clear()
+            self._runner_radar_date = today
+            self._runner_radar_last_summary = 0.0
+
+        ticks = self._load_runner_radar_ticks()
+        if not ticks:
+            return
+
+        rows: List[Dict] = []
+        for raw_sym, tick in ticks.items():
+            sym = str(raw_sym or "").strip().upper()
+            if not sym or self._is_excluded_symbol(sym):
+                continue
+            price = _safe_float(tick.get("last_price"))
+            change = _safe_float(tick.get("change"))
+            if price <= 0 or change < self._RUNNER_RADAR_MIN_CHANGE:
+                continue
+            volume = _safe_float(tick.get("volume_traded", tick.get("volume", 0)))
+            avg_px = _safe_float(tick.get("average_traded_price", price))
+            turnover_cr = (volume * (avg_px if avg_px > 0 else price)) / 1e7
+            total_buy = _safe_float(tick.get("total_buy_quantity", tick.get("total_buy_qty", 0)))
+            total_sell = _safe_float(tick.get("total_sell_quantity", tick.get("total_sell_qty", 0)))
+            high = _safe_float(tick.get("high", tick.get("ohlc", {}).get("high", 0)))
+            low = _safe_float(tick.get("low", tick.get("ohlc", {}).get("low", 0)))
+            vwap = avg_px
+            above_vwap = bool(vwap > 0 and price >= vwap)
+            quality, reason = self._classify_runner_radar_row(
+                price=price,
+                change=change,
+                turnover_cr=turnover_cr,
+                above_vwap=above_vwap,
+                high=high,
+                low=low,
+                total_buy=total_buy,
+                total_sell=total_sell,
+            )
+            bucket = int(change // self._RUNNER_RADAR_BUCKET_STEP) * self._RUNNER_RADAR_BUCKET_STEP
+            rows.append({
+                "symbol": sym,
+                "price": price,
+                "change": change,
+                "turnover_cr": turnover_cr,
+                "above_vwap": above_vwap,
+                "quality": quality,
+                "reason": reason,
+                "bucket": bucket,
+            })
+
+        if not rows:
+            return
+        rows.sort(key=lambda r: (r["change"], r["turnover_cr"]), reverse=True)
+
+        new_rows = [
+            row for row in rows
+            if row["bucket"] > self._runner_radar_seen.get(row["symbol"], 0)
+        ]
+        now_ts = time.time()
+        should_summary = now_ts - self._runner_radar_last_summary >= self._RUNNER_RADAR_SUMMARY_INTERVAL_SEC
+        if not new_rows and not should_summary:
+            return
+
+        display_rows = (new_rows if new_rows else rows)[: self._RUNNER_RADAR_MAX_LINES]
+        header = (
+            "**📡 TOP GAINER RADAR — visibility only**\n"
+            "_Not a buy list. Trade engine/auto-buy remains selective._"
+        )
+        lines = [header]
+        for row in display_rows:
+            vwap_tag = "VWAP+" if row["above_vwap"] else "VWAP-"
+            lines.append(
+                f"`{row['symbol']}` +{row['change']:.1f}% | ₹{row['price']:.2f} | "
+                f"₹{row['turnover_cr']:.1f}Cr | {vwap_tag} | **{row['quality']}** — {row['reason']}"
+            )
+            self._runner_radar_seen[row["symbol"]] = max(
+                self._runner_radar_seen.get(row["symbol"], 0),
+                row["bucket"],
+            )
+
+        self._runner_radar_last_summary = now_ts
+        self._send_to_channels("\n".join(lines))
 
     # ------------------------------------------------------------------
     # Signal state
