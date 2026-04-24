@@ -683,7 +683,10 @@ class AutoPilotInvestor:
         # other risk checks. Positive values re-enable a hard daily cap.
         self._daily_batch_alert_count: int = 0  # counter of batch buy alerts sent today
         self._tick_confirmed_auto_buy_count: int = 0  # successful live auto-buys from Discord/tick-confirmed path
-        self._OPENING_FAST_LANE_TOP_N = 2       # allow only 1-2 instant opening entries before buffer flush
+        self._OPENING_FAST_LANE_TOP_N = max(1, _env_int("ASSISTANT_OPENING_FAST_LANE_TOP_N", 4))
+        # Keep fast-lane selective, but do not hard-stop at the first 1-2 names.
+        # The order manager now time-slices capital, so cleaner 9:25-10:30 names
+        # still have buying power even if early starters fire.
         self._opening_fast_lane_count: int = 0  # counter of elite opening-window bypasses sent today
         # Opening priority refresh: rescan a small liquid subset during the
         # first minutes of trade so we do not wait for the slow full-universe
@@ -5220,7 +5223,12 @@ class AutoPilotInvestor:
             from datetime import timezone, timedelta
             _now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
         now_min = _now_ist.hour * 60 + _now_ist.minute
-        _late_swing_window = 13 * 60 + 30 < now_min <= 14 * 60 + 15
+        _swing_start_min = 9 * 60 + 20
+        _swing_end_min = 13 * 60 + 30
+        _late_swing_start_min = 13 * 60 + 30
+        _late_swing_end_min = 14 * 60 + 15
+        _late_swing_window = _late_swing_start_min < now_min <= _late_swing_end_min
+        _opening_starter_window = _swing_start_min <= now_min <= 9 * 60 + 45
 
         if c.holding_horizon == "intraday":
             micro_open = 9 * 60 + 15 <= now_min < 9 * 60 + 20
@@ -5248,8 +5256,10 @@ class AutoPilotInvestor:
             if grade not in {"A+", "A"}:
                 return False, "intraday auto-buy needs A or A+ grade"
         else:
-            if not (9 * 60 + 20 <= now_min <= 13 * 60 + 30):
+            if not (_swing_start_min <= now_min <= _swing_end_min):
                 if not _late_swing_window:
+                    if now_min < _swing_start_min:
+                        return False, "swing auto-buy starts at 9:20 AM IST"
                     return False, "swing auto-buy is paused after 1:30 PM IST"
                 if c.holding_horizon not in {"2-day swing", "5-day swing"}:
                     return False, "late auto-buy is reserved for exceptional swing setups only"
@@ -5275,6 +5285,21 @@ class AutoPilotInvestor:
 
         if entry_lane == "stretched":
             return False, entry_reason
+
+        if (
+            _opening_starter_window
+            and c.holding_horizon in {"2-day swing", "5-day swing"}
+            and grade in {"A+", "A"}
+            and c.price >= 50
+            and rr2 >= 2.0
+            and gap_pct <= 0.8
+            and 1.5 <= c.change_pct <= 5.5
+            and c.blind_score >= 55
+            and c.confidence >= 20
+            and c.volume_ratio >= 1.4
+            and not _avoid_horizon
+        ):
+            return True, "eligible now as an opening starter swing auto-buy"
 
         if c.holding_horizon == "5-day swing":
             if c.price < 20:
@@ -5389,7 +5414,32 @@ class AutoPilotInvestor:
         gap_pct = cls._candidate_entry_gap_pct(c)
         entry_lane, _ = cls._classify_entry_timing_lane(c)
 
-        if c.price <= 0 or c.blind_score < 38 or c.confidence < 25 or rr2 < 1.4:
+        if c.price <= 0 or rr2 < 1.4:
+            return ("avoid", "", 0, "Below minimum quality for evidence-backed execution")
+        try:
+            import pytz
+            _ist = pytz.timezone("Asia/Kolkata")
+            _now_ist = datetime.now(_ist)
+        except Exception:
+            from datetime import timezone, timedelta
+            _now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+        _now_min = _now_ist.hour * 60 + _now_ist.minute
+        _opening_starter_window = 9 * 60 + 20 <= _now_min <= 9 * 60 + 45
+
+        if (
+            _opening_starter_window
+            and entry_lane in {"early", "continuation"}
+            and c.price >= 50
+            and 1.5 <= c.change_pct <= 5.5
+            and c.blind_score >= 55
+            and c.confidence >= 20
+            and c.volume_ratio >= 1.4
+            and rr2 >= 2.0
+            and gap_pct <= 0.8
+        ):
+            return ("2-day swing", "CNC", 2, "Opening starter: early strength with controlled risk")
+
+        if c.blind_score < 38 or c.confidence < 25:
             return ("avoid", "", 0, "Below minimum quality for evidence-backed execution")
         if c.volume_ratio < 1.4:
             return ("avoid", "", 0, "Participation is too weak for either intraday or swing execution")

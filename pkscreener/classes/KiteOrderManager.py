@@ -38,6 +38,11 @@ def _get_secret(name: str, default: str = "") -> str:
         return str(default).strip()
 
 
+def _secret_truthy(name: str, default: bool = False) -> bool:
+    raw = _get_secret(name, "1" if default else "0")
+    return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+
 def _ist_now() -> datetime:
     try:
         import pytz
@@ -226,6 +231,7 @@ class KiteOrderManager:
         KITE_INTRADAY_CAPITAL=25000     Total MIS notional bucket
         KITE_INTRADAY_MAX_ORDER_VALUE=15000 Max MIS notional per order
         KITE_INTRADAY_MAX_OPEN_POSITIONS=2 Max MIS simultaneous positions
+        KITE_TIME_SLICED_CAPITAL=1      Reserve capital for later high-quality setups
         KITE_TRAILING_STOP_PCT=3.0      Trailing stop activation (% above buy)
         KITE_TRAILING_STOP_TRAIL=1.0    Trail distance (% below highest) — tighter for higher capture
         KITE_MAX_HOLD_DAYS=5            Max days to hold before time-decay exit
@@ -260,6 +266,7 @@ class KiteOrderManager:
         self.intraday_max_open_positions = int(
             _get_secret("KITE_INTRADAY_MAX_OPEN_POSITIONS", str(self.max_open_positions)) or self.max_open_positions
         )
+        self.time_sliced_capital = _secret_truthy("KITE_TIME_SLICED_CAPITAL", True)
         self.trailing_stop_pct = float(_get_secret("KITE_TRAILING_STOP_PCT", "3.0"))
         self.trailing_trail_pct = float(_get_secret("KITE_TRAILING_STOP_TRAIL", "1.0"))
         self.max_hold_days = int(_get_secret("KITE_MAX_HOLD_DAYS", "5"))
@@ -460,6 +467,42 @@ class KiteOrderManager:
     def _capital_limit_for_product(self, product_type: str = "") -> float:
         return self.intraday_capital if self._capital_bucket_for_product(product_type) == "intraday" else self.swing_capital
 
+    def _capital_limit_available_now_for_product(self, product_type: str = "") -> float:
+        """Return the capital bucket currently available to new entries.
+
+        The full bucket is intentionally not released at the open. This prevents
+        mediocre early alerts from consuming all buying power before cleaner
+        9:30-10:30 continuation setups appear.
+        """
+        capital_limit = self._capital_limit_for_product(product_type)
+        if capital_limit <= 0 or not self.time_sliced_capital:
+            return capital_limit
+
+        now = _ist_now()
+        now_min = now.hour * 60 + now.minute
+        bucket = self._capital_bucket_for_product(product_type)
+
+        if bucket == "swing":
+            if now_min < 9 * 60 + 25:
+                fraction = 0.40
+            elif now_min < 9 * 60 + 45:
+                fraction = 0.70
+            elif now_min < 10 * 60 + 30:
+                fraction = 0.85
+            else:
+                fraction = 1.00
+        else:
+            if now_min < 9 * 60 + 25:
+                fraction = 0.50
+            elif now_min < 9 * 60 + 45:
+                fraction = 0.80
+            elif now_min < 10 * 60 + 15:
+                fraction = 0.90
+            else:
+                fraction = 1.00
+
+        return round(capital_limit * fraction, 2)
+
     def _per_order_limit_for_product(self, product_type: str = "") -> float:
         return (
             self.intraday_max_order_value
@@ -498,7 +541,7 @@ class KiteOrderManager:
         return count
 
     def _remaining_capital_for_product(self, product_type: str = "") -> float:
-        capital_limit = self._capital_limit_for_product(product_type)
+        capital_limit = self._capital_limit_available_now_for_product(product_type)
         if capital_limit <= 0:
             return 0.0
         deployed = self._current_open_value_for_product(product_type)
@@ -865,9 +908,10 @@ class KiteOrderManager:
                 )
             )
 
-        capital_limit = self._capital_limit_for_product(order_product)
+        configured_capital_limit = self._capital_limit_for_product(order_product)
+        capital_limit = self._capital_limit_available_now_for_product(order_product)
         remaining_pool = self._remaining_capital_for_product(order_product)
-        if capital_limit > 0 and price > 0:
+        if configured_capital_limit > 0 and price > 0:
             affordable_qty_by_pool = int(remaining_pool // price) if remaining_pool > 0 else 0
             if affordable_qty_by_pool <= 0:
                 bucket_label = "intraday" if self._capital_bucket_for_product(order_product) == "intraday" else "swing"
@@ -881,7 +925,8 @@ class KiteOrderManager:
                         status="SKIPPED",
                         message=(
                             f"{bucket_label.title()} capital pool reached. "
-                            f"Configured ₹{capital_limit:,.0f}, already deployed ₹{self._current_open_value_for_product(order_product):,.0f}."
+                            f"Available now ₹{capital_limit:,.0f} of configured ₹{configured_capital_limit:,.0f}, "
+                            f"already deployed ₹{self._current_open_value_for_product(order_product):,.0f}."
                         ),
                     )
                 )
@@ -909,7 +954,7 @@ class KiteOrderManager:
                     free_delivery_cash = max(0.0, available_cash - open_delivery_value)
                 else:
                     free_delivery_cash = available_cash
-                if capital_limit > 0:
+                if configured_capital_limit > 0:
                     free_delivery_cash = min(free_delivery_cash, remaining_pool)
                 affordable_qty = int(free_delivery_cash // price) if free_delivery_cash > 0 else 0
                 if affordable_qty <= 0:
