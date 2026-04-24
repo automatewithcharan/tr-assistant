@@ -749,6 +749,17 @@ class AutoPilotInvestor:
         self._RUNNER_RADAR_BUCKET_STEP = 5
         self._RUNNER_RADAR_SUMMARY_INTERVAL_SEC = 300
         self._RUNNER_RADAR_MAX_LINES = 12
+        # Early expansion radar: visibility-only board for stocks forming at
+        # +1% to +4.5% before they graduate into the top-gainer radar.
+        self._early_radar_seen: Dict[str, int] = {}  # symbol -> highest 1% bucket alerted
+        self._early_radar_date: Optional[str] = None
+        self._early_radar_last_summary: float = 0.0
+        self._EARLY_RADAR_MIN_CHANGE = _env_float("ASSISTANT_EARLY_RADAR_MIN_CHANGE", 1.0)
+        self._EARLY_RADAR_MAX_CHANGE = _env_float("ASSISTANT_EARLY_RADAR_MAX_CHANGE", 4.5)
+        self._EARLY_RADAR_MIN_TURNOVER_CR = _env_float("ASSISTANT_EARLY_RADAR_MIN_TURNOVER_CR", 0.75)
+        self._EARLY_RADAR_MIN_IMBALANCE = _env_float("ASSISTANT_EARLY_RADAR_MIN_IMBALANCE", 1.4)
+        self._EARLY_RADAR_SUMMARY_INTERVAL_SEC = _env_int("ASSISTANT_EARLY_RADAR_INTERVAL_SEC", 180)
+        self._EARLY_RADAR_MAX_LINES = _env_int("ASSISTANT_EARLY_RADAR_MAX_LINES", 8)
         # NSE market hours (IST): 9:15 AM open, 3:30 PM close
         self._MARKET_OPEN_HOUR_IST = 9
         self._MARKET_OPEN_MIN_IST = 15
@@ -1154,6 +1165,9 @@ class AutoPilotInvestor:
                 self._runner_radar_seen.clear()
                 self._runner_radar_date = today_str
                 self._runner_radar_last_summary = 0.0
+                self._early_radar_seen.clear()
+                self._early_radar_date = today_str
+                self._early_radar_last_summary = 0.0
                 self._nifty_crash_pause = False
                 self._last_opening_priority_refresh = 0.0
                 self._opening_priority_state_df = None
@@ -1176,6 +1190,8 @@ class AutoPilotInvestor:
             # Fast tick scan (zero API calls, < 1s) — catches pre-jump conditions
             # BEFORE the full OHLCV cycle would even start.
             self._run_tick_fast_scan()
+            # Visibility-only early board: +1% to +4.5% stocks with structure.
+            self._run_early_expansion_radar()
             # Visibility-only radar: show all strong runners, even if not buyable.
             self._run_top_gainer_radar()
             # Flush opening buffer (ranked summary of buffered opening alerts)
@@ -1199,6 +1215,7 @@ class AutoPilotInvestor:
                 time.sleep(_tick_poll_interval)
                 _remaining -= _tick_poll_interval
                 self._run_tick_fast_scan()
+                self._run_early_expansion_radar()
                 # Flush opening buffer every cycle (self-throttles internally)
                 self._flush_opening_buffer()
                 # Check buynow rescan every ~30s within the tick loop
@@ -4097,6 +4114,152 @@ class AutoPilotInvestor:
             for sym, tick in all_ticks.items():
                 ticks.setdefault(sym, tick)
         return ticks
+
+    def _classify_early_expansion_row(
+        self,
+        *,
+        price: float,
+        change: float,
+        turnover_cr: float,
+        above_vwap: bool,
+        high: float,
+        low: float,
+        total_buy: float,
+        total_sell: float,
+        open_price: float,
+    ) -> Tuple[str, str]:
+        """Return (quality_label, reason) for early +1% to +4.5% radar rows."""
+        is_circuit_like = total_sell <= 0 and total_buy > 0
+        imbalance = (total_buy / total_sell) if total_sell > 0 else 0.0
+        near_high = True
+        if high > 0 and low > 0 and high > low and price > 0:
+            near_high = ((high - price) / max(high - low, 0.01)) <= 0.30
+        opening_reclaim = bool(open_price > 0 and price >= open_price)
+
+        if is_circuit_like:
+            return "SKIP", "sell book empty; circuit/liquidity risk"
+        if price < 20:
+            return "SKIP", "below ₹20"
+        if turnover_cr < self._EARLY_RADAR_MIN_TURNOVER_CR:
+            return "SKIP", f"turnover only ₹{turnover_cr:.1f}Cr"
+        if not above_vwap:
+            return "SKIP", "below VWAP"
+        if not near_high:
+            return "SKIP", "not holding near day high"
+        if change < self._EARLY_RADAR_MIN_CHANGE or change > self._EARLY_RADAR_MAX_CHANGE:
+            return "SKIP", "outside early expansion band"
+        if imbalance >= self._EARLY_RADAR_MIN_IMBALANCE and opening_reclaim:
+            return "EARLY TRADE CANDIDATE", f"VWAP+, near high, buyer demand {imbalance:.1f}x"
+        if imbalance >= 1.1 or change >= 2.0:
+            return "WATCH", "VWAP+ and forming, needs stronger buyer pressure"
+        return "SKIP", "not enough buyer pressure yet"
+
+    def _run_early_expansion_radar(self) -> None:
+        """Show stocks forming early before they become visible top gainers.
+
+        This is intentionally visibility-only. The actual buy engine still needs
+        OHLCV confirmation, risk/reward, VWAP/orderbook, and capital checks.
+        """
+        if not self._is_market_open():
+            return
+        today = datetime.now().strftime("%Y-%m-%d")
+        if self._early_radar_date != today:
+            self._early_radar_seen.clear()
+            self._early_radar_date = today
+            self._early_radar_last_summary = 0.0
+
+        ticks = self._load_runner_radar_ticks()
+        if not ticks:
+            return
+
+        rows: List[Dict] = []
+        for raw_sym, tick in ticks.items():
+            sym = str(raw_sym or "").strip().upper()
+            if not sym or self._is_excluded_symbol(sym):
+                continue
+            price = _safe_float(tick.get("last_price"))
+            change = _safe_float(tick.get("change"))
+            if price <= 0 or change < self._EARLY_RADAR_MIN_CHANGE or change > self._EARLY_RADAR_MAX_CHANGE:
+                continue
+            volume = _safe_float(tick.get("volume_traded", tick.get("volume", 0)))
+            avg_px = _safe_float(tick.get("average_traded_price", price))
+            turnover_cr = (volume * (avg_px if avg_px > 0 else price)) / 1e7
+            total_buy = _safe_float(tick.get("total_buy_quantity", tick.get("total_buy_qty", 0)))
+            total_sell = _safe_float(tick.get("total_sell_quantity", tick.get("total_sell_qty", 0)))
+            high = _safe_float(tick.get("high", tick.get("ohlc", {}).get("high", 0)))
+            low = _safe_float(tick.get("low", tick.get("ohlc", {}).get("low", 0)))
+            open_price = _safe_float(tick.get("open", tick.get("ohlc", {}).get("open", 0)))
+            above_vwap = bool(avg_px > 0 and price >= avg_px)
+            quality, reason = self._classify_early_expansion_row(
+                price=price,
+                change=change,
+                turnover_cr=turnover_cr,
+                above_vwap=above_vwap,
+                high=high,
+                low=low,
+                total_buy=total_buy,
+                total_sell=total_sell,
+                open_price=open_price,
+            )
+            if quality == "SKIP":
+                continue
+            bucket = int(change)
+            imbalance = (total_buy / total_sell) if total_sell > 0 else 0.0
+            rows.append({
+                "symbol": sym,
+                "price": price,
+                "change": change,
+                "turnover_cr": turnover_cr,
+                "above_vwap": above_vwap,
+                "quality": quality,
+                "reason": reason,
+                "bucket": bucket,
+                "imbalance": imbalance,
+            })
+
+        if not rows:
+            return
+        rows.sort(
+            key=lambda r: (
+                1 if r["quality"] == "EARLY TRADE CANDIDATE" else 0,
+                r["imbalance"],
+                r["turnover_cr"],
+                r["change"],
+            ),
+            reverse=True,
+        )
+
+        new_rows = [
+            row for row in rows
+            if row["bucket"] > self._early_radar_seen.get(row["symbol"], -1)
+        ]
+        now_ts = time.time()
+        should_summary = now_ts - self._early_radar_last_summary >= self._EARLY_RADAR_SUMMARY_INTERVAL_SEC
+        # Keep this calm: a +1% radar can produce many new names in a few seconds.
+        # Send a ranked snapshot on interval instead of dribbling alerts nonstop.
+        if not should_summary:
+            return
+        if not new_rows and not rows:
+            return
+
+        display_rows = (new_rows if new_rows else rows)[: self._EARLY_RADAR_MAX_LINES]
+        lines = [
+            "**🔎 EARLY EXPANSION RADAR — forming now**",
+            "_Not a buy list. These are +1% to +4.5% names with early structure before the +5% radar._",
+        ]
+        for row in display_rows:
+            vwap_tag = "VWAP+" if row["above_vwap"] else "VWAP-"
+            lines.append(
+                f"`{row['symbol']}` +{row['change']:.1f}% | ₹{row['price']:.2f} | "
+                f"₹{row['turnover_cr']:.1f}Cr | {vwap_tag} | **{row['quality']}** — {row['reason']}"
+            )
+            self._early_radar_seen[row["symbol"]] = max(
+                self._early_radar_seen.get(row["symbol"], -1),
+                row["bucket"],
+            )
+
+        self._early_radar_last_summary = now_ts
+        self._send_to_channels("\n".join(lines))
 
     def _classify_runner_radar_row(
         self,
