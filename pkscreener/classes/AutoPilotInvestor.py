@@ -672,7 +672,9 @@ class AutoPilotInvestor:
         self._RESCAN_MIN_SCORE = 50.0           # stricter than global min-score
         self._RESCAN_MIN_CONFIDENCE = 20.0      # avoid low-conviction stale setups
         self._RESCAN_MIN_VOL_RATIO = 0.8        # require at least reasonable volume backing
-        self._RESCAN_MIN_DAY_CHANGE = 2.0       # must show live momentum now
+        self._RESCAN_MIN_DAY_CHANGE = _env_float("ASSISTANT_RESCAN_MIN_DAY_CHANGE", 1.0)
+        # must show live momentum now; lowered after honest replay showed the
+        # +1% to +4.5% Buy Now lane had better edge than late top-gainer chases.
         self._RESCAN_MAX_DAY_CHANGE = 12.0      # avoid very late chase entries
         # ── CONSISTENT DAILY INCOME: 5 trades/day ──
         # 5 × ₹50K = ₹2.5L = full MIS margin. Diversification ensures even if
@@ -5679,6 +5681,21 @@ class AutoPilotInvestor:
         _late_swing_end_min = 14 * 60 + 15
         _late_swing_window = _late_swing_start_min < now_min <= _late_swing_end_min
         _opening_starter_window = _swing_start_min <= now_min <= 10 * 60 + 0
+        _early_engine_end_min = _env_time_min("ASSISTANT_EARLY_ENGINE_END", 13 * 60 + 30)
+
+        if (
+            cls._is_true_buy_action(getattr(c, "original_action", ""))
+            and 9 * 60 + 20 <= now_min <= _early_engine_end_min
+            and c.price >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_PRICE", 20.0)
+            and _env_float("ASSISTANT_EARLY_ENGINE_MIN_CHANGE", 1.0) <= c.change_pct <= _env_float("ASSISTANT_EARLY_ENGINE_MAX_CHANGE", 4.5)
+            and rr2 >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_RR", 1.5)
+            and gap_pct <= _env_float("ASSISTANT_EARLY_ENGINE_MAX_GAP", 1.2)
+            and c.blind_score >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_SCORE", 50.0)
+            and c.confidence >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_CONFIDENCE", 20.0)
+            and c.volume_ratio >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_VOL_RATIO", 1.0)
+            and not ("bearish" in str(getattr(c, "reasons", "") or "").lower())
+        ):
+            return True, "eligible now as an early-engine auto-buy"
 
         if c.holding_horizon == "intraday":
             micro_open = 9 * 60 + 15 <= now_min < 9 * 60 + 20
@@ -5888,6 +5905,18 @@ class AutoPilotInvestor:
             and gap_pct <= 0.8
         ):
             return ("2-day swing", "CNC", 2, "Opening starter: early strength with controlled risk")
+
+        if (
+            cls._is_true_buy_action(getattr(c, "original_action", ""))
+            and c.price >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_PRICE", 20.0)
+            and _env_float("ASSISTANT_EARLY_ENGINE_MIN_CHANGE", 1.0) <= c.change_pct <= _env_float("ASSISTANT_EARLY_ENGINE_MAX_CHANGE", 4.5)
+            and c.blind_score >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_SCORE", 50.0)
+            and c.confidence >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_CONFIDENCE", 20.0)
+            and c.volume_ratio >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_VOL_RATIO", 1.0)
+            and rr2 >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_RR", 1.5)
+            and gap_pct <= _env_float("ASSISTANT_EARLY_ENGINE_MAX_GAP", 1.2)
+        ):
+            return ("intraday", "MIS", 1, "Early engine: Buy Now while move is still controlled")
 
         if c.blind_score < 38 or c.confidence < 25:
             return ("avoid", "", 0, "Below minimum quality for evidence-backed execution")
