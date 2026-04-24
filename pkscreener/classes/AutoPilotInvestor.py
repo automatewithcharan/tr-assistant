@@ -5228,7 +5228,7 @@ class AutoPilotInvestor:
         _late_swing_start_min = 13 * 60 + 30
         _late_swing_end_min = 14 * 60 + 15
         _late_swing_window = _late_swing_start_min < now_min <= _late_swing_end_min
-        _opening_starter_window = _swing_start_min <= now_min <= 9 * 60 + 45
+        _opening_starter_window = _swing_start_min <= now_min <= 10 * 60 + 0
 
         if c.holding_horizon == "intraday":
             micro_open = 9 * 60 + 15 <= now_min < 9 * 60 + 20
@@ -5293,10 +5293,10 @@ class AutoPilotInvestor:
             and c.price >= 50
             and rr2 >= 2.0
             and gap_pct <= 0.8
-            and 1.5 <= c.change_pct <= 5.5
+            and 1.5 <= c.change_pct <= 6.5
             and c.blind_score >= 55
-            and c.confidence >= 20
-            and c.volume_ratio >= 1.4
+            and c.confidence >= 18
+            and c.volume_ratio >= 0.25
             and not _avoid_horizon
         ):
             return True, "eligible now as an opening starter swing auto-buy"
@@ -5424,16 +5424,16 @@ class AutoPilotInvestor:
             from datetime import timezone, timedelta
             _now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
         _now_min = _now_ist.hour * 60 + _now_ist.minute
-        _opening_starter_window = 9 * 60 + 20 <= _now_min <= 9 * 60 + 45
+        _opening_starter_window = 9 * 60 + 20 <= _now_min <= 10 * 60 + 0
 
         if (
             _opening_starter_window
             and entry_lane in {"early", "continuation"}
             and c.price >= 50
-            and 1.5 <= c.change_pct <= 5.5
+            and 1.5 <= c.change_pct <= 6.5
             and c.blind_score >= 55
-            and c.confidence >= 20
-            and c.volume_ratio >= 1.4
+            and c.confidence >= 18
+            and c.volume_ratio >= 0.25
             and rr2 >= 2.0
             and gap_pct <= 0.8
         ):
