@@ -749,6 +749,7 @@ class AutoPilotInvestor:
         self._RUNNER_RADAR_BUCKET_STEP = 5
         self._RUNNER_RADAR_SUMMARY_INTERVAL_SEC = 300
         self._RUNNER_RADAR_MAX_LINES = 12
+        self._RUNNER_RADAR_MIN_QUALITY = {"TRADE CANDIDATE", "WATCH"}
         # Early expansion radar: visibility-only board for stocks forming at
         # +1% to +4.5% before they graduate into the top-gainer radar.
         self._early_radar_seen: Dict[str, int] = {}  # symbol -> highest 1% bucket alerted
@@ -4355,8 +4356,13 @@ class AutoPilotInvestor:
             return
         rows.sort(key=lambda r: (r["change"], r["turnover_cr"]), reverse=True)
 
-        new_rows = [
+        review_rows = [
             row for row in rows
+            if row["quality"] in self._RUNNER_RADAR_MIN_QUALITY
+        ]
+        blocked_count = len(rows) - len(review_rows)
+        new_rows = [
+            row for row in review_rows
             if row["bucket"] > self._runner_radar_seen.get(row["symbol"], 0)
         ]
         now_ts = time.time()
@@ -4364,10 +4370,20 @@ class AutoPilotInvestor:
         if not new_rows and not should_summary:
             return
 
-        display_rows = (new_rows if new_rows else rows)[: self._RUNNER_RADAR_MAX_LINES]
+        display_rows = (new_rows if new_rows else review_rows)[: self._RUNNER_RADAR_MAX_LINES]
+        if not display_rows:
+            if not should_summary:
+                return
+            # Keep one compact anti-FOMO note instead of repeating every late/thin runner.
+            self._runner_radar_last_summary = now_ts
+            self._send_to_channels(
+                "**📡 TOP GAINER RADAR — no clean manual reviews**\n"
+                f"Skipped {blocked_count} visible runners because they were late, thin, below VWAP, or circuit-risk."
+            )
+            return
         header = (
-            "**📡 TOP GAINER RADAR — visibility only**\n"
-            "_Not a buy list. Trade engine/auto-buy remains selective._"
+            "**📡 TOP GAINER RADAR — manual review only**\n"
+            "_Only WATCH / TRADE CANDIDATE names are shown. Late, thin, and circuit-risk runners are suppressed._"
         )
         lines = [header]
         for row in display_rows:
@@ -4380,6 +4396,8 @@ class AutoPilotInvestor:
                 self._runner_radar_seen.get(row["symbol"], 0),
                 row["bucket"],
             )
+        if blocked_count > 0:
+            lines.append(f"_Suppressed {blocked_count} late/thin/circuit-risk runners._")
 
         self._runner_radar_last_summary = now_ts
         self._send_to_channels("\n".join(lines))
