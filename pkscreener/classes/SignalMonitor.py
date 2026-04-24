@@ -10,6 +10,7 @@ import html
 import json
 import os
 import subprocess
+import time
 from datetime import datetime
 from typing import Dict, List, Optional, Set, Tuple
 
@@ -160,6 +161,7 @@ class SignalMonitorRunner:
         self._anomaly_detector: Optional[VolumeAnomalyDetector] = None
         self._anomaly_profiles_loaded = False
         self._market_context = None  # Lazy-init MarketContextEngine
+        self._last_partial_save_ts = 0.0
 
     def run(
         self,
@@ -230,6 +232,14 @@ class SignalMonitorRunner:
             symbols=cycle_symbols,
             show_progress=True,
             progress_label="Checked",
+            progress_callback=lambda rows, completed, total_rows: self._save_partial_outputs(
+                rows,
+                completed,
+                total_rows,
+                previous_simple_df,
+                previous_state_df,
+                total,
+            ),
         )
         if report_df is None:
             report_df = pd.DataFrame()
@@ -271,6 +281,70 @@ class SignalMonitorRunner:
         self._send_alerts(alerts_df, summary_df)
         self._cycle_number += 1
         return report_df, merged_simple_df, alerts_df, summary_df
+
+    def _save_partial_outputs(
+        self,
+        rows: List[Dict],
+        completed: int,
+        cycle_total: int,
+        previous_simple_df: pd.DataFrame,
+        previous_state_df: pd.DataFrame,
+        universe_total: int,
+    ) -> None:
+        """Publish fresh latest boards during long live scans.
+
+        The final cycle still writes dated files and alerts. Partial writes only
+        keep the latest CSVs fresh so autopilot does not trade from stale state.
+        """
+        now_ts = time.time()
+        if completed < cycle_total and now_ts - self._last_partial_save_ts < 45:
+            return
+        if not rows:
+            return
+
+        try:
+            report_df, actionable_df = self.actionable_runner._build_from_rows(list(rows))
+            if report_df is None:
+                return
+            if actionable_df is None:
+                actionable_df = pd.DataFrame()
+
+            simple_df = self.actionable_runner.build_simple_view(report_df)
+            state_df = self._build_state(simple_df)
+            merged_simple_df, merged_state_df = self._merge_with_previous(
+                previous_simple_df,
+                previous_state_df,
+                simple_df,
+                state_df,
+            )
+            merged_simple_df, merged_state_df = self._refresh_live_prices_from_ticks(
+                merged_simple_df,
+                merged_state_df,
+            )
+            merged_simple_df, merged_state_df = self._apply_buy_guardrails(
+                merged_simple_df,
+                merged_state_df,
+            )
+            summary_df = self._build_summary_from_simple(
+                merged_simple_df,
+                universe_total,
+                0,
+            )
+            self._save_latest_outputs_only(
+                report_df,
+                actionable_df,
+                merged_simple_df,
+                merged_state_df,
+                pd.DataFrame(columns=self.ALERT_COLUMNS),
+                summary_df,
+            )
+            self._last_partial_save_ts = now_ts
+            OutputControls().printOutput(
+                f"  [+] Published partial monitor board: {completed}/{cycle_total} checked...",
+                end="\r",
+            )
+        except Exception as exc:
+            default_logger().debug(f"Partial monitor board save failed: {exc}", exc_info=True)
 
     def _select_symbols_for_cycle(self, symbols: List[str], previous_simple_df: pd.DataFrame) -> List[str]:
         """Return either the full universe or only changed live-tick symbols for this cycle."""
@@ -1316,6 +1390,34 @@ class SignalMonitorRunner:
         OutputControls().printOutput(f"  [+] Saved momentum board: {outputs['signals_momentum_latest']}")
         OutputControls().printOutput(f"  [+] Saved monitor alerts: {outputs['alerts_latest']}")
         OutputControls().printOutput(f"  [+] Saved monitor dashboard: {outputs['dashboard_latest']}")
+
+    def _save_latest_outputs_only(
+        self,
+        report_df: pd.DataFrame,
+        actionable_df: pd.DataFrame,
+        simple_df: pd.DataFrame,
+        state_df: pd.DataFrame,
+        alerts_df: pd.DataFrame,
+        summary_df: pd.DataFrame,
+    ) -> None:
+        """Persist only latest CSVs for in-progress monitor scans."""
+        report_to_save = report_df.copy() if report_df is not None else pd.DataFrame()
+        actionable_to_save = actionable_df.copy() if actionable_df is not None else pd.DataFrame()
+        simple_to_save = simple_df.copy() if simple_df is not None else pd.DataFrame()
+        state_to_save = state_df.copy() if state_df is not None else pd.DataFrame()
+        alerts_to_save = alerts_df.copy() if alerts_df is not None else pd.DataFrame(columns=self.ALERT_COLUMNS)
+        summary_to_save = summary_df.copy() if summary_df is not None else pd.DataFrame(columns=self.SUMMARY_COLUMNS)
+
+        report_to_save.drop(columns=["ActionRank", "NowActionRank"], inplace=True, errors="ignore")
+        actionable_to_save.drop(columns=["ActionRank", "NowActionRank"], inplace=True, errors="ignore")
+
+        report_to_save.to_csv(self._latest_path("signals"), index=False)
+        simple_to_save.to_csv(self._latest_path("signals_simple"), index=False)
+        self._build_momentum_board(simple_to_save).to_csv(self._latest_path("signals_momentum"), index=False)
+        actionable_to_save.to_csv(self._latest_path("actionable"), index=False)
+        summary_to_save.to_csv(self._latest_path("summary"), index=False)
+        state_to_save.to_csv(self._latest_path("state"), index=False)
+        alerts_to_save.to_csv(self._latest_path("alerts"), index=False)
 
     def _print_summary(self, summary_df: pd.DataFrame, simple_df: pd.DataFrame, alerts_df: pd.DataFrame, scorecard_df: Optional[pd.DataFrame] = None) -> None:
         """Print a short monitor summary after each cycle."""

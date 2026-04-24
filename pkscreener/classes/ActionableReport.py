@@ -11,7 +11,7 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Tuple
 
 import pandas as pd
 
@@ -176,6 +176,7 @@ class ActionableReportRunner:
         symbols: Optional[List[str]] = None,
         show_progress: bool = False,
         progress_label: str = "Processed",
+        progress_callback: Optional[Callable[[List[Dict], int, int], None]] = None,
     ) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame]]:
         """Build report data without printing or saving side effects."""
         symbols = symbols or self._load_universe_symbols()
@@ -187,6 +188,7 @@ class ActionableReportRunner:
             symbols=symbols[: len(symbols)],
             show_progress=show_progress,
             progress_label=progress_label,
+            progress_callback=progress_callback,
         )
 
         return self._build_from_rows(rows)
@@ -388,6 +390,7 @@ class ActionableReportRunner:
         symbols: List[str],
         show_progress: bool = False,
         progress_label: str = "Processed",
+        progress_callback: Optional[Callable[[List[Dict], int, int], None]] = None,
     ) -> List[Dict]:
         """Collect analyzed rows, optionally in parallel, with lightweight progress updates."""
         if not symbols:
@@ -404,6 +407,8 @@ class ActionableReportRunner:
                     OutputControls().printOutput(
                         f"  [+] {progress_label} {index}/{total} symbols...", end="\r"
                     )
+                if progress_callback and (index % 50 == 0 or index == total):
+                    progress_callback(list(rows), index, total)
             if show_progress:
                 OutputControls().printOutput("")
             return rows
@@ -431,6 +436,8 @@ class ActionableReportRunner:
                     OutputControls().printOutput(
                         f"  [+] {progress_label} {completed}/{total} symbols...", end="\r"
                     )
+                if progress_callback and (completed % 50 == 0 or completed == total):
+                    progress_callback(list(rows), completed, total)
         if show_progress:
             OutputControls().printOutput("")
         return rows
