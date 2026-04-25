@@ -77,6 +77,20 @@ sync_archive_bucket() {
     fi
 }
 
+sync_compressed_logs() {
+    [ -z "$ARCHIVE_BUCKET" ] && return 0
+    [ ! -d "$LOGS_DIR" ] && return 0
+    shopt -s nullglob
+    local files=("$LOGS_DIR"/session_*.log.gz)
+    shopt -u nullglob
+    [ "${#files[@]}" -eq 0 ] && return 0
+    if command -v gcloud >/dev/null 2>&1; then
+        gcloud storage cp "${files[@]}" "$ARCHIVE_BUCKET/assistant_logs/" >> "$LOG" 2>&1
+    else
+        gsutil -m cp "${files[@]}" "$ARCHIVE_BUCKET/assistant_logs/" >> "$LOG" 2>&1
+    fi
+}
+
 compress_old_logs() {
     [ ! -d "$LOGS_DIR" ] && return 0
     find "$LOGS_DIR" -type f -name 'session_*.log' -mmin +"$LOG_COMPRESS_MINUTES" -exec gzip -f {} \; >> "$LOG" 2>&1 || true
@@ -87,6 +101,7 @@ prune_synced_archive() {
     [ ! -d "$ARCHIVE_DIR" ] && return 0
     [ "$ARCHIVE_PRUNE_DAYS" -lt 0 ] && return 0
     find "$ARCHIVE_DIR" -type f -name '*.gz' -mtime +"$ARCHIVE_PRUNE_DAYS" -delete >> "$LOG" 2>&1 || true
+    find "$LOGS_DIR" -type f -name 'session_*.log.gz' -mtime +"$ARCHIVE_PRUNE_DAYS" -delete >> "$LOG" 2>&1 || true
 }
 
 WARN_KB=$((DISK_WARN_GB * 1024 * 1024))
@@ -106,7 +121,7 @@ if [ -n "${FREE_KB:-}" ] && [ "$FREE_KB" -le "$CRIT_KB" ]; then
     send_discord_on_state_change "critical" "🚨 **Disk guard critical** — only $(kb_to_gb "$FREE_KB") GB free. Cleanup ran and archive sync may be incomplete."
 else
     log "Disk guard: syncing archive to ${ARCHIVE_BUCKET:-<not-configured>}"
-    if sync_archive_bucket; then
+    if sync_archive_bucket && sync_compressed_logs; then
         prune_synced_archive
         if [ -n "${FREE_KB:-}" ]; then
             send_discord_on_state_change "healthy" "✅ **Disk/archive guard healthy** — archive sync is working and free space is $(kb_to_gb "$FREE_KB") GB."
