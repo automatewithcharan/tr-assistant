@@ -80,6 +80,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--to-date", type=str, default=None)
     parser.add_argument("--max-symbols", type=int, default=250)
     parser.add_argument("--top-liquidity", type=int, default=250)
+    parser.add_argument(
+        "--per-day-candidates",
+        type=int,
+        default=0,
+        help="Keep the top N daily/liquidity candidates per trading day before minute replay.",
+    )
     parser.add_argument("--limit-minute-fetches", type=int, default=600)
     parser.add_argument("--out-prefix", type=str, default="fresh_early_engine")
     parser.add_argument("--quiet", action="store_true")
@@ -183,6 +189,7 @@ def liquid_symbol_days(
     end: datetime,
     cfg: StrategyConfig,
     top_liquidity: int,
+    per_day_candidates: int = 0,
 ) -> list[dict]:
     rows: list[dict] = []
     for symbol, daily in daily_by_symbol.items():
@@ -213,7 +220,24 @@ def liquid_symbol_days(
                     "daily_high_change_pct": high_change,
                 }
             )
-    rows.sort(key=lambda item: item["avg_turnover_cr_20"], reverse=True)
+    if per_day_candidates > 0:
+        by_day: dict[date, list[dict]] = {}
+        for row in rows:
+            by_day.setdefault(row["day"], []).append(row)
+        selected: list[dict] = []
+        for day in sorted(by_day):
+            day_rows = sorted(
+                by_day[day],
+                key=lambda item: (
+                    item["daily_high_change_pct"],
+                    item["avg_turnover_cr_20"],
+                ),
+                reverse=True,
+            )
+            selected.extend(day_rows[:per_day_candidates])
+        rows = selected
+
+    rows.sort(key=lambda item: (item["day"], -item["daily_high_change_pct"], -item["avg_turnover_cr_20"]))
     if top_liquidity:
         return rows[:top_liquidity]
     return rows
@@ -438,7 +462,14 @@ def main() -> int:
         if not args.quiet and (i == 1 or i % 25 == 0):
             print(f"  daily fetched {i}/{len(symbols)} usable={len(daily_by_symbol)}")
 
-    symbol_days = liquid_symbol_days(daily_by_symbol, start, end, cfg, args.top_liquidity)
+    symbol_days = liquid_symbol_days(
+        daily_by_symbol,
+        start,
+        end,
+        cfg,
+        args.top_liquidity,
+        per_day_candidates=args.per_day_candidates,
+    )
     if args.limit_minute_fetches:
         symbol_days = symbol_days[: args.limit_minute_fetches]
     if not args.quiet:
@@ -466,27 +497,43 @@ def main() -> int:
         if not trades_df.empty
         else pd.DataFrame(columns=["day", "trades", "net_pnl", "wins"])
     )
+    by_month_df = pd.DataFrame(columns=["month", "trades", "net_pnl", "wins", "win_rate_pct"])
+    if not trades_df.empty:
+        tmp = trades_df.copy()
+        tmp["month"] = pd.to_datetime(tmp["day"]).dt.strftime("%Y-%m")
+        by_month_df = tmp.groupby("month", as_index=False).agg(
+            trades=("symbol", "count"),
+            net_pnl=("net_pnl", "sum"),
+            wins=("net_pnl", lambda s: int((s > 0).sum())),
+        )
+        by_month_df["win_rate_pct"] = (by_month_df["wins"] / by_month_df["trades"] * 100).round(1)
 
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     raw_path = RESULTS_DIR / f"{args.out_prefix}_raw_{stamp}.csv"
     trades_path = RESULTS_DIR / f"{args.out_prefix}_trades_{stamp}.csv"
     summary_path = RESULTS_DIR / f"{args.out_prefix}_summary_{stamp}.csv"
     by_day_path = RESULTS_DIR / f"{args.out_prefix}_by_day_{stamp}.csv"
+    by_month_path = RESULTS_DIR / f"{args.out_prefix}_by_month_{stamp}.csv"
     raw_df.to_csv(raw_path, index=False)
     trades_df.to_csv(trades_path, index=False)
     summary_df.to_csv(summary_path, index=False)
     by_day_df.to_csv(by_day_path, index=False)
+    by_month_df.to_csv(by_month_path, index=False)
 
     print("\nSummary")
     print(summary_df.to_string(index=False))
     if not by_day_df.empty:
         print("\nBy day")
         print(by_day_df.to_string(index=False))
+    if not by_month_df.empty:
+        print("\nBy month")
+        print(by_month_df.to_string(index=False))
     print("\nFiles")
     print(f"  raw:     {raw_path}")
     print(f"  trades:  {trades_path}")
     print(f"  summary: {summary_path}")
     print(f"  by_day:  {by_day_path}")
+    print(f"  month:   {by_month_path}")
     return 0
 
 
