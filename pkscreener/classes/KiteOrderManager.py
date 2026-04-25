@@ -54,6 +54,8 @@ def _ist_now() -> datetime:
 
 def _is_market_open() -> bool:
     now = _ist_now()
+    if now.weekday() >= 5:
+        return False
     now_min = now.hour * 60 + now.minute
     return 9 * 60 + 15 <= now_min <= 15 * 60 + 30
 
@@ -1168,6 +1170,19 @@ class KiteOrderManager:
 
         if symbol not in self._positions or self._positions[symbol].status != "open":
             return OrderResult(False, symbol=symbol, message="No open position found")
+
+        if not _is_market_open():
+            return self._return_logged_result(
+                OrderResult(
+                    False,
+                    symbol=symbol,
+                    side="SELL",
+                    qty=qty,
+                    price=price,
+                    status="SKIPPED",
+                    message="Market is closed",
+                )
+            )
 
         pos = self._positions[symbol]
         sell_qty = qty if qty > 0 else pos.qty
