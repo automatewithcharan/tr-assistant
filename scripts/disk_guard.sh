@@ -32,6 +32,7 @@ DISK_CRITICAL_GB="${TRADE_DISK_CRITICAL_GB:-4}"
 ARCHIVE_PRUNE_DAYS="${TRADE_ARCHIVE_PRUNE_AFTER_SYNC_DAYS:-2}"
 LOG_COMPRESS_MINUTES="${TRADE_LOG_COMPRESS_MINUTES:-180}"
 LOG_DELETE_DAYS="${TRADE_LOG_DELETE_DAYS:-60}"
+CLEANUP_KEEP_DAYS="${TRADE_CLEANUP_KEEP_DAYS:-3}"
 
 send_discord() {
     [ -z "$WEBHOOK" ] && return
@@ -64,7 +65,7 @@ kb_to_gb() {
 }
 
 run_cleanup() {
-    "$PYTHON" scripts/cleanup_results_data.py --apply --keep-days 14 --archive-instead-of-delete >> "$LOG" 2>&1 || true
+    "$PYTHON" scripts/cleanup_results_data.py --apply --keep-days "$CLEANUP_KEEP_DAYS" --archive-instead-of-delete >> "$LOG" 2>&1 || true
 }
 
 sync_archive_bucket() {
@@ -109,6 +110,7 @@ CRIT_KB=$((DISK_CRITICAL_GB * 1024 * 1024))
 FREE_KB=$(free_kb)
 
 compress_old_logs
+run_cleanup
 
 if [ -n "${FREE_KB:-}" ] && [ "$FREE_KB" -le "$WARN_KB" ]; then
     log "Disk guard: low disk detected (free=$(kb_to_gb "$FREE_KB")G), running cleanup"

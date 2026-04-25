@@ -23,7 +23,6 @@ PRESERVE_DIRECTORIES = {
 PRESERVE_PREFIXES = (
     "livetrade_",
     "papertrade_",
-    "signalperf_",
 )
 
 

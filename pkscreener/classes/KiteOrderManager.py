@@ -1427,6 +1427,9 @@ class KiteOrderManager:
         Returns list of OrderResults for executed sells.
         Supports partial sells (e.g. 50% at T1) via qty parameter.
         """
+        if not _is_market_open():
+            return []
+
         signals = self.check_sell_signals(ticks)
         results = []
 
