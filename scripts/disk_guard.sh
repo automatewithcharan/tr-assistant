@@ -92,6 +92,24 @@ sync_compressed_logs() {
     fi
 }
 
+sync_critical_state() {
+    [ -z "$ARCHIVE_BUCKET" ] && return 0
+    shopt -s nullglob
+    local files=(
+        "$RUNTIME_DIR"/kite_orders_log.csv
+        "$RUNTIME_DIR"/kite_tracked_positions.json
+        "$RUNTIME_DIR"/assistant_runtime.db
+        "$RUNTIME_DIR"/autopilot_main_log.csv
+    )
+    shopt -u nullglob
+    [ "${#files[@]}" -eq 0 ] && return 0
+    if command -v gcloud >/dev/null 2>&1; then
+        gcloud storage cp "${files[@]}" "$ARCHIVE_BUCKET/state/" >> "$LOG" 2>&1
+    else
+        gsutil -m cp "${files[@]}" "$ARCHIVE_BUCKET/state/" >> "$LOG" 2>&1
+    fi
+}
+
 compress_old_logs() {
     [ ! -d "$LOGS_DIR" ] && return 0
     find "$LOGS_DIR" -type f -name 'session_*.log' -mmin +"$LOG_COMPRESS_MINUTES" -exec gzip -f {} \; >> "$LOG" 2>&1 || true
@@ -123,7 +141,7 @@ if [ -n "${FREE_KB:-}" ] && [ "$FREE_KB" -le "$CRIT_KB" ]; then
     send_discord_on_state_change "critical" "🚨 **Disk guard critical** — only $(kb_to_gb "$FREE_KB") GB free. Cleanup ran and archive sync may be incomplete."
 else
     log "Disk guard: syncing archive to ${ARCHIVE_BUCKET:-<not-configured>}"
-    if sync_archive_bucket && sync_compressed_logs; then
+    if sync_archive_bucket && sync_compressed_logs && sync_critical_state; then
         prune_synced_archive
         if [ -n "${FREE_KB:-}" ]; then
             send_discord_on_state_change "healthy" "✅ **Disk/archive guard healthy** — archive sync is working and free space is $(kb_to_gb "$FREE_KB") GB."
