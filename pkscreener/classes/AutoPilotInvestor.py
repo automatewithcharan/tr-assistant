@@ -5283,6 +5283,8 @@ class AutoPilotInvestor:
             from datetime import timezone, timedelta
             ist_offset = timezone(timedelta(hours=5, minutes=30))
             now_ist = datetime.now(ist_offset)
+        if now_ist.weekday() >= 5:
+            return False
         open_minutes = self._MARKET_OPEN_HOUR_IST * 60 + self._MARKET_OPEN_MIN_IST
         close_minutes = self._MARKET_CLOSE_HOUR_IST * 60 + self._MARKET_CLOSE_MIN_IST
         now_minutes = now_ist.hour * 60 + now_ist.minute
@@ -5302,6 +5304,8 @@ class AutoPilotInvestor:
             from datetime import timezone, timedelta
             ist_offset = timezone(timedelta(hours=5, minutes=30))
             now_ist = datetime.now(ist_offset)
+        if now_ist.weekday() >= 5:
+            return False
         now_min = now_ist.hour * 60 + now_ist.minute
         return (9 * 60 + 15) <= now_min <= (9 * 60 + 30)
 
@@ -5319,6 +5323,8 @@ class AutoPilotInvestor:
             from datetime import timezone, timedelta
             ist_offset = timezone(timedelta(hours=5, minutes=30))
             now_ist = datetime.now(ist_offset)
+        if now_ist.weekday() >= 5:
+            return False
         now_min = now_ist.hour * 60 + now_ist.minute
         return (9 * 60 + 15) <= now_min < (9 * 60 + 20)
 
@@ -5472,6 +5478,8 @@ class AutoPilotInvestor:
             from datetime import timezone, timedelta
             ist_offset = timezone(timedelta(hours=5, minutes=30))
             now_ist = datetime.now(ist_offset)
+        if now_ist.weekday() >= 5:
+            return False
         now_minutes = now_ist.hour * 60 + now_ist.minute
         close_minutes = self._MARKET_CLOSE_HOUR_IST * 60 + self._MARKET_CLOSE_MIN_IST
         post_market_end = 18 * 60  # 6:00 PM IST
