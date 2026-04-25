@@ -5681,7 +5681,7 @@ class AutoPilotInvestor:
         _late_swing_end_min = 14 * 60 + 15
         _late_swing_window = _late_swing_start_min < now_min <= _late_swing_end_min
         _opening_starter_window = _swing_start_min <= now_min <= 10 * 60 + 0
-        _early_engine_end_min = _env_time_min("ASSISTANT_EARLY_ENGINE_END", 13 * 60 + 30)
+        _early_engine_end_min = _env_time_min("ASSISTANT_EARLY_ENGINE_END", 11 * 60 + 30)
 
         if (
             cls._is_true_buy_action(getattr(c, "original_action", ""))
@@ -5689,10 +5689,10 @@ class AutoPilotInvestor:
             and c.price >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_PRICE", 20.0)
             and _env_float("ASSISTANT_EARLY_ENGINE_MIN_CHANGE", 1.0) <= c.change_pct <= _env_float("ASSISTANT_EARLY_ENGINE_MAX_CHANGE", 4.5)
             and rr2 >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_RR", 1.5)
-            and gap_pct <= _env_float("ASSISTANT_EARLY_ENGINE_MAX_GAP", 1.2)
+            and gap_pct <= _env_float("ASSISTANT_EARLY_ENGINE_MAX_GAP", 0.5)
             and c.blind_score >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_SCORE", 50.0)
             and c.confidence >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_CONFIDENCE", 20.0)
-            and c.volume_ratio >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_VOL_RATIO", 1.0)
+            and c.volume_ratio >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_VOL_RATIO", 3.0)
             and not ("bearish" in str(getattr(c, "reasons", "") or "").lower())
         ):
             return True, "eligible now as an early-engine auto-buy"
@@ -5912,9 +5912,9 @@ class AutoPilotInvestor:
             and _env_float("ASSISTANT_EARLY_ENGINE_MIN_CHANGE", 1.0) <= c.change_pct <= _env_float("ASSISTANT_EARLY_ENGINE_MAX_CHANGE", 4.5)
             and c.blind_score >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_SCORE", 50.0)
             and c.confidence >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_CONFIDENCE", 20.0)
-            and c.volume_ratio >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_VOL_RATIO", 1.0)
+            and c.volume_ratio >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_VOL_RATIO", 3.0)
             and rr2 >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_RR", 1.5)
-            and gap_pct <= _env_float("ASSISTANT_EARLY_ENGINE_MAX_GAP", 1.2)
+            and gap_pct <= _env_float("ASSISTANT_EARLY_ENGINE_MAX_GAP", 0.5)
         ):
             return ("intraday", "MIS", 1, "Early engine: Buy Now while move is still controlled")
 
