@@ -32,10 +32,11 @@ from pkscreener.classes.SignalPerformanceTracker import SignalPerformanceTracker
 class SignalMonitorRunner:
     """Continuously monitor a universe and alert on fresh Buy Now / Sell Now changes."""
 
-    FULL_REFRESH_EVERY_CYCLES = 50
+    FULL_REFRESH_EVERY_CYCLES = int(os.environ.get("SIGNALMONITOR_FULL_REFRESH_EVERY_CYCLES", "200") or 200)
     MEANINGFUL_PRICE_MOVE_PCT = 0.5   # Tick-to-tick price move threshold (lowered for faster pick-up)
     TRIGGER_PROXIMITY_PCT = 1.0
-    STREAM_BOOTSTRAP_MAX_SYMBOLS = 600
+    STREAM_BOOTSTRAP_MAX_SYMBOLS = int(os.environ.get("SIGNALMONITOR_STREAM_BOOTSTRAP_MAX_SYMBOLS", "75") or 75)
+    MAX_CHANGED_SYMBOLS_PER_CYCLE = int(os.environ.get("SIGNALMONITOR_MAX_CHANGED_PER_CYCLE", "75") or 75)
     HIGH_DAILY_CHANGE_PCT = 2.0        # Force full OHLCV rescan when live daily change exceeds this
     ORDER_BOOK_IMBALANCE_RATIO = 2.5   # Pre-jump: buyers/sellers ratio threshold
     VOLUME_BURST_FRACTION = 0.025      # Pre-jump: 2.5% of accumulated day vol traded in last 60s
@@ -226,6 +227,8 @@ class SignalMonitorRunner:
                 summary_df,
             )
             self._print_summary(summary_df, previous_simple_df, pd.DataFrame(columns=self.ALERT_COLUMNS), scorecard_df)
+            self._close_paper_trades_if_eod()
+            self._cycle_number += 1
             return pd.DataFrame(), previous_simple_df, pd.DataFrame(columns=self.ALERT_COLUMNS), summary_df
 
         label = (
@@ -367,6 +370,10 @@ class SignalMonitorRunner:
         current_ticks = self.actionable_runner.live_ticks or {}
         if not current_ticks:
             return symbols
+        current_tick_snapshot = {
+            str(symbol).strip().upper(): tick
+            for symbol, tick in current_ticks.items()
+        }
         if self._cycle_number <= 0:
             if self.streaming_mode:
                 bootstrap_symbols = self._bootstrap_symbols_for_first_cycle(
@@ -375,18 +382,17 @@ class SignalMonitorRunner:
                     previous_simple_df,
                 )
                 if bootstrap_symbols:
+                    self._previous_live_ticks_by_symbol = current_tick_snapshot
                     return bootstrap_symbols
-            return symbols
+            self._previous_live_ticks_by_symbol = current_tick_snapshot
+            return self._sort_symbols_by_change(symbols, current_ticks)[: self.STREAM_BOOTSTRAP_MAX_SYMBOLS]
 
         previous_ticks = self._previous_live_ticks_by_symbol
-        self._previous_live_ticks_by_symbol = {
-            str(symbol).strip().upper(): tick
-            for symbol, tick in current_ticks.items()
-        }
+        self._previous_live_ticks_by_symbol = current_tick_snapshot
         if not previous_ticks:
-            return self._sort_symbols_by_change(symbols, current_ticks)
+            return self._sort_symbols_by_change(symbols, current_ticks)[: self.STREAM_BOOTSTRAP_MAX_SYMBOLS]
         if self._cycle_number % self.FULL_REFRESH_EVERY_CYCLES == 0:
-            return self._sort_symbols_by_change(symbols, current_ticks)
+            return self._sort_symbols_by_change(symbols, current_ticks)[: self.MAX_CHANGED_SYMBOLS_PER_CYCLE]
 
         previous_simple_map = self._simple_row_map(previous_simple_df)
         changed_symbols: List[Tuple[float, str]] = []
@@ -433,7 +439,7 @@ class SignalMonitorRunner:
         # Process highest-priority symbols first so that if the cycle is long,
         # the most impactful stocks (big movers / strong order-book imbalance) are done first.
         changed_symbols.sort(key=lambda item: -item[0])
-        return [sym for _, sym in changed_symbols] or symbols
+        return [sym for _, sym in changed_symbols[: self.MAX_CHANGED_SYMBOLS_PER_CYCLE]]
 
     def _bootstrap_symbols_for_first_cycle(
         self,

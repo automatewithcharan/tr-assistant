@@ -90,13 +90,19 @@ class SignalPerformanceTracker:
         self.run_at_str = self.run_at.strftime("%Y-%m-%d %H:%M:%S")
         self.history_provider = KiteHistoricalDataProvider()
         self.live_ticks = load_latest_live_ticks(self.universe) if self.use_live_kite else {}
+        self.live_max_update_rows = max(0, int(os.environ.get("SIGNALPERF_LIVE_MAX_UPDATE_ROWS", "50") or 50))
 
     def register_and_update(self, alerts_df: Optional[pd.DataFrame] = None) -> tuple[pd.DataFrame, pd.DataFrame]:
         """Register fresh alerts, update outcomes, and save the scorecard."""
         ledger_df = self._load_ledger()
+        had_alerts = alerts_df is not None and not alerts_df.empty
         if alerts_df is not None and not alerts_df.empty:
             ledger_df = self._register_alerts(ledger_df, alerts_df)
-        ledger_df = self._update_outcomes(ledger_df)
+        # Live monitor cycles must stay fast. Full ledger evaluation is handled by
+        # daily truth/reporting; during live scans we only refresh a recent slice.
+        if not self.use_live_kite or had_alerts:
+            max_rows = self.live_max_update_rows if self.use_live_kite else None
+            ledger_df = self._update_outcomes(ledger_df, max_rows=max_rows)
         scorecard_df = self._build_scorecard(ledger_df)
         self._save_outputs(ledger_df, scorecard_df)
         return ledger_df, scorecard_df
@@ -183,7 +189,7 @@ class SignalPerformanceTracker:
             return new_df
         return pd.concat([ledger_df, new_df], ignore_index=True)
 
-    def _update_outcomes(self, ledger_df: pd.DataFrame) -> pd.DataFrame:
+    def _update_outcomes(self, ledger_df: pd.DataFrame, max_rows: Optional[int] = None) -> pd.DataFrame:
         """Update returns and outcome flags using official historical candles."""
         if ledger_df is None or ledger_df.empty:
             return pd.DataFrame(columns=self.LEDGER_COLUMNS)
@@ -192,17 +198,24 @@ class SignalPerformanceTracker:
         for column in ["StopHit", "Target1Hit", "Target2Hit"]:
             ledger_df[column] = ledger_df[column].fillna(False).astype(bool)
 
+        update_df = ledger_df
+        if max_rows is not None and max_rows > 0 and len(update_df) > max_rows:
+            sortable = update_df.copy()
+            sortable["_AlertTimeParsed"] = pd.to_datetime(sortable["AlertTime"], errors="coerce")
+            update_df = sortable.sort_values("_AlertTimeParsed", ascending=False).head(max_rows).drop(columns=["_AlertTimeParsed"])
+        update_indexes = list(update_df.index)
+
         symbols = sorted(
             {
                 str(symbol).strip().upper()
-                for symbol in ledger_df["Symbol"].tolist()
+                for symbol in update_df["Symbol"].tolist()
                 if str(symbol).strip()
             }
         )
         history_map: Dict[str, Optional[pd.DataFrame]] = {}
 
         for symbol in symbols:
-            symbol_rows = ledger_df[ledger_df["Symbol"].astype(str).str.upper() == symbol].copy()
+            symbol_rows = update_df[update_df["Symbol"].astype(str).str.upper() == symbol].copy()
             if symbol_rows.empty:
                 continue
             alert_times = pd.to_datetime(symbol_rows["AlertTime"], errors="coerce").dropna()
@@ -218,7 +231,7 @@ class SignalPerformanceTracker:
                 to_date=to_date,
             )
 
-        for index in ledger_df.index:
+        for index in update_indexes:
             try:
                 ledger_df.loc[index] = self._update_one_row(ledger_df.loc[index], history_map)
             except Exception as exc:
