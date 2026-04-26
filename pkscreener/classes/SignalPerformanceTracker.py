@@ -228,6 +228,7 @@ class SignalPerformanceTracker:
 
     def _update_one_row(self, row: pd.Series, history_map: Dict[str, Optional[pd.DataFrame]]) -> pd.Series:
         """Update a single ledger row from historical candles."""
+        row = row.copy()
         symbol = str(row.get("Symbol", "")).strip().upper()
         direction = int(self._to_float(row.get("Direction"), 0.0))
         entry_price = self._to_float(row.get("EntryPrice"))

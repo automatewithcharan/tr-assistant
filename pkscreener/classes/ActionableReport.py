@@ -73,7 +73,7 @@ class ActionableReportRunner:
         risk_percent: float = 1.0,
         min_trade_value: float = 10000000.0,
         min_volume_ratio: float = 1.0,
-        max_workers: int = 0,  # 0 = auto (min(8, cpu_count))
+        max_workers: int = 0,  # 0 = auto, tunable through ACTIONABLE_MAX_WORKERS
         use_live_kite: bool = False,
         strong_buy_only: bool = False,
     ):
@@ -85,7 +85,9 @@ class ActionableReportRunner:
         self.risk_percent = float(risk_percent)
         self.min_trade_value = float(min_trade_value)
         self.min_volume_ratio = float(min_volume_ratio)
-        self.max_workers = max(1, int(max_workers or 0)) if max_workers else min(8, max(1, (os.cpu_count() or 2)))
+        auto_worker_cap = int(os.environ.get("ACTIONABLE_MAX_WORKERS", "16") or 16)
+        auto_workers = min(max(1, auto_worker_cap), max(4, (os.cpu_count() or 2) * 2))
+        self.max_workers = max(1, int(max_workers or 0)) if max_workers else auto_workers
         self.use_live_kite = bool(use_live_kite)
         self.strong_buy_only = bool(strong_buy_only)
         self.buy_ready_max_gap_pct = 0.50

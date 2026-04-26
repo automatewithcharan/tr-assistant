@@ -24,6 +24,7 @@ from PKDevTools.classes.log import default_logger
 
 from pkscreener.classes.ActionableReport import ActionableReportRunner
 from pkscreener.classes.AnomalyDetector import VolumeAnomalyDetector
+from pkscreener.classes.PaperTradeTracker import PaperTradeTracker
 from pkscreener.classes.RiskGuardrails import LiveTradingGuardrails
 from pkscreener.classes.SignalPerformanceTracker import SignalPerformanceTracker
 
@@ -54,6 +55,10 @@ class SignalMonitorRunner:
         "WatchForSellCount",
         "HoldCount",
         "FreshAlertsThisRun",
+        "CycleScannedSymbols",
+        "CycleSeconds",
+        "SymbolsPerSecond",
+        "CycleLagWarning",
         "LastRunAt",
     ]
 
@@ -162,11 +167,14 @@ class SignalMonitorRunner:
         self._anomaly_profiles_loaded = False
         self._market_context = None  # Lazy-init MarketContextEngine
         self._last_partial_save_ts = 0.0
+        self._paper_tracker = PaperTradeTracker()
+        self._paper_closed_date: Optional[str] = None
 
     def run(
         self,
     ) -> Tuple[Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[pd.DataFrame], Optional[pd.DataFrame]]:
         """Run one monitor cycle and persist the current outputs."""
+        cycle_started = time.time()
         self.run_at = PKDateUtilities.currentDateTime()
         self.run_at_str = self.run_at.strftime("%Y-%m-%d %H:%M:%S")
         self.timestamp = self.run_at.strftime("%Y%m%d_%H%M%S")
@@ -207,6 +215,7 @@ class SignalMonitorRunner:
                 f"  [+] No changed symbols detected for {self.universe}. Reusing the last live board."
             )
             summary_df = self._build_summary_from_simple(previous_simple_df, total, 0)
+            summary_df = self._annotate_summary_timing(summary_df, cycle_started, 0)
             _, scorecard_df = self.performance_tracker.register_and_update()
             self._save_outputs(
                 pd.DataFrame(),
@@ -273,7 +282,10 @@ class SignalMonitorRunner:
         followthrough_alerts = self._check_followthrough_and_exits()
         # V2: End-of-day missed opportunity analysis
         self._run_missed_opportunity_analysis()
+        self._paper_track_alerts(alerts_df)
+        self._close_paper_trades_if_eod()
         summary_df = self._build_summary_from_simple(merged_simple_df, total, len(alerts_df))
+        summary_df = self._annotate_summary_timing(summary_df, cycle_started, cycle_total)
         _, scorecard_df = self.performance_tracker.register_and_update(alerts_df)
 
         self._save_outputs(report_df, actionable_df, merged_simple_df, merged_state_df, alerts_df, summary_df)
@@ -822,11 +834,34 @@ class SignalMonitorRunner:
                     "WatchForSellCount": int(what_to_do_counts.get("Watch for Sell", 0)),
                     "HoldCount": int(what_to_do_counts.get("Hold / Do Nothing", 0)),
                     "FreshAlertsThisRun": int(alert_count),
+                    "CycleScannedSymbols": 0,
+                    "CycleSeconds": 0.0,
+                    "SymbolsPerSecond": 0.0,
+                    "CycleLagWarning": "",
                     "LastRunAt": self.run_at_str,
                 }
             ],
             columns=self.SUMMARY_COLUMNS,
         )
+
+    def _annotate_summary_timing(self, summary_df: pd.DataFrame, cycle_started: float, cycle_scanned_symbols: int) -> pd.DataFrame:
+        """Add speed diagnostics so we can see if slow cycles are costing entries."""
+        if summary_df is None or summary_df.empty:
+            return summary_df
+        elapsed = max(0.001, time.time() - cycle_started)
+        scanned = max(0, int(cycle_scanned_symbols or 0))
+        symbols_per_second = scanned / elapsed if scanned > 0 else 0.0
+        warning = ""
+        if scanned >= 500 and elapsed > 90:
+            warning = "slow_cycle_gt_90s"
+        elif scanned >= 100 and elapsed > 45:
+            warning = "slow_cycle_gt_45s"
+        summary_df = summary_df.copy()
+        summary_df["CycleScannedSymbols"] = scanned
+        summary_df["CycleSeconds"] = round(elapsed, 2)
+        summary_df["SymbolsPerSecond"] = round(symbols_per_second, 2)
+        summary_df["CycleLagWarning"] = warning
+        return summary_df[self.SUMMARY_COLUMNS].copy()
 
     def _build_state(self, simple_df: pd.DataFrame) -> pd.DataFrame:
         """Build a compact state table used for change detection."""
@@ -1429,8 +1464,15 @@ class SignalMonitorRunner:
             f"Buy Now {summary.get('BuyNowCount', 0)} | "
             f"Momentum Buy {summary.get('MomentumBuyCount', 0)} | "
             f"Sell Now {summary.get('SellNowCount', 0)} | "
-            f"Fresh alerts {summary.get('FreshAlertsThisRun', 0)}"
+            f"Fresh alerts {summary.get('FreshAlertsThisRun', 0)} | "
+            f"Cycle {float(summary.get('CycleSeconds', 0.0) or 0.0):.1f}s "
+            f"({float(summary.get('SymbolsPerSecond', 0.0) or 0.0):.1f}/s)"
         )
+        if str(summary.get("CycleLagWarning", "") or "").strip():
+            OutputControls().printOutput(
+                f"  [!] Monitor speed warning: {summary.get('CycleLagWarning')} — "
+                "increase workers/prewarm or reduce universe if this repeats."
+            )
 
         if alerts_df is not None and not alerts_df.empty:
             OutputControls().printOutput("  [+] Fresh monitor alerts:")
@@ -1488,6 +1530,116 @@ class SignalMonitorRunner:
             inplace=True,
         )
         return momentum_df.head(50).copy()
+
+    def _paper_track_alerts(self, alerts_df: pd.DataFrame) -> None:
+        """Paper-track every live buy-style alert so we can prove signal quality safely."""
+        if alerts_df is None or alerts_df.empty:
+            return
+        if not self._is_regular_market_hours():
+            return
+
+        tracked = 0
+        for _, row in alerts_df.iterrows():
+            action = str(row.get("NowAction", "") or "")
+            action_lower = action.lower()
+            is_buy_style = (
+                action in {"Strong Buy Now", "Buy Now", "Momentum Buy"}
+                or "anomaly" in action_lower
+                or "runner" in action_lower
+                or "pre-move" in action_lower
+            )
+            if not is_buy_style:
+                continue
+
+            symbol = str(row.get("Symbol", "") or "").strip().upper()
+            price = self._to_float(row.get("PriceNow"))
+            if not symbol or price <= 0:
+                continue
+
+            score = self._to_float(row.get("SignalStrengthPct"))
+            qty = self._safe_int(row.get("SuggestedQty"))
+            source = self._paper_source_for_action(action)
+            grade = self._paper_grade_for_action(action)
+            volume_ratio = self._extract_volume_ratio(row.get("Checks"))
+            self._paper_tracker.log_entry(
+                symbol=symbol,
+                price=price,
+                score=score,
+                grade=grade,
+                volume_ratio=volume_ratio,
+                change_at_entry=0.0,
+                stop_loss=self._to_float(row.get("SellIfBelow")),
+                target1=self._to_float(row.get("TakeProfit1")),
+                target2=self._to_float(row.get("TakeProfit2")),
+                suggested_qty=qty,
+                source=source,
+            )
+            tracked += 1
+
+        if tracked:
+            OutputControls().printOutput(f"  [+] Paper-tracked {tracked} live alert(s) for truth validation.")
+
+    def _close_paper_trades_if_eod(self) -> None:
+        """Close monitor paper trades near EOD using the latest Kite tick snapshot."""
+        try:
+            now_ist = PKDateUtilities.currentDateTime()
+        except Exception:
+            now_ist = datetime.now()
+        today = now_ist.strftime("%Y-%m-%d")
+        minute_of_day = int(now_ist.hour) * 60 + int(now_ist.minute)
+        if minute_of_day < (15 * 60 + 10) or self._paper_closed_date == today:
+            return
+        ticks = self.actionable_runner.live_ticks or {}
+        summary = self._paper_tracker.close_day(ticks)
+        self._paper_closed_date = today
+        if summary:
+            OutputControls().printOutput(summary, enableMultipleLineOutput=True)
+
+    @staticmethod
+    def _safe_int(value) -> int:
+        try:
+            if value is None or pd.isna(value):
+                return 0
+            text = str(value).strip()
+            if not text or text.lower() == "nan":
+                return 0
+            return int(float(text))
+        except Exception:
+            return 0
+
+    @staticmethod
+    def _paper_source_for_action(action: str) -> str:
+        action_lower = str(action or "").lower()
+        if "anomaly" in action_lower or "runner" in action_lower or "pre-move" in action_lower:
+            return "signal_monitor_anomaly"
+        if "momentum" in action_lower:
+            return "signal_monitor_momentum"
+        return "signal_monitor_buy"
+
+    @staticmethod
+    def _paper_grade_for_action(action: str) -> str:
+        action_lower = str(action or "").lower()
+        if "grade-a" in action_lower or "strong" in action_lower:
+            return "A"
+        if "grade-b" in action_lower or "buy now" in action_lower:
+            return "B"
+        if "momentum" in action_lower:
+            return "MOM"
+        return "C"
+
+    @staticmethod
+    def _extract_volume_ratio(checks) -> float:
+        import re
+
+        text = str(checks or "")
+        for pattern in (r"Vol\s+([0-9]+(?:\.[0-9]+)?)x", r"volume\s+([0-9]+(?:\.[0-9]+)?)x"):
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if match:
+                try:
+                    return float(match.group(1))
+                except Exception:
+                    return 0.0
+        return 0.0
 
     def _send_alerts(self, alerts_df: pd.DataFrame, summary_df: pd.DataFrame) -> None:
         """Send desktop / Telegram / Discord alerts for fresh Buy Now / Sell Now changes."""

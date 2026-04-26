@@ -55,6 +55,18 @@ os.environ.setdefault("SUBSCRIPTION_ENABLED", "0")
 import multiprocessing
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
+
+def _auto_worker_count(env_name: str, default_cap: int = 16) -> int:
+    """Pick a safe I/O-heavy scanner worker count without hard-capping at 3/8."""
+    try:
+        configured = int(os.environ.get(env_name, "0") or 0)
+        if configured > 0:
+            return max(1, configured)
+    except Exception:
+        pass
+    cpu_count = os.cpu_count() or 2
+    return max(4, min(default_cap, cpu_count * 2))
+
 # try:
 #     logging.getLogger("tensorflow").setLevel(logging.ERROR)
 # except Exception:
@@ -2015,7 +2027,11 @@ def pkscreenercli():
                         if args.assistantminvolratio is not None
                         else (tuned_profile.get("min_volume_ratio") if tuned_profile is not None else 1.0)
                     ),
-                    max_workers=(args.assistantworkers if args.assistantworkers is not None else 8),
+                    max_workers=(
+                        args.assistantworkers
+                        if args.assistantworkers is not None
+                        else _auto_worker_count("ASSISTANT_WORKERS", 16)
+                    ),
                     signal_interval=(args.assistantinterval if args.assistantinterval is not None else 30),
                     signal_limit=(args.assistantlimit if args.assistantlimit is not None else 0),
                     alert_channels=str(args.assistantalerts or "discord").strip().lower(),
@@ -2504,7 +2520,7 @@ def pkscreenercli():
             signalmonitor_workers = (
                 args.signalmonitorworkers
                 if args.signalmonitorworkers is not None
-                else 3
+                else _auto_worker_count("SIGNALMONITOR_WORKERS", 16)
             )
             signalmonitor_alerts = str(args.signalmonitoralerts or "none").strip().lower()
             signalmonitor_interval = (
@@ -2859,7 +2875,7 @@ def pkscreenercli():
                 max_workers=(
                     args.autopilotworkers
                     if args.autopilotworkers is not None
-                    else 3
+                    else _auto_worker_count("AUTOPILOT_WORKERS", 16)
                 ),
                 max_daily_loss_amount=(
                     args.autopilotmaxdailyloss
