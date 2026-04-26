@@ -6114,14 +6114,22 @@ class AutoPilotInvestor:
         self._send_to_channels(message)
 
         # Auto-buy A+/A grade candidates while broker funds and risk controls allow.
-        if not is_post_market and self._order_manager is not None:
+        # Log every main pick, not just bought names, so the post-market truth
+        # report can explain exactly why a good-looking alert was not bought.
+        if not is_post_market:
             _auto_lines = []
             auto_sent = 0
             for c, grade, _, _ in main_picks:
-                if self._AUTO_BUY_TOP_N > 0 and auto_sent >= self._AUTO_BUY_TOP_N:
-                    break
+                auto_result = ""
                 auto_eligible = self._eligible_for_live_auto_buy(c, grade)
-                if auto_eligible:
+                capped_by_alert_limit = auto_eligible and self._AUTO_BUY_TOP_N > 0 and auto_sent >= self._AUTO_BUY_TOP_N
+                if capped_by_alert_limit:
+                    auto_result = (
+                        f"⚠️ Auto-buy skipped for `{c.symbol}`: live alert-side auto-buy cap "
+                        f"{self._AUTO_BUY_TOP_N} reached"
+                    )
+                    self._log(f"Batch auto-buy cap skip {c.symbol}: cap={self._AUTO_BUY_TOP_N}")
+                elif auto_eligible:
                     _ar = self._try_auto_buy(
                         c.symbol, c.price, c.stop_loss, c.target1, c.target2,
                         c.blind_score, c.reasons,
@@ -6129,18 +6137,38 @@ class AutoPilotInvestor:
                         holding_horizon=c.holding_horizon,
                         max_hold_days=c.max_hold_days,
                     )
-                    self._log(f"Batch auto-buy result {c.symbol}: {_ar}")
-                    if _ar:
-                        _auto_lines.append(_ar)
+                    auto_result = _ar or ""
+                    self._log(f"Batch auto-buy result {c.symbol}: {auto_result}")
                     auto_sent += 1
                 else:
+                    gate_reason = self._live_auto_buy_gate_detail(c, grade)[1]
+                    auto_result = f"⚠️ Auto-buy skipped for `{c.symbol}`: {gate_reason}"
                     self._log(
                         f"Batch auto-buy skip {c.symbol}: grade={grade}, score={c.blind_score:.0f}, "
                         f"conf={c.confidence:.0f}%, rr={self._candidate_rr2(c):.1f}, "
-                        f"vol={c.volume_ratio:.1f}x"
+                        f"vol={c.volume_ratio:.1f}x, reason={gate_reason}"
                     )
+                if auto_result:
+                    _auto_lines.append(auto_result)
+                self._log_engine_confirmed_buy_candidate(
+                    symbol=c.symbol,
+                    action=str(getattr(c, "original_action", "") or "Buy"),
+                    live_price=c.price,
+                    stop_loss=c.stop_loss,
+                    target1=c.target1,
+                    target2=c.target2,
+                    blind_score=c.blind_score,
+                    confidence=c.confidence,
+                    volume_ratio=c.volume_ratio,
+                    daily_change=c.change_pct,
+                    rr2=self._candidate_rr2(c),
+                    grade=grade,
+                    rank_score=self._candidate_rank(c),
+                    auto_eligible=auto_eligible,
+                    auto_result=auto_result,
+                )
             if _auto_lines:
-                self._send_to_channels("\n".join(_auto_lines))
+                self._send_to_channels("**🤖 Auto-buy results**\n" + "\n".join(_auto_lines))
 
         # Send overflow as a separate watchlist message
         if overflow_picks:
@@ -6511,7 +6539,7 @@ class AutoPilotInvestor:
         auto_eligible: bool,
         auto_result: Optional[str],
     ) -> None:
-        """Persist clean engine-confirmed buy candidates for later model training."""
+        """Persist buy candidate auto-buy decisions for truth reports and training."""
         log_path = os.path.join(
             self.output_dir,
             f"engine_confirmed_buys_{self.config.account_name}.csv",
@@ -6550,6 +6578,34 @@ class AutoPilotInvestor:
         text = str(outcome or "").strip()
         lower = text.lower()
         if not auto_eligible:
+            if "auto-buy cap" in lower or "alert-side auto-buy cap" in lower:
+                return "SKIPPED", "auto_buy_cap"
+            if "paused after 1:30" in lower:
+                return "INELIGIBLE", "swing_window_closed"
+            if "starts at 9:20" in lower:
+                return "INELIGIBLE", "before_swing_window"
+            if "intraday auto-buy is only allowed" in lower:
+                return "INELIGIBLE", "intraday_window_closed"
+            if "entry is already stretched" in lower:
+                return "INELIGIBLE", "entry_stretched"
+            if "below trigger" in lower or "within 0.6% of trigger" in lower:
+                return "INELIGIBLE", "entry_not_tight"
+            if "r:r" in lower:
+                return "INELIGIBLE", "rr_below_floor"
+            if "volume" in lower:
+                return "INELIGIBLE", "volume_below_floor"
+            if "confidence" in lower:
+                return "INELIGIBLE", "confidence_below_floor"
+            if "score" in lower:
+                return "INELIGIBLE", "score_below_floor"
+            if "day move" in lower:
+                return "INELIGIBLE", "day_move_outside_zone"
+            if "price is below" in lower:
+                return "INELIGIBLE", "price_below_floor"
+            if "grade" in lower:
+                return "INELIGIBLE", "grade_below_floor"
+            if "horizon model" in lower or "alert-quality only" in lower:
+                return "INELIGIBLE", "horizon_avoid"
             return "INELIGIBLE", "setup_not_tight"
         if not text:
             return "NO_ACTION", ""
@@ -6561,6 +6617,8 @@ class AutoPilotInvestor:
             return "ERROR", "order_manager_unavailable"
         if "disabled" in lower:
             return "SKIPPED", "auto_trade_disabled"
+        if "auto-buy cap" in lower or "alert-side auto-buy cap" in lower:
+            return "SKIPPED", "auto_buy_cap"
         if "starter position exceeds limit" in lower:
             return "SKIPPED", "position_too_large"
         if "already" in lower and "holding" in lower:
