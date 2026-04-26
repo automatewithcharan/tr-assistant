@@ -387,6 +387,31 @@ class ArgumentParser:
             required=False,
         )
         parser.add_argument(
+            "--dailytruth",
+            nargs="?",
+            const="today",
+            help="Build the daily truth report for alerts, orders, costs, and benchmark comparison",
+            required=False,
+        )
+        parser.add_argument(
+            "--dailytruthuniverse",
+            default="allstocks",
+            help="Signal-performance universe to use for the daily truth report (default: allstocks)",
+            required=False,
+        )
+        parser.add_argument(
+            "--dailytruthaccount",
+            default="main",
+            help="Live account name used for engine-confirmed buy and Kite order logs (default: main)",
+            required=False,
+        )
+        parser.add_argument(
+            "--dailytruthfetchbenchmarks",
+            action="store_true",
+            help="Fetch missing benchmark history from Kite instead of using only cached benchmark data",
+            required=False,
+        )
+        parser.add_argument(
             "--signalvalidate",
             nargs="?",
             const="nifty50",
@@ -2612,6 +2637,41 @@ def pkscreenercli():
             else:
                 OutputControls().printOutput(
                     "  [+] No signal alerts are stored yet, so the scorecard is still empty."
+                )
+            sys.exit(0)
+
+        if args.dailytruth is not None:
+            from pkscreener.classes.DailyTruthReport import DailyTruthReport
+
+            truth_date = None if str(args.dailytruth or "").lower() == "today" else str(args.dailytruth)
+            report = DailyTruthReport(
+                report_date=truth_date,
+                universe=str(args.dailytruthuniverse or "allstocks"),
+                account_name=str(args.dailytruthaccount or "main"),
+                fetch_benchmarks=bool(args.dailytruthfetchbenchmarks),
+            )
+            detail_df, summary_df, benchmarks_df, paths = report.build()
+            OutputControls().printOutput(
+                colorText.GREEN
+                + "  [+] Daily truth report generated."
+                + colorText.END
+            )
+            OutputControls().printOutput(f"  [+] Detail: {paths.detail}")
+            OutputControls().printOutput(f"  [+] Summary: {paths.summary}")
+            OutputControls().printOutput(f"  [+] Benchmarks: {paths.benchmarks}")
+            if summary_df is not None and not summary_df.empty:
+                OutputControls().printOutput(
+                    summary_df.to_string(index=False),
+                    enableMultipleLineOutput=True,
+                )
+            if benchmarks_df is not None and not benchmarks_df.empty:
+                OutputControls().printOutput(
+                    benchmarks_df.to_string(index=False),
+                    enableMultipleLineOutput=True,
+                )
+            if detail_df is None or detail_df.empty:
+                OutputControls().printOutput(
+                    "  [+] No alert rows found for this date yet. Run --signalscorecard for the universe first if needed."
                 )
             sys.exit(0)
 
