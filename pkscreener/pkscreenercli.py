@@ -2024,11 +2024,27 @@ def pkscreenercli():
                     prewarm=bool(args.assistantprewarm),
                     prewarm_workers=(args.assistantprewarmworkers if args.assistantprewarmworkers is not None else 4),
                     strong_buy_only=bool(args.assistantstrongbuyonly),
-                    max_daily_loss_amount=(args.assistantmaxdailyloss if args.assistantmaxdailyloss is not None else 0.0),
+                    max_daily_loss_amount=(
+                        args.assistantmaxdailyloss
+                        if args.assistantmaxdailyloss is not None
+                        else float(
+                            os.environ.get(
+                                "ASSISTANT_MAX_DAILY_LOSS",
+                                os.environ.get("AUTOPILOT_MAX_DAILY_LOSS", "0"),
+                            )
+                            or 0
+                        )
+                    ),
                     max_consecutive_losses=(
                         args.assistantmaxconsecutivelosses
                         if args.assistantmaxconsecutivelosses is not None
-                        else 0
+                        else int(
+                            os.environ.get(
+                                "ASSISTANT_MAX_CONSECUTIVE_LOSSES",
+                                os.environ.get("AUTOPILOT_MAX_CONSECUTIVE_LOSSES", "0"),
+                            )
+                            or 0
+                        )
                     ),
                     autopilot_enabled=bool(getattr(args, 'assistantautopilot', False)),
                     autopilot_interval=(
@@ -2659,6 +2675,7 @@ def pkscreenercli():
             OutputControls().printOutput(f"  [+] Detail: {paths.detail}")
             OutputControls().printOutput(f"  [+] Summary: {paths.summary}")
             OutputControls().printOutput(f"  [+] Benchmarks: {paths.benchmarks}")
+            OutputControls().printOutput(f"  [+] Dashboard: {paths.dashboard}")
             if summary_df is not None and not summary_df.empty:
                 OutputControls().printOutput(
                     summary_df.to_string(index=False),
@@ -2847,12 +2864,24 @@ def pkscreenercli():
                 max_daily_loss_amount=(
                     args.autopilotmaxdailyloss
                     if args.autopilotmaxdailyloss is not None
-                    else float(os.environ.get("AUTOPILOT_MAX_DAILY_LOSS", "0") or 0)
+                    else float(
+                        os.environ.get(
+                            "AUTOPILOT_MAX_DAILY_LOSS",
+                            os.environ.get("ASSISTANT_MAX_DAILY_LOSS", "0"),
+                        )
+                        or 0
+                    )
                 ),
                 max_consecutive_losses=(
                     args.autopilotmaxconsecutivelosses
                     if args.autopilotmaxconsecutivelosses is not None
-                    else int(os.environ.get("AUTOPILOT_MAX_CONSECUTIVE_LOSSES", "0") or 0)
+                    else int(
+                        os.environ.get(
+                            "AUTOPILOT_MAX_CONSECUTIVE_LOSSES",
+                            os.environ.get("ASSISTANT_MAX_CONSECUTIVE_LOSSES", "0"),
+                        )
+                        or 0
+                    )
                 ),
                 alert_channels=str(args.autopilotalerts or "discord").strip().lower(),
                 cycle_interval_sec=(

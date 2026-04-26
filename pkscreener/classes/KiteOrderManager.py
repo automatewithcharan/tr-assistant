@@ -43,6 +43,13 @@ def _secret_truthy(name: str, default: bool = False) -> bool:
     return str(raw).strip().lower() in {"1", "true", "yes", "y", "on"}
 
 
+def _secret_float(name: str, default: float = 0.0) -> float:
+    try:
+        return float(_get_secret(name, str(default)) or default)
+    except Exception:
+        return float(default)
+
+
 def _ist_now() -> datetime:
     try:
         import pytz
@@ -269,6 +276,8 @@ class KiteOrderManager:
             _get_secret("KITE_INTRADAY_MAX_OPEN_POSITIONS", str(self.max_open_positions)) or self.max_open_positions
         )
         self.time_sliced_capital = _secret_truthy("KITE_TIME_SLICED_CAPITAL", True)
+        self.order_fill_wait_seconds = max(0.0, _secret_float("KITE_ORDER_FILL_WAIT_SEC", 4.0))
+        self.cancel_unfilled_limit_orders = _secret_truthy("KITE_CANCEL_UNFILLED_LIMIT", True)
         self.trailing_stop_pct = float(_get_secret("KITE_TRAILING_STOP_PCT", "3.0"))
         self.trailing_trail_pct = float(_get_secret("KITE_TRAILING_STOP_TRAIL", "1.0"))
         self.max_hold_days = int(_get_secret("KITE_MAX_HOLD_DAYS", "5"))
@@ -386,6 +395,51 @@ class KiteOrderManager:
         """Log and return a non-position-mutating order result."""
         self._log_order(result)
         return result
+
+    def _order_status_from_history(self, order_id: str, history: Any) -> Dict[str, Any]:
+        """Normalize Kite order history into the fields we need for truth logs."""
+        latest = history[-1] if isinstance(history, list) and history else {}
+        filled_qty = int(latest.get("filled_quantity", 0) or 0)
+        avg_price = float(latest.get("average_price", 0) or 0)
+        status = str(latest.get("status", "UNKNOWN") or "UNKNOWN").upper()
+        message = str(
+            latest.get("status_message")
+            or latest.get("status_message_raw")
+            or latest.get("order_status")
+            or ""
+        ).strip()
+        return {
+            "order_id": str(order_id or ""),
+            "status": status,
+            "filled_qty": filled_qty,
+            "avg_price": avg_price,
+            "pending_qty": int(latest.get("pending_quantity", 0) or 0),
+            "message": message,
+        }
+
+    def _wait_for_order_status(self, client: Any, order_id: str) -> Dict[str, Any]:
+        """Poll Kite briefly so PLACED does not masquerade as FILLED."""
+        deadline = time.time() + self.order_fill_wait_seconds
+        status: Dict[str, Any] = {"order_id": str(order_id or ""), "status": "UNKNOWN"}
+        while True:
+            try:
+                status = self._order_status_from_history(order_id, client.order_history(order_id))
+            except Exception as exc:
+                status = {"order_id": str(order_id or ""), "status": "ERROR", "message": str(exc)}
+            if status.get("status") in {"COMPLETE", "REJECTED", "CANCELLED"}:
+                return status
+            if time.time() >= deadline:
+                return status
+            time.sleep(0.5)
+
+    def _cancel_order_best_effort(self, client: Any, order_id: str) -> bool:
+        """Cancel an unfilled regular order without hiding failures."""
+        try:
+            client.cancel_order(variety="regular", order_id=order_id)
+            return True
+        except Exception as exc:
+            _log.warning("Could not cancel unfilled order %s: %s", order_id, exc)
+            return False
 
     def _looks_like_funds_shortage(self, message: str) -> bool:
         text = str(message or "").lower()
@@ -1115,29 +1169,56 @@ class KiteOrderManager:
 
             order_id = client.place_order(**order_params)
             order_id = str(order_id or "")
+            fill_status = self._wait_for_order_status(client, order_id)
 
             _log.info(
-                "BUY order placed: %s x%d, order_id=%s, type=%s%s",
+                "BUY order placed: %s x%d, order_id=%s, type=%s%s, fill_status=%s",
                 symbol,
                 qty,
                 order_id,
                 kite_order_type,
                 f", price={order_params.get('price')}" if "price" in order_params else "",
+                fill_status.get("status"),
             )
 
+            filled_qty = int(fill_status.get("filled_qty", 0) or 0)
+            avg_price = float(fill_status.get("avg_price", 0) or 0)
+            status_text = str(fill_status.get("status", "UNKNOWN") or "UNKNOWN").upper()
+            if filled_qty > 0:
+                if status_text != "COMPLETE" and kite_order_type == "LIMIT" and self.cancel_unfilled_limit_orders:
+                    cancelled = self._cancel_order_best_effort(client, order_id)
+                    status_text = "PARTIAL_FILLED_CANCELLED" if cancelled else f"{status_text}_PARTIAL_FILLED"
+                fill_label = "filled" if status_text == "COMPLETE" else "partially filled"
+                result = OrderResult(
+                    True, order_id=order_id, symbol=symbol, side="BUY",
+                    qty=filled_qty, price=avg_price or reference_price or price,
+                    status=status_text,
+                    message=f"Order {fill_label} (ID: {order_id}) x{filled_qty} @ ₹{(avg_price or reference_price or price):.2f}"
+                )
+                self._record_buy(
+                    result, stop_loss, target1, target2, blind_score, reasons,
+                    product_type=order_product,
+                    holding_horizon=holding_horizon,
+                    max_hold_days_override=max_hold_days_override,
+                )
+                self._daily_order_count += 1
+                return result
+
+            if kite_order_type == "LIMIT" and self.cancel_unfilled_limit_orders and status_text not in {"REJECTED", "CANCELLED"}:
+                cancelled = self._cancel_order_best_effort(client, order_id)
+                status_text = "CANCELLED_UNFILLED" if cancelled else f"{status_text}_UNFILLED"
+
             result = OrderResult(
-                True, order_id=order_id, symbol=symbol, side="BUY",
-                qty=qty, price=reference_price or price, status="PLACED",
-                message=f"Order placed successfully (ID: {order_id})"
-            )
-            self._record_buy(
-                result, stop_loss, target1, target2, blind_score, reasons,
-                product_type=order_product,
-                holding_horizon=holding_horizon,
-                max_hold_days_override=max_hold_days_override,
+                False, order_id=order_id, symbol=symbol, side="BUY",
+                qty=filled_qty or qty, price=avg_price or reference_price or price,
+                status=status_text,
+                message=(
+                    f"Order submitted but not filled (ID: {order_id}; status={fill_status.get('status', 'UNKNOWN')}). "
+                    f"{fill_status.get('message', '')}".strip()
+                ),
             )
             self._daily_order_count += 1
-            return result
+            return self._return_logged_result(result)
 
         except Exception as exc:
             _log.error("BUY order failed for %s: %s", symbol, exc)
@@ -1231,16 +1312,48 @@ class KiteOrderManager:
             
             order_id = client.place_order(**order_params)
             order_id = str(order_id or "")
+            fill_status = self._wait_for_order_status(client, order_id)
 
-            _log.info("SELL order placed: %s x%d, order_id=%s — %s", symbol, sell_qty, order_id, reason)
+            _log.info(
+                "SELL order placed: %s x%d, order_id=%s, fill_status=%s — %s",
+                symbol,
+                sell_qty,
+                order_id,
+                fill_status.get("status"),
+                reason,
+            )
+
+            filled_qty = int(fill_status.get("filled_qty", 0) or 0)
+            avg_price = float(fill_status.get("avg_price", 0) or 0)
+            status_text = str(fill_status.get("status", "UNKNOWN") or "UNKNOWN").upper()
+            if filled_qty > 0:
+                if status_text != "COMPLETE" and kite_order_type == "LIMIT" and self.cancel_unfilled_limit_orders:
+                    cancelled = self._cancel_order_best_effort(client, order_id)
+                    status_text = "PARTIAL_FILLED_CANCELLED" if cancelled else f"{status_text}_PARTIAL_FILLED"
+                fill_label = "filled" if status_text == "COMPLETE" else "partially filled"
+                result = OrderResult(
+                    True, order_id=order_id, symbol=symbol, side="SELL",
+                    qty=filled_qty, price=avg_price or reference_price or price,
+                    status=status_text,
+                    message=f"Sell {fill_label} (ID: {order_id}) x{filled_qty} @ ₹{(avg_price or reference_price or price):.2f} — {reason}"
+                )
+                self._record_sell(result, reason)
+                return result
+
+            if kite_order_type == "LIMIT" and self.cancel_unfilled_limit_orders and status_text not in {"REJECTED", "CANCELLED"}:
+                cancelled = self._cancel_order_best_effort(client, order_id)
+                status_text = "CANCELLED_UNFILLED" if cancelled else f"{status_text}_UNFILLED"
 
             result = OrderResult(
-                True, order_id=order_id, symbol=symbol, side="SELL",
-                qty=sell_qty, price=reference_price or price, status="PLACED",
-                message=f"Sell order placed (ID: {order_id}) — {reason}"
+                False, order_id=order_id, symbol=symbol, side="SELL",
+                qty=filled_qty or sell_qty, price=avg_price or reference_price or price,
+                status=status_text,
+                message=(
+                    f"Sell submitted but not filled (ID: {order_id}; status={fill_status.get('status', 'UNKNOWN')}). "
+                    f"{fill_status.get('message', '')}".strip()
+                ),
             )
-            self._record_sell(result, reason)
-            return result
+            return self._return_logged_result(result)
 
         except Exception as exc:
             _log.error("SELL order failed for %s: %s", symbol, exc)
@@ -1277,8 +1390,8 @@ class KiteOrderManager:
         with self._lock:
             if result.symbol in self._positions:
                 pos = self._positions[result.symbol]
-                # Partial sell: reduce qty, keep position open
-                if reason == SellReason.PARTIAL_T1 and result.qty < pos.qty:
+                # Partial fills must keep the remaining broker position visible.
+                if result.qty < pos.qty:
                     pos.qty -= result.qty
                     _log.info("Partial sell %s: sold %d, remaining %d",
                               result.symbol, result.qty, pos.qty)
@@ -1723,14 +1836,7 @@ class KiteOrderManager:
             client = self._get_client()
             order_history = client.order_history(order_id)
             if order_history:
-                latest = order_history[-1]
-                return {
-                    "order_id": order_id,
-                    "status": latest.get("status", "UNKNOWN"),
-                    "filled_qty": latest.get("filled_quantity", 0),
-                    "avg_price": latest.get("average_price", 0),
-                    "pending_qty": latest.get("pending_quantity", 0),
-                }
+                return self._order_status_from_history(order_id, order_history)
         except Exception as exc:
             return {"order_id": order_id, "status": "ERROR", "error": str(exc)}
         return {"order_id": order_id, "status": "UNKNOWN"}

@@ -555,10 +555,12 @@ class AssistantLiveSupervisor:
         if os.name == "nt":
             creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 
+        launch_env = _runtime_env(self.repo_root)
+        launch_env["SUPERVISOR_SESSION_ID"] = str(self.session_id)
         process = subprocess.Popen(
             command,
             cwd=str(self.repo_root),
-            env=_runtime_env(self.repo_root),
+            env=launch_env,
             stdout=log_handle,
             stderr=log_handle,
             creationflags=creationflags,

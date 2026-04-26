@@ -25,8 +25,9 @@ class HealthMonitor:
             "discord": {"name": "DiscordTradeBot", "required": True},
             "autopilot": {"name": "AutoPilot", "required": True},
         }
-        self.logs_dir = os.path.join(output_dir, "assistant_logs")
-        self.data_dir = os.path.join(output_dir, "Data")
+        base_dir = output_dir if os.path.basename(os.path.normpath(output_dir)) == "Data" else os.path.join(output_dir, "Data")
+        self.logs_dir = os.path.join(base_dir, "assistant_logs")
+        self.data_dir = base_dir
 
     def check_all(self) -> Tuple[bool, str]:
         """Run all health checks. Return (healthy, status_message)."""
@@ -188,9 +189,7 @@ class HealthMonitor:
             return True  # Not configured, not an issue
         try:
             result = subprocess.run(
-                ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", "-X", "POST", 
-                 self.discord_webhook, "-H", "Content-Type: application/json",
-                 "-d", '{"content":"test"}'],
+                ["curl", "-s", "-o", "/dev/null", "-w", "%{http_code}", self.discord_webhook],
                 capture_output=True,
                 text=True,
                 timeout=5

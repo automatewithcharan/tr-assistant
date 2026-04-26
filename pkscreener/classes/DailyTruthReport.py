@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import html
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
@@ -37,9 +38,11 @@ class TruthReportPaths:
     detail: str
     summary: str
     benchmarks: str
+    dashboard: str
     detail_latest: str
     summary_latest: str
     benchmarks_latest: str
+    dashboard_latest: str
 
 
 class DailyTruthReport:
@@ -355,23 +358,140 @@ class DailyTruthReport:
         detail = out / f"daily_truth_report_{stamp}.csv"
         summary = out / f"daily_truth_summary_{stamp}.csv"
         benchmarks = out / f"daily_truth_benchmarks_{stamp}.csv"
+        dashboard = out / f"daily_truth_dashboard_{stamp}.html"
         detail_latest = out / "daily_truth_report_latest.csv"
         summary_latest = out / "daily_truth_summary_latest.csv"
         benchmarks_latest = out / "daily_truth_benchmarks_latest.csv"
+        dashboard_latest = out / "daily_truth_dashboard_latest.html"
         detail_df.to_csv(detail, index=False)
         summary_df.to_csv(summary, index=False)
         benchmarks_df.to_csv(benchmarks, index=False)
         detail_df.to_csv(detail_latest, index=False)
         summary_df.to_csv(summary_latest, index=False)
         benchmarks_df.to_csv(benchmarks_latest, index=False)
+        dashboard_html = self._dashboard_html(detail_df, summary_df, benchmarks_df)
+        dashboard.write_text(dashboard_html, encoding="utf-8")
+        dashboard_latest.write_text(dashboard_html, encoding="utf-8")
         return TruthReportPaths(
             detail=str(detail),
             summary=str(summary),
             benchmarks=str(benchmarks),
+            dashboard=str(dashboard),
             detail_latest=str(detail_latest),
             summary_latest=str(summary_latest),
             benchmarks_latest=str(benchmarks_latest),
+            dashboard_latest=str(dashboard_latest),
         )
+
+    def _dashboard_html(self, detail_df: pd.DataFrame, summary_df: pd.DataFrame, benchmarks_df: pd.DataFrame) -> str:
+        row = summary_df.iloc[0].to_dict() if summary_df is not None and not summary_df.empty else {}
+        bought_df = self._unique_bought_rows(detail_df) if detail_df is not None and not detail_df.empty else pd.DataFrame()
+        skipped_winners_df = (
+            detail_df[detail_df["LearningVerdict"].astype(str).eq("SKIPPED_WINNER_REVIEW_GATE")].copy()
+            if detail_df is not None and not detail_df.empty
+            else pd.DataFrame()
+        )
+        gate_reasons_df = pd.DataFrame()
+        if detail_df is not None and not detail_df.empty and "AutoReason" in detail_df.columns:
+            gate_reasons_df = (
+                detail_df.assign(AutoReason=detail_df["AutoReason"].fillna("").replace("", "not_logged"))
+                .groupby("AutoReason", dropna=False)
+                .size()
+                .reset_index(name="Count")
+                .sort_values("Count", ascending=False)
+                .head(12)
+            )
+
+        def money(value) -> str:
+            try:
+                return f"Rs {float(value):,.0f}"
+            except Exception:
+                return "Rs 0"
+
+        def pct(value) -> str:
+            try:
+                if value is None or pd.isna(value):
+                    return "-"
+                return f"{float(value):+.2f}%"
+            except Exception:
+                return "-"
+
+        cards = [
+            ("Net P/L after tax est.", money(row.get("NetPnLAfterTax", 0))),
+            ("Bought / unique symbols", f"{int(row.get('BoughtCount', 0) or 0)} / {int(row.get('UniqueBoughtSymbols', 0) or 0)}"),
+            ("Skipped winners to review", str(int(row.get("SkippedWinners", 0) or 0))),
+            ("Gate protected capital", str(int(row.get("GateProtectedCount", 0) or 0))),
+            ("Deployed capital", money(row.get("DeployedCapital", 0))),
+            ("Market regime", str(row.get("MarketRegime", "UNKNOWN") or "UNKNOWN")),
+        ]
+
+        def table(df: pd.DataFrame, columns: list, limit: int = 15) -> str:
+            if df is None or df.empty:
+                return "<p class='muted'>No rows.</p>"
+            view = df.loc[:, [c for c in columns if c in df.columns]].head(limit).copy()
+            head = "".join(f"<th>{html.escape(str(c))}</th>" for c in view.columns)
+            body_rows = []
+            for _, data_row in view.iterrows():
+                cells = "".join(f"<td>{html.escape(str(data_row.get(c, '')))}</td>" for c in view.columns)
+                body_rows.append(f"<tr>{cells}</tr>")
+            return f"<table><thead><tr>{head}</tr></thead><tbody>{''.join(body_rows)}</tbody></table>"
+
+        benchmark_table = table(benchmarks_df, ["Benchmark", "SymbolUsed", "ReturnPct", "EquivalentPnLOnDeployed", "Status"], 10)
+        bought_table = table(
+            bought_df.sort_values("NetPnLAfterTax", ascending=False) if not bought_df.empty else bought_df,
+            ["Symbol", "FillPrice", "Qty", "Invested", "ReturnEODPct", "NetPnLAfterTax", "OrderStatus", "LearningVerdict"],
+            12,
+        )
+        skipped_table = table(
+            skipped_winners_df.sort_values("WhatIfNetPnLAfterTax", ascending=False) if not skipped_winners_df.empty else skipped_winners_df,
+            ["Symbol", "EntryPrice", "SuggestedQty", "ReturnEODPct", "WhatIfNetPnLAfterTax", "AutoReason", "LearningNote"],
+            12,
+        )
+        reasons_table = table(gate_reasons_df, ["AutoReason", "Count"], 12)
+        card_html = "".join(
+            f"<div class='card'><span>{html.escape(label)}</span><strong>{html.escape(value)}</strong></div>"
+            for label, value in cards
+        )
+        return f"""<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Daily Truth Dashboard {html.escape(self.report_date.isoformat())}</title>
+  <style>
+    :root {{ --ink:#18212f; --muted:#647084; --line:#dbe3ee; --bg:#f5f7fb; --card:#ffffff; --accent:#0f766e; }}
+    body {{ margin:0; font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, sans-serif; background:var(--bg); color:var(--ink); }}
+    main {{ max-width:1180px; margin:0 auto; padding:28px 18px 44px; }}
+    h1 {{ margin:0 0 6px; font-size:30px; }}
+    h2 {{ margin:28px 0 12px; font-size:18px; }}
+    .muted {{ color:var(--muted); }}
+    .cards {{ display:grid; grid-template-columns:repeat(auto-fit, minmax(170px,1fr)); gap:12px; margin:22px 0; }}
+    .card {{ background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px; box-shadow:0 10px 28px rgba(24,33,47,.06); }}
+    .card span {{ display:block; color:var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:.04em; }}
+    .card strong {{ display:block; margin-top:8px; font-size:22px; }}
+    .panel {{ background:var(--card); border:1px solid var(--line); border-radius:16px; padding:16px; overflow:auto; box-shadow:0 10px 28px rgba(24,33,47,.05); }}
+    table {{ width:100%; border-collapse:collapse; font-size:13px; }}
+    th, td {{ padding:9px 10px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }}
+    th {{ color:var(--muted); font-size:11px; text-transform:uppercase; letter-spacing:.04em; }}
+    .trust {{ border-left:4px solid var(--accent); }}
+  </style>
+</head>
+<body>
+<main>
+  <h1>Daily Truth Dashboard</h1>
+  <p class="muted">{html.escape(self.report_date.isoformat())} | Generated {html.escape(self.generated_at)} | {html.escape(str(row.get("RegimeReason", "")))}</p>
+  <section class="cards">{card_html}</section>
+  <section class="panel trust">
+    <h2>Trust Summary</h2>
+    <p>Total alerts: {int(row.get("TotalAlerts", 0) or 0)} across {int(row.get("UniqueAlertSymbols", 0) or 0)} symbols. Avg bought EOD return: {pct(row.get("AvgBoughtReturnEODPct"))}. Avg all-alert EOD return: {pct(row.get("AvgAllAlertReturnEODPct"))}. This page separates actual filled buys from skipped ideas so we can improve gates without storytelling.</p>
+  </section>
+  <h2>Benchmark Check</h2><section class="panel">{benchmark_table}</section>
+  <h2>Filled Buys</h2><section class="panel">{bought_table}</section>
+  <h2>Skipped Winners To Review</h2><section class="panel">{skipped_table}</section>
+  <h2>Top Skip Reasons</h2><section class="panel">{reasons_table}</section>
+</main>
+</body>
+</html>"""
 
     def _load_signal_ledger(self) -> pd.DataFrame:
         candidates = [
