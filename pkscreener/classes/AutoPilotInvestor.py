@@ -2929,6 +2929,13 @@ class AutoPilotInvestor:
             else:
                 _demand_grade = "C"
                 _size_mult = 0.5
+            if _demand_grade == "C":
+                self._log(
+                    f"Demand-confirmed suppressed {sym}: C-grade "
+                    f"(imb={_imb:.1f}x, vol={_volr:.1f}x, rise={_rise:.1f}%)"
+                )
+                self._demand_watchlist.pop(sym, None)
+                continue
 
             _sl_price = round(price * 0.97, 2)  # 3% SL
             _target_price = round(price * 1.08, 2)  # 8% target
@@ -2953,6 +2960,21 @@ class AutoPilotInvestor:
                 continue
             _rr = round((_target_price - price) / max(price - _sl_price, 0.01), 1)
             _age_min = item["age_sec"] / 60
+            _strong_b_demand = (
+                _demand_grade == "B"
+                and _rr >= 2.2
+                and _volr >= 5.0
+                and _imb >= 4.0
+                and float(item.get("live_change", 0.0) or 0.0) <= 4.5
+            )
+            if _demand_grade == "B" and not _strong_b_demand:
+                self._log(
+                    f"Demand-confirmed suppressed {sym}: weak B-grade "
+                    f"(rr={_rr:.1f}x, imb={_imb:.1f}x, vol={_volr:.1f}x, "
+                    f"day={float(item.get('live_change', 0.0) or 0.0):.1f}%)"
+                )
+                self._demand_watchlist.pop(sym, None)
+                continue
             _demand_auto_result = ""
             _today = datetime.now().strftime("%Y-%m-%d")
             if self._demand_auto_date != _today:
@@ -2965,8 +2987,6 @@ class AutoPilotInvestor:
                     f"🤖 Auto-buy: no — demand auto-buy cap reached "
                     f"({len(self._demand_auto_bought)}/{self._DEMAND_AUTO_MAX_PER_DAY})."
                 )
-            elif _demand_grade != "A":
-                _demand_auto_result = "🤖 Auto-buy: no — demand auto-buy is reserved for A-grade demand setups."
             elif _rr < self._DEMAND_AUTO_MIN_RR:
                 _demand_auto_result = f"🤖 Auto-buy: no — R:R {_rr:.1f}x is below demand auto-buy floor {self._DEMAND_AUTO_MIN_RR:.1f}x."
             else:
@@ -2976,9 +2996,9 @@ class AutoPilotInvestor:
                     _sl_price,
                     round(price * 1.04, 2),
                     _target_price,
-                    70.0,
+                    70.0 if _demand_grade == "A" else 58.0,
                     (
-                        f"demand-confirmed A-grade | buyer demand {_imb:.1f}x | "
+                        f"demand-confirmed {_demand_grade}-grade | buyer demand {_imb:.1f}x | "
                         f"volume {_volr:.1f}x | moved +{_rise:.1f}% from detect"
                     ),
                     product_preference="MIS",
@@ -2991,8 +3011,8 @@ class AutoPilotInvestor:
                     self._demand_auto_bought.add(sym)
 
             # Plain-English grade descriptions
-            _grade_desc = {"A": "Strong — highest conviction, full size", "B": "Good — moderate conviction, reduced size", "C": "Weak — low conviction, smallest size"}[_demand_grade]
-            _verdict = "✅ BUY NOW" if _demand_grade in ("A", "B") else "⚠️ RISKY — only if you accept higher risk"
+            _grade_desc = {"A": "Strong — highest conviction, full size", "B": "Good — moderate conviction, reduced size"}[_demand_grade]
+            _verdict = "✅ BUY NOW" if _demand_auto_result.startswith("✅") else "👀 WATCH — no automatic buy"
             # Expected remaining growth: from current price to target
             _expected_growth = round(((_target_price - price) / price) * 100, 1)
             msg = (
