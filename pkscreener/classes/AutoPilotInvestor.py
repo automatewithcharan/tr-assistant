@@ -5860,8 +5860,10 @@ class AutoPilotInvestor:
                     return False, f"R:R 1:{rr2:.1f} is below 1:2.2 for the 9:15 lane"
                 if gap_pct > 0.5:
                     return False, f"entry is {gap_pct:.1f}% below trigger for the 9:15 lane"
-                if c.change_pct < 0.6 or c.change_pct > 3.8:
-                    return False, f"day move {c.change_pct:.1f}% is outside the 9:15 lane zone"
+                if c.change_pct < 0.6:
+                    return False, f"day move {c.change_pct:.1f}% is below the 9:15 lane zone (needs 0.6%-3.8%)"
+                if c.change_pct > 3.8:
+                    return False, f"day move {c.change_pct:.1f}% is above the 9:15 lane zone (needs 0.6%-3.8%)"
             elif not (9 * 60 + 20 <= now_min <= 10 * 60 + 0):
                 return False, "intraday auto-buy is only allowed during the opening window"
             if entry_lane != "early":
@@ -5921,8 +5923,10 @@ class AutoPilotInvestor:
                 return False, f"R:R 1:{rr2:.1f} is below the 5-day swing floor"
             if gap_pct > 1.2:
                 return False, f"entry is {gap_pct:.1f}% below trigger"
-            if c.change_pct < 1.8 or c.change_pct > 7.8:
-                return False, f"day move {c.change_pct:.1f}% is outside the 5-day swing zone"
+            if c.change_pct < 1.8:
+                return False, f"day move {c.change_pct:.1f}% is below the 5-day swing zone (needs 1.8%-7.8%)"
+            if c.change_pct > 7.8:
+                return False, f"day move {c.change_pct:.1f}% is above the 5-day swing zone (needs 1.8%-7.8%)"
             if c.blind_score < 50:
                 return False, f"score {c.blind_score:.0f} is below 50"
             if c.confidence < 27:
@@ -5940,8 +5944,10 @@ class AutoPilotInvestor:
                 return False, f"R:R 1:{rr2:.1f} is below the 2-day swing floor"
             if gap_pct > 1.2:
                 return False, f"entry is {gap_pct:.1f}% below trigger"
-            if c.change_pct < 1.8 or c.change_pct > 6.8:
-                return False, f"day move {c.change_pct:.1f}% is outside the 2-day swing zone"
+            if c.change_pct < 1.8:
+                return False, f"day move {c.change_pct:.1f}% is below the 2-day swing zone (needs 1.8%-6.8%)"
+            if c.change_pct > 6.8:
+                return False, f"day move {c.change_pct:.1f}% is above the 2-day swing zone (needs 1.8%-6.8%)"
             if c.blind_score < 40:
                 return False, f"score {c.blind_score:.0f} is below 40"
             if c.confidence < 28:
@@ -5958,8 +5964,10 @@ class AutoPilotInvestor:
             return False, f"R:R 1:{rr2:.1f} is below the intraday floor"
         if gap_pct > 0.8:
             return False, f"entry is {gap_pct:.1f}% below trigger"
-        if c.change_pct < 1.8 or c.change_pct > 4.8:
-            return False, f"day move {c.change_pct:.1f}% is outside the intraday zone"
+        if c.change_pct < 1.8:
+            return False, f"day move {c.change_pct:.1f}% is below the intraday zone (needs 1.8%-4.8%)"
+        if c.change_pct > 4.8:
+            return False, f"day move {c.change_pct:.1f}% is above the intraday zone (needs 1.8%-4.8%)"
         if grade == "A+":
             if c.blind_score < 68:
                 return False, f"score {c.blind_score:.0f} is below 68"
