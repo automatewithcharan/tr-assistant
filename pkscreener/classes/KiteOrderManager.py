@@ -1296,7 +1296,8 @@ class KiteOrderManager:
                 qty=filled_qty or qty, price=avg_price or reference_price or price,
                 status=status_text,
                 message=(
-                    f"Order submitted but not filled (ID: {order_id}; status={fill_status.get('status', 'UNKNOWN')}). "
+                    f"Order submitted but not filled (ID: {order_id}; final_status={status_text}; "
+                    f"initial_status={fill_status.get('status', 'UNKNOWN')}). "
                     f"{fill_status.get('message', '')}".strip()
                 ),
             )
@@ -1450,7 +1451,8 @@ class KiteOrderManager:
                 qty=filled_qty or sell_qty, price=avg_price or reference_price or price,
                 status=status_text,
                 message=(
-                    f"Sell submitted but not filled (ID: {order_id}; status={fill_status.get('status', 'UNKNOWN')}). "
+                    f"Sell submitted but not filled (ID: {order_id}; final_status={status_text}; "
+                    f"initial_status={fill_status.get('status', 'UNKNOWN')}). "
                     f"{fill_status.get('message', '')}".strip()
                 ),
             )
