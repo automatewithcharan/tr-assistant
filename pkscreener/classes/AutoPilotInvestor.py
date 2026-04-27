@@ -767,7 +767,7 @@ class AutoPilotInvestor:
         # Execution-grade early runner lane: tiny starter buys for the cleanest
         # tick-confirmed runners before they become obvious +7-10% chases.
         self._EARLY_RUNNER_AUTO_BUY_ENABLED = _env_truthy("ASSISTANT_EARLY_RUNNER_AUTO_BUY", True)
-        self._EARLY_RUNNER_AUTO_MAX_PER_DAY = _env_int("ASSISTANT_EARLY_RUNNER_AUTO_MAX_PER_DAY", 2)
+        self._EARLY_RUNNER_AUTO_MAX_PER_DAY = _env_int("ASSISTANT_EARLY_RUNNER_AUTO_MAX_PER_DAY", 4)
         self._EARLY_RUNNER_AUTO_MIN_CHANGE = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_CHANGE", 2.2)
         self._EARLY_RUNNER_AUTO_MAX_CHANGE = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MAX_CHANGE", 4.8)
         self._EARLY_RUNNER_AUTO_MIN_TURNOVER_CR = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_TURNOVER_CR", 3.0)
@@ -4316,16 +4316,44 @@ class AutoPilotInvestor:
             if sym:
                 self._early_runner_seen[sym] = _safe_float(row.get("change"))
 
-        candidates = [
-            row for row in rows
-            if row.get("quality") == "EARLY TRADE CANDIDATE"
-            and self._EARLY_RUNNER_AUTO_MIN_CHANGE <= _safe_float(row.get("change")) <= self._EARLY_RUNNER_AUTO_MAX_CHANGE
-            and _safe_float(row.get("turnover_cr")) >= self._EARLY_RUNNER_AUTO_MIN_TURNOVER_CR
-            and _safe_float(row.get("imbalance")) >= self._EARLY_RUNNER_AUTO_MIN_IMBALANCE
-            and bool(row.get("above_vwap"))
-        ]
+        auto_skip_notes: List[str] = []
+        candidates = []
+        for row in rows:
+            if row.get("quality") != "EARLY TRADE CANDIDATE":
+                continue
+            sym = str(row.get("symbol", "") or "").strip().upper()
+            change = _safe_float(row.get("change"))
+            turnover_cr = _safe_float(row.get("turnover_cr"))
+            imbalance = _safe_float(row.get("imbalance"))
+            above_vwap = bool(row.get("above_vwap"))
+            if not above_vwap:
+                auto_skip_notes.append(f"{sym}: below VWAP")
+                continue
+            if change < self._EARLY_RUNNER_AUTO_MIN_CHANGE:
+                auto_skip_notes.append(f"{sym}: move +{change:.1f}% below {self._EARLY_RUNNER_AUTO_MIN_CHANGE:.1f}%")
+                continue
+            if change > self._EARLY_RUNNER_AUTO_MAX_CHANGE:
+                auto_skip_notes.append(f"{sym}: move +{change:.1f}% above {self._EARLY_RUNNER_AUTO_MAX_CHANGE:.1f}%")
+                continue
+            if turnover_cr < self._EARLY_RUNNER_AUTO_MIN_TURNOVER_CR:
+                auto_skip_notes.append(f"{sym}: turnover ₹{turnover_cr:.1f}Cr below ₹{self._EARLY_RUNNER_AUTO_MIN_TURNOVER_CR:.1f}Cr")
+                continue
+            if imbalance < self._EARLY_RUNNER_AUTO_MIN_IMBALANCE:
+                auto_skip_notes.append(f"{sym}: demand {imbalance:.1f}x below {self._EARLY_RUNNER_AUTO_MIN_IMBALANCE:.1f}x")
+                continue
+            candidates.append(row)
         if not candidates:
+            if auto_skip_notes:
+                self._send_to_channels(
+                    "🤖 Early-runner auto-buy: no eligible names — "
+                    + " | ".join(auto_skip_notes[:5])
+                )
             return
+        if auto_skip_notes:
+            self._send_to_channels(
+                "🤖 Early-runner filters: "
+                + " | ".join(auto_skip_notes[:5])
+            )
 
         candidates.sort(
             key=lambda row: (
