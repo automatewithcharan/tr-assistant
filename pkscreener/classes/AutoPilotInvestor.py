@@ -742,6 +742,11 @@ class AutoPilotInvestor:
         self._DEMAND_CONFIRM_MAX_DAY_CHANGE = 5.5 # avoid late chase entries in this path
         self._DEMAND_CONFIRM_FAST_RISE_PCT = 0.7  # fast-track stronger setups earlier
         self._DEMAND_CONFIRM_FAST_IMBALANCE = 4.5 # fast-track needs very strong imbalance
+        self._DEMAND_AUTO_BUY_ENABLED = _env_truthy("ASSISTANT_DEMAND_AUTO_BUY", True)
+        self._DEMAND_AUTO_MAX_PER_DAY = _env_int("ASSISTANT_DEMAND_AUTO_MAX_PER_DAY", 2)
+        self._DEMAND_AUTO_MIN_RR = _env_float("ASSISTANT_DEMAND_AUTO_MIN_RR", 2.0)
+        self._demand_auto_bought: Set[str] = set()
+        self._demand_auto_date: Optional[str] = None
         # Top-gainer radar: visibility layer only. It should show the full field
         # of live runners without turning every runner into an actionable BUY.
         self._runner_radar_seen: Dict[str, int] = {}  # symbol -> highest pct bucket alerted
@@ -2948,6 +2953,42 @@ class AutoPilotInvestor:
                 continue
             _rr = round((_target_price - price) / max(price - _sl_price, 0.01), 1)
             _age_min = item["age_sec"] / 60
+            _demand_auto_result = ""
+            _today = datetime.now().strftime("%Y-%m-%d")
+            if self._demand_auto_date != _today:
+                self._demand_auto_bought.clear()
+                self._demand_auto_date = _today
+            if not self._DEMAND_AUTO_BUY_ENABLED:
+                _demand_auto_result = "🤖 Auto-buy: no — demand auto-buy disabled."
+            elif len(self._demand_auto_bought) >= self._DEMAND_AUTO_MAX_PER_DAY:
+                _demand_auto_result = (
+                    f"🤖 Auto-buy: no — demand auto-buy cap reached "
+                    f"({len(self._demand_auto_bought)}/{self._DEMAND_AUTO_MAX_PER_DAY})."
+                )
+            elif _demand_grade != "A":
+                _demand_auto_result = "🤖 Auto-buy: no — demand auto-buy is reserved for A-grade demand setups."
+            elif _rr < self._DEMAND_AUTO_MIN_RR:
+                _demand_auto_result = f"🤖 Auto-buy: no — R:R {_rr:.1f}x is below demand auto-buy floor {self._DEMAND_AUTO_MIN_RR:.1f}x."
+            else:
+                _auto_line = self._try_auto_buy(
+                    sym,
+                    price,
+                    _sl_price,
+                    round(price * 1.04, 2),
+                    _target_price,
+                    70.0,
+                    (
+                        f"demand-confirmed A-grade | buyer demand {_imb:.1f}x | "
+                        f"volume {_volr:.1f}x | moved +{_rise:.1f}% from detect"
+                    ),
+                    product_preference="MIS",
+                    holding_horizon="intraday",
+                    max_hold_days=1,
+                )
+                if _auto_line:
+                    _demand_auto_result = _auto_line
+                if _auto_line and _auto_line.startswith("✅"):
+                    self._demand_auto_bought.add(sym)
 
             # Plain-English grade descriptions
             _grade_desc = {"A": "Strong — highest conviction, full size", "B": "Good — moderate conviction, reduced size", "C": "Weak — low conviction, smallest size"}[_demand_grade]
@@ -2968,7 +3009,7 @@ class AutoPilotInvestor:
                 f"🔴 EXIT if price drops to `₹{_sl_price:.0f}` (limits your loss to 3%)\n"
                 f"🟢 SELL near `₹{_target_price:.0f}` if momentum continues (fixed demand-watch target: +{_scope_pct:.1f}% from alert price)\n"
                 f"💰 You risk `₹{price - _sl_price:.0f}` per share to gain `₹{_target_price - price:.0f}` per share ({_rr:.1f}x reward vs risk)\n\n"
-                f"🤖 Auto-buy: no — demand-watch alert, not a live auto-buy setup.\n"
+                f"{_demand_auto_result or '🤖 Auto-buy: no — demand-watch alert, not a live auto-buy setup.'}\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             )
             self._send_to_channels(msg)
