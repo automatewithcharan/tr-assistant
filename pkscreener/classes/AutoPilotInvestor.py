@@ -766,7 +766,7 @@ class AutoPilotInvestor:
         self._EARLY_RADAR_MAX_LINES = _env_int("ASSISTANT_EARLY_RADAR_MAX_LINES", 8)
         # Execution-grade early runner lane: tiny starter buys for the cleanest
         # tick-confirmed runners before they become obvious +7-10% chases.
-        self._EARLY_RUNNER_AUTO_BUY_ENABLED = _env_truthy("ASSISTANT_EARLY_RUNNER_AUTO_BUY", False)
+        self._EARLY_RUNNER_AUTO_BUY_ENABLED = _env_truthy("ASSISTANT_EARLY_RUNNER_AUTO_BUY", True)
         self._EARLY_RUNNER_AUTO_MAX_PER_DAY = _env_int("ASSISTANT_EARLY_RUNNER_AUTO_MAX_PER_DAY", 2)
         self._EARLY_RUNNER_AUTO_MIN_CHANGE = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_CHANGE", 2.2)
         self._EARLY_RUNNER_AUTO_MAX_CHANGE = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MAX_CHANGE", 4.8)
