@@ -764,6 +764,18 @@ class AutoPilotInvestor:
         self._EARLY_RADAR_MIN_IMBALANCE = _env_float("ASSISTANT_EARLY_RADAR_MIN_IMBALANCE", 1.4)
         self._EARLY_RADAR_SUMMARY_INTERVAL_SEC = _env_int("ASSISTANT_EARLY_RADAR_INTERVAL_SEC", 180)
         self._EARLY_RADAR_MAX_LINES = _env_int("ASSISTANT_EARLY_RADAR_MAX_LINES", 8)
+        # Execution-grade early runner lane: tiny starter buys for the cleanest
+        # tick-confirmed runners before they become obvious +7-10% chases.
+        self._EARLY_RUNNER_AUTO_BUY_ENABLED = _env_truthy("ASSISTANT_EARLY_RUNNER_AUTO_BUY", True)
+        self._EARLY_RUNNER_AUTO_MAX_PER_DAY = _env_int("ASSISTANT_EARLY_RUNNER_AUTO_MAX_PER_DAY", 2)
+        self._EARLY_RUNNER_AUTO_MIN_CHANGE = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_CHANGE", 1.5)
+        self._EARLY_RUNNER_AUTO_MAX_CHANGE = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MAX_CHANGE", 4.8)
+        self._EARLY_RUNNER_AUTO_MIN_TURNOVER_CR = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_TURNOVER_CR", 3.0)
+        self._EARLY_RUNNER_AUTO_MIN_IMBALANCE = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_IMBALANCE", 2.8)
+        self._EARLY_RUNNER_AUTO_MIN_RR = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_RR", 1.6)
+        self._early_runner_auto_attempted: Set[str] = set()
+        self._early_runner_auto_bought: Set[str] = set()
+        self._early_runner_auto_date: Optional[str] = None
         # NSE market hours (IST): 9:15 AM open, 3:30 PM close
         self._MARKET_OPEN_HOUR_IST = 9
         self._MARKET_OPEN_MIN_IST = 15
@@ -4265,6 +4277,90 @@ class AutoPilotInvestor:
 
         self._early_radar_last_summary = now_ts
         self._send_to_channels("\n".join(lines))
+        self._review_early_radar_rows_for_auto_buy(rows)
+
+    def _review_early_radar_rows_for_auto_buy(self, rows: List[Dict]) -> None:
+        """Auto-buy only the cleanest early radar names with fresh tick-derived levels."""
+        if (
+            not rows
+            or not self._EARLY_RUNNER_AUTO_BUY_ENABLED
+            or self._order_manager is None
+            or self._past_buy_cutoff()
+        ):
+            return
+        today = datetime.now().strftime("%Y-%m-%d")
+        if self._early_runner_auto_date != today:
+            self._early_runner_auto_attempted.clear()
+            self._early_runner_auto_bought.clear()
+            self._early_runner_auto_date = today
+        if self._AUTO_BUY_TOP_N > 0 and self._tick_confirmed_auto_buy_count >= self._AUTO_BUY_TOP_N:
+            return
+        if len(self._early_runner_auto_bought) >= self._EARLY_RUNNER_AUTO_MAX_PER_DAY:
+            return
+
+        candidates = [
+            row for row in rows
+            if row.get("quality") == "EARLY TRADE CANDIDATE"
+            and self._EARLY_RUNNER_AUTO_MIN_CHANGE <= _safe_float(row.get("change")) <= self._EARLY_RUNNER_AUTO_MAX_CHANGE
+            and _safe_float(row.get("turnover_cr")) >= self._EARLY_RUNNER_AUTO_MIN_TURNOVER_CR
+            and _safe_float(row.get("imbalance")) >= self._EARLY_RUNNER_AUTO_MIN_IMBALANCE
+            and bool(row.get("above_vwap"))
+        ]
+        if not candidates:
+            return
+
+        candidates.sort(
+            key=lambda row: (
+                _safe_float(row.get("imbalance")),
+                _safe_float(row.get("turnover_cr")),
+                -abs(_safe_float(row.get("change")) - 3.0),
+            ),
+            reverse=True,
+        )
+        for row in candidates:
+            if len(self._early_runner_auto_bought) >= self._EARLY_RUNNER_AUTO_MAX_PER_DAY:
+                break
+            if self._AUTO_BUY_TOP_N > 0 and self._tick_confirmed_auto_buy_count >= self._AUTO_BUY_TOP_N:
+                break
+            sym = str(row.get("symbol", "") or "").strip().upper()
+            if not sym or sym in self._early_runner_auto_attempted:
+                continue
+            price = _safe_float(row.get("price"))
+            if price <= 0:
+                continue
+
+            stop_loss = round(price * 0.975, 2)
+            target1 = round(price * 1.035, 2)
+            target2 = round(price * 1.055, 2)
+            rr2 = _compute_long_rr(price, stop_loss, target2)
+            if rr2 < self._EARLY_RUNNER_AUTO_MIN_RR:
+                self._log(f"Early-runner auto skip {sym}: R:R 1:{rr2:.1f} below floor")
+                continue
+
+            blind_score = min(88.0, 58.0 + _safe_float(row.get("imbalance")) * 4.0 + _safe_float(row.get("turnover_cr")) * 0.7)
+            reasons = (
+                f"early-runner auto lane | VWAP+ | near high | buyer demand "
+                f"{_safe_float(row.get('imbalance')):.1f}x | turnover ₹{_safe_float(row.get('turnover_cr')):.1f}Cr"
+            )
+            self._early_runner_auto_attempted.add(sym)
+            result = self._try_auto_buy(
+                sym,
+                price,
+                stop_loss,
+                target1,
+                target2,
+                blind_score,
+                reasons,
+                product_preference="MIS",
+                holding_horizon="intraday",
+                max_hold_days=1,
+            )
+            self._log(f"Early-runner auto-buy result {sym}: {result}")
+            if result:
+                self._send_to_channels(result)
+            if result and result.startswith("✅"):
+                self._early_runner_auto_bought.add(sym)
+                self._tick_confirmed_auto_buy_count += 1
 
     def _classify_runner_radar_row(
         self,
