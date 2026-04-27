@@ -135,6 +135,8 @@ class PaperTradeTracker:
                 suggested_qty=suggested_qty,
                 source=source,
             )
+            # Keep forward testing visible during the session, not just after EOD.
+            self._persist_day(today_str)
 
         self.logger.debug(f"[PaperTracker] Entry: {symbol} at ₹{price:.2f} score={score:.0f} [{source}]")
 
@@ -154,6 +156,8 @@ class PaperTradeTracker:
                 trade.fade_exit_sent = True
             elif level == "STOP_HIT":
                 trade.stop_hit = True
+            if self._today:
+                self._persist_day(self._today)
 
     # ------------------------------------------------------------------
     # EOD close
