@@ -283,6 +283,7 @@ class KiteOrderManager:
         self.order_fill_wait_seconds = max(0.0, _secret_float("KITE_ORDER_FILL_WAIT_SEC", 4.0))
         self.cancel_unfilled_limit_orders = _secret_truthy("KITE_CANCEL_UNFILLED_LIMIT", True)
         self.max_buy_price_stale_drop_pct = max(0.0, _secret_float("KITE_MAX_BUY_PRICE_STALE_DROP_PCT", 1.0))
+        self.confirm_stop_loss_with_broker = _secret_truthy("KITE_CONFIRM_STOP_LOSS_WITH_BROKER", True)
         self.trailing_stop_pct = float(_get_secret("KITE_TRAILING_STOP_PCT", "3.0"))
         self.trailing_trail_pct = float(_get_secret("KITE_TRAILING_STOP_TRAIL", "1.0"))
         self.max_hold_days = int(_get_secret("KITE_MAX_HOLD_DAYS", "5"))
@@ -540,6 +541,20 @@ class KiteOrderManager:
             tick = ticks.get(symbol, {}) if isinstance(ticks, dict) else {}
             return float(tick.get("last_price") or 0.0)
         except Exception:
+            return 0.0
+
+    def _broker_last_price(self, symbol: str) -> float:
+        """Best-effort fresh broker LTP for safety-critical exits."""
+        symbol = str(symbol or "").strip().upper()
+        if not symbol:
+            return 0.0
+        try:
+            client = self._get_client()
+            quote = client.quote(f"NSE:{symbol}") or {}
+            data = quote.get(f"NSE:{symbol}", {}) if isinstance(quote, dict) else {}
+            return float(data.get("last_price") or 0.0)
+        except Exception as exc:
+            _log.debug("Broker LTP lookup failed for %s: %s", symbol, exc)
             return 0.0
 
     def _current_open_delivery_value(self) -> float:
@@ -1558,6 +1573,19 @@ class KiteOrderManager:
 
             # 1. Stop loss hit
             if pos.stop_loss > 0 and live_price <= pos.stop_loss:
+                if self.confirm_stop_loss_with_broker:
+                    broker_price = self._broker_last_price(sym)
+                    if broker_price > 0 and broker_price > pos.stop_loss:
+                        _log.warning(
+                            "Ignoring false stop tick for %s: tick ₹%.2f <= SL ₹%.2f, broker LTP ₹%.2f",
+                            sym,
+                            live_price,
+                            pos.stop_loss,
+                            broker_price,
+                        )
+                        continue
+                    if broker_price > 0:
+                        live_price = broker_price
                 signals.append((sym, SellReason.STOP_LOSS, live_price, 0))
                 continue
 
