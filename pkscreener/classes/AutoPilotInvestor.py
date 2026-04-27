@@ -854,7 +854,12 @@ class AutoPilotInvestor:
             max_hold_days=max_hold_days,
         )
         if result.success:
-            status = f"✅ Auto-bought `{symbol}` x{result.qty} via Kite (ID: {result.order_id})"
+            product_label = str(product_preference or "").strip().upper() or "AUTO"
+            horizon_label = str(holding_horizon or "").strip().lower() or "auto"
+            status = (
+                f"✅ Auto-bought `{symbol}` x{result.qty} via Kite "
+                f"(ID: {result.order_id}) | Product: `{product_label}` | Horizon: `{horizon_label}`"
+            )
             # Automatically place GTT OCO (stop-loss + target) so no manual action needed
             if stop_loss > 0 and target2 > 0 and price > 0:
                 gtt = self._order_manager.place_gtt_oco(
