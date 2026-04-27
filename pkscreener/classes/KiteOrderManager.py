@@ -176,6 +176,8 @@ class TrackedPosition:
         self.gtt_expires_at = ""
         self.gtt_updated_at = ""
         self.gtt_last_error = ""
+        self.sell_block_reason = ""
+        self.sell_blocked_at = ""
 
     def to_dict(self) -> Dict[str, Any]:
         return self.__dict__.copy()
@@ -208,6 +210,8 @@ class TrackedPosition:
         pos.gtt_expires_at = str(d.get("gtt_expires_at", "") or "")
         pos.gtt_updated_at = str(d.get("gtt_updated_at", "") or "")
         pos.gtt_last_error = str(d.get("gtt_last_error", "") or "")
+        pos.sell_block_reason = str(d.get("sell_block_reason", "") or "")
+        pos.sell_blocked_at = str(d.get("sell_blocked_at", "") or "")
         return pos
 
     @property
@@ -455,6 +459,42 @@ class KiteOrderManager:
             "insufficient balance",
         )
         return any(p in text for p in patterns)
+
+    def _looks_like_cdsl_authorization_required(self, message: str) -> bool:
+        text = str(message or "").lower()
+        patterns = (
+            "cdsl",
+            "authorise shares",
+            "authorize shares",
+            "authorised at cdsl",
+            "authorized at cdsl",
+            "demat depository",
+            "edis",
+            "tpin",
+        )
+        return any(pattern in text for pattern in patterns)
+
+    def _mark_cdsl_authorization_required(self, symbol: str, message: str = "") -> None:
+        symbol = str(symbol or "").strip().upper()
+        with self._lock:
+            pos = self._positions.get(symbol)
+            if not pos:
+                return
+            pos.sell_block_reason = "CDSL_AUTH_REQUIRED"
+            pos.sell_blocked_at = _ist_now().isoformat(timespec="seconds")
+            pos.gtt_last_error = str(message or "CDSL authorisation required before selling CNC/delivery shares.")
+            self._save_positions()
+
+    def clear_sell_block(self, symbol: str) -> None:
+        """Clear a manual sell block after the user has handled broker-side auth."""
+        symbol = str(symbol or "").strip().upper()
+        with self._lock:
+            pos = self._positions.get(symbol)
+            if not pos:
+                return
+            pos.sell_block_reason = ""
+            pos.sell_blocked_at = ""
+            self._save_positions()
 
     def _extract_available_funds(self) -> float:
         try:
@@ -1267,6 +1307,24 @@ class KiteOrderManager:
 
         pos = self._positions[symbol]
         sell_qty = qty if qty > 0 else pos.qty
+        if str(getattr(pos, "sell_block_reason", "") or "") == "CDSL_AUTH_REQUIRED":
+            if str(reason or "").lower() == SellReason.MANUAL or str(reason or "").lower() == "manual_sell":
+                self.clear_sell_block(symbol)
+            else:
+                return self._return_logged_result(
+                    OrderResult(
+                        False,
+                        symbol=symbol,
+                        side="SELL",
+                        qty=sell_qty,
+                        price=price,
+                        status="CDSL_AUTH_REQUIRED",
+                        message=(
+                            "CDSL authorisation required before selling CNC/delivery shares. "
+                            "Authorise in Kite/CDSL, then retry the sell."
+                        ),
+                    )
+                )
 
         if sell_qty > pos.qty:
             return OrderResult(
@@ -1353,6 +1411,13 @@ class KiteOrderManager:
                     f"{fill_status.get('message', '')}".strip()
                 ),
             )
+            if self._looks_like_cdsl_authorization_required(result.message):
+                result.status = "CDSL_AUTH_REQUIRED"
+                result.message = (
+                    "CDSL authorisation required before selling CNC/delivery shares. "
+                    "Authorise the shares in Kite/CDSL and place a fresh sell order."
+                )
+                self._mark_cdsl_authorization_required(symbol, result.message)
             return self._return_logged_result(result)
 
         except Exception as exc:
@@ -1361,6 +1426,13 @@ class KiteOrderManager:
                 False, symbol=symbol, side="SELL", qty=sell_qty, price=price,
                 status="FAILED", message=str(exc)
             )
+            if self._looks_like_cdsl_authorization_required(result.message):
+                result.status = "CDSL_AUTH_REQUIRED"
+                result.message = (
+                    "CDSL authorisation required before selling CNC/delivery shares. "
+                    "Authorise the shares in Kite/CDSL and place a fresh sell order."
+                )
+                self._mark_cdsl_authorization_required(symbol, result.message)
             self._log_order(result)
             return result
 
@@ -1439,6 +1511,8 @@ class KiteOrderManager:
 
         for sym, pos in list(self._positions.items()):
             if pos.status != "open":
+                continue
+            if str(getattr(pos, "sell_block_reason", "") or "") == "CDSL_AUTH_REQUIRED":
                 continue
 
             tick = ticks.get(sym, {})
@@ -1705,10 +1779,13 @@ class KiteOrderManager:
             emoji = "🟢" if pnl >= 0 else "🔴"
             trail_info = f" | trail ₹{p.trailing_stop:.0f}" if p.trailing_stop > 0 else ""
             horizon_info = f" | {getattr(p, 'holding_horizon', 'intraday')}/{getattr(p, 'product_type', self.product_type)}"
+            block_info = ""
+            if str(getattr(p, "sell_block_reason", "") or "") == "CDSL_AUTH_REQUIRED":
+                block_info = " | ⚠️ CDSL auth needed before sell"
             lines.append(
                 f"{emoji} `{p.symbol}` x{p.qty} | buy ₹{p.buy_price:.0f} → ₹{live:.0f} "
                 f"| P/L ₹{pnl:+,.0f} ({pnl_pct:+.1f}%)"
-                f" | SL ₹{p.stop_loss:.0f}{trail_info}{horizon_info}"
+                f" | SL ₹{p.stop_loss:.0f}{trail_info}{horizon_info}{block_info}"
             )
         emoji = "🟢" if total_pnl >= 0 else "🔴"
         lines.append(f"\n{emoji} **Total running P/L: ₹{total_pnl:+,.0f}**")
