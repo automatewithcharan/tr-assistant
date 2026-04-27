@@ -282,6 +282,7 @@ class KiteOrderManager:
         self.time_sliced_capital = _secret_truthy("KITE_TIME_SLICED_CAPITAL", True)
         self.order_fill_wait_seconds = max(0.0, _secret_float("KITE_ORDER_FILL_WAIT_SEC", 4.0))
         self.cancel_unfilled_limit_orders = _secret_truthy("KITE_CANCEL_UNFILLED_LIMIT", True)
+        self.max_buy_price_stale_drop_pct = max(0.0, _secret_float("KITE_MAX_BUY_PRICE_STALE_DROP_PCT", 1.0))
         self.trailing_stop_pct = float(_get_secret("KITE_TRAILING_STOP_PCT", "3.0"))
         self.trailing_trail_pct = float(_get_secret("KITE_TRAILING_STOP_TRAIL", "1.0"))
         self.max_hold_days = int(_get_secret("KITE_MAX_HOLD_DAYS", "5"))
@@ -1159,6 +1160,33 @@ class KiteOrderManager:
                     message="Invalid quantity",
                 )
             )
+
+        latest_price = self._latest_tick_price(symbol) if price > 0 else 0.0
+        if latest_price > 0 and price > 0 and self.max_buy_price_stale_drop_pct > 0:
+            stale_drop_pct = ((price - latest_price) / price) * 100
+            if stale_drop_pct > self.max_buy_price_stale_drop_pct:
+                return self._return_logged_result(
+                    OrderResult(
+                        False,
+                        symbol=symbol,
+                        side="BUY",
+                        qty=qty,
+                        price=price,
+                        status="SKIPPED",
+                        message=(
+                            f"Live price faded {stale_drop_pct:.1f}% from signal "
+                            f"(signal ₹{price:.2f}, now ₹{latest_price:.2f}); avoiding stale momentum buy"
+                        ),
+                    )
+                )
+            if latest_price < price:
+                _log.info(
+                    "%s buy reference refreshed from signal ₹%.2f to live ₹%.2f",
+                    symbol,
+                    price,
+                    latest_price,
+                )
+                price = latest_price
 
         # Dry run mode
         if self.dry_run:

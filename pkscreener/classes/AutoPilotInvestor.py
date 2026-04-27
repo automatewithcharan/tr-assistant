@@ -774,6 +774,10 @@ class AutoPilotInvestor:
         self._EARLY_RUNNER_AUTO_MIN_IMBALANCE = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_IMBALANCE", 2.8)
         self._EARLY_RUNNER_AUTO_MIN_RR = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_RR", 1.6)
         self._EARLY_RUNNER_AUTO_MAX_PULLBACK_PCT = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MAX_PULLBACK_PCT", 0.3)
+        self._EARLY_RUNNER_AUTO_MAX_TICK_STALE_DROP_PCT = _env_float(
+            "ASSISTANT_EARLY_RUNNER_AUTO_MAX_TICK_STALE_DROP_PCT",
+            0.7,
+        )
         self._early_runner_seen: Dict[str, float] = {}
         self._early_runner_auto_attempted: Set[str] = set()
         self._early_runner_auto_bought: Set[str] = set()
@@ -4347,6 +4351,20 @@ class AutoPilotInvestor:
             price = _safe_float(row.get("price"))
             if price <= 0:
                 continue
+            latest_price = 0.0
+            try:
+                latest_price = float(self._order_manager._latest_tick_price(sym) or 0.0)
+            except Exception:
+                latest_price = 0.0
+            if latest_price > 0:
+                stale_drop_pct = ((price - latest_price) / price * 100) if price > 0 else 0.0
+                if stale_drop_pct > self._EARLY_RUNNER_AUTO_MAX_TICK_STALE_DROP_PCT:
+                    self._log(
+                        f"Early-runner auto skip {sym}: live tick faded "
+                        f"{stale_drop_pct:.1f}% from radar price ₹{price:.2f} to ₹{latest_price:.2f}"
+                    )
+                    continue
+                price = latest_price
 
             stop_loss = round(price * 0.965, 2)
             target1 = round(price * 1.045, 2)
