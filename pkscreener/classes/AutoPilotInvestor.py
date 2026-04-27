@@ -768,11 +768,13 @@ class AutoPilotInvestor:
         # tick-confirmed runners before they become obvious +7-10% chases.
         self._EARLY_RUNNER_AUTO_BUY_ENABLED = _env_truthy("ASSISTANT_EARLY_RUNNER_AUTO_BUY", True)
         self._EARLY_RUNNER_AUTO_MAX_PER_DAY = _env_int("ASSISTANT_EARLY_RUNNER_AUTO_MAX_PER_DAY", 2)
-        self._EARLY_RUNNER_AUTO_MIN_CHANGE = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_CHANGE", 1.5)
+        self._EARLY_RUNNER_AUTO_MIN_CHANGE = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_CHANGE", 2.2)
         self._EARLY_RUNNER_AUTO_MAX_CHANGE = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MAX_CHANGE", 4.8)
         self._EARLY_RUNNER_AUTO_MIN_TURNOVER_CR = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_TURNOVER_CR", 3.0)
         self._EARLY_RUNNER_AUTO_MIN_IMBALANCE = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_IMBALANCE", 2.8)
         self._EARLY_RUNNER_AUTO_MIN_RR = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_RR", 1.6)
+        self._EARLY_RUNNER_AUTO_MAX_PULLBACK_PCT = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MAX_PULLBACK_PCT", 0.3)
+        self._early_runner_seen: Dict[str, float] = {}
         self._early_runner_auto_attempted: Set[str] = set()
         self._early_runner_auto_bought: Set[str] = set()
         self._early_runner_auto_date: Optional[str] = None
@@ -4290,6 +4292,7 @@ class AutoPilotInvestor:
             return
         today = datetime.now().strftime("%Y-%m-%d")
         if self._early_runner_auto_date != today:
+            self._early_runner_seen.clear()
             self._early_runner_auto_attempted.clear()
             self._early_runner_auto_bought.clear()
             self._early_runner_auto_date = today
@@ -4297,6 +4300,12 @@ class AutoPilotInvestor:
             return
         if len(self._early_runner_auto_bought) >= self._EARLY_RUNNER_AUTO_MAX_PER_DAY:
             return
+
+        previous_seen = dict(self._early_runner_seen)
+        for row in rows:
+            sym = str(row.get("symbol", "") or "").strip().upper()
+            if sym:
+                self._early_runner_seen[sym] = _safe_float(row.get("change"))
 
         candidates = [
             row for row in rows
@@ -4325,13 +4334,23 @@ class AutoPilotInvestor:
             sym = str(row.get("symbol", "") or "").strip().upper()
             if not sym or sym in self._early_runner_auto_attempted:
                 continue
+            change = _safe_float(row.get("change"))
+            previous_change = previous_seen.get(sym)
+            if (
+                previous_change is not None
+                and change < previous_change - self._EARLY_RUNNER_AUTO_MAX_PULLBACK_PCT
+            ):
+                self._log(
+                    f"Early-runner auto skip {sym}: fading from +{previous_change:.1f}% to +{change:.1f}%"
+                )
+                continue
             price = _safe_float(row.get("price"))
             if price <= 0:
                 continue
 
-            stop_loss = round(price * 0.975, 2)
-            target1 = round(price * 1.035, 2)
-            target2 = round(price * 1.055, 2)
+            stop_loss = round(price * 0.965, 2)
+            target1 = round(price * 1.045, 2)
+            target2 = round(price * 1.075, 2)
             rr2 = _compute_long_rr(price, stop_loss, target2)
             if rr2 < self._EARLY_RUNNER_AUTO_MIN_RR:
                 self._log(f"Early-runner auto skip {sym}: R:R 1:{rr2:.1f} below floor")
