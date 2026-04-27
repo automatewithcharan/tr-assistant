@@ -4371,6 +4371,7 @@ class AutoPilotInvestor:
         if len(self._early_runner_auto_bought) >= self._EARLY_RUNNER_AUTO_MAX_PER_DAY:
             return
 
+        threshold_epsilon = 0.01
         previous_seen = dict(self._early_runner_seen)
         for row in rows:
             sym = str(row.get("symbol", "") or "").strip().upper()
@@ -4390,17 +4391,17 @@ class AutoPilotInvestor:
             if not above_vwap:
                 auto_skip_notes.append(f"{sym}: below VWAP")
                 continue
-            if change < self._EARLY_RUNNER_AUTO_MIN_CHANGE:
-                auto_skip_notes.append(f"{sym}: move +{change:.1f}% below {self._EARLY_RUNNER_AUTO_MIN_CHANGE:.1f}%")
+            if change < self._EARLY_RUNNER_AUTO_MIN_CHANGE - threshold_epsilon:
+                auto_skip_notes.append(f"{sym}: move +{change:.2f}% below {self._EARLY_RUNNER_AUTO_MIN_CHANGE:.2f}%")
                 continue
-            if change > self._EARLY_RUNNER_AUTO_MAX_CHANGE:
-                auto_skip_notes.append(f"{sym}: move +{change:.1f}% above {self._EARLY_RUNNER_AUTO_MAX_CHANGE:.1f}%")
+            if change > self._EARLY_RUNNER_AUTO_MAX_CHANGE + threshold_epsilon:
+                auto_skip_notes.append(f"{sym}: move +{change:.2f}% above {self._EARLY_RUNNER_AUTO_MAX_CHANGE:.2f}%")
                 continue
-            if turnover_cr < self._EARLY_RUNNER_AUTO_MIN_TURNOVER_CR:
-                auto_skip_notes.append(f"{sym}: turnover ₹{turnover_cr:.1f}Cr below ₹{self._EARLY_RUNNER_AUTO_MIN_TURNOVER_CR:.1f}Cr")
+            if turnover_cr < self._EARLY_RUNNER_AUTO_MIN_TURNOVER_CR - threshold_epsilon:
+                auto_skip_notes.append(f"{sym}: turnover ₹{turnover_cr:.2f}Cr below ₹{self._EARLY_RUNNER_AUTO_MIN_TURNOVER_CR:.2f}Cr")
                 continue
-            if imbalance < self._EARLY_RUNNER_AUTO_MIN_IMBALANCE:
-                auto_skip_notes.append(f"{sym}: demand {imbalance:.1f}x below {self._EARLY_RUNNER_AUTO_MIN_IMBALANCE:.1f}x")
+            if imbalance < self._EARLY_RUNNER_AUTO_MIN_IMBALANCE - threshold_epsilon:
+                auto_skip_notes.append(f"{sym}: demand {imbalance:.2f}x below {self._EARLY_RUNNER_AUTO_MIN_IMBALANCE:.2f}x")
                 continue
             candidates.append(row)
         if not candidates:
