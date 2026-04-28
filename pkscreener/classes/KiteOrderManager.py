@@ -1226,12 +1226,12 @@ class KiteOrderManager:
             if reference_price <= 0 and order_type == "MARKET":
                 reference_price = self._latest_tick_price(symbol)
             # Some brokers/accounts reject API MARKET buys without market protection.
-            # For live auto-buys we nearly always have a reference price, so prefer an
-            # aggressive LIMIT order slightly above the observed price to preserve fill
-            # probability while staying API-compatible.
+            # For live auto-buys we nearly always have a reference price, so prefer a
+            # minimal LIMIT order 0.1% above the observed price to preserve fill
+            # probability while minimizing slippage and staying API-compatible.
             aggressive_limit_price = 0.0
             if reference_price > 0 and order_type == "MARKET":
-                aggressive_limit_price = _round_to_nse_tick(reference_price * 1.003)
+                aggressive_limit_price = _round_to_nse_tick(reference_price * 1.001)
                 kite_order_type = "LIMIT"
             else:
                 kite_order_type = "MARKET" if order_type == "MARKET" or price <= 0 else "LIMIT"
