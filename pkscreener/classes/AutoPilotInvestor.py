@@ -773,10 +773,10 @@ class AutoPilotInvestor:
         # tick-confirmed runners before they become obvious +7-10% chases.
         self._EARLY_RUNNER_AUTO_BUY_ENABLED = _env_truthy("ASSISTANT_EARLY_RUNNER_AUTO_BUY", True)
         self._EARLY_RUNNER_AUTO_MAX_PER_DAY = _env_int("ASSISTANT_EARLY_RUNNER_AUTO_MAX_PER_DAY", 4)
-        self._EARLY_RUNNER_AUTO_MIN_CHANGE = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_CHANGE", 2.2)
-        self._EARLY_RUNNER_AUTO_MAX_CHANGE = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MAX_CHANGE", 4.8)
-        self._EARLY_RUNNER_AUTO_MIN_TURNOVER_CR = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_TURNOVER_CR", 3.0)
-        self._EARLY_RUNNER_AUTO_MIN_IMBALANCE = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_IMBALANCE", 2.8)
+        self._EARLY_RUNNER_AUTO_MIN_CHANGE = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_CHANGE", 1.5)
+        self._EARLY_RUNNER_AUTO_MAX_CHANGE = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MAX_CHANGE", 8.0)
+        self._EARLY_RUNNER_AUTO_MIN_TURNOVER_CR = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_TURNOVER_CR", 1.0)
+        self._EARLY_RUNNER_AUTO_MIN_IMBALANCE = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_IMBALANCE", 1.5)
         self._EARLY_RUNNER_AUTO_MIN_RR = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_RR", 1.6)
         self._EARLY_RUNNER_AUTO_MAX_PULLBACK_PCT = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MAX_PULLBACK_PCT", 0.3)
         self._EARLY_RUNNER_AUTO_MAX_TICK_STALE_DROP_PCT = _env_float(
@@ -5911,7 +5911,7 @@ class AutoPilotInvestor:
             from datetime import timezone, timedelta
             _now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
         now_min = _now_ist.hour * 60 + _now_ist.minute
-        _swing_start_min = 9 * 60 + 20
+        _swing_start_min = 9 * 60 + 15
         _swing_end_min = 13 * 60 + 30
         _late_swing_start_min = 13 * 60 + 30
         _late_swing_end_min = 14 * 60 + 15
@@ -5921,7 +5921,7 @@ class AutoPilotInvestor:
 
         if (
             cls._is_true_buy_action(getattr(c, "original_action", ""))
-            and 9 * 60 + 20 <= now_min <= _early_engine_end_min
+            and 9 * 60 + 15 <= now_min <= _early_engine_end_min
             and c.price >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_PRICE", 20.0)
             and _env_float("ASSISTANT_EARLY_ENGINE_MIN_CHANGE", 1.0) <= c.change_pct <= _env_float("ASSISTANT_EARLY_ENGINE_MAX_CHANGE", 4.5)
             and rr2 >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_RR", 1.5)
@@ -6054,10 +6054,10 @@ class AutoPilotInvestor:
             return False, f"R:R 1:{rr2:.1f} is below the intraday floor"
         if gap_pct > 0.8:
             return False, f"entry is {gap_pct:.1f}% below trigger"
-        if c.change_pct < 1.8:
-            return False, f"day move {c.change_pct:.1f}% is below the intraday zone (needs 1.8%-4.8%)"
-        if c.change_pct > 4.8:
-            return False, f"day move {c.change_pct:.1f}% is above the intraday zone (needs 1.8%-4.8%)"
+        if c.change_pct < 1.5:
+            return False, f"day move {c.change_pct:.1f}% is below the intraday zone (needs 1.5%-10.0%)"
+        if c.change_pct > 10.0:
+            return False, f"day move {c.change_pct:.1f}% is above the intraday zone (needs 1.5%-10.0%)"
         if grade == "A+":
             if c.blind_score < 68:
                 return False, f"score {c.blind_score:.0f} is below 68"
