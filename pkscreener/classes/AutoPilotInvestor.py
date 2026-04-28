@@ -680,7 +680,7 @@ class AutoPilotInvestor:
         # 5 × ₹50K = ₹2.5L = full MIS margin. Diversification ensures even if
         # 1 trade loses, the other 4 cover it. Most days: ₹5K-₹20K income.
         self._TOP_N_DAILY_BATCH = 5             # 5 trades per day for consistency
-        self._AUTO_BUY_TOP_N = max(0, _env_int("KITE_LIVE_AUTO_BUY_CAP", 0))
+        self._AUTO_BUY_TOP_N = 0
         # 0 = no live-alert-side cap; rely on broker funds, position limits, and
         # other risk checks. Positive values re-enable a hard daily cap.
         self._daily_batch_alert_count: int = 0  # counter of batch buy alerts sent today
