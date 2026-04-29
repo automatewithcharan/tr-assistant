@@ -4421,6 +4421,11 @@ class AutoPilotInvestor:
             or self._past_buy_cutoff()
         ):
             return
+        # Early radar is intraday-only (MIS). After the intraday cutoff these
+        # small movers have no same-day upside left — skip silently.
+        _now_min = self._ist_now_minute()
+        if _now_min > self._INTRADAY_AUTO_BUY_CUTOFF_MIN:
+            return
         today = datetime.now().strftime("%Y-%m-%d")
         if self._early_runner_auto_date != today:
             self._early_runner_seen.clear()
@@ -4557,9 +4562,8 @@ class AutoPilotInvestor:
                 max_hold_days=1,
             )
             self._log(f"Early-runner auto-buy result {sym}: {result}")
-            if result:
-                self._send_to_channels(result)
             if result and result.startswith("✅"):
+                self._send_to_channels(result)
                 self._early_runner_auto_bought.add(sym)
                 self._tick_confirmed_auto_buy_count += 1
 
@@ -6192,13 +6196,13 @@ class AutoPilotInvestor:
         if c.price < 20:
             return False, "price is below the ₹20 floor"
         if rr2 < 1.8:
-            return False, f"R:R 1:{rr2:.1f} is below the intraday floor"
+            return False, f"R:R 1:{rr2:.1f} is below minimum — signal targets are likely stale relative to current price"
         if gap_pct > 0.8:
             return False, f"entry is {gap_pct:.1f}% below trigger"
         if c.change_pct < 1.5:
-            return False, f"day move {c.change_pct:.1f}% is below the intraday zone (needs 1.5%-10.0%)"
+            return False, f"day move {c.change_pct:.1f}% is below the minimum zone (needs 1.5%-10.0%)"
         if c.change_pct > 10.0:
-            return False, f"day move {c.change_pct:.1f}% is above the intraday zone (needs 1.5%-10.0%)"
+            return False, f"day move {c.change_pct:.1f}% is above the maximum zone (needs 1.5%-10.0%)"
         if grade == "A+":
             if c.blind_score < 68:
                 return False, f"score {c.blind_score:.0f} is below 68"
