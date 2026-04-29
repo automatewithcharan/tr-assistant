@@ -126,7 +126,7 @@ class AutoPilotConfig:
     # Runtime
     max_workers: int = 3
     alert_channels: str = "discord"
-    cycle_interval_sec: int = 60
+    cycle_interval_sec: int = 15
     max_buy_alerts_per_cycle: int = 3
 
     def normalized(self) -> "AutoPilotConfig":
@@ -675,7 +675,7 @@ class AutoPilotInvestor:
         self._pending_followups: List["BlindBuyCandidate"] = []  # buffer for batching
         self._FOLLOWUP_COOLDOWN_SEC = 900  # 15 minutes between follow-up alerts
         # BuyNow rescan tuning: keep this path rare and high quality (fallback only).
-        self._RESCAN_INTERVAL_SEC = 180         # every 3 min (was effectively every 60s)
+        self._RESCAN_INTERVAL_SEC = 60          # every 1 min — faster second-chance detection
         self._RESCAN_MAX_PER_CYCLE = 2          # burst control: max 2 per rescan cycle
         self._RESCAN_MAX_PER_DAY = 12           # hard daily cap for "MISSED EARLIER" alerts
         self._RESCAN_MIN_SCORE = 50.0           # stricter than global min-score
@@ -771,7 +771,7 @@ class AutoPilotInvestor:
         self._runner_radar_last_summary: float = 0.0
         self._RUNNER_RADAR_MIN_CHANGE = 5.0
         self._RUNNER_RADAR_BUCKET_STEP = 5
-        self._RUNNER_RADAR_SUMMARY_INTERVAL_SEC = 300
+        self._RUNNER_RADAR_SUMMARY_INTERVAL_SEC = 90
         self._RUNNER_RADAR_MAX_LINES = 12
         self._RUNNER_RADAR_MIN_QUALITY = {"TRADE CANDIDATE", "WATCH"}
         # Early expansion radar: visibility-only board for stocks forming at
@@ -783,7 +783,7 @@ class AutoPilotInvestor:
         self._EARLY_RADAR_MAX_CHANGE = _env_float("ASSISTANT_EARLY_RADAR_MAX_CHANGE", 4.5)
         self._EARLY_RADAR_MIN_TURNOVER_CR = _env_float("ASSISTANT_EARLY_RADAR_MIN_TURNOVER_CR", 0.75)
         self._EARLY_RADAR_MIN_IMBALANCE = _env_float("ASSISTANT_EARLY_RADAR_MIN_IMBALANCE", 1.4)
-        self._EARLY_RADAR_SUMMARY_INTERVAL_SEC = _env_int("ASSISTANT_EARLY_RADAR_INTERVAL_SEC", 180)
+        self._EARLY_RADAR_SUMMARY_INTERVAL_SEC = _env_int("ASSISTANT_EARLY_RADAR_INTERVAL_SEC", 60)
         self._EARLY_RADAR_MAX_LINES = _env_int("ASSISTANT_EARLY_RADAR_MAX_LINES", 8)
         # Execution-grade early runner lane: tiny starter buys for the cleanest
         # tick-confirmed runners before they become obvious +7-10% chases.
@@ -835,7 +835,7 @@ class AutoPilotInvestor:
         self._opening_buffer: List[Dict] = [] # buffered alert dicts during opening window
         self._opening_buffer_lock = __import__('threading').Lock()
         self._last_opening_flush: float = 0.0
-        self._OPENING_FLUSH_INTERVAL_SEC = 30 # flush buffer every 30s during opening
+        self._OPENING_FLUSH_INTERVAL_SEC = 10 # flush buffer every 10s during opening
         self._opening_flush_done_date: Optional[str] = None  # date of last complete flush
         # Paper trade tracker — logs every alert, checks EOD outcome
         self._paper_tracker = PaperTradeTracker()

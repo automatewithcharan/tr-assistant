@@ -2032,7 +2032,7 @@ def pkscreenercli():
                         if args.assistantworkers is not None
                         else _auto_worker_count("ASSISTANT_WORKERS", 16)
                     ),
-                    signal_interval=(args.assistantinterval if args.assistantinterval is not None else 30),
+                    signal_interval=(args.assistantinterval if args.assistantinterval is not None else 10),
                     signal_limit=(args.assistantlimit if args.assistantlimit is not None else 0),
                     alert_channels=str(args.assistantalerts or "discord").strip().lower(),
                     ticker_limit=(args.assistanttickerlimit if args.assistanttickerlimit is not None else 0),
