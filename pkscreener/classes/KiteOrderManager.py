@@ -311,6 +311,7 @@ class KiteOrderManager:
         self._client = None
         self._instrument_cache: Dict[str, Dict[str, Any]] = {}
         self._instrument_cache_loaded = False
+        self._dead_symbols: set = set()  # symbols that failed with "expired/does not exist" today
         self._load_positions()
         self._load_pending_buys()
 
@@ -331,7 +332,6 @@ class KiteOrderManager:
     def _load_instrument_cache(self) -> None:
         if self._instrument_cache_loaded:
             return
-        self._instrument_cache_loaded = True
         try:
             client = self._get_client()
             combined: Dict[str, Dict[str, Any]] = {}
@@ -353,7 +353,9 @@ class KiteOrderManager:
                     current = combined.get(sym)
                     if current is None or current.get("exchange") != "NSE":
                         combined[sym] = entry
-            self._instrument_cache = combined
+            if combined:
+                self._instrument_cache = combined
+                self._instrument_cache_loaded = True
         except Exception as exc:
             _log.debug("Instrument cache load failed: %s", exc)
 
@@ -992,6 +994,15 @@ class KiteOrderManager:
         symbol = str(symbol).strip().upper()
         order_product = self._normalize_product_type(product_type_override)
 
+        if symbol in self._dead_symbols:
+            return self._return_logged_result(
+                OrderResult(
+                    False, symbol=symbol, side="BUY", qty=qty, price=price,
+                    status="SKIPPED",
+                    message=f"Skipped {symbol}: instrument marked dead/expired for today",
+                )
+            )
+
         # Safety checks
         if not self.auto_trade:
             return self._return_logged_result(
@@ -1220,7 +1231,10 @@ class KiteOrderManager:
         latest_price = self._latest_tick_price(symbol) if price > 0 else 0.0
         if latest_price > 0 and price > 0 and self.max_buy_price_stale_drop_pct > 0:
             stale_drop_pct = ((price - latest_price) / price) * 100
-            if stale_drop_pct > self.max_buy_price_stale_drop_pct:
+            # CNC swing trades can tolerate a larger pullback from signal — targeting 10%+ over days
+            _is_cnc = order_product in ("CNC", "NRML")
+            _stale_threshold = self.max_buy_price_stale_drop_pct * 3 if _is_cnc else self.max_buy_price_stale_drop_pct
+            if stale_drop_pct > _stale_threshold:
                 return self._return_logged_result(
                     OrderResult(
                         False,
@@ -1231,7 +1245,8 @@ class KiteOrderManager:
                         status="SKIPPED",
                         message=(
                             f"Live price faded {stale_drop_pct:.1f}% from signal "
-                            f"(signal ₹{price:.2f}, now ₹{latest_price:.2f}); avoiding stale momentum buy"
+                            f"(signal ₹{price:.2f}, now ₹{latest_price:.2f}); "
+                            f"threshold {_stale_threshold:.1f}% for {order_product}"
                         ),
                     )
                 )
@@ -1355,10 +1370,14 @@ class KiteOrderManager:
 
         except Exception as exc:
             _log.error("BUY order failed for %s: %s", symbol, exc)
+            msg = str(exc)
             result = OrderResult(
                 False, symbol=symbol, side="BUY", qty=qty, price=price,
-                status="FAILED", message=str(exc)
+                status="FAILED", message=msg
             )
+            if any(phrase in msg.lower() for phrase in ("expired", "does not exist", "instrument you are placing")):
+                self._dead_symbols.add(symbol)
+                _log.warning("Marking %s as dead for today: %s", symbol, msg)
             if self._looks_like_funds_shortage(result.message):
                 return result
             return self._return_logged_result(result)
@@ -1654,33 +1673,37 @@ class KiteOrderManager:
 
             # 3. Target 1 hit — sell 50% to lock in profits, trail the rest
             if pos.target1 > 0 and live_price >= pos.target1 and not pos.t1_booked:
-                # Partial profit booking: sell half, trail the other half
                 partial_qty = max(1, pos.qty // 2)
                 signals.append((sym, SellReason.PARTIAL_T1, live_price, partial_qty))
                 pos.t1_booked = True
-                # Set trailing stop on remainder at breakeven (buy price)
-                pos.trailing_stop = max(pos.buy_price, pos.target1 * (1 - self.trailing_trail_pct / 100))
+                _t1_trail_dist = (self.trailing_trail_pct / 100) if is_intraday else 0.025
+                pos.trailing_stop = max(pos.buy_price, pos.target1 * (1 - _t1_trail_dist))
                 _log.info("%s hit T1 (₹%.2f): selling %d of %d, trailing rest from ₹%.2f",
                           sym, pos.target1, partial_qty, pos.qty, pos.trailing_stop)
 
-            # 4. Trailing stop — activates after stock rises > trailing_stop_pct above buy
-            if pos.trailing_stop <= 0 and pnl_pct >= self.trailing_stop_pct:
-                pos.trailing_stop = pos.highest_price * (1 - self.trailing_trail_pct / 100)
+            # 4. Trailing stop — activates earlier for swing, uses wider trail to avoid shakeouts
+            # Swing: activates at 2% gain, trails 2.5% below highest (captures multi-day moves)
+            # Intraday: activates at configured trailing_stop_pct, trails configured trail_pct (tighter)
+            _trail_activate_pct = self.trailing_stop_pct if is_intraday else min(self.trailing_stop_pct, 2.0)
+            _trail_dist_pct = (self.trailing_trail_pct / 100) if is_intraday else 0.025
+
+            if pos.trailing_stop <= 0 and pnl_pct >= _trail_activate_pct:
+                pos.trailing_stop = max(pos.buy_price, pos.highest_price * (1 - _trail_dist_pct))
 
             if pos.trailing_stop > 0:
-                # Update trailing stop upward
-                new_trail = pos.highest_price * (1 - self.trailing_trail_pct / 100)
+                new_trail = pos.highest_price * (1 - _trail_dist_pct)
                 if new_trail > pos.trailing_stop:
                     pos.trailing_stop = new_trail
                 if live_price <= pos.trailing_stop:
                     signals.append((sym, SellReason.TRAILING_STOP, live_price, 0))
                     continue
 
-            # 5. Time decay — held too long without meaningful gain
+            # 5. Time decay — exit only if still losing after max hold period
+            # Don't exit positive positions on time alone; let trailing stop handle them.
             try:
                 buy_date = datetime.fromisoformat(pos.buy_time).date()
                 days_held = (now.date() - buy_date).days
-                if days_held >= hold_days_limit and pnl_pct < 2.0:
+                if days_held >= hold_days_limit and pnl_pct < 0.0:
                     signals.append((sym, SellReason.TIME_DECAY, live_price, 0))
                     continue
             except Exception:
@@ -1944,7 +1967,10 @@ class KiteOrderManager:
     def reconcile_with_broker(self) -> Dict[str, Any]:
         """Fetch real positions from Kite and reconcile with tracked ones.
 
-        Returns a report of any discrepancies.
+        For MIS positions that are tracked as open but absent from the broker,
+        this marks them closed — they were auto-squared off by Zerodha at 3:20 PM.
+
+        Returns a report of actions taken and any remaining discrepancies.
         """
         try:
             broker_holdings = self._get_broker_exposure()
@@ -1952,19 +1978,34 @@ class KiteOrderManager:
             return {"error": str(exc), "reconciled": False}
 
         report = {"broker_positions": len(broker_holdings), "tracked_positions": 0,
-                  "mismatches": [], "untracked": [], "reconciled": True}
+                  "auto_closed": [], "mismatches": [], "untracked": [], "reconciled": True}
 
-        tracked_open = {sym: pos for sym, pos in self._positions.items() if pos.status == "open"}
-        report["tracked_positions"] = len(tracked_open)
+        with self._lock:
+            tracked_open = {sym: pos for sym, pos in self._positions.items() if pos.status == "open"}
+            report["tracked_positions"] = len(tracked_open)
 
-        for sym, pos in tracked_open.items():
-            bp = broker_holdings.get(sym)
-            if bp is None:
-                report["mismatches"].append(f"{sym}: tracked but not in broker")
-            elif bp["qty"] != pos.qty:
-                report["mismatches"].append(
-                    f"{sym}: tracked qty={pos.qty}, broker qty={bp['qty']}"
-                )
+            changed = False
+            for sym, pos in tracked_open.items():
+                bp = broker_holdings.get(sym)
+                if bp is None:
+                    if pos.product_type == "MIS":
+                        # MIS position not at broker → broker auto-squared it off
+                        pos.status = "closed"
+                        pos.sell_reason = "broker_auto_square_off"
+                        if not pos.sell_time:
+                            pos.sell_time = _ist_now().isoformat(timespec="seconds")
+                        report["auto_closed"].append(sym)
+                        changed = True
+                        _log.info("Reconcile: closed stale MIS position %s (broker auto-squared off)", sym)
+                    else:
+                        report["mismatches"].append(f"{sym}: tracked but not in broker")
+                elif bp["qty"] != pos.qty:
+                    report["mismatches"].append(
+                        f"{sym}: tracked qty={pos.qty}, broker qty={bp['qty']}"
+                    )
+
+            if changed:
+                self._save_positions()
 
         for sym in broker_holdings:
             if sym not in tracked_open:

@@ -1218,6 +1218,19 @@ class AutoPilotInvestor:
             f"min_score={self.config.blind_buy_min_score}, "
             f"alerts={self.config.alert_channels}"
         )
+        # Startup reconcile — close any MIS positions that the broker already
+        # auto-squared off (e.g. yesterday's trades) but are still "open" locally.
+        if self._order_manager is not None:
+            try:
+                rec = self._order_manager.reconcile_with_broker()
+                closed = rec.get("auto_closed", [])
+                if closed:
+                    self._log(f"Startup reconcile: auto-closed {len(closed)} stale MIS position(s): {', '.join(closed)}")
+                mismatches = rec.get("mismatches", [])
+                if mismatches:
+                    self._log(f"Startup reconcile: {len(mismatches)} mismatch(es): {'; '.join(mismatches)}")
+            except Exception as _rec_exc:
+                self._log(f"Startup reconcile failed: {_rec_exc}")
         while True:
             # Daily state reset — clear stale momentum tracking from previous day
             today_str = datetime.now().strftime("%Y-%m-%d")
@@ -1240,6 +1253,19 @@ class AutoPilotInvestor:
                 self._last_opening_priority_refresh = 0.0
                 self._opening_priority_state_df = None
                 self._opening_priority_stats = {}
+                # Reconcile broker positions at day start — closes any MIS positions
+                # that Zerodha auto-squared off yesterday but are still "open" locally.
+                if self._order_manager is not None:
+                    try:
+                        rec = self._order_manager.reconcile_with_broker()
+                        closed = rec.get("auto_closed", [])
+                        if closed:
+                            self._log(f"Day-start reconcile: auto-closed {len(closed)} stale MIS position(s): {', '.join(closed)}")
+                        mismatches = rec.get("mismatches", [])
+                        if mismatches:
+                            self._log(f"Day-start reconcile: {len(mismatches)} mismatch(es): {'; '.join(mismatches)}")
+                    except Exception as _rec_exc:
+                        self._log(f"Day-start reconcile failed: {_rec_exc}")
             self._momentum_tracked_date = today_str
             # Pre-open auction scan: fires during 9:00-9:15 AM IST
             self._run_preopen_auction_scan()
@@ -5417,12 +5443,10 @@ class AutoPilotInvestor:
             if not symbol or quantity <= 0:
                 continue
 
-            current_price = float(trade.get("CurrentPrice", 0))
             signal_row = signal_map.get(symbol)
-            if signal_row is not None:
-                signal_price = float(signal_row.get("LTP", signal_row.get("PriceNow", signal_row.get("Price Now", 0))) or 0)
-                if signal_price > 0:
-                    current_price = signal_price
+            current_price = float(trade.get("CurrentPrice", 0))
+            if current_price <= 0 and signal_row is not None:
+                current_price = float(signal_row.get("LTP", signal_row.get("PriceNow", signal_row.get("Price Now", 0))) or 0)
 
             if current_price <= 0:
                 current_price = entry_price
@@ -5499,12 +5523,10 @@ class AutoPilotInvestor:
             if not symbol or quantity <= 0 or entry_price <= 0:
                 continue
 
-            current_price = float(ticks.get(symbol, {}).get("last_price", 0) or 0)
             signal_row = signal_map.get(symbol)
-            if signal_row is not None:
-                signal_price = float(signal_row.get("LTP", signal_row.get("PriceNow", signal_row.get("Price Now", 0))) or 0)
-                if signal_price > 0:
-                    current_price = signal_price
+            current_price = float(ticks.get(symbol, {}).get("last_price", 0) or 0)
+            if current_price <= 0 and signal_row is not None:
+                current_price = float(signal_row.get("LTP", signal_row.get("PriceNow", signal_row.get("Price Now", 0))) or 0)
             if current_price <= 0:
                 current_price = entry_price
 
@@ -6045,7 +6067,7 @@ class AutoPilotInvestor:
             and _env_float("ASSISTANT_EARLY_ENGINE_MIN_CHANGE", 0.6) <= c.change_pct <= _env_float("ASSISTANT_EARLY_ENGINE_MAX_CHANGE", 5.0)
             and rr2 >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_RR", 1.4)
             and gap_pct <= _env_float("ASSISTANT_EARLY_ENGINE_MAX_GAP", 0.8)
-            and c.blind_score >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_SCORE", 44.0)
+            and c.blind_score >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_SCORE", 52.0)
             and c.confidence >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_CONFIDENCE", 16.0)
             and c.volume_ratio >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_VOL_RATIO", 2.0)
             and not ("bearish" in str(getattr(c, "reasons", "") or "").lower())
@@ -6128,8 +6150,8 @@ class AutoPilotInvestor:
                 return False, f"R:R 1:{rr2:.1f} is below the 5-day swing floor"
             if gap_pct > 1.2:
                 return False, f"entry is {gap_pct:.1f}% below trigger"
-            if c.change_pct < 1.8:
-                return False, f"day move {c.change_pct:.1f}% is below the 5-day swing zone (needs 1.8%-7.8%)"
+            if c.change_pct < 1.0:
+                return False, f"day move {c.change_pct:.1f}% is below the 5-day swing zone (needs 1.0%-7.8%)"
             if c.change_pct > 7.8:
                 return False, f"day move {c.change_pct:.1f}% is above the 5-day swing zone (needs 1.8%-7.8%)"
             if c.blind_score < 50:
@@ -6149,8 +6171,8 @@ class AutoPilotInvestor:
                 return False, f"R:R 1:{rr2:.1f} is below the 2-day swing floor"
             if gap_pct > 1.2:
                 return False, f"entry is {gap_pct:.1f}% below trigger"
-            if c.change_pct < 1.8:
-                return False, f"day move {c.change_pct:.1f}% is below the 2-day swing zone (needs 1.8%-6.8%)"
+            if c.change_pct < 1.0:
+                return False, f"day move {c.change_pct:.1f}% is below the 2-day swing zone (needs 1.0%-6.8%)"
             if c.change_pct > 6.8:
                 return False, f"day move {c.change_pct:.1f}% is above the 2-day swing zone (needs 1.8%-6.8%)"
             if c.blind_score < 40:
@@ -6251,6 +6273,7 @@ class AutoPilotInvestor:
             _now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
         _now_min = _now_ist.hour * 60 + _now_ist.minute
         _opening_starter_window = 9 * 60 + 20 <= _now_min <= 10 * 60 + 0
+        _early_engine_end_min = _env_time_min("ASSISTANT_EARLY_ENGINE_END", 10 * 60 + 45)
         _late_comer_window = _env_time_min("ASSISTANT_LATE_COMER_START", 10 * 60 + 30) <= _now_min <= _env_time_min("ASSISTANT_LATE_COMER_END", 13 * 60 + 15)
 
         if (
@@ -6267,10 +6290,11 @@ class AutoPilotInvestor:
             return ("2-day swing", "CNC", 2, "Opening starter: early strength with controlled risk")
 
         if (
-            cls._is_true_buy_action(getattr(c, "original_action", ""))
+            9 * 60 + 15 <= _now_min <= _early_engine_end_min
+            and cls._is_true_buy_action(getattr(c, "original_action", ""))
             and c.price >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_PRICE", 20.0)
             and _env_float("ASSISTANT_EARLY_ENGINE_MIN_CHANGE", 0.6) <= c.change_pct <= _env_float("ASSISTANT_EARLY_ENGINE_MAX_CHANGE", 5.0)
-            and c.blind_score >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_SCORE", 44.0)
+            and c.blind_score >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_SCORE", 52.0)
             and c.confidence >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_CONFIDENCE", 16.0)
             and c.volume_ratio >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_VOL_RATIO", 2.0)
             and rr2 >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_RR", 1.4)
