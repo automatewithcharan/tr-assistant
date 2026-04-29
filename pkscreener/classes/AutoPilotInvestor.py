@@ -789,11 +789,11 @@ class AutoPilotInvestor:
         # tick-confirmed runners before they become obvious +7-10% chases.
         self._EARLY_RUNNER_AUTO_BUY_ENABLED = _env_truthy("ASSISTANT_EARLY_RUNNER_AUTO_BUY", True)
         self._EARLY_RUNNER_AUTO_MAX_PER_DAY = _env_int("ASSISTANT_EARLY_RUNNER_AUTO_MAX_PER_DAY", 4)
-        self._EARLY_RUNNER_AUTO_MIN_CHANGE = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_CHANGE", 1.5)
-        self._EARLY_RUNNER_AUTO_MAX_CHANGE = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MAX_CHANGE", 8.0)
-        self._EARLY_RUNNER_AUTO_MIN_TURNOVER_CR = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_TURNOVER_CR", 1.0)
-        self._EARLY_RUNNER_AUTO_MIN_IMBALANCE = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_IMBALANCE", 1.5)
-        self._EARLY_RUNNER_AUTO_MIN_RR = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_RR", 1.6)
+        self._EARLY_RUNNER_AUTO_MIN_CHANGE = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_CHANGE", 1.2)
+        self._EARLY_RUNNER_AUTO_MAX_CHANGE = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MAX_CHANGE", 5.5)
+        self._EARLY_RUNNER_AUTO_MIN_TURNOVER_CR = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_TURNOVER_CR", 0.75)
+        self._EARLY_RUNNER_AUTO_MIN_IMBALANCE = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_IMBALANCE", 1.4)
+        self._EARLY_RUNNER_AUTO_MIN_RR = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MIN_RR", 1.5)
         self._EARLY_RUNNER_AUTO_MAX_PULLBACK_PCT = _env_float("ASSISTANT_EARLY_RUNNER_AUTO_MAX_PULLBACK_PCT", 0.3)
         self._EARLY_RUNNER_AUTO_MAX_TICK_STALE_DROP_PCT = _env_float(
             "ASSISTANT_EARLY_RUNNER_AUTO_MAX_TICK_STALE_DROP_PCT",
@@ -4416,7 +4416,8 @@ class AutoPilotInvestor:
         auto_skip_notes: List[str] = []
         candidates = []
         for row in rows:
-            if row.get("quality") != "EARLY TRADE CANDIDATE":
+            quality = str(row.get("quality", "") or "").strip().upper()
+            if quality not in {"EARLY TRADE CANDIDATE", "WATCH"}:
                 continue
             sym = str(row.get("symbol", "") or "").strip().upper()
             change = _safe_float(row.get("change"))
@@ -4438,6 +4439,13 @@ class AutoPilotInvestor:
             if imbalance < self._EARLY_RUNNER_AUTO_MIN_IMBALANCE - threshold_epsilon:
                 auto_skip_notes.append(f"{sym}: demand {imbalance:.2f}x below {self._EARLY_RUNNER_AUTO_MIN_IMBALANCE:.2f}x")
                 continue
+            if quality == "WATCH":
+                if imbalance < self._EARLY_RUNNER_AUTO_MIN_IMBALANCE + 0.8 - threshold_epsilon:
+                    auto_skip_notes.append(f"{sym}: watch demand {imbalance:.2f}x below fast-entry floor")
+                    continue
+                if turnover_cr < max(self._EARLY_RUNNER_AUTO_MIN_TURNOVER_CR, 1.0) - threshold_epsilon:
+                    auto_skip_notes.append(f"{sym}: watch turnover ₹{turnover_cr:.2f}Cr below fast-entry floor")
+                    continue
             candidates.append(row)
         if not candidates:
             if auto_skip_notes:
@@ -5997,9 +6005,9 @@ class AutoPilotInvestor:
         gap_pct = cls._candidate_entry_gap_pct(c)
         if str(getattr(c, "holding_horizon", "") or "") == "avoid":
             return "alert_only", "entry timing is not actionable because the setup is alert-only"
-        if c.change_pct <= 2.6 and gap_pct <= 0.8 and c.volume_ratio >= 1.8 and rr2 >= 1.5:
+        if c.change_pct <= 4.8 and gap_pct <= 1.0 and c.volume_ratio >= 1.2 and rr2 >= 1.4:
             return "early", "early breakout — one of the cleaner early entry windows"
-        if c.change_pct <= 6.2 and gap_pct <= 1.0 and c.volume_ratio >= 2.0 and rr2 >= 1.8:
+        if c.change_pct <= 6.0 and gap_pct <= 0.8 and c.volume_ratio >= 2.2 and rr2 >= 1.9:
             return "continuation", "late but still actionable continuation setup"
         return "stretched", "entry is already stretched — alert-only unless manually justified"
 
@@ -6023,20 +6031,23 @@ class AutoPilotInvestor:
         _late_swing_start_min = 13 * 60 + 30
         _late_swing_end_min = 14 * 60 + 15
         _late_swing_window = _late_swing_start_min < now_min <= _late_swing_end_min
+        _late_comer_start_min = _env_time_min("ASSISTANT_LATE_COMER_START", 10 * 60 + 30)
+        _late_comer_end_min = _env_time_min("ASSISTANT_LATE_COMER_END", 13 * 60 + 15)
+        _late_comer_window = _late_comer_start_min <= now_min <= _late_comer_end_min
         _opening_starter_window = _swing_start_min <= now_min <= 10 * 60 + 0
-        _early_engine_end_min = _env_time_min("ASSISTANT_EARLY_ENGINE_END", 11 * 60 + 30)
+        _early_engine_end_min = _env_time_min("ASSISTANT_EARLY_ENGINE_END", 10 * 60 + 45)
         _intraday_auto_buy_cutoff_min = _env_time_min("ASSISTANT_INTRADAY_AUTO_BUY_CUTOFF", 11 * 60 + 30)
 
         if (
             cls._is_true_buy_action(getattr(c, "original_action", ""))
             and 9 * 60 + 15 <= now_min <= _early_engine_end_min
             and c.price >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_PRICE", 20.0)
-            and _env_float("ASSISTANT_EARLY_ENGINE_MIN_CHANGE", 1.0) <= c.change_pct <= _env_float("ASSISTANT_EARLY_ENGINE_MAX_CHANGE", 4.5)
-            and rr2 >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_RR", 1.5)
-            and gap_pct <= _env_float("ASSISTANT_EARLY_ENGINE_MAX_GAP", 0.5)
-            and c.blind_score >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_SCORE", 50.0)
-            and c.confidence >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_CONFIDENCE", 20.0)
-            and c.volume_ratio >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_VOL_RATIO", 3.0)
+            and _env_float("ASSISTANT_EARLY_ENGINE_MIN_CHANGE", 0.6) <= c.change_pct <= _env_float("ASSISTANT_EARLY_ENGINE_MAX_CHANGE", 5.0)
+            and rr2 >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_RR", 1.4)
+            and gap_pct <= _env_float("ASSISTANT_EARLY_ENGINE_MAX_GAP", 0.8)
+            and c.blind_score >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_SCORE", 44.0)
+            and c.confidence >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_CONFIDENCE", 16.0)
+            and c.volume_ratio >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_VOL_RATIO", 2.0)
             and not ("bearish" in str(getattr(c, "reasons", "") or "").lower())
         ):
             return True, "eligible now as an early-engine auto-buy"
@@ -6046,22 +6057,22 @@ class AutoPilotInvestor:
             if micro_open:
                 if entry_lane != "early":
                     return False, "9:15 intraday auto-buy is reserved for early breakout entries only"
-                if grade != "A+":
-                    return False, "9:15 intraday auto-buy needs A+ grade"
-                if c.blind_score < 72:
-                    return False, f"score {c.blind_score:.0f} is below 72 for the 9:15 lane"
-                if c.confidence < 48:
-                    return False, f"confidence {c.confidence:.0f}% is below 48% for the 9:15 lane"
-                if c.volume_ratio < 6.0:
-                    return False, f"volume {c.volume_ratio:.1f}x is below 6.0x for the 9:15 lane"
-                if rr2 < 2.2:
-                    return False, f"R:R 1:{rr2:.1f} is below 1:2.2 for the 9:15 lane"
-                if gap_pct > 0.5:
+                if grade not in {"A+", "A"}:
+                    return False, "9:15 intraday auto-buy needs A or A+ grade"
+                if c.blind_score < 60:
+                    return False, f"score {c.blind_score:.0f} is below 60 for the 9:15 lane"
+                if c.confidence < 34:
+                    return False, f"confidence {c.confidence:.0f}% is below 34% for the 9:15 lane"
+                if c.volume_ratio < 2.5:
+                    return False, f"volume {c.volume_ratio:.1f}x is below 2.5x for the 9:15 lane"
+                if rr2 < 1.7:
+                    return False, f"R:R 1:{rr2:.1f} is below 1:1.7 for the 9:15 lane"
+                if gap_pct > 0.8:
                     return False, f"entry is {gap_pct:.1f}% below trigger for the 9:15 lane"
-                if c.change_pct < 0.6:
-                    return False, f"day move {c.change_pct:.1f}% is below the 9:15 lane zone (needs 0.6%-3.8%)"
-                if c.change_pct > 3.8:
-                    return False, f"day move {c.change_pct:.1f}% is above the 9:15 lane zone (needs 0.6%-3.8%)"
+                if c.change_pct < 0.4:
+                    return False, f"day move {c.change_pct:.1f}% is below the 9:15 lane zone (needs 0.4%-4.8%)"
+                if c.change_pct > 4.8:
+                    return False, f"day move {c.change_pct:.1f}% is above the 9:15 lane zone (needs 0.4%-4.8%)"
             elif now_min > _intraday_auto_buy_cutoff_min:
                 return False, f"intraday auto-buy is paused after {_format_ist_minute(_intraday_auto_buy_cutoff_min)} IST"
             elif not (9 * 60 + 20 <= now_min <= 10 * 60 + 0):
@@ -6072,31 +6083,25 @@ class AutoPilotInvestor:
                 return False, "intraday auto-buy needs A or A+ grade"
         else:
             if not (_swing_start_min <= now_min <= _swing_end_min):
-                if not _late_swing_window:
-                    if now_min < _swing_start_min:
-                        return False, "swing auto-buy starts at 9:20 AM IST"
-                    return False, "swing auto-buy is paused after 1:30 PM IST"
-                if c.holding_horizon not in {"2-day swing", "5-day swing"}:
-                    return False, "late auto-buy is reserved for exceptional swing setups only"
-                if grade not in {"A+", "A"}:
-                    return False, "late swing auto-buy needs A or A+ grade"
-                if c.price < 50:
-                    return False, "late swing auto-buy needs price above ₹50"
-                if rr2 < 2.2:
-                    return False, f"late swing auto-buy needs R:R at least 1:2.2 (now 1:{rr2:.1f})"
-                if gap_pct > 0.6:
-                    return False, f"late swing auto-buy needs entry within 0.6% of trigger (now {gap_pct:.1f}%)"
-                if c.change_pct < 1.8 or c.change_pct > 5.8:
-                    return False, f"late swing auto-buy needs day move between 1.8% and 5.8% (now {c.change_pct:.1f}%)"
-                if c.blind_score < 58:
-                    return False, f"late swing auto-buy needs score at least 58 (now {c.blind_score:.0f})"
-                if c.confidence < 38:
-                    return False, f"late swing auto-buy needs confidence at least 38% (now {c.confidence:.0f}%)"
-                if c.volume_ratio < 4.0:
-                    return False, f"late swing auto-buy needs volume at least 4.0x (now {c.volume_ratio:.1f}x)"
-                if _avoid_horizon:
-                    return False, "horizon model tagged this late setup as avoid"
-                return True, "eligible now as an exceptional late-day swing auto-buy"
+                if now_min < _swing_start_min:
+                    return False, "swing auto-buy starts at 9:15 AM IST"
+                return False, "swing auto-buy is paused after 1:30 PM IST"
+
+        if (
+            _late_comer_window
+            and c.holding_horizon in {"2-day swing", "5-day swing"}
+            and grade in {"A+", "A"}
+            and c.price >= _env_float("ASSISTANT_LATE_COMER_MIN_PRICE", 30.0)
+            and _env_float("ASSISTANT_LATE_COMER_MIN_CHANGE", 4.5) <= c.change_pct <= _env_float("ASSISTANT_LATE_COMER_MAX_CHANGE", 9.5)
+            and c.blind_score >= _env_float("ASSISTANT_LATE_COMER_MIN_SCORE", 52.0)
+            and c.confidence >= _env_float("ASSISTANT_LATE_COMER_MIN_CONFIDENCE", 34.0)
+            and c.volume_ratio >= _env_float("ASSISTANT_LATE_COMER_MIN_VOL_RATIO", 1.8)
+            and rr2 >= _env_float("ASSISTANT_LATE_COMER_MIN_RR", 1.8)
+            and gap_pct <= _env_float("ASSISTANT_LATE_COMER_MAX_GAP", 0.7)
+            and not _avoid_horizon
+            and "bearish" not in str(getattr(c, "reasons", "") or "").lower()
+        ):
+            return True, "eligible now as a strict late-comer continuation swing auto-buy"
 
         if entry_lane == "stretched":
             return False, entry_reason
@@ -6246,6 +6251,7 @@ class AutoPilotInvestor:
             _now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
         _now_min = _now_ist.hour * 60 + _now_ist.minute
         _opening_starter_window = 9 * 60 + 20 <= _now_min <= 10 * 60 + 0
+        _late_comer_window = _env_time_min("ASSISTANT_LATE_COMER_START", 10 * 60 + 30) <= _now_min <= _env_time_min("ASSISTANT_LATE_COMER_END", 13 * 60 + 15)
 
         if (
             _opening_starter_window
@@ -6263,14 +6269,26 @@ class AutoPilotInvestor:
         if (
             cls._is_true_buy_action(getattr(c, "original_action", ""))
             and c.price >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_PRICE", 20.0)
-            and _env_float("ASSISTANT_EARLY_ENGINE_MIN_CHANGE", 1.0) <= c.change_pct <= _env_float("ASSISTANT_EARLY_ENGINE_MAX_CHANGE", 4.5)
-            and c.blind_score >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_SCORE", 50.0)
-            and c.confidence >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_CONFIDENCE", 20.0)
-            and c.volume_ratio >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_VOL_RATIO", 3.0)
-            and rr2 >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_RR", 1.5)
-            and gap_pct <= _env_float("ASSISTANT_EARLY_ENGINE_MAX_GAP", 0.5)
+            and _env_float("ASSISTANT_EARLY_ENGINE_MIN_CHANGE", 0.6) <= c.change_pct <= _env_float("ASSISTANT_EARLY_ENGINE_MAX_CHANGE", 5.0)
+            and c.blind_score >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_SCORE", 44.0)
+            and c.confidence >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_CONFIDENCE", 16.0)
+            and c.volume_ratio >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_VOL_RATIO", 2.0)
+            and rr2 >= _env_float("ASSISTANT_EARLY_ENGINE_MIN_RR", 1.4)
+            and gap_pct <= _env_float("ASSISTANT_EARLY_ENGINE_MAX_GAP", 0.8)
         ):
             return ("intraday", "MIS", 1, "Early engine: Buy Now while move is still controlled")
+
+        if (
+            _late_comer_window
+            and c.price >= _env_float("ASSISTANT_LATE_COMER_MIN_PRICE", 30.0)
+            and _env_float("ASSISTANT_LATE_COMER_MIN_CHANGE", 4.5) <= c.change_pct <= _env_float("ASSISTANT_LATE_COMER_MAX_CHANGE", 9.5)
+            and c.blind_score >= _env_float("ASSISTANT_LATE_COMER_MIN_SCORE", 52.0)
+            and c.confidence >= _env_float("ASSISTANT_LATE_COMER_MIN_CONFIDENCE", 34.0)
+            and c.volume_ratio >= _env_float("ASSISTANT_LATE_COMER_MIN_VOL_RATIO", 1.8)
+            and rr2 >= _env_float("ASSISTANT_LATE_COMER_MIN_RR", 1.8)
+            and gap_pct <= _env_float("ASSISTANT_LATE_COMER_MAX_GAP", 0.7)
+        ):
+            return ("2-day swing", "CNC", 2, "Strict late-comer continuation: liquid midday runner with controlled risk")
 
         if c.blind_score < 38 or c.confidence < 25:
             return ("avoid", "", 0, "Below minimum quality for evidence-backed execution")

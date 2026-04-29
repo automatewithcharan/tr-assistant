@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import threading
 import time
@@ -67,17 +68,25 @@ def _is_market_open() -> bool:
     return 9 * 60 + 15 <= now_min <= 15 * 60 + 30
 
 
-def _round_to_nse_tick(price: float) -> float:
-    """Round a price UP to the nearest NSE tick size (₹0.05).
+def _round_to_tick(price: float, tick_size: float = 0.05, *, direction: str = "up") -> float:
+    """Round a price to the nearest valid tick.
 
-    NSE requires all order prices to be multiples of 0.05.
-    Rounding up avoids placing limit orders below the intended level.
-    Adapted from sdoosa-algo-trade-python.
+    Defaults to ₹0.05, but some NSE/BSE names require ₹0.10, ₹0.50, etc.
     """
-    import math
     if price <= 0:
         return 0.0
-    return round(math.ceil(price * 20) / 20, 2)
+    tick = float(tick_size or 0.05)
+    if tick <= 0:
+        tick = 0.05
+    scaled = price / tick
+    if direction == "down":
+        rounded = math.floor(scaled)
+    elif direction == "nearest":
+        rounded = round(scaled)
+    else:
+        rounded = math.ceil(scaled)
+    decimals = max(2, len(f"{tick:.8f}".rstrip("0").split(".")[-1]))
+    return round(rounded * tick, decimals)
 
 
 def _normalize_gtt_trigger_id(value: Any) -> str:
@@ -300,6 +309,8 @@ class KiteOrderManager:
         self._daily_order_count = 0
         self._daily_order_date = ""
         self._client = None
+        self._instrument_cache: Dict[str, Dict[str, Any]] = {}
+        self._instrument_cache_loaded = False
         self._load_positions()
         self._load_pending_buys()
 
@@ -316,6 +327,45 @@ class KiteOrderManager:
         mgr.ensure_fresh_session()
         self._client = mgr._build_client()
         return self._client
+
+    def _load_instrument_cache(self) -> None:
+        if self._instrument_cache_loaded:
+            return
+        self._instrument_cache_loaded = True
+        try:
+            client = self._get_client()
+            combined: Dict[str, Dict[str, Any]] = {}
+            for exchange in ("NSE", "BSE"):
+                try:
+                    instruments = client.instruments(exchange) or []
+                except Exception as exc:
+                    _log.debug("Instrument dump failed for %s: %s", exchange, exc)
+                    continue
+                for row in instruments:
+                    sym = str((row or {}).get("tradingsymbol", "") or "").strip().upper()
+                    if not sym:
+                        continue
+                    tick_size = float((row or {}).get("tick_size", 0.05) or 0.05)
+                    entry = {
+                        "exchange": exchange,
+                        "tick_size": tick_size,
+                    }
+                    current = combined.get(sym)
+                    if current is None or current.get("exchange") != "NSE":
+                        combined[sym] = entry
+            self._instrument_cache = combined
+        except Exception as exc:
+            _log.debug("Instrument cache load failed: %s", exc)
+
+    def _resolve_exchange_and_tick_size(self, symbol: str) -> Tuple[str, float]:
+        symbol = str(symbol or "").strip().upper()
+        if not symbol:
+            return "NSE", 0.05
+        self._load_instrument_cache()
+        meta = self._instrument_cache.get(symbol) or {}
+        exchange = str(meta.get("exchange", "NSE") or "NSE").upper()
+        tick_size = float(meta.get("tick_size", 0.05) or 0.05)
+        return exchange, tick_size
 
     # ------------------------------------------------------------------
     # Persistence
@@ -551,8 +601,10 @@ class KiteOrderManager:
             return 0.0
         try:
             client = self._get_client()
-            quote = client.quote(f"NSE:{symbol}") or {}
-            data = quote.get(f"NSE:{symbol}", {}) if isinstance(quote, dict) else {}
+            exchange, _tick_size = self._resolve_exchange_and_tick_size(symbol)
+            key = f"{exchange}:{symbol}"
+            quote = client.quote(key) or {}
+            data = quote.get(key, {}) if isinstance(quote, dict) else {}
             return float(data.get("last_price") or 0.0)
         except Exception as exc:
             _log.debug("Broker LTP lookup failed for %s: %s", symbol, exc)
@@ -853,8 +905,10 @@ class KiteOrderManager:
         """
         try:
             client = self._get_client()
-            quote = client.quote(f"NSE:{symbol}")
-            data = quote.get(f"NSE:{symbol}", {})
+            exchange, _tick_size = self._resolve_exchange_and_tick_size(symbol)
+            key = f"{exchange}:{symbol}"
+            quote = client.quote(key)
+            data = quote.get(key, {})
             if not data:
                 return False, ""
             ltp = float(data.get("last_price", 0))
@@ -1220,19 +1274,20 @@ class KiteOrderManager:
             reference_price = float(price or 0.0)
             if reference_price <= 0 and order_type == "MARKET":
                 reference_price = self._latest_tick_price(symbol)
+            exchange, tick_size = self._resolve_exchange_and_tick_size(symbol)
             # Some brokers/accounts reject API MARKET buys without market protection.
             # Use a disciplined LIMIT at the refreshed live reference price instead
             # of paying an extra premium above the market.
             aggressive_limit_price = 0.0
             if reference_price > 0 and order_type == "MARKET":
-                aggressive_limit_price = _round_to_nse_tick(reference_price)
+                aggressive_limit_price = _round_to_tick(reference_price, tick_size, direction="up")
                 kite_order_type = "LIMIT"
             else:
                 kite_order_type = "MARKET" if order_type == "MARKET" or price <= 0 else "LIMIT"
 
             order_params = {
                 "tradingsymbol": symbol,
-                "exchange": "NSE",
+                "exchange": exchange,
                 "transaction_type": "BUY",
                 "quantity": qty,
                 "order_type": kite_order_type,
@@ -1240,7 +1295,7 @@ class KiteOrderManager:
                 "variety": "regular",
             }
             if kite_order_type == "LIMIT" and reference_price > 0:
-                order_params["price"] = aggressive_limit_price or _round_to_nse_tick(reference_price)
+                order_params["price"] = aggressive_limit_price or _round_to_tick(reference_price, tick_size, direction="up")
             elif kite_order_type == "MARKET":
                 order_params["market_protection"] = -1
 
@@ -1385,8 +1440,9 @@ class KiteOrderManager:
             reference_price = float(price or 0.0)
             if reference_price <= 0 and order_type == "MARKET":
                 reference_price = self._latest_tick_price(symbol)
+            exchange, tick_size = self._resolve_exchange_and_tick_size(symbol)
             if reference_price > 0 and order_type == "MARKET":
-                aggressive_limit_price = _round_to_nse_tick(max(reference_price * 0.997, 0.05))
+                aggressive_limit_price = _round_to_tick(max(reference_price * 0.997, tick_size), tick_size, direction="down")
                 kite_order_type = "LIMIT"
             else:
                 aggressive_limit_price = 0.0
@@ -1394,7 +1450,7 @@ class KiteOrderManager:
 
             order_params = {
                 "tradingsymbol": symbol,
-                "exchange": "NSE",
+                "exchange": exchange,
                 "transaction_type": "SELL",
                 "quantity": sell_qty,
                 "order_type": kite_order_type,
@@ -1402,7 +1458,7 @@ class KiteOrderManager:
                 "variety": "regular",
             }
             if kite_order_type == "LIMIT" and reference_price > 0:
-                order_params["price"] = aggressive_limit_price or _round_to_nse_tick(reference_price)
+                order_params["price"] = aggressive_limit_price or _round_to_tick(reference_price, tick_size, direction="down")
             elif kite_order_type == "MARKET":
                 order_params["market_protection"] = -1
             
@@ -2049,13 +2105,19 @@ class KiteOrderManager:
         try:
             client = self._get_client()
             order_product = self._normalize_product_type(product_type)
+            resolved_exchange, tick_size = self._resolve_exchange_and_tick_size(symbol)
+            if not exchange or exchange == "NSE":
+                exchange = resolved_exchange
             # Kite OCO: trigger_values = [stop_loss, target] (ascending order required by API)
             trigger_response = client.place_gtt(
                 trigger_type=client.GTT_TYPE_OCO,
                 tradingsymbol=symbol,
                 exchange=exchange,
-                trigger_values=[_round_to_nse_tick(stop_loss), _round_to_nse_tick(target)],
-                last_price=_round_to_nse_tick(buy_price),
+                trigger_values=[
+                    _round_to_tick(stop_loss, tick_size, direction="down"),
+                    _round_to_tick(target, tick_size, direction="up"),
+                ],
+                last_price=_round_to_tick(buy_price, tick_size, direction="nearest"),
                 orders=[
                     # Leg 1: stop-loss — fires when price <= stop_loss
                     {
@@ -2065,7 +2127,7 @@ class KiteOrderManager:
                         "product": order_product,
                         # The installed Kite client validates `price` on every GTT leg,
                         # even for MARKET orders.
-                        "price": _round_to_nse_tick(stop_loss),
+                        "price": _round_to_tick(stop_loss, tick_size, direction="down"),
                     },
                     # Leg 2: target — fires when price >= target
                     {
@@ -2073,7 +2135,7 @@ class KiteOrderManager:
                         "quantity": qty,
                         "order_type": "LIMIT",
                         "product": order_product,
-                        "price": _round_to_nse_tick(target),
+                        "price": _round_to_tick(target, tick_size, direction="up"),
                     },
                 ],
             )
