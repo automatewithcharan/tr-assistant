@@ -5525,6 +5525,10 @@ class AutoPilotInvestor:
 
             signal_row = signal_map.get(symbol)
             current_price = float(ticks.get(symbol, {}).get("last_price", 0) or 0)
+            if current_price <= 0:
+                # Tick not available — fetch a fresh quote from the broker API.
+                # This covers positions in symbols outside the WebSocket universe.
+                current_price = self._order_manager._broker_last_price(symbol)
             if current_price <= 0 and signal_row is not None:
                 current_price = float(signal_row.get("LTP", signal_row.get("PriceNow", signal_row.get("Price Now", 0))) or 0)
             if current_price <= 0:
@@ -6114,7 +6118,7 @@ class AutoPilotInvestor:
             and c.holding_horizon in {"2-day swing", "5-day swing"}
             and grade in {"A+", "A"}
             and c.price >= _env_float("ASSISTANT_LATE_COMER_MIN_PRICE", 30.0)
-            and _env_float("ASSISTANT_LATE_COMER_MIN_CHANGE", 4.5) <= c.change_pct <= _env_float("ASSISTANT_LATE_COMER_MAX_CHANGE", 9.5)
+            and _env_float("ASSISTANT_LATE_COMER_MIN_CHANGE", 4.5) <= c.change_pct <= _env_float("ASSISTANT_LATE_COMER_MAX_CHANGE", 11.5)
             and c.blind_score >= _env_float("ASSISTANT_LATE_COMER_MIN_SCORE", 52.0)
             and c.confidence >= _env_float("ASSISTANT_LATE_COMER_MIN_CONFIDENCE", 34.0)
             and c.volume_ratio >= _env_float("ASSISTANT_LATE_COMER_MIN_VOL_RATIO", 1.8)
@@ -6125,9 +6129,6 @@ class AutoPilotInvestor:
         ):
             return True, "eligible now as a strict late-comer continuation swing auto-buy"
 
-        if entry_lane == "stretched":
-            return False, entry_reason
-
         if (
             _opening_starter_window
             and c.holding_horizon in {"2-day swing", "5-day swing"}
@@ -6135,13 +6136,16 @@ class AutoPilotInvestor:
             and c.price >= 50
             and rr2 >= 2.0
             and gap_pct <= 0.8
-            and 1.5 <= c.change_pct <= 6.5
+            and 1.5 <= c.change_pct <= 7.5
             and c.blind_score >= 55
             and c.confidence >= 18
             and c.volume_ratio >= 0.25
             and not _avoid_horizon
         ):
             return True, "eligible now as an opening starter swing auto-buy"
+
+        if entry_lane == "stretched":
+            return False, entry_reason
 
         if c.holding_horizon == "5-day swing":
             if c.price < 20:
@@ -6278,9 +6282,9 @@ class AutoPilotInvestor:
 
         if (
             _opening_starter_window
-            and entry_lane in {"early", "continuation"}
+            and entry_lane in {"early", "continuation", "stretched"}
             and c.price >= 50
-            and 1.5 <= c.change_pct <= 6.5
+            and 1.5 <= c.change_pct <= 7.5
             and c.blind_score >= 55
             and c.confidence >= 18
             and c.volume_ratio >= 0.25
@@ -6305,7 +6309,7 @@ class AutoPilotInvestor:
         if (
             _late_comer_window
             and c.price >= _env_float("ASSISTANT_LATE_COMER_MIN_PRICE", 30.0)
-            and _env_float("ASSISTANT_LATE_COMER_MIN_CHANGE", 4.5) <= c.change_pct <= _env_float("ASSISTANT_LATE_COMER_MAX_CHANGE", 9.5)
+            and _env_float("ASSISTANT_LATE_COMER_MIN_CHANGE", 4.5) <= c.change_pct <= _env_float("ASSISTANT_LATE_COMER_MAX_CHANGE", 11.5)
             and c.blind_score >= _env_float("ASSISTANT_LATE_COMER_MIN_SCORE", 52.0)
             and c.confidence >= _env_float("ASSISTANT_LATE_COMER_MIN_CONFIDENCE", 34.0)
             and c.volume_ratio >= _env_float("ASSISTANT_LATE_COMER_MIN_VOL_RATIO", 1.8)

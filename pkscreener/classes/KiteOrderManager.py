@@ -1632,6 +1632,8 @@ class KiteOrderManager:
             tick = ticks.get(sym, {})
             live_price = float(tick.get("last_price", 0))
             if live_price <= 0:
+                live_price = self._broker_last_price(sym)
+            if live_price <= 0:
                 continue
 
             # Update highest price for trailing stop
