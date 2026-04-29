@@ -22,7 +22,7 @@ import time
 import math
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 
@@ -68,6 +68,15 @@ def _env_time_min(name: str, default_min: int) -> int:
         return int(parts[0]) * 60 + int(parts[1])
     except Exception:
         return default_min
+
+
+def _format_ist_minute(minute_of_day: int) -> str:
+    minute_of_day = max(0, int(minute_of_day))
+    hour24 = minute_of_day // 60
+    minute = minute_of_day % 60
+    suffix = "AM" if hour24 < 12 else "PM"
+    hour12 = hour24 % 12 or 12
+    return f"{hour12}:{minute:02d} {suffix}"
 from PKDevTools.classes.log import default_logger
 
 from pkscreener.classes.PaperTradeTracker import PaperTradeTracker
@@ -710,6 +719,13 @@ class AutoPilotInvestor:
         self._TICK_ALREADY_MOVED_PCT = 16.0      # above this % skip — too late to enter intraday. Correct fix: catch EARLIER at 3-5%, not buy LATER at 16%+
         # Hard cutoff: never send BUY alerts after this IST minute-of-day
         self._BUY_ALERT_CUTOFF_MIN = 15 * 60 + 15  # 3:15 PM — last 15 min are exit zone
+        # Intraday/MIS entries must stop much earlier than general alerts.
+        # The goal is to prevent weak late-session chases that have no time left
+        # to work before square-off pressure begins.
+        self._INTRADAY_AUTO_BUY_CUTOFF_MIN = _env_time_min(
+            "ASSISTANT_INTRADAY_AUTO_BUY_CUTOFF",
+            11 * 60 + 30,
+        )
         # ETFs, liquid funds, and bond funds — not equity picks, never alert
         self._EXCLUDED_SYMBOLS: Set[str] = {
             "LIQUIDBEES", "CPSEETF", "NIFTYBEES", "BANKBEES", "JUNIORBEES",
@@ -850,6 +866,16 @@ class AutoPilotInvestor:
         """
         if self._order_manager is None:
             return "⚠️ Kite auto-buy unavailable: order manager not initialized"
+        product_label = str(product_preference or "").strip().upper()
+        horizon_label = str(holding_horizon or "").strip().lower()
+        is_intraday = product_label == "MIS" or horizon_label == "intraday"
+        if is_intraday:
+            now_min = self._ist_now_minute()
+            if now_min > self._INTRADAY_AUTO_BUY_CUTOFF_MIN:
+                return (
+                    f"⚠️ Auto-buy skipped for `{symbol}`: intraday auto-buy is paused after "
+                    f"{_format_ist_minute(self._INTRADAY_AUTO_BUY_CUTOFF_MIN)} IST"
+                )
         result = self._order_manager.auto_buy_from_candidate(
             symbol=symbol, live_price=price, stop_loss=stop_loss,
             target1=target1, target2=target2,
@@ -859,8 +885,8 @@ class AutoPilotInvestor:
             max_hold_days=max_hold_days,
         )
         if result.success:
-            product_label = str(product_preference or "").strip().upper() or "AUTO"
-            horizon_label = str(holding_horizon or "").strip().lower() or "auto"
+            product_label = product_label or "AUTO"
+            horizon_label = horizon_label or "auto"
             status = (
                 f"✅ Auto-bought `{symbol}` x{result.qty} via Kite "
                 f"(ID: {result.order_id}) | Product: `{product_label}` | Horizon: `{horizon_label}`"
@@ -890,6 +916,15 @@ class AutoPilotInvestor:
             return status
         else:
             return f"⚠️ Auto-buy skipped for `{symbol}`: {result.message}"
+
+    def _ist_now_minute(self) -> int:
+        try:
+            import pytz
+            now_ist = datetime.now(pytz.timezone("Asia/Kolkata"))
+        except Exception:
+            from datetime import timezone, timedelta
+            now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+        return now_ist.hour * 60 + now_ist.minute
 
     def _cap_suggested_qty_to_broker(
         self,
@@ -5353,6 +5388,9 @@ class AutoPilotInvestor:
 
     def _check_portfolio_sells(self, signal_df: pd.DataFrame) -> Tuple[List[SellAlert], int]:
         """Check all open portfolio positions for sell conditions."""
+        if self._order_manager is not None:
+            return self._check_kite_tracked_position_sells(signal_df)
+
         sell_alerts = []
         trades_df = self._load_portfolio_trades()
         if trades_df is None or trades_df.empty:
@@ -5362,12 +5400,7 @@ class AutoPilotInvestor:
         if open_trades.empty:
             return sell_alerts, 0
 
-        # Build signal lookup
-        signal_map = {}
-        for _, row in signal_df.iterrows():
-            sym = str(row.get("Symbol", "")).strip().upper()
-            if sym:
-                signal_map[sym] = row
+        signal_map = self._build_signal_lookup(signal_df)
 
         for _, trade in open_trades.iterrows():
             symbol = str(trade.get("Symbol", "")).strip().upper()
@@ -5376,7 +5409,6 @@ class AutoPilotInvestor:
             if not symbol or quantity <= 0:
                 continue
 
-            # Get current price from signal data or trade data
             current_price = float(trade.get("CurrentPrice", 0))
             signal_row = signal_map.get(symbol)
             if signal_row is not None:
@@ -5387,34 +5419,29 @@ class AutoPilotInvestor:
             if current_price <= 0:
                 current_price = entry_price
 
-            invested = float(trade.get("InvestedAmount", entry_price * quantity))
             pnl_pct = round((current_price - entry_price) * 100 / entry_price, 2) if entry_price > 0 else 0.0
 
             should_sell = False
             reason = ""
 
-            # Check signal says sell
             if self.config.auto_exit_on_sell and signal_row is not None:
                 now_action = str(signal_row.get("NowAction", signal_row.get("What To Do", ""))).strip()
                 if any(x in now_action.lower() for x in ["sell", "exit"]):
                     should_sell = True
                     reason = f"Signal: {now_action}"
 
-            # Check stop loss
             if not should_sell and self.config.auto_exit_on_stop:
                 stop_loss = float(trade.get("StopLoss", 0))
                 if stop_loss > 0 and current_price <= stop_loss:
                     should_sell = True
                     reason = f"STOP LOSS hit ({stop_loss:.2f}), cut losses now"
 
-            # Check target
             if not should_sell and self.config.auto_exit_on_target2:
                 target2 = float(trade.get("Target2", 0))
                 if target2 > 0 and current_price >= target2:
                     should_sell = True
                     reason = f"TARGET 2 HIT ({target2:.2f}), book profits!"
 
-            # Also check target1 — alert but with different urgency
             if not should_sell:
                 target1 = float(trade.get("Target1", 0))
                 if target1 > 0 and current_price >= target1:
@@ -5432,6 +5459,86 @@ class AutoPilotInvestor:
                 ))
 
         return sell_alerts, len(open_trades)
+
+    def _build_signal_lookup(self, signal_df: pd.DataFrame) -> Dict[str, Any]:
+        signal_map: Dict[str, Any] = {}
+        for _, row in signal_df.iterrows():
+            sym = str(row.get("Symbol", row.get("Stock", ""))).strip().upper()
+            if sym:
+                signal_map[sym] = row
+        return signal_map
+
+    def _check_kite_tracked_position_sells(self, signal_df: pd.DataFrame) -> Tuple[List[SellAlert], int]:
+        sell_alerts: List[SellAlert] = []
+        if self._order_manager is None:
+            return sell_alerts, 0
+
+        signal_map = self._build_signal_lookup(signal_df)
+        ticks = self._order_manager._load_ticks()
+        open_positions = self._order_manager.get_open_positions()
+        if not open_positions:
+            return sell_alerts, 0
+
+        existing_signals = {
+            (sym, reason, qty)
+            for sym, reason, _price, qty in self._order_manager.check_sell_signals(ticks)
+        }
+
+        for pos in open_positions:
+            symbol = str(getattr(pos, "symbol", "") or "").strip().upper()
+            quantity = int(getattr(pos, "qty", 0) or 0)
+            entry_price = float(getattr(pos, "buy_price", 0) or 0)
+            if not symbol or quantity <= 0 or entry_price <= 0:
+                continue
+
+            current_price = float(ticks.get(symbol, {}).get("last_price", 0) or 0)
+            signal_row = signal_map.get(symbol)
+            if signal_row is not None:
+                signal_price = float(signal_row.get("LTP", signal_row.get("PriceNow", signal_row.get("Price Now", 0))) or 0)
+                if signal_price > 0:
+                    current_price = signal_price
+            if current_price <= 0:
+                current_price = entry_price
+
+            pnl_pct = round((current_price - entry_price) * 100 / entry_price, 2) if entry_price > 0 else 0.0
+            reasons: List[str] = []
+
+            if self.config.auto_exit_on_sell and signal_row is not None:
+                now_action = str(signal_row.get("NowAction", signal_row.get("What To Do", ""))).strip()
+                if any(x in now_action.lower() for x in ["sell", "exit"]):
+                    reasons.append(f"Signal: {now_action}")
+
+            stop_loss = float(getattr(pos, "stop_loss", 0) or 0)
+            if self.config.auto_exit_on_stop and stop_loss > 0 and current_price <= stop_loss:
+                reasons.append(f"STOP LOSS hit ({stop_loss:.2f}), cut losses now")
+
+            target2 = float(getattr(pos, "target2", 0) or 0)
+            if self.config.auto_exit_on_target2 and target2 > 0 and current_price >= target2:
+                reasons.append(f"TARGET 2 HIT ({target2:.2f}), book profits!")
+
+            target1 = float(getattr(pos, "target1", 0) or 0)
+            if target1 > 0 and current_price >= target1:
+                reasons.append(f"Target 1 reached ({target1:.2f}), consider partial exit")
+
+            matched_engine_reasons = [
+                self._order_manager.format_sell_reason(reason)
+                for sym, reason, qty in existing_signals
+                if sym == symbol and (qty == 0 or qty == quantity)
+            ]
+            reasons.extend(matched_engine_reasons)
+
+            if reasons and symbol not in self._already_alerted_sells:
+                deduped_reasons = list(dict.fromkeys(r for r in reasons if r))
+                sell_alerts.append(SellAlert(
+                    symbol=symbol,
+                    quantity=quantity,
+                    entry_price=entry_price,
+                    current_price=round(current_price, 2),
+                    pnl_pct=pnl_pct,
+                    reason=" | ".join(deduped_reasons),
+                ))
+
+        return sell_alerts, len(open_positions)
 
     def _load_portfolio_trades(self) -> Optional[pd.DataFrame]:
         """Load the current portfolio trades CSV."""
@@ -5918,6 +6025,7 @@ class AutoPilotInvestor:
         _late_swing_window = _late_swing_start_min < now_min <= _late_swing_end_min
         _opening_starter_window = _swing_start_min <= now_min <= 10 * 60 + 0
         _early_engine_end_min = _env_time_min("ASSISTANT_EARLY_ENGINE_END", 11 * 60 + 30)
+        _intraday_auto_buy_cutoff_min = _env_time_min("ASSISTANT_INTRADAY_AUTO_BUY_CUTOFF", 11 * 60 + 30)
 
         if (
             cls._is_true_buy_action(getattr(c, "original_action", ""))
@@ -5954,6 +6062,8 @@ class AutoPilotInvestor:
                     return False, f"day move {c.change_pct:.1f}% is below the 9:15 lane zone (needs 0.6%-3.8%)"
                 if c.change_pct > 3.8:
                     return False, f"day move {c.change_pct:.1f}% is above the 9:15 lane zone (needs 0.6%-3.8%)"
+            elif now_min > _intraday_auto_buy_cutoff_min:
+                return False, f"intraday auto-buy is paused after {_format_ist_minute(_intraday_auto_buy_cutoff_min)} IST"
             elif not (9 * 60 + 20 <= now_min <= 10 * 60 + 0):
                 return False, "intraday auto-buy is only allowed during the opening window"
             if entry_lane != "early":
@@ -6816,6 +6926,8 @@ class AutoPilotInvestor:
         if not auto_eligible:
             if "auto-buy cap" in lower or "alert-side auto-buy cap" in lower:
                 return "SKIPPED", "auto_buy_cap"
+            if "intraday auto-buy is paused after" in lower:
+                return "INELIGIBLE", "intraday_window_closed"
             if "paused after 1:30" in lower:
                 return "INELIGIBLE", "swing_window_closed"
             if "starts at 9:20" in lower:

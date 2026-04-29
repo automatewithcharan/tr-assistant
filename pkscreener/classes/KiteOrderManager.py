@@ -131,6 +131,7 @@ class SellReason:
     TARGET_2 = "target_2_hit"
     TRAILING_STOP = "trailing_stop_hit"
     TIME_DECAY = "held_too_long"
+    EOD_SQUAREOFF = "eod_squareoff"
     REVERSAL = "intraday_reversal"
     REGIME_BREAK = "cusum_regime_break"
     MANUAL = "manual_sell"
@@ -977,20 +978,6 @@ class KiteOrderManager:
                 )
             )
 
-        open_count = sum(1 for p in self._positions.values() if p.status == "open")
-        if open_count >= self.max_open_positions:
-            return self._return_logged_result(
-                OrderResult(
-                    False,
-                    symbol=symbol,
-                    side="BUY",
-                    qty=qty,
-                    price=price,
-                    status="SKIPPED",
-                    message=f"Max open positions reached ({self.max_open_positions})",
-                )
-            )
-
         bucket_open_count = self._current_open_count_for_product(order_product)
         bucket_max_positions = self._max_positions_for_product(order_product)
         if bucket_max_positions > 0 and bucket_open_count >= bucket_max_positions:
@@ -1202,6 +1189,14 @@ class KiteOrderManager:
                     latest_price,
                 )
                 price = latest_price
+            elif latest_price > price:
+                _log.info(
+                    "%s buy reference lifted from stale signal ₹%.2f to live ₹%.2f",
+                    symbol,
+                    price,
+                    latest_price,
+                )
+                price = latest_price
 
         # Dry run mode
         if self.dry_run:
@@ -1226,12 +1221,11 @@ class KiteOrderManager:
             if reference_price <= 0 and order_type == "MARKET":
                 reference_price = self._latest_tick_price(symbol)
             # Some brokers/accounts reject API MARKET buys without market protection.
-            # For live auto-buys we nearly always have a reference price, so prefer a
-            # minimal LIMIT order 0.1% above the observed price to preserve fill
-            # probability while minimizing slippage and staying API-compatible.
+            # Use a disciplined LIMIT at the refreshed live reference price instead
+            # of paying an extra premium above the market.
             aggressive_limit_price = 0.0
             if reference_price > 0 and order_type == "MARKET":
-                aggressive_limit_price = _round_to_nse_tick(reference_price * 1.001)
+                aggressive_limit_price = _round_to_nse_tick(reference_price)
                 kite_order_type = "LIMIT"
             else:
                 kite_order_type = "MARKET" if order_type == "MARKET" or price <= 0 else "LIMIT"
@@ -1572,6 +1566,12 @@ class KiteOrderManager:
             pnl_pct = ((live_price - pos.buy_price) / pos.buy_price * 100) if pos.buy_price > 0 else 0
             is_intraday = getattr(pos, "product_type", self.product_type) == "MIS" or getattr(pos, "holding_horizon", "") == "intraday"
             hold_days_limit = int(getattr(pos, "max_hold_days_override", 0) or 0) or self.max_hold_days
+            now_min = now.hour * 60 + now.minute
+
+            # 0. Hard intraday square-off before broker auto square-off.
+            if is_intraday and now_min >= 15 * 60 + 10:
+                signals.append((sym, SellReason.EOD_SQUAREOFF, live_price, 0))
+                continue
 
             # 1. Stop loss hit
             if pos.stop_loss > 0 and live_price <= pos.stop_loss:
@@ -1858,6 +1858,7 @@ class KiteOrderManager:
             SellReason.TARGET_2: "🟢🟢 Max target reached!",
             SellReason.TRAILING_STOP: "🟡 Trailing stop triggered",
             SellReason.TIME_DECAY: "⏰ Held too long without gain",
+            SellReason.EOD_SQUAREOFF: "🕒 End-of-day MIS square-off",
             SellReason.REVERSAL: "🔻 Intraday reversal detected",
             SellReason.REGIME_BREAK: "📉 CUSUM regime break — momentum reversed",
             SellReason.MANUAL: "👤 Manual sell",
