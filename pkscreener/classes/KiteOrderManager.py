@@ -255,9 +255,14 @@ class KiteOrderManager:
         KITE_INTRADAY_MAX_ORDER_VALUE=15000 Max MIS notional per order
         KITE_INTRADAY_MAX_OPEN_POSITIONS=2 Max MIS simultaneous positions
         KITE_TIME_SLICED_CAPITAL=1      Reserve capital for later high-quality setups
-        KITE_TRAILING_STOP_PCT=3.0      Trailing stop activation (% above buy)
-        KITE_TRAILING_STOP_TRAIL=1.0    Trail distance (% below highest) — tighter for higher capture
-        KITE_MAX_HOLD_DAYS=5            Max days to hold before time-decay exit
+        KITE_TRAILING_STOP_PCT=3.0      Intraday trailing stop activation (% above buy)
+        KITE_TRAILING_STOP_TRAIL=1.0    Intraday trail distance (% below highest)
+        KITE_SWING_TRAIL_ACTIVATE_PCT=5.0  Swing trail activates after this % gain (default 5%)
+        KITE_SWING_TRAIL_DIST_PCT=4.0      Swing trail distance % below peak (default 4%)
+        KITE_SWING_MIN_TARGET2_PCT=5.0  Minimum target2 for CNC orders (% above entry)
+        KITE_SWING_MAX_TARGET2_PCT=20.0 Maximum target2 for CNC orders (% above entry)
+        KITE_SWING_DEFAULT_SL_PCT=5.0   Default stop-loss % below entry if signal has none
+        KITE_MAX_HOLD_DAYS=10           Max days to hold losing position before time-decay exit
         KITE_DRY_RUN=0                  1=log orders without placing them
         KITE_PRODUCT_TYPE=MIS            MIS=intraday margin (5x leverage), CNC=delivery (full capital)
     """
@@ -296,7 +301,9 @@ class KiteOrderManager:
         self.confirm_stop_loss_with_broker = _secret_truthy("KITE_CONFIRM_STOP_LOSS_WITH_BROKER", True)
         self.trailing_stop_pct = float(_get_secret("KITE_TRAILING_STOP_PCT", "3.0"))
         self.trailing_trail_pct = float(_get_secret("KITE_TRAILING_STOP_TRAIL", "1.0"))
-        self.max_hold_days = int(_get_secret("KITE_MAX_HOLD_DAYS", "5"))
+        self.swing_trail_activate_pct = float(_get_secret("KITE_SWING_TRAIL_ACTIVATE_PCT", "5.0"))
+        self.swing_trail_dist_pct = float(_get_secret("KITE_SWING_TRAIL_DIST_PCT", "4.0"))
+        self.max_hold_days = int(_get_secret("KITE_MAX_HOLD_DAYS", "10"))
         # Max positions from the same sector (0 = disabled)
         self.max_sector_concentration = int(_get_secret("KITE_MAX_SECTOR_POSITIONS", "3"))
         # MIS = intraday margin (5x leverage, auto-squared off at 3:20 PM by broker)
@@ -1678,16 +1685,20 @@ class KiteOrderManager:
                 partial_qty = max(1, pos.qty // 2)
                 signals.append((sym, SellReason.PARTIAL_T1, live_price, partial_qty))
                 pos.t1_booked = True
-                _t1_trail_dist = (self.trailing_trail_pct / 100) if is_intraday else 0.025
+                _t1_trail_dist = (self.trailing_trail_pct / 100) if is_intraday else (self.swing_trail_dist_pct / 100)
                 pos.trailing_stop = max(pos.buy_price, pos.target1 * (1 - _t1_trail_dist))
                 _log.info("%s hit T1 (₹%.2f): selling %d of %d, trailing rest from ₹%.2f",
                           sym, pos.target1, partial_qty, pos.qty, pos.trailing_stop)
 
-            # 4. Trailing stop — activates earlier for swing, uses wider trail to avoid shakeouts
-            # Swing: activates at 2% gain, trails 2.5% below highest (captures multi-day moves)
-            # Intraday: activates at configured trailing_stop_pct, trails configured trail_pct (tighter)
-            _trail_activate_pct = self.trailing_stop_pct if is_intraday else min(self.trailing_stop_pct, 2.0)
-            _trail_dist_pct = (self.trailing_trail_pct / 100) if is_intraday else 0.025
+            # 4. Trailing stop — intraday uses tight trail; swing uses wide trail to let winners run
+            # Swing: activates at swing_trail_activate_pct (default 5%), trails swing_trail_dist_pct (default 4%)
+            # Intraday: activates at trailing_stop_pct (default 3%), trails trailing_trail_pct% (tighter)
+            if is_intraday:
+                _trail_activate_pct = self.trailing_stop_pct
+                _trail_dist_pct = self.trailing_trail_pct / 100
+            else:
+                _trail_activate_pct = self.swing_trail_activate_pct
+                _trail_dist_pct = self.swing_trail_dist_pct / 100
 
             if pos.trailing_stop <= 0 and pnl_pct >= _trail_activate_pct:
                 pos.trailing_stop = max(pos.buy_price, pos.highest_price * (1 - _trail_dist_pct))
@@ -1836,6 +1847,24 @@ class KiteOrderManager:
                     ),
                 )
             )
+        # Rescue stale signal targets: if the stock ran since the signal scan, target2
+        # may be only 1-2% above current price. Floor at 5% so the GTT has room.
+        # pkscreener's valid technical targets (6-15%) are left untouched.
+        order_product = self._normalize_product_type(product_type)
+        is_swing_order = order_product in ("CNC", "NRML")
+        if is_swing_order and live_price > 0:
+            _min_t2_pct = float(os.environ.get("KITE_SWING_MIN_TARGET2_PCT", "8.0"))
+            _max_t2_pct = float(os.environ.get("KITE_SWING_MAX_TARGET2_PCT", "20.0"))
+            _min_t2 = live_price * (1 + _min_t2_pct / 100)
+            _max_t2 = live_price * (1 + _max_t2_pct / 100)
+            if target2 <= 0 or target2 < _min_t2:
+                target2 = round(_min_t2, 2)
+                target1 = round(live_price * (1 + _min_t2_pct / 2 / 100), 2)
+            elif target2 > _max_t2:
+                target2 = round(_max_t2, 2)
+            if stop_loss <= 0 or stop_loss >= live_price:
+                _sl_pct = float(os.environ.get("KITE_SWING_DEFAULT_SL_PCT", "5.0"))
+                stop_loss = round(live_price * (1 - _sl_pct / 100), 2)
         result = self.place_buy_order(
             symbol=symbol, qty=qty, price=live_price,
             stop_loss=stop_loss, target1=target1, target2=target2,

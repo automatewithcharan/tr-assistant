@@ -6322,7 +6322,7 @@ class AutoPilotInvestor:
             and rr2 >= 2.0
             and gap_pct <= 0.8
         ):
-            return ("2-day swing", "CNC", 2, "Opening starter: early strength with controlled risk")
+            return ("2-day swing", "CNC", 7, "Opening starter: early strength with controlled risk")
 
         if (
             9 * 60 + 15 <= _now_min <= _early_engine_end_min
@@ -6347,7 +6347,7 @@ class AutoPilotInvestor:
             and rr2 >= _env_float("ASSISTANT_LATE_COMER_MIN_RR", 1.8)
             and gap_pct <= _env_float("ASSISTANT_LATE_COMER_MAX_GAP", 0.7)
         ):
-            return ("2-day swing", "CNC", 2, "Strict late-comer continuation: liquid midday runner with controlled risk")
+            return ("2-day swing", "CNC", 7, "Strict late-comer continuation: liquid midday runner with controlled risk")
 
         if c.blind_score < 38 or c.confidence < 25:
             return ("avoid", "", 0, "Below minimum quality for evidence-backed execution")
@@ -6372,7 +6372,7 @@ class AutoPilotInvestor:
             and c.volume_ratio >= 2.0
             and rr2 >= 1.8
         ):
-            return ("5-day swing", "CNC", 5, "Historically stronger as a multi-session continuation")
+            return ("5-day swing", "CNC", 10, "Historically stronger as a multi-session continuation")
 
         if (
             c.blind_score >= 48
@@ -6380,7 +6380,7 @@ class AutoPilotInvestor:
             and c.volume_ratio >= 1.8
             and rr2 >= 1.5
         ):
-            return ("2-day swing", "CNC", 2, "Good continuation candidate, but not an elite same-day setup")
+            return ("2-day swing", "CNC", 7, "Good continuation candidate, but not an elite same-day setup")
 
         return ("avoid", "", 0, "Alert-quality only; not strong enough for auto execution")
 
