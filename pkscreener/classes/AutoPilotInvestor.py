@@ -670,7 +670,7 @@ class AutoPilotInvestor:
         self._definitely_buy_alerted: Set[str] = set()  # track DEFINITELY BUY to allow upgrade re-alerts
         self._last_buynow_rescan: float = 0.0  # timestamp of last /buynow rescan
         self._rescan_alert_count: int = 0  # number of BuyNow-rescan alerts sent today
-        self._already_alerted_sells: Set[str] = set()  # avoid repeat sell alerts
+        self._already_alerted_sells: Set[str] = self._load_daily_sell_alerted_set()  # persist across restarts
         self._last_buy_alert_time: Optional[datetime] = None  # cooldown tracking
         self._pending_followups: List["BlindBuyCandidate"] = []  # buffer for batching
         self._FOLLOWUP_COOLDOWN_SEC = 900  # 15 minutes between follow-up alerts
@@ -755,7 +755,7 @@ class AutoPilotInvestor:
         self._DEMAND_CONFIRM_RISE_PCT = 0.9       # standard rise threshold from detection
         self._DEMAND_CONFIRM_MIN_IMBALANCE = 2.8  # minimum persistent order-book demand
         self._DEMAND_CONFIRM_MIN_VOL_RATIO = 2.0  # minimum live volume / 10-day avg volume
-        self._DEMAND_CONFIRM_MAX_DAY_CHANGE = 5.5 # avoid late chase entries in this path
+        self._DEMAND_CONFIRM_MAX_DAY_CHANGE = 7.5 # raised from 5.5 to match opening-starter ceiling
         self._DEMAND_CONFIRM_FAST_RISE_PCT = 0.7  # fast-track stronger setups earlier
         self._DEMAND_CONFIRM_FAST_IMBALANCE = 4.5 # fast-track needs very strong imbalance
         self._DEMAND_AUTO_BUY_ENABLED = _env_truthy("ASSISTANT_DEMAND_AUTO_BUY", True)
@@ -3147,8 +3147,8 @@ class AutoPilotInvestor:
             last_tick_alert = self._tick_alerted.get(symbol)
             if isinstance(last_tick_alert, datetime):
                 signed_change_peek = float(tick.get("change") or 0)
-                if symbol in self._tick_rejected and signed_change_peek >= 5.0:
-                    cooldown = 600  # 10-min for 5%+ runners rejected earlier — momentum override will catch them now
+                if symbol in self._tick_rejected and signed_change_peek >= 3.0:
+                    cooldown = 600  # 10-min for 3%+ runners rejected earlier — re-check as volume builds
                 elif symbol in self._tick_rejected:
                     cooldown = self._TICK_REJECT_COOLDOWN_SEC  # 30-min for other rejected stocks
                 else:
@@ -4409,7 +4409,11 @@ class AutoPilotInvestor:
             )
 
         self._early_radar_last_summary = now_ts
-        self._send_to_channels("\n".join(lines))
+        # Only post to Discord during the intraday buy window. After 11:30 the
+        # auto-buy is silenced, so this would just be noise with no action.
+        _now_min_radar = self._ist_now_minute()
+        if _now_min_radar <= self._INTRADAY_AUTO_BUY_CUTOFF_MIN:
+            self._send_to_channels("\n".join(lines))
         self._review_early_radar_rows_for_auto_buy(rows)
 
     def _review_early_radar_rows_for_auto_buy(self, rows: List[Dict]) -> None:
@@ -5599,6 +5603,10 @@ class AutoPilotInvestor:
         today = datetime.now().strftime("%Y-%m-%d")
         return os.path.join(self.output_dir, f"alerted_buys_{today}.txt")
 
+    def _daily_sell_alerted_path(self) -> str:
+        today = datetime.now().strftime("%Y-%m-%d")
+        return os.path.join(self.output_dir, f"alerted_sells_{today}.txt")
+
     def _load_daily_alerted_set(self) -> Set[str]:
         """Load today's already-alerted symbols so restarts don't re-fire same-day alerts."""
         path = self._daily_alerted_path()
@@ -5614,6 +5622,25 @@ class AutoPilotInvestor:
         """Append a symbol to today's alerted file."""
         try:
             with open(self._daily_alerted_path(), "a") as f:
+                f.write(symbol.upper() + "\n")
+        except Exception:
+            pass
+
+    def _load_daily_sell_alerted_set(self) -> Set[str]:
+        """Load today's already-sell-alerted symbols so restarts don't re-fire same-day sell alerts."""
+        path = self._daily_sell_alerted_path()
+        if not os.path.isfile(path):
+            return set()
+        try:
+            with open(path, "r") as f:
+                return {line.strip().upper() for line in f if line.strip()}
+        except Exception:
+            return set()
+
+    def _save_daily_sell_alerted(self, symbol: str) -> None:
+        """Append a symbol to today's sell-alerted file."""
+        try:
+            with open(self._daily_sell_alerted_path(), "a") as f:
                 f.write(symbol.upper() + "\n")
         except Exception:
             pass
@@ -6772,6 +6799,7 @@ class AutoPilotInvestor:
                 f"_Sell in your broker → then use `/sell {a.symbol} {a.quantity} {a.current_price:.0f}` to record_"
             )
             self._already_alerted_sells.add(a.symbol)
+            self._save_daily_sell_alerted(a.symbol)
 
         message = "\n\n".join(sections)
         self._send_to_channels(message)
