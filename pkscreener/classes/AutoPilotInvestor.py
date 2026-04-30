@@ -20,6 +20,7 @@ direction change, ATR trailing) more heavily than lagging ones.
 import os
 import time
 import math
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set, Tuple
@@ -841,6 +842,15 @@ class AutoPilotInvestor:
         self._opening_flush_done_date: Optional[str] = None  # date of last complete flush
         # Paper trade tracker — logs every alert, checks EOD outcome
         self._paper_tracker = PaperTradeTracker()
+        self._discord_execution_only = True
+        self._daily_execution_summary_sent_date: Optional[str] = None
+        self._daily_auto_bought: List[str] = []
+        self._daily_auto_buy_failed: List[str] = []
+        self._daily_protection_failed: List[str] = []
+        self._daily_missed_opportunities: List[str] = []
+        self._daily_internal_watch: Set[str] = set()
+        self._daily_internal_avoid: Set[str] = set()
+        self._daily_no_buy_reasons: Counter = Counter()
 
         # Kite auto-order manager (only if KITE_AUTO_TRADE=1)
         self._order_manager = None
@@ -867,7 +877,10 @@ class AutoPilotInvestor:
         Returns a Discord-ready status line, or None if auto-trade is off.
         """
         if self._order_manager is None:
-            return "⚠️ Kite auto-buy unavailable: order manager not initialized"
+            return (
+                f"⚠️ **IMPORTANT MISSED OPPORTUNITY — `{symbol}`**\n"
+                "System issue: Kite auto-buy unavailable because the order manager is not initialized."
+            )
         product_label = str(product_preference or "").strip().upper()
         horizon_label = str(holding_horizon or "").strip().lower()
         is_intraday = product_label == "MIS" or horizon_label == "intraday"
@@ -875,8 +888,9 @@ class AutoPilotInvestor:
             now_min = self._ist_now_minute()
             if now_min > self._INTRADAY_AUTO_BUY_CUTOFF_MIN:
                 return (
-                    f"⚠️ Auto-buy skipped for `{symbol}`: intraday auto-buy is paused after "
-                    f"{_format_ist_minute(self._INTRADAY_AUTO_BUY_CUTOFF_MIN)} IST"
+                    f"⚠️ **IMPORTANT MISSED OPPORTUNITY — `{symbol}`**\n"
+                    f"Buyable setup, but intraday auto-buy cutoff "
+                    f"{_format_ist_minute(self._INTRADAY_AUTO_BUY_CUTOFF_MIN)} IST passed before execution."
                 )
         result = self._order_manager.auto_buy_from_candidate(
             symbol=symbol, live_price=price, stop_loss=stop_loss,
@@ -890,8 +904,9 @@ class AutoPilotInvestor:
             product_label = product_label or "AUTO"
             horizon_label = horizon_label or "auto"
             status = (
-                f"✅ Auto-bought `{symbol}` x{result.qty} via Kite "
-                f"(ID: {result.order_id}) | Product: `{product_label}` | Horizon: `{horizon_label}`"
+                f"✅ **AUTO-BOUGHT — `{symbol}`**\n"
+                f"Placed Kite order `{result.order_id}` for `{result.qty}` shares "
+                f"at about `₹{price:.2f}` | Product `{product_label}` | Horizon `{horizon_label}`"
             )
             # Automatically place GTT OCO (stop-loss + target) so no manual action needed
             if stop_loss > 0 and target2 > 0 and price > 0:
@@ -914,10 +929,33 @@ class AutoPilotInvestor:
                         status="failed",
                         error=str(gtt.get("message", "") or ""),
                     )
-                    status += f"\n⚠️ GTT failed: {gtt.get('message','')}"
+                    status += (
+                        f"\n⚠️ **PROTECTION FAILED — `{symbol}`**\n"
+                        f"Buy happened, but stop loss / GTT protection failed: {gtt.get('message','')}"
+                    )
             return status
         else:
-            return f"⚠️ Auto-buy skipped for `{symbol}`: {result.message}"
+            raw_message = str(result.message or "").strip()
+            lower = raw_message.lower()
+            if "live price faded" in lower:
+                return (
+                    f"⚠️ **AUTO-BUY FAILED — `{symbol}`**\n"
+                    f"FAILED: price moved/faded before execution. {raw_message}"
+                )
+            if any(token in lower for token in (
+                "max open positions",
+                "market is closed",
+                "order manager not initialized",
+                "no affordable",
+                "remaining pool",
+                "per-trade cap",
+                "already holding",
+            )):
+                return (
+                    f"⚠️ **IMPORTANT MISSED OPPORTUNITY — `{symbol}`**\n"
+                    f"Buyable setup missed because: {raw_message}"
+                )
+            return f"⚠️ **AUTO-BUY FAILED — `{symbol}`**\n{raw_message}"
 
     def _ist_now_minute(self) -> int:
         try:
@@ -964,13 +1002,14 @@ class AutoPilotInvestor:
             gtt_actions = []
         for action in gtt_actions:
             if action.get("action") == "recreated" and action.get("ok"):
-                self._send_to_channels(
-                    f"🔐 **GTT restored for `{action['symbol']}`** — {action['message']}"
-                )
+                self._log(f"GTT restored for {action['symbol']}: {action['message']}")
             elif action.get("action") == "repair_failed":
-                self._send_to_channels(
-                    f"⚠️ **GTT repair failed for `{action['symbol']}`** — {action['message']}"
+                failure_message = (
+                    f"⚠️ **PROTECTION FAILED — `{action['symbol']}`**\n"
+                    f"{action['message']}"
                 )
+                self._daily_protection_failed.append(str(action["symbol"]))
+                self._send_to_channels(failure_message)
         results = self._order_manager.execute_sell_signals()
         for r in results:
             if r.success:
@@ -978,8 +1017,8 @@ class AutoPilotInvestor:
                 sell_reason = pos.sell_reason if pos else ""
                 reason_text = self._order_manager.format_sell_reason(sell_reason)
                 pnl = pos.pnl if pos else 0
-                self._send_to_channels(
-                    f"🔔 **AUTO-SELL `{r.symbol}`** x{r.qty} — {reason_text}\n"
+                self._log(
+                    f"AUTO-SELL {r.symbol} x{r.qty} — {reason_text} | "
                     f"Order ID: {r.order_id} | P/L: ₹{pnl:+,.0f}"
                 )
 
@@ -994,15 +1033,22 @@ class AutoPilotInvestor:
             return
         for r in results:
             if r.success:
-                self._send_to_channels(
-                    f"✅ Auto-bought `{r.symbol}` x{r.qty} via Kite on retry (ID: {r.order_id})"
+                self._handle_auto_buy_result(
+                    r.symbol,
+                    f"✅ **AUTO-BOUGHT — `{r.symbol}`**\nPlaced Kite retry order `{r.order_id}` for `{r.qty}` shares.",
                 )
             elif r.status == "FUNDS_SHORT":
-                self._send_to_channels(f"⚠️ Auto-buy pending for `{r.symbol}`: {r.message}")
+                self._record_no_buy_reason(str(r.message or "funds short"))
             elif r.status == "EXPIRED":
-                self._send_to_channels(f"⌛ Auto-buy expired for `{r.symbol}`: {r.message}")
+                self._handle_auto_buy_result(
+                    r.symbol,
+                    f"⚠️ **IMPORTANT MISSED OPPORTUNITY — `{r.symbol}`**\n{r.message}",
+                )
             else:
-                self._send_to_channels(f"⚠️ Auto-buy retry skipped for `{r.symbol}`: {r.message}")
+                self._handle_auto_buy_result(
+                    r.symbol,
+                    f"⚠️ **AUTO-BUY FAILED — `{r.symbol}`**\n{r.message}",
+                )
 
     def _attempt_tick_confirmed_auto_buy(
         self,
@@ -1255,6 +1301,14 @@ class AutoPilotInvestor:
                 self._last_opening_priority_refresh = 0.0
                 self._opening_priority_state_df = None
                 self._opening_priority_stats = {}
+                self._daily_execution_summary_sent_date = None
+                self._daily_auto_bought = []
+                self._daily_auto_buy_failed = []
+                self._daily_protection_failed = []
+                self._daily_missed_opportunities = []
+                self._daily_internal_watch.clear()
+                self._daily_internal_avoid.clear()
+                self._daily_no_buy_reasons.clear()
                 # Reconcile broker positions at day start — closes any MIS positions
                 # that Zerodha auto-squared off yesterday but are still "open" locally.
                 if self._order_manager is not None:
@@ -1283,6 +1337,7 @@ class AutoPilotInvestor:
             self._run_fade_detector()
             # End-of-day exit reminder: fires once per day at 3:10 PM IST
             self._run_eod_exit_alert()
+            self._run_daily_execution_summary()
             # Fast tick scan (zero API calls, < 1s) — catches pre-jump conditions
             # BEFORE the full OHLCV cycle would even start.
             self._run_tick_fast_scan()
@@ -1393,16 +1448,11 @@ class AutoPilotInvestor:
         if picks:
             msg = self._preopen_analyzer.format_alert(picks, current_phase)
             if msg:
-                self._send_to_channels(msg)
                 self._log(f"Pre-open auction: sent {len(picks)} picks for phase={current_phase}")
         else:
             # Only send "no signals" during buffer phase (most reliable)
             if current_phase == "buffer":
-                self._send_to_channels(
-                    f"**🔔 PRE-OPEN AUCTION — {now_ist.strftime('%d %b %Y %H:%M')}**\n"
-                    f"No strong auction signals detected. Market may open flat.\n"
-                    f"_Tick scanner active — alerts will fire if anything develops after 9:15_"
-                )
+                self._log("Pre-open auction: no strong auction signals detected.")
 
         self._preopen_auction_sent_phase = current_phase
 
@@ -1506,12 +1556,6 @@ class AutoPilotInvestor:
 
         if not picks:
             self._log("Pre-market watchlist: no qualifying setups today.")
-            # Still send a brief message so user knows the system is alive
-            self._send_to_channels(
-                f"**📋 PRE-MARKET WATCHLIST — {now_ist.strftime('%d %b %Y')}**\n"
-                f"No strong setups found from yesterday's scan. Market may be quiet.\n"
-                f"_Tick scanner is active — alerts will fire if anything develops after 9:15 AM_"
-            )
             return
 
         # Sort: score desc, then R:R desc
@@ -1536,7 +1580,6 @@ class AutoPilotInvestor:
             "\n_These are setups to act on IF price breaks above 'Buy above' level with volume in the first 15 minutes._\n"
             "_Tick scanner is live — BUY alerts will fire automatically when entry conditions are met._"
         )
-        self._send_to_channels("\n".join(lines))
         self._log(f"Pre-market watchlist sent: {len(top)} picks.")
 
     # ------------------------------------------------------------------
@@ -1832,7 +1875,8 @@ class AutoPilotInvestor:
                 f"{f'\\n{auto_status_line}' if auto_status_line else ''}"
             )
 
-            self._send_to_channels(msg)
+            if temp_candidate is not None:
+                self._record_internal_stage(temp_candidate.alert_stage or "BUY", sym, auto_status_line)
             # Auto-buy via Kite only for tighter engine-confirmed buys.
             _auto_result = None
             if is_engine_confirmed_buy:
@@ -1844,9 +1888,10 @@ class AutoPilotInvestor:
                         max_hold_days=temp_candidate.max_hold_days,
                     )
                 else:
-                    _auto_result = f"⚠️ Auto-buy skipped for `{sym}`: {self._live_auto_buy_gate_detail(temp_candidate, candidate_grade)[1]}"
+                    _gate_reason = self._live_auto_buy_gate_detail(temp_candidate, candidate_grade)[1]
+                    _auto_result = f"⚠️ **IMPORTANT MISSED OPPORTUNITY — `{sym}`**\nBuyable setup missed because: {_gate_reason}"
                 if _auto_result:
-                    self._send_to_channels(_auto_result)
+                    self._handle_auto_buy_result(sym, _auto_result)
                 self._log_engine_confirmed_buy_candidate(
                     symbol=sym,
                     action=current_action,
@@ -2000,11 +2045,6 @@ class AutoPilotInvestor:
 
         score_emoji = lambda s: "🔥" if s >= 70 else "✅"
         if not top:
-            self._send_to_channels(
-                f"**📊 MID-DAY SCAN (11 AM) — {now_ist.strftime('%d %b %Y')}**\n"
-                f"No consolidation breakout setups found right now.\n"
-                f"_Tick scanner remains active for any new signals_"
-            )
             return
 
         lines = [
@@ -2022,7 +2062,6 @@ class AutoPilotInvestor:
             "\n_Buy on breakout above entry price with volume. These stocks have already shown strength today._\n"
             "_Tick scanner is live — BUY alerts fire automatically if conditions confirm._"
         )
-        self._send_to_channels("\n".join(lines))
         self._log(f"Mid-day scanner sent: {len(top)} picks.")
 
     # ------------------------------------------------------------------
@@ -2143,11 +2182,6 @@ class AutoPilotInvestor:
 
         score_emoji = lambda s: "🔥" if s >= 70 else "✅"
         if not top:
-            self._send_to_channels(
-                f"**⚡ POWER HOUR (2 PM) — {now_ist.strftime('%d %b %Y')}**\n"
-                f"No high-conviction setups for the final push today.\n"
-                f"_Consider holding existing positions but avoid new entries without strong signals_"
-            )
             return
 
         lines = [
@@ -2165,7 +2199,6 @@ class AutoPilotInvestor:
             "\n_These have trended up all day. Entry here targets the close-of-day push._\n"
             "_⚠️ Exit before 3:15 PM — avoid holding intraday trades overnight._"
         )
-        self._send_to_channels("\n".join(lines))
         self._log(f"Power hour alert sent: {len(top)} picks.")
 
     # ------------------------------------------------------------------
@@ -2297,7 +2330,6 @@ class AutoPilotInvestor:
                 f"{stop_line}\n"
                 f"{footer_line}"
             )
-            self._send_to_channels(message)
             self._log(f"Momentum continuation alert: {sym} now +{current_change:.1f}% (was +{last_alert_pct:.1f}%)")
 
             # Update tracking
@@ -2428,7 +2460,6 @@ class AutoPilotInvestor:
                     f"{'Move stop loss up or consider partial exit.' if drop_from_entry_pct < 1.5 else 'Consider exiting — momentum is dying.'}"
                 )
 
-            self._send_to_channels(message)
             self._paper_tracker.log_fade(sym, alert_level)
             self._log(
                 f"Fade detector [{alert_level}]: {sym} entry=₹{entry_price:.2f} "
@@ -2501,8 +2532,79 @@ class AutoPilotInvestor:
             lines.append("")
             lines.append(paper_summary)
 
-        self._send_to_channels("\n".join(lines))
         self._log("EOD exit alert sent.")
+
+    def _run_daily_execution_summary(self) -> None:
+        try:
+            import pytz
+            ist = pytz.timezone("Asia/Kolkata")
+            now_ist = datetime.now(ist)
+        except Exception:
+            from datetime import timezone, timedelta
+            now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
+        today_str = now_ist.strftime("%Y-%m-%d")
+        now_min = now_ist.hour * 60 + now_ist.minute
+        if now_min < 15 * 60 + 25:
+            return
+        if self._daily_execution_summary_sent_date == today_str:
+            return
+        self._daily_execution_summary_sent_date = today_str
+        top_reasons = self._daily_no_buy_reasons.most_common(5)
+        reason_text = ", ".join(f"{reason} ({count})" for reason, count in top_reasons) or "none"
+        lines = [
+            f"**📘 DAILY SUMMARY — {now_ist.strftime('%d %b %Y')}**",
+            f"Auto-bought stocks: {', '.join(self._daily_auto_bought[:12]) if self._daily_auto_bought else 'none'}",
+            f"Failed buys: {', '.join(self._daily_auto_buy_failed[:12]) if self._daily_auto_buy_failed else 'none'}",
+            f"Missed opportunities: {', '.join(self._daily_missed_opportunities[:12]) if self._daily_missed_opportunities else 'none'}",
+            f"Watched internally: {len(self._daily_internal_watch)}",
+            f"Avoided internally: {len(self._daily_internal_avoid)}",
+            f"Top reasons for not buying: {reason_text}",
+        ]
+        self._send_to_channels("\n".join(lines))
+
+    def _record_internal_stage(self, stage: str, symbol: str, reason: str = "") -> None:
+        normalized = str(stage or "").strip().upper()
+        sym = str(symbol or "").strip().upper()
+        if not sym:
+            return
+        if normalized == "WATCH EARLY":
+            self._daily_internal_watch.add(sym)
+        elif normalized in {"MISSED", "AVOID"}:
+            self._daily_internal_avoid.add(sym)
+        if reason:
+            self._record_no_buy_reason(reason)
+
+    def _record_no_buy_reason(self, reason: str) -> None:
+        text = str(reason or "").strip()
+        if text:
+            self._daily_no_buy_reasons[text] += 1
+
+    def _handle_auto_buy_result(self, symbol: str, result: Optional[str]) -> None:
+        text = str(result or "").strip()
+        sym = str(symbol or "").strip().upper()
+        if not text or not sym:
+            return
+        lower = text.lower()
+        if "auto-bought" in lower:
+            self._daily_auto_bought.append(sym)
+            self._send_to_channels(text)
+            if "protection failed" in lower:
+                self._daily_protection_failed.append(sym)
+            return
+        if "protection failed" in lower:
+            self._daily_protection_failed.append(sym)
+            self._send_to_channels(text)
+            return
+        if "important missed opportunity" in lower:
+            self._daily_missed_opportunities.append(sym)
+            self._record_no_buy_reason(text.split("\n", 1)[-1])
+            self._send_to_channels(text)
+            return
+        if "auto-buy failed" in lower:
+            self._daily_auto_buy_failed.append(sym)
+            self._record_no_buy_reason(text.split("\n", 1)[-1])
+            self._send_to_channels(text)
+            return
 
     # ------------------------------------------------------------------
     # Tick-only scoring for stocks NOT in signal state
@@ -2746,7 +2848,7 @@ class AutoPilotInvestor:
             f"🤖 Auto-buy: no — momentum-only alert, not a live auto-buy setup.\n"
             f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
         )
-        self._send_to_channels(msg)
+        self._record_internal_stage("WATCH EARLY", sym, "momentum-only alert, not auto-buy eligible")
         self._already_alerted_buys.add(sym)
         self._save_daily_alerted(sym)
         self._tick_only_alert_count = getattr(self, '_tick_only_alert_count', 0) + 1
@@ -3070,7 +3172,7 @@ class AutoPilotInvestor:
                 )
                 if _auto_line:
                     _demand_auto_result = _auto_line
-                if _auto_line and _auto_line.startswith("✅"):
+                if _auto_line and "auto-bought" in str(_auto_line).lower():
                     self._demand_auto_bought.add(sym)
 
             # Plain-English grade descriptions
@@ -3095,7 +3197,9 @@ class AutoPilotInvestor:
                 f"{_demand_auto_result or '🤖 Auto-buy: no — demand-watch alert, not a live auto-buy setup.'}\n"
                 f"━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             )
-            self._send_to_channels(msg)
+            self._record_internal_stage("WATCH EARLY", sym, "demand-confirmed setup tracked internally")
+            if _demand_auto_result:
+                self._handle_auto_buy_result(sym, _demand_auto_result)
             self._already_alerted_buys.add(sym)
             self._demand_watchlist.pop(sym, None)
             self._demand_alert_count += 1
@@ -4073,10 +4177,7 @@ class AutoPilotInvestor:
                 f"{_auto_status_line}"
             )
             if _stage in {"WATCH EARLY", "MISSED", "AVOID"}:
-                _watch_key = datetime.now().strftime("%Y-%m-%d")
-                if self._watch_alerted.get(sym) != _watch_key:
-                    self._watch_alerted[sym] = _watch_key
-                    self._send_to_channels(message)
+                self._record_internal_stage(_stage, sym, _alert_candidate.alert_stage_reason)
                 self._log(
                     f"{_stage} ALERT SENT: {sym} at ₹{_price_now:.2f} ({direction}{daily_change:.2f}%) "
                     f"score={blind_score:.0f} vol={volume_ratio:.1f}x"
@@ -4113,7 +4214,6 @@ class AutoPilotInvestor:
                     if _is_definitely_buy:
                         self._definitely_buy_alerted.add(sym)
                     self._save_daily_alerted(sym)
-                    self._send_to_channels(fast_lane_message)
                     auto_result = self._attempt_tick_confirmed_auto_buy(
                         symbol=sym,
                         price=_price_now,
@@ -4129,7 +4229,7 @@ class AutoPilotInvestor:
                         source="opening fast-lane",
                     )
                     if auto_result:
-                        self._send_to_channels(auto_result)
+                        self._handle_auto_buy_result(sym, auto_result)
                 else:
                     # During opening 15-min window: buffer alerts, don't send individually.
                     # They'll be flushed as a ranked summary every 30s.
@@ -4171,7 +4271,6 @@ class AutoPilotInvestor:
                 if _is_definitely_buy:
                     self._definitely_buy_alerted.add(sym)
                 self._save_daily_alerted(sym)
-                self._send_to_channels(message)
                 self._log(
                     f"Tick-confirmed auto-buy check: {sym} score={blind_score:.0f} "
                     f"conf={confidence:.0f}% vol={volume_ratio:.1f}x change={daily_change:.1f}%"
@@ -4192,10 +4291,10 @@ class AutoPilotInvestor:
                         source="tick-confirmed live alert",
                     )
                 except Exception as exc:
-                    auto_result = f"⚠️ Auto-buy failed for `{sym}`: {exc}"
+                    auto_result = f"⚠️ **AUTO-BUY FAILED — `{sym}`**\n{exc}"
                     self._log(f"Tick-confirmed auto-buy crash {sym}: {exc}")
                 if auto_result:
-                    self._send_to_channels(auto_result)
+                    self._handle_auto_buy_result(sym, auto_result)
             # Track for momentum continuation re-alerts
             self._momentum_tracked[sym] = {
                 "entry_price": _price_now,
@@ -4243,17 +4342,7 @@ class AutoPilotInvestor:
             ))
             self._enrich_candidate_alert_stage(_watch_candidate)
             if _watch_candidate.alert_stage == "WATCH EARLY":
-                _watch_key = datetime.now().strftime("%Y-%m-%d")
-                if self._watch_alerted.get(sym) != _watch_key:
-                    self._watch_alerted[sym] = _watch_key
-                    self._send_to_channels(
-                        "\n".join([
-                            f"**👀 EARLY WATCH — `{sym}`** — strong stock preparing",
-                            f"Price `₹{_price_now:.2f}` | Buy Above `{_buy_above_display:.2f}` | Day move `{daily_change:+.2f}%` | Volume `{_vol_ratio_live:.1f}x`",
-                            "What to do: wait for the breakout to start. Upgrade to BUY only if price pushes through the trigger cleanly.",
-                            f"Why: {self._simplify_blind_reasons(blind_reasons)}",
-                        ])
-                    )
+                self._record_internal_stage("WATCH EARLY", sym, _watch_candidate.alert_stage_reason)
 
     def _load_ticks_snapshot(self) -> Dict[str, Dict]:
         """Read the latest ticks JSON saved by KiteTickerStream.
@@ -4451,27 +4540,14 @@ class AutoPilotInvestor:
             return
 
         display_rows = (new_rows if new_rows else rows)[: self._EARLY_RADAR_MAX_LINES]
-        lines = [
-            "**👀 EARLY WATCH RADAR — strong stocks preparing**",
-            "_These are early +1% to +4.5% setups building pressure before a bigger breakout. Watch now, buy only when the move starts cleanly._",
-        ]
         for row in display_rows:
-            vwap_tag = "VWAP+" if row["above_vwap"] else "VWAP-"
-            lines.append(
-                f"`{row['symbol']}` +{row['change']:.1f}% | ₹{row['price']:.2f} | "
-                f"₹{row['turnover_cr']:.1f}Cr | {vwap_tag} | **{row['quality']}** — {row['reason']}"
-            )
+            self._record_internal_stage("WATCH EARLY", str(row.get("symbol", "")), str(row.get("reason", "")))
             self._early_radar_seen[row["symbol"]] = max(
                 self._early_radar_seen.get(row["symbol"], -1),
                 row["bucket"],
             )
 
         self._early_radar_last_summary = now_ts
-        # Only post to Discord during the intraday buy window. After 11:30 the
-        # auto-buy is silenced, so this would just be noise with no action.
-        _now_min_radar = self._ist_now_minute()
-        if _now_min_radar <= self._INTRADAY_AUTO_BUY_CUTOFF_MIN:
-            self._send_to_channels("\n".join(lines))
         self._review_early_radar_rows_for_auto_buy(rows)
 
     def _review_early_radar_rows_for_auto_buy(self, rows: List[Dict]) -> None:
@@ -4541,17 +4617,11 @@ class AutoPilotInvestor:
                     continue
             candidates.append(row)
         if not candidates:
-            if auto_skip_notes:
-                self._send_to_channels(
-                    "🤖 Early-runner auto-buy: no eligible names — "
-                    + " | ".join(auto_skip_notes[:5])
-                )
+            for note in auto_skip_notes[:20]:
+                self._record_no_buy_reason(note)
             return
-        if auto_skip_notes:
-            self._send_to_channels(
-                "🤖 Early-runner filters: "
-                + " | ".join(auto_skip_notes[:5])
-            )
+        for note in auto_skip_notes[:20]:
+            self._record_no_buy_reason(note)
 
         candidates.sort(
             key=lambda row: (
@@ -4624,8 +4694,9 @@ class AutoPilotInvestor:
                 max_hold_days=1,
             )
             self._log(f"Early-runner auto-buy result {sym}: {result}")
-            if result and result.startswith("✅"):
-                self._send_to_channels(result)
+            if result:
+                self._handle_auto_buy_result(sym, result)
+            if result and "auto-bought" in str(result).lower():
                 self._early_runner_auto_bought.add(sym)
                 self._tick_confirmed_auto_buy_count += 1
 
@@ -4710,7 +4781,7 @@ class AutoPilotInvestor:
             if live_price <= 0 or stop_loss <= 0 or target1 <= 0 or target2 <= 0 or live_price <= stop_loss:
                 reason = "full signal row has no usable stop/targets"
                 self._log(f"Radar auto-review skip {sym}: {reason}")
-                self._send_to_channels(f"⚠️ Auto-buy skipped for `{sym}` from radar: {reason}")
+                self._record_no_buy_reason(reason)
                 continue
 
             blind_score, blind_reasons = BlindBuyScorer.score(row)
@@ -4740,7 +4811,7 @@ class AutoPilotInvestor:
             )
 
             if not eligible:
-                self._send_to_channels(f"⚠️ Auto-buy skipped for `{sym}` from radar: {reason}")
+                self._record_no_buy_reason(reason)
                 continue
 
             result = self._try_auto_buy(
@@ -4756,7 +4827,7 @@ class AutoPilotInvestor:
                 max_hold_days=candidate.max_hold_days,
             )
             if result:
-                self._send_to_channels(result)
+                self._handle_auto_buy_result(sym, result)
 
     def _run_top_gainer_radar(self) -> None:
         """Show live top gainers without forcing them into the buy engine.
@@ -4840,31 +4911,18 @@ class AutoPilotInvestor:
                 return
             # Keep one compact anti-FOMO note instead of repeating every late/thin runner.
             self._runner_radar_last_summary = now_ts
-            self._send_to_channels(
-                "**📡 TOP GAINER RADAR — no clean manual reviews**\n"
-                f"Skipped {blocked_count} visible runners because they were late, thin, below VWAP, or circuit-risk."
+            self._record_no_buy_reason(
+                f"top gainer radar skipped {blocked_count} late/thin/circuit-risk runners"
             )
             return
-        header = (
-            "**📡 TOP GAINER RADAR — manual review only**\n"
-            "_Only WATCH / TRADE CANDIDATE names are shown. Late, thin, and circuit-risk runners are suppressed._"
-        )
-        lines = [header]
         for row in display_rows:
-            vwap_tag = "VWAP+" if row["above_vwap"] else "VWAP-"
-            lines.append(
-                f"`{row['symbol']}` +{row['change']:.1f}% | ₹{row['price']:.2f} | "
-                f"₹{row['turnover_cr']:.1f}Cr | {vwap_tag} | **{row['quality']}** — {row['reason']}"
-            )
+            self._record_internal_stage("WATCH EARLY", str(row.get("symbol", "")), str(row.get("reason", "")))
             self._runner_radar_seen[row["symbol"]] = max(
                 self._runner_radar_seen.get(row["symbol"], 0),
                 row["bucket"],
             )
-        if blocked_count > 0:
-            lines.append(f"_Suppressed {blocked_count} late/thin/circuit-risk runners._")
 
         self._runner_radar_last_summary = now_ts
-        self._send_to_channels("\n".join(lines))
         self._review_top_gainer_rows_for_auto_buy(display_rows)
 
     # ------------------------------------------------------------------
@@ -5873,7 +5931,6 @@ class AutoPilotInvestor:
                 "stop_loss": sl,
             }
 
-        self._send_to_channels("\n\n".join(lines))
         self._log(f"Opening buffer flushed: {n_total} picks sent (top {self._MAX_OPENING_ALERTS}), {len(overflow)} overflow")
 
         auto_lines = []
@@ -5894,14 +5951,12 @@ class AutoPilotInvestor:
             )
             if auto_result:
                 auto_lines.append(auto_result)
+                self._handle_auto_buy_result(str(pick.get("symbol", "")), auto_result)
             if self._AUTO_BUY_TOP_N > 0 and self._tick_confirmed_auto_buy_count >= self._AUTO_BUY_TOP_N:
                 break
-        if auto_lines:
-            self._send_to_channels("\n".join(auto_lines))
 
         # Send overflow as compact watchlist
         if overflow:
-            overflow_lines = [f"**📝 WATCHLIST** — {len(overflow)} more confirmed stocks (lower conviction):"]
             for pick in overflow:
                 sym = pick["symbol"]
                 score = pick.get("blind_score", 0)
@@ -5910,10 +5965,6 @@ class AutoPilotInvestor:
                 vol = pick.get("volume_ratio", 0)
                 sl = pick.get("stop_loss", 0)
                 t2 = pick.get("target2", 0)
-                overflow_lines.append(
-                    f"`{sym}` Score {score:.0f} | `₹{price:.2f}` (+{change:.1f}%) | "
-                    f"Vol `{vol:.1f}x` | SL `₹{sl:.2f}` → T2 `₹{t2:.2f}`"
-                )
                 self._already_alerted_buys.add(sym)
                 self._save_daily_alerted(sym)
                 self._momentum_tracked[sym] = {
@@ -5922,7 +5973,6 @@ class AutoPilotInvestor:
                     "last_alert_time": datetime.now(),
                     "stop_loss": sl,
                 }
-            self._send_to_channels("\n".join(overflow_lines))
 
     def _is_post_market_window(self) -> bool:
         """Return True during post-market window (3:30 PM – 6:00 PM IST).
@@ -6037,7 +6087,7 @@ class AutoPilotInvestor:
 
         # Top-N daily volume gate: cap actionable intraday alerts at _TOP_N_DAILY_BATCH per day.
         # Post-market previews are exempt — they are for tomorrow, not today's action.
-        if not is_post_market:
+        if not is_post_market and not self._discord_execution_only:
             _remaining_quota = self._TOP_N_DAILY_BATCH - self._daily_batch_alert_count
             if _remaining_quota <= 0:
                 self._log(
@@ -6608,22 +6658,14 @@ class AutoPilotInvestor:
             if c.alert_stage == "BUY":
                 actionable_candidates.append(c)
             elif c.alert_stage == "MISSED":
+                self._record_internal_stage("MISSED", c.symbol, c.alert_stage_reason)
                 late_candidates.append(c)
             else:
+                self._record_internal_stage(c.alert_stage or "AVOID", c.symbol, c.alert_stage_reason)
                 avoid_candidates.append(c)
 
         candidates = actionable_candidates
         if not candidates and (late_candidates or avoid_candidates):
-            late_lines = ["**🟡 WATCH FOR PULLBACK**"]
-            for c in late_candidates[:8]:
-                late_lines.append(
-                    f"`{c.symbol}` +{c.change_pct:.1f}% | ₹{c.price:.2f} | Vol `{c.volume_ratio:.1f}x` — Good stock, but late entry. Wait for pullback."
-                )
-            for c in avoid_candidates[:5]:
-                late_lines.append(
-                    f"`{c.symbol}` +{c.change_pct:.1f}% | ₹{c.price:.2f} — Avoid chasing; move is already extended."
-                )
-            self._send_to_channels("\n".join(late_lines))
             return
 
         # Determine market context for time-of-day labeling
@@ -6684,9 +6726,6 @@ class AutoPilotInvestor:
         for rank, (c, grade, momentum, risk_flag) in enumerate(main_picks, 1):
             self._format_candidate_block(sections, c, grade, momentum, rank, len(main_picks), risk_flag=risk_flag)
 
-        message = "\n\n".join(sections)
-        self._send_to_channels(message)
-
         # Auto-buy A+/A grade candidates while broker funds and risk controls allow.
         # Log every main pick, not just bought names, so the post-market truth
         # report can explain exactly why a good-looking alert was not bought.
@@ -6699,8 +6738,8 @@ class AutoPilotInvestor:
                 capped_by_alert_limit = auto_eligible and self._AUTO_BUY_TOP_N > 0 and auto_sent >= self._AUTO_BUY_TOP_N
                 if capped_by_alert_limit:
                     auto_result = (
-                        f"⚠️ Auto-buy skipped for `{c.symbol}`: live alert-side auto-buy cap "
-                        f"{self._AUTO_BUY_TOP_N} reached"
+                        f"⚠️ **IMPORTANT MISSED OPPORTUNITY — `{c.symbol}`**\n"
+                        f"Buyable setup missed because live auto-buy cap {self._AUTO_BUY_TOP_N} was already reached."
                     )
                     self._log(f"Batch auto-buy cap skip {c.symbol}: cap={self._AUTO_BUY_TOP_N}")
                 elif auto_eligible:
@@ -6716,7 +6755,7 @@ class AutoPilotInvestor:
                     auto_sent += 1
                 else:
                     gate_reason = self._live_auto_buy_gate_detail(c, grade)[1]
-                    auto_result = f"⚠️ Auto-buy skipped for `{c.symbol}`: {gate_reason}"
+                    auto_result = f"⚠️ **IMPORTANT MISSED OPPORTUNITY — `{c.symbol}`**\nBuyable setup missed because: {gate_reason}"
                     self._log(
                         f"Batch auto-buy skip {c.symbol}: grade={grade}, score={c.blind_score:.0f}, "
                         f"conf={c.confidence:.0f}%, rr={self._candidate_rr2(c):.1f}, "
@@ -6724,6 +6763,7 @@ class AutoPilotInvestor:
                     )
                 if auto_result:
                     _auto_lines.append(auto_result)
+                    self._handle_auto_buy_result(c.symbol, auto_result)
                 self._log_engine_confirmed_buy_candidate(
                     symbol=c.symbol,
                     action=str(getattr(c, "original_action", "") or "Buy"),
@@ -6741,29 +6781,10 @@ class AutoPilotInvestor:
                     auto_eligible=auto_eligible,
                     auto_result=auto_result,
                 )
-            if _auto_lines:
-                self._send_to_channels("**🤖 Auto-buy results**\n" + "\n".join(_auto_lines))
-
         # Send overflow as a separate watchlist message
         if overflow_picks:
-            overflow_sections = [
-                f"**📝 WATCHLIST** — {len(overflow_picks)} more picks (lower conviction):",
-            ]
             for rank, (c, grade, momentum, risk_flag) in enumerate(overflow_picks, _MAX_MAIN + 1):
-                self._format_candidate_block(overflow_sections, c, grade, momentum, rank, len(candidates), compact=True, risk_flag=risk_flag)
-            overflow_msg = "\n\n".join(overflow_sections)
-            self._send_to_channels(overflow_msg)
-
-        if late_candidates:
-            late_sections = [
-                "**🟡 WATCH FOR PULLBACK**",
-                "Good stocks, but the clean entry is gone for now.",
-            ]
-            for c in late_candidates[:8]:
-                late_sections.append(
-                    f"`{c.symbol}` +{c.change_pct:.1f}% | ₹{c.price:.2f} | Vol `{c.volume_ratio:.1f}x` — Good stock, but late entry. Wait for pullback."
-                )
-            self._send_to_channels("\n".join(late_sections))
+                self._format_candidate_block([], c, grade, momentum, rank, len(candidates), compact=True, risk_flag=risk_flag)
 
     def _format_candidate_block(self, sections: list, c: 'BlindBuyCandidate', grade: str,
                                  momentum: float, rank: int, total: int,
@@ -6970,7 +6991,7 @@ class AutoPilotInvestor:
             self._save_daily_sell_alerted(a.symbol)
 
         message = "\n\n".join(sections)
-        self._send_to_channels(message)
+        self._log(f"Sell alerts prepared for {len(alerts)} position(s); Discord execution-only mode suppresses them.")
 
     def _send_to_channels(self, message: str) -> None:
         """Send message to all configured alert channels."""
