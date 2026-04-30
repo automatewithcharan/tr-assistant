@@ -193,6 +193,17 @@ class BlindBuyCandidate:
     horizon_reason: str = ""
     alert_stage: str = ""
     alert_stage_reason: str = ""
+    entry_type: str = ""
+    entry_type_reason: str = ""
+    off_high_pct: float = 0.0
+    vwap_gap_pct: float = 0.0
+    support_gap_pct: float = 0.0
+    buyer_imbalance: float = 0.0
+    turnover_cr: float = 0.0
+    fresh_buyer_confirmation: bool = False
+    spread_pct: float = 0.0
+    range_pct: float = 0.0
+    last_trade_qty: float = 0.0
 
 
 @dataclass
@@ -722,9 +733,9 @@ class AutoPilotInvestor:
         self._TICK_ALREADY_MOVED_PCT = 8.0       # above this % skip — too late to enter intraday. Focus on the early 1-5% zone instead.
         # Hard cutoff: never send BUY alerts after this IST minute-of-day
         self._BUY_ALERT_CUTOFF_MIN = 15 * 60 + 15  # 3:15 PM — last 15 min are exit zone
-        # Intraday/MIS entries must stop much earlier than general alerts.
-        # The goal is to prevent weak late-session chases that have no time left
-        # to work before square-off pressure begins.
+        # 11:30 AM IST is now the switch to strict late-session MIS mode, not a
+        # blanket rejection. New intraday entries still stop at the final MIS
+        # cutoff, which defaults to 1:30 PM IST to stay aligned with swing risk.
         self._INTRADAY_AUTO_BUY_CUTOFF_MIN = _env_time_min(
             "ASSISTANT_INTRADAY_AUTO_BUY_CUTOFF",
             11 * 60 + 30,
@@ -877,6 +888,7 @@ class AutoPilotInvestor:
         self._daily_auto_buy_failed: List[str] = []
         self._daily_protection_failed: List[str] = []
         self._daily_missed_opportunities: List[str] = []
+        self._auto_buy_timeline: Dict[str, Dict[str, Any]] = {}
         self._daily_internal_watch: Set[str] = set()
         self._daily_internal_avoid: Set[str] = set()
         self._daily_no_buy_reasons: Counter = Counter()
@@ -905,21 +917,40 @@ class AutoPilotInvestor:
 
         Returns a Discord-ready status line, or None if auto-trade is off.
         """
+        candidate_stub = BlindBuyCandidate(
+            symbol=symbol,
+            price=price,
+            stop_loss=stop_loss,
+            target1=target1,
+            target2=target2,
+            blind_score=blind_score,
+            reasons=reasons,
+            product_preference=product_preference,
+            holding_horizon=holding_horizon,
+            max_hold_days=max_hold_days,
+        )
         if self._order_manager is None:
-            return (
-                f"⚠️ **IMPORTANT MISSED OPPORTUNITY — `{symbol}`**\n"
-                "System issue: Kite auto-buy unavailable because the order manager is not initialized."
+            return self._format_missed_or_late_message(
+                symbol,
+                reason="System issue: Kite auto-buy unavailable because the order manager is not initialized.",
+                candidate=candidate_stub,
+                live_price=price,
             )
         product_label = str(product_preference or "").strip().upper()
         horizon_label = str(holding_horizon or "").strip().lower()
         is_intraday = product_label == "MIS" or horizon_label == "intraday"
         if is_intraday:
             now_min = self._ist_now_minute()
-            if now_min > self._INTRADAY_AUTO_BUY_CUTOFF_MIN:
-                return (
-                    f"⚠️ **IMPORTANT MISSED OPPORTUNITY — `{symbol}`**\n"
-                    f"Buyable setup, but intraday auto-buy cutoff "
-                    f"{_format_ist_minute(self._INTRADAY_AUTO_BUY_CUTOFF_MIN)} IST passed before execution."
+            final_cutoff = self._intraday_final_auto_buy_cutoff_min()
+            if now_min > final_cutoff:
+                return self._format_missed_or_late_message(
+                    symbol,
+                    reason=(
+                        f"Buyable setup, but the final intraday auto-buy cutoff "
+                        f"{_format_ist_minute(final_cutoff)} IST passed before execution."
+                    ),
+                    candidate=candidate_stub,
+                    live_price=price,
                 )
         result = self._order_manager.auto_buy_from_candidate(
             symbol=symbol, live_price=price, stop_loss=stop_loss,
@@ -980,9 +1011,11 @@ class AutoPilotInvestor:
                 "per-trade cap",
                 "already holding",
             )):
-                return (
-                    f"⚠️ **IMPORTANT MISSED OPPORTUNITY — `{symbol}`**\n"
-                    f"Buyable setup missed because: {raw_message}"
+                return self._format_missed_or_late_message(
+                    symbol,
+                    reason=f"Buyable setup missed because: {raw_message}",
+                    candidate=candidate_stub,
+                    live_price=price,
                 )
             return f"⚠️ **AUTO-BUY FAILED — `{symbol}`**\n{raw_message}"
 
@@ -994,6 +1027,168 @@ class AutoPilotInvestor:
             from datetime import timezone, timedelta
             now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
         return now_ist.hour * 60 + now_ist.minute
+
+    def _ist_now(self) -> datetime:
+        try:
+            import pytz
+            return datetime.now(pytz.timezone("Asia/Kolkata"))
+        except Exception:
+            from datetime import timezone, timedelta
+            return datetime.now(timezone(timedelta(hours=5, minutes=30)))
+
+    def _swing_auto_buy_cutoff_min(self) -> int:
+        return 13 * 60 + 30
+
+    def _intraday_final_auto_buy_cutoff_min(self) -> int:
+        return _env_time_min("ASSISTANT_INTRADAY_FINAL_CUTOFF", 13 * 60 + 30)
+
+    def _note_auto_buy_timeline(
+        self,
+        symbol: str,
+        *,
+        live_price: float = 0.0,
+        entry_type: str = "",
+        market_regime: str = "",
+        holding_horizon: str = "",
+        buyable_now: Optional[bool] = None,
+    ) -> Dict[str, Any]:
+        timeline = self._auto_buy_timeline.setdefault(symbol, {})
+        now_ist = self._ist_now()
+        now_min = self._ist_now_minute()
+        ts = now_ist.strftime("%Y-%m-%d %H:%M:%S %Z")
+        live_price = round(float(live_price or 0.0), 2)
+        intraday_final_cutoff = self._intraday_final_auto_buy_cutoff_min()
+
+        timeline.setdefault("first_detected_time", ts)
+        timeline.setdefault("intraday_cutoff_time", _format_ist_minute(self._INTRADAY_AUTO_BUY_CUTOFF_MIN))
+        timeline.setdefault("intraday_final_cutoff_time", _format_ist_minute(intraday_final_cutoff))
+        timeline.setdefault("swing_cutoff_time", _format_ist_minute(self._swing_auto_buy_cutoff_min()))
+        timeline.setdefault("entry_type", str(entry_type or ""))
+        if market_regime:
+            timeline["market_regime"] = market_regime
+        if holding_horizon:
+            timeline["holding_horizon"] = holding_horizon
+        if live_price > 0 and "live_price_at_detection" not in timeline:
+            timeline["live_price_at_detection"] = live_price
+
+        if buyable_now:
+            timeline.setdefault("first_buyable_time", ts)
+            if live_price > 0 and "live_price_at_first_buyable" not in timeline:
+                timeline["live_price_at_first_buyable"] = live_price
+
+        if now_min <= self._INTRADAY_AUTO_BUY_CUTOFF_MIN:
+            timeline["detected_before_intraday_cutoff"] = "yes"
+            if buyable_now:
+                timeline["buyable_before_intraday_cutoff"] = "yes"
+        else:
+            timeline.setdefault("detected_before_intraday_cutoff", "no")
+            timeline.setdefault("buyable_before_intraday_cutoff", "no")
+            if live_price > 0 and "live_price_at_intraday_cutoff" not in timeline:
+                timeline["live_price_at_intraday_cutoff"] = live_price
+
+        if now_min <= intraday_final_cutoff:
+            timeline["detected_before_intraday_final_cutoff"] = "yes"
+            if buyable_now:
+                timeline["buyable_before_intraday_final_cutoff"] = "yes"
+        else:
+            timeline.setdefault("detected_before_intraday_final_cutoff", "no")
+            timeline.setdefault("buyable_before_intraday_final_cutoff", "no")
+            if live_price > 0 and "live_price_at_intraday_final_cutoff" not in timeline:
+                timeline["live_price_at_intraday_final_cutoff"] = live_price
+
+        if now_min <= self._swing_auto_buy_cutoff_min():
+            timeline["detected_before_swing_cutoff"] = "yes"
+            if buyable_now:
+                timeline["buyable_before_swing_cutoff"] = "yes"
+        else:
+            timeline.setdefault("detected_before_swing_cutoff", "no")
+            timeline.setdefault("buyable_before_swing_cutoff", "no")
+            if live_price > 0 and "live_price_at_swing_cutoff" not in timeline:
+                timeline["live_price_at_swing_cutoff"] = live_price
+        return timeline
+
+    def _format_missed_or_late_message(
+        self,
+        symbol: str,
+        *,
+        reason: str,
+        candidate: Optional['BlindBuyCandidate'] = None,
+        live_price: float = 0.0,
+    ) -> str:
+        now_min = self._ist_now_minute()
+        product_label = str(getattr(candidate, "product_preference", "") or "").upper()
+        horizon_label = str(getattr(candidate, "holding_horizon", "") or "").lower()
+        is_intraday = product_label == "MIS" or horizon_label == "intraday"
+        entry_type = str(getattr(candidate, "entry_type", "") or "")
+        timeline = self._note_auto_buy_timeline(
+            symbol,
+            live_price=live_price or float(getattr(candidate, "price", 0.0) or 0.0),
+            entry_type=entry_type,
+            holding_horizon=horizon_label,
+            buyable_now=False,
+        )
+        timeline["reason_not_bought"] = str(reason or "")
+        timeline["live_price_at_missed_message"] = round(float(live_price or getattr(candidate, "price", 0.0) or 0.0), 2)
+        self._log(
+            "MissedAudit "
+            f"{symbol}: first_detected={timeline.get('first_detected_time','')} "
+            f"first_buyable={timeline.get('first_buyable_time','')} "
+            f"intraday_cutoff={timeline.get('intraday_cutoff_time','')} "
+            f"intraday_final_cutoff={timeline.get('intraday_final_cutoff_time','')} "
+            f"swing_cutoff={timeline.get('swing_cutoff_time','')} "
+            f"detected_before_intraday={timeline.get('detected_before_intraday_cutoff','no')} "
+            f"buyable_before_intraday={timeline.get('buyable_before_intraday_cutoff','no')} "
+            f"detected_before_intraday_final={timeline.get('detected_before_intraday_final_cutoff','no')} "
+            f"buyable_before_intraday_final={timeline.get('buyable_before_intraday_final_cutoff','no')} "
+            f"detected_before_swing={timeline.get('detected_before_swing_cutoff','no')} "
+            f"buyable_before_swing={timeline.get('buyable_before_swing_cutoff','no')} "
+            f"entry_type={timeline.get('entry_type','')} "
+            f"market_regime={timeline.get('market_regime','')} "
+            f"price_detected={timeline.get('live_price_at_detection','')} "
+            f"price_intraday_cutoff={timeline.get('live_price_at_intraday_cutoff','')} "
+            f"price_intraday_final_cutoff={timeline.get('live_price_at_intraday_final_cutoff','')} "
+            f"price_swing_cutoff={timeline.get('live_price_at_swing_cutoff','')} "
+            f"price_missed={timeline.get('live_price_at_missed_message','')} "
+            f"reason={timeline.get('reason_not_bought','')}"
+        )
+
+        buyable_before_intraday = timeline.get("buyable_before_intraday_cutoff") == "yes"
+        buyable_before_intraday_final = timeline.get("buyable_before_intraday_final_cutoff") == "yes"
+        buyable_before_swing = timeline.get("buyable_before_swing_cutoff") == "yes"
+
+        lower_reason = str(reason or "").lower()
+        if now_min > self._swing_auto_buy_cutoff_min():
+            if buyable_before_swing:
+                header = "⚠️ **IMPORTANT MISSED OPPORTUNITY"
+            else:
+                header = "🕒 **LATE_DISCOVERY"
+        elif is_intraday and now_min > self._intraday_final_auto_buy_cutoff_min():
+            if buyable_before_intraday_final:
+                header = "⚠️ **IMPORTANT MISSED OPPORTUNITY"
+            else:
+                header = "🕒 **LATE_DISCOVERY"
+        elif "strict cnc swing re-check failed" in lower_reason:
+            header = "🟠 **SWING_RECHECK_REJECTED"
+        elif "strict late-session mis rejected" in lower_reason:
+            header = "🟠 **STRICT_MODE_REJECTED"
+        elif any(token in lower_reason for token in (
+            "max open positions",
+            "market is closed",
+            "per-trade cap",
+            "already holding",
+            "blocked by market regime",
+            "order manager",
+            "remaining pool",
+            "no affordable",
+            "live auto-buy cap",
+        )):
+            header = "⛔ **BLOCKED"
+        elif buyable_before_intraday or buyable_before_intraday_final or buyable_before_swing:
+            header = "⚠️ **IMPORTANT MISSED OPPORTUNITY"
+        else:
+            header = "❌ **REJECTED"
+
+        return f"{header} — `{symbol}`**\n{reason}"
 
     def _cap_suggested_qty_to_broker(
         self,
@@ -1019,6 +1214,125 @@ class AutoPilotInvestor:
             )
         except Exception:
             return desired_qty, round(desired_qty * price, 0)
+
+    def _resolve_auto_buy_candidate(
+        self,
+        candidate: 'BlindBuyCandidate',
+    ) -> Tuple['BlindBuyCandidate', str, bool, str]:
+        candidate = self._enrich_candidate_alert_stage(candidate, off_high_pct=float(getattr(candidate, "off_high_pct", 0.0) or 0.0))
+        grade, _ = self._grade_candidate(candidate)
+        eligible, reason = self._live_auto_buy_gate_detail(candidate, grade)
+        self._note_auto_buy_timeline(
+            candidate.symbol,
+            live_price=candidate.price,
+            entry_type=candidate.entry_type,
+            holding_horizon=candidate.holding_horizon,
+            buyable_now=eligible,
+        )
+        if eligible:
+            return candidate, grade, True, reason
+
+        now_min = self._ist_now_minute()
+        is_intraday = str(getattr(candidate, "holding_horizon", "") or "").lower() == "intraday"
+        if is_intraday and self._INTRADAY_AUTO_BUY_CUTOFF_MIN < now_min <= self._swing_auto_buy_cutoff_min():
+            strict_mis_ok, strict_mis_reason = self._strict_late_session_intraday_gate(candidate)
+            if strict_mis_ok:
+                self._note_auto_buy_timeline(
+                    candidate.symbol,
+                    live_price=candidate.price,
+                    entry_type=candidate.entry_type,
+                    holding_horizon=candidate.holding_horizon,
+                    buyable_now=True,
+                )
+                return candidate, grade, True, strict_mis_reason
+            converted = BlindBuyCandidate(**vars(candidate))
+            converted.holding_horizon = "2-day swing"
+            converted.product_preference = "CNC"
+            converted.max_hold_days = max(2, int(getattr(candidate, "max_hold_days", 0) or 0))
+            converted.horizon_reason = "converted from intraday after 11:30 AM IST cutoff"
+            converted = self._enrich_candidate_horizon(converted)
+            converted.holding_horizon = "2-day swing"
+            converted.product_preference = "CNC"
+            converted.max_hold_days = max(2, int(getattr(candidate, "max_hold_days", 0) or 0))
+            converted = self._enrich_candidate_alert_stage(converted, off_high_pct=float(getattr(converted, "off_high_pct", 0.0) or 0.0))
+            converted_grade, _ = self._grade_candidate(converted)
+            converted_eligible, converted_reason = self._live_auto_buy_gate_detail(converted, converted_grade)
+            if not converted_eligible:
+                converted_eligible, converted_reason = self._strict_post_cutoff_swing_gate(converted)
+            self._note_auto_buy_timeline(
+                converted.symbol,
+                live_price=converted.price,
+                entry_type=converted.entry_type,
+                holding_horizon=converted.holding_horizon,
+                buyable_now=converted_eligible,
+            )
+            if converted_eligible:
+                return converted, converted_grade, True, (
+                    "intraday cutoff passed, but the setup re-qualified as a strict CNC swing entry"
+                )
+            return converted, converted_grade, False, (
+                f"strict late-session MIS rejected: {strict_mis_reason}; strict CNC swing re-check failed: {converted_reason}"
+            )
+        return candidate, grade, False, reason
+
+    def _strict_post_cutoff_swing_gate(self, candidate: 'BlindBuyCandidate') -> Tuple[bool, str]:
+        execution_ok, execution_reason = self._execution_quality_gate(candidate)
+        if not execution_ok:
+            return False, execution_reason
+        swing_ok, swing_reason = self._swing_entry_quality_gate(candidate)
+        if not swing_ok:
+            return False, swing_reason
+        rr2 = self._candidate_rr2(candidate)
+        gap_pct = self._candidate_entry_gap_pct(candidate)
+        if candidate.price < 20:
+            return False, "price is below the ₹20 swing floor"
+        if rr2 < 1.5:
+            return False, f"R:R 1:{rr2:.1f} is below the 2-day swing floor"
+        if gap_pct > 0.8:
+            return False, f"entry gap {gap_pct:.1f}% is too loose for the post-11:30 swing lane"
+        if candidate.change_pct < 1.0 or candidate.change_pct > 7.0:
+            return False, f"day move {candidate.change_pct:.1f}% is outside the strict post-11:30 swing zone"
+        if candidate.blind_score < 40:
+            return False, f"score {candidate.blind_score:.0f} is below the post-11:30 swing floor"
+        if candidate.confidence < 28:
+            return False, f"confidence {candidate.confidence:.0f}% is below the post-11:30 swing floor"
+        if candidate.volume_ratio < 1.8:
+            return False, f"volume {candidate.volume_ratio:.1f}x is below the post-11:30 swing floor"
+        return True, "eligible now as a strict post-11:30 CNC swing auto-buy"
+
+    @classmethod
+    def _strict_late_session_intraday_gate(cls, c: 'BlindBuyCandidate') -> Tuple[bool, str]:
+        execution_ok, execution_reason = cls._execution_quality_gate(c)
+        if not execution_ok:
+            return False, execution_reason
+        rr2 = cls._candidate_rr2(c)
+        gap_pct = cls._candidate_entry_gap_pct(c)
+        entry_type, entry_reason = cls._classify_entry_type(c)
+        if entry_type == "LATE_CHASE":
+            return False, f"entry type LATE_CHASE — {entry_reason}"
+        if entry_type not in {"PULLBACK_RETEST", "SECOND_LEG_CONTINUATION", "EARLY_BREAKOUT"}:
+            return False, f"entry type {entry_type} is not fresh enough for late-session MIS"
+        if c.price < 20:
+            return False, "price is below the ₹20 floor"
+        if rr2 < 1.7:
+            return False, f"R:R 1:{rr2:.1f} is below the late-session MIS floor"
+        if gap_pct > 0.7:
+            return False, f"entry gap {gap_pct:.1f}% is too loose for late-session MIS"
+        if c.blind_score < 58:
+            return False, f"score {c.blind_score:.0f} is below the late-session MIS floor"
+        if c.confidence < 30:
+            return False, f"confidence {c.confidence:.0f}% is below the late-session MIS floor"
+        if c.volume_ratio < 1.8:
+            return False, f"volume {c.volume_ratio:.1f}x is below the late-session MIS floor"
+        if c.change_pct < 1.2 or c.change_pct > 6.8:
+            return False, f"day move {c.change_pct:.1f}% is outside the late-session MIS zone"
+        if float(getattr(c, "off_high_pct", 0.0) or 0.0) > 1.4:
+            return False, f"price is {float(getattr(c, 'off_high_pct', 0.0) or 0.0):.1f}% off the high and no fresh re-break is visible"
+        if float(getattr(c, "vwap_gap_pct", 0.0) or 0.0) < -0.05:
+            return False, "price is below VWAP, so the reclaim is not confirmed"
+        if not cls._has_fresh_buyer_confirmation(c):
+            return False, "fresh buyer confirmation is missing for late-session MIS"
+        return True, f"eligible now as a strict late-session MIS auto-buy ({entry_type})"
 
     def _run_sell_monitor(self) -> None:
         """Check tracked Kite positions for sell signals and execute."""
@@ -1094,6 +1408,15 @@ class AutoPilotInvestor:
         reasons: str,
         original_action: str = "",
         source: str = "tick-confirmed",
+        spread_pct: float = 0.0,
+        range_pct: float = 0.0,
+        last_trade_qty: float = 0.0,
+        turnover_cr: float = 0.0,
+        buyer_imbalance: float = 0.0,
+        vwap_gap_pct: float = 0.0,
+        off_high_pct: float = 0.0,
+        support_gap_pct: float = 0.0,
+        fresh_buyer_confirmation: bool = False,
     ) -> Optional[str]:
         """Place a selective live buy for the tightest tick-confirmed setups."""
         if self._order_manager is None:
@@ -1121,16 +1444,29 @@ class AutoPilotInvestor:
             blind_score=blind_score,
             original_action=original_action,
             reasons=reasons,
+            spread_pct=spread_pct,
+            range_pct=range_pct,
+            last_trade_qty=last_trade_qty,
+            turnover_cr=turnover_cr,
+            buyer_imbalance=buyer_imbalance,
+            vwap_gap_pct=vwap_gap_pct,
+            off_high_pct=off_high_pct,
+            support_gap_pct=support_gap_pct,
+            fresh_buyer_confirmation=fresh_buyer_confirmation,
         ))
-        grade, _ = self._grade_candidate(candidate)
-        if not self._eligible_for_live_auto_buy(candidate, grade):
-            gate_reason = self._live_auto_buy_gate_detail(candidate, grade)[1]
+        candidate, grade, auto_eligible, gate_reason = self._resolve_auto_buy_candidate(candidate)
+        if not auto_eligible:
             self._log(
                 f"Auto-buy skip {symbol}: {source} not tight enough "
                 f"(grade={grade}, conf={confidence:.0f}%, rr={self._candidate_rr2(candidate):.1f}, "
                 f"gap={self._candidate_entry_gap_pct(candidate):.1f}%, vol={volume_ratio:.1f}x)"
             )
-            return f"⚠️ Auto-buy skipped for `{symbol}`: {gate_reason}"
+            return self._format_missed_or_late_message(
+                symbol,
+                reason=f"Buyable setup missed because: {gate_reason}",
+                candidate=candidate,
+                live_price=price,
+            )
 
         result = self._try_auto_buy(
             symbol, price, stop_loss, target1, target2, blind_score, reasons,
@@ -1875,10 +2211,11 @@ class AutoPilotInvestor:
             auto_status_line = ""
             auto_eligible = False
             if temp_candidate is not None:
-                candidate_grade, _ = self._grade_candidate(temp_candidate)
+                temp_candidate, candidate_grade, auto_eligible, auto_gate_reason = self._resolve_auto_buy_candidate(temp_candidate)
                 candidate_rank = self._candidate_rank(temp_candidate)
-                auto_eligible = self._eligible_for_live_auto_buy(temp_candidate, candidate_grade)
-                auto_status_line = self._format_auto_buy_status_line(temp_candidate, candidate_grade)
+                auto_status_line = (
+                    f"{'🤖 Auto-buy: yes' if auto_eligible else '🤖 Auto-buy: no'} — {auto_gate_reason}"
+                )
                 suggested_qty, approx_cost = self._cap_suggested_qty_to_broker(
                     live_price,
                     suggested_qty,
@@ -1923,8 +2260,12 @@ class AutoPilotInvestor:
                         max_hold_days=temp_candidate.max_hold_days,
                     )
                 else:
-                    _gate_reason = self._live_auto_buy_gate_detail(temp_candidate, candidate_grade)[1]
-                    _auto_result = f"⚠️ **IMPORTANT MISSED OPPORTUNITY — `{sym}`**\nBuyable setup missed because: {_gate_reason}"
+                    _auto_result = self._format_missed_or_late_message(
+                        sym,
+                        reason=f"Buyable setup missed because: {auto_gate_reason}",
+                        candidate=temp_candidate,
+                        live_price=live_price,
+                    )
                 if _auto_result:
                     self._handle_auto_buy_result(sym, _auto_result)
                 self._log_engine_confirmed_buy_candidate(
@@ -1941,6 +2282,8 @@ class AutoPilotInvestor:
                     rr2=rr2,
                     grade=candidate_grade,
                     rank_score=candidate_rank,
+                    entry_type=temp_candidate.entry_type,
+                    entry_type_reason=temp_candidate.entry_type_reason,
                     auto_eligible=auto_eligible,
                     auto_result=_auto_result,
                 )
@@ -3382,6 +3725,7 @@ class AutoPilotInvestor:
                     "average_traded_price": float(tick.get("average_traded_price") or 0),
                     "best_bid": float(tick.get("best_bid") or 0),
                     "best_ask": float(tick.get("best_ask") or 0),
+                    "last_traded_quantity": float(tick.get("last_traded_quantity") or 0),
                     # Priority: flat band for 2-6% (sweet spot), IMBALANCE breaks ties.
                     # Above 6%: decreasing priority (late entry, train leaving).
                     # This ensures early movers with strong demand (stock at +3% with
@@ -4144,6 +4488,18 @@ class AutoPilotInvestor:
             _risk_per_share = round(_price_now - stop_loss, 2) if stop_loss > 0 else 0
             _reward_per_share = round(target2 - _price_now, 2) if target2 > 0 else 0
             _expected_growth_pct = round(((target2 - _price_now) / _price_now) * 100, 1) if target2 > 0 and _price_now > 0 else 0
+            _fresh_vwap = float(_fresh_tick.get("average_traded_price") or item.get("average_traded_price") or 0)
+            _fresh_bid = float(_fresh_tick.get("best_bid") or item.get("best_bid") or 0)
+            _fresh_ask = float(_fresh_tick.get("best_ask") or item.get("best_ask") or 0)
+            _fresh_open = float(_fresh_tick.get("open") or item.get("open") or 0)
+            _fresh_low = float(_fresh_tick.get("low") or _fresh_tick.get("ohlc", {}).get("low", 0) or item.get("low") or 0)
+            _fresh_high = float(_fresh_tick.get("high") or _fresh_tick.get("ohlc", {}).get("high", 0) or item.get("high") or 0)
+            _fresh_spread_pct = ((_fresh_ask - _fresh_bid) / _price_now * 100) if _fresh_ask > 0 and _fresh_bid > 0 and _price_now > 0 and _fresh_ask >= _fresh_bid else 0.0
+            _fresh_range_pct = ((_fresh_high - _fresh_low) / _fresh_open * 100) if _fresh_high > 0 and _fresh_low > 0 and _fresh_open > 0 else 0.0
+            _fresh_ltq = float(_fresh_tick.get("last_traded_quantity") or item.get("last_traded_quantity") or 0)
+            _fresh_vwap_gap_pct = ((_price_now - _fresh_vwap) / _fresh_vwap * 100) if _fresh_vwap > 0 and _price_now > 0 else 0.0
+            _fresh_support_ref = max(_buy_above_display, _fresh_vwap)
+            _fresh_support_gap_pct = ((_price_now - _fresh_support_ref) / _fresh_support_ref * 100) if _fresh_support_ref > 0 and _price_now > 0 else 0.0
             _alert_candidate = self._enrich_candidate_horizon(BlindBuyCandidate(
                 symbol=sym,
                 price=_price_now,
@@ -4158,11 +4514,24 @@ class AutoPilotInvestor:
                 original_action=_now_action,
                 reasons=blind_reasons,
                 suggested_qty=suggested_qty,
+                buyer_imbalance=round(_item_imbalance, 2),
+                turnover_cr=round(_item_turnover_cr, 2),
+                spread_pct=round(_fresh_spread_pct, 2),
+                range_pct=round(_fresh_range_pct, 2),
+                last_trade_qty=round(_fresh_ltq, 2),
+                vwap_gap_pct=round(_fresh_vwap_gap_pct, 2),
+                support_gap_pct=round(max(0.0, _fresh_support_gap_pct), 2),
+                fresh_buyer_confirmation=bool(
+                    _item_imbalance >= 1.6
+                    and _item_turnover_cr >= 1.0
+                    and _fresh_vwap > 0
+                    and _price_now >= _fresh_vwap
+                ),
             ))
             _off_high_pct = 0.0
-            _fresh_high = float(_fresh_tick.get("high") or _fresh_tick.get("ohlc", {}).get("high", 0) or 0)
             if _fresh_high > 0 and _price_now > 0:
                 _off_high_pct = ((_fresh_high - _price_now) / _fresh_high) * 100
+            _alert_candidate.off_high_pct = round(_off_high_pct, 2)
             _alert_candidate.buy_above = _buy_above_display
             self._enrich_candidate_alert_stage(_alert_candidate, off_high_pct=_off_high_pct)
             suggested_qty, _invest_amt = self._cap_suggested_qty_to_broker(
@@ -4262,6 +4631,15 @@ class AutoPilotInvestor:
                         reasons=blind_reasons,
                         original_action=_now_action,
                         source="opening fast-lane",
+                        spread_pct=_alert_candidate.spread_pct,
+                        range_pct=_alert_candidate.range_pct,
+                        last_trade_qty=_alert_candidate.last_trade_qty,
+                        turnover_cr=_alert_candidate.turnover_cr,
+                        buyer_imbalance=_alert_candidate.buyer_imbalance,
+                        vwap_gap_pct=_alert_candidate.vwap_gap_pct,
+                        off_high_pct=_alert_candidate.off_high_pct,
+                        support_gap_pct=_alert_candidate.support_gap_pct,
+                        fresh_buyer_confirmation=_alert_candidate.fresh_buyer_confirmation,
                     )
                     if auto_result:
                         self._handle_auto_buy_result(sym, auto_result)
@@ -4284,6 +4662,15 @@ class AutoPilotInvestor:
                             "reasons": blind_reasons,
                             "original_action": _now_action,
                             "message": message,
+                            "spread_pct": _alert_candidate.spread_pct,
+                            "range_pct": _alert_candidate.range_pct,
+                            "last_trade_qty": _alert_candidate.last_trade_qty,
+                            "turnover_cr": _alert_candidate.turnover_cr,
+                            "buyer_imbalance": _alert_candidate.buyer_imbalance,
+                            "vwap_gap_pct": _alert_candidate.vwap_gap_pct,
+                            "off_high_pct": _alert_candidate.off_high_pct,
+                            "support_gap_pct": _alert_candidate.support_gap_pct,
+                            "fresh_buyer_confirmation": _alert_candidate.fresh_buyer_confirmation,
                         })
                     self._log(
                         f"📦 BUFFERED (opening window): {sym} at ₹{_price_now:.2f} ({direction}{daily_change:.2f}%) "
@@ -4324,6 +4711,15 @@ class AutoPilotInvestor:
                         reasons=blind_reasons,
                         original_action=_now_action,
                         source="tick-confirmed live alert",
+                        spread_pct=_alert_candidate.spread_pct,
+                        range_pct=_alert_candidate.range_pct,
+                        last_trade_qty=_alert_candidate.last_trade_qty,
+                        turnover_cr=_alert_candidate.turnover_cr,
+                        buyer_imbalance=_alert_candidate.buyer_imbalance,
+                        vwap_gap_pct=_alert_candidate.vwap_gap_pct,
+                        off_high_pct=_alert_candidate.off_high_pct,
+                        support_gap_pct=_alert_candidate.support_gap_pct,
+                        fresh_buyer_confirmation=_alert_candidate.fresh_buyer_confirmation,
                     )
                 except Exception as exc:
                     auto_result = f"⚠️ **AUTO-BUY FAILED — `{sym}`**\n{exc}"
@@ -4667,10 +5063,10 @@ class AutoPilotInvestor:
             return
         if not self._EARLY_RUNNER_AUTO_BUY_ENABLED or self._order_manager is None or self._past_buy_cutoff():
             return
-        # Early-watch lane is intraday only (MIS). After the cutoff there's no
-        # same-day upside left — fall through silently and let day rollover clear.
+        # Early-watch lane is intraday only (MIS). Let it run until the final MIS
+        # cutoff; after that there is not enough same-day time left to open fresh risk.
         _now_min = self._ist_now_minute()
-        if _now_min > self._INTRADAY_AUTO_BUY_CUTOFF_MIN:
+        if _now_min > self._intraday_final_auto_buy_cutoff_min():
             return
         # Market regime gate: block in crash/bear, fall through in neutral or
         # missing-engine scenarios. Lifecycle housekeeping (MISSED/weak drops)
@@ -5667,6 +6063,32 @@ class AutoPilotInvestor:
             )
             _tick_change = _safe_float(_tick_liq.get("change"), 0.0)
             _display_change = _tick_change if abs(_tick_change) > abs(_row_change) else _row_change
+            _off_high_pct = 0.0
+            if _day_high > 0 and price > 0:
+                _off_high_pct = max(0.0, (_day_high - price) / _day_high * 100)
+            _vwap_gap_pct = 0.0
+            if _vwap > 0 and price > 0:
+                _vwap_gap_pct = ((price - _vwap) / _vwap) * 100
+            _support_ref = max(_buy_above, _vwap)
+            _support_gap_pct = 0.0
+            if _support_ref > 0 and price > 0:
+                _support_gap_pct = max(0.0, ((price - _support_ref) / _support_ref) * 100)
+            _total_buy = float(_tick_liq.get("total_buy_quantity", _tick_liq.get("total_buy_qty", 0)) or 0)
+            _total_sell = float(_tick_liq.get("total_sell_quantity", _tick_liq.get("total_sell_qty", 0)) or 0)
+            _buyer_imbalance = (_total_buy / _total_sell) if _total_sell > 0 else 0.0
+            _turnover_cr_live = (
+                float(_tick_liq.get("volume_traded", _tick_liq.get("volume", 0)) or 0)
+                * (_vwap if _vwap > 0 else price)
+            ) / 1e7
+            _best_bid = float(_tick_liq.get("best_bid") or 0)
+            _best_ask = float(_tick_liq.get("best_ask") or 0)
+            _spread_pct = 0.0
+            if _best_ask > 0 and _best_bid > 0 and price > 0 and _best_ask >= _best_bid:
+                _spread_pct = ((_best_ask - _best_bid) / price) * 100
+            _open_px = float(_tick_liq.get("open") or _tick_liq.get("ohlc", {}).get("open", 0) or 0)
+            _day_low = float(_tick_liq.get("low") or _tick_liq.get("ohlc", {}).get("low", 0) or 0)
+            _range_pct_live = ((_day_high - _day_low) / _open_px * 100) if _day_high > 0 and _day_low > 0 and _open_px > 0 else 0.0
+            _last_trade_qty = float(_tick_liq.get("last_traded_quantity", _tick_liq.get("last_trade_quantity", 0)) or 0)
 
             _suggested_qty = int(_safe_float(row.get("SuggestedQty", row.get("Suggested Qty", 0)), 0.0))
             if _suggested_qty <= 0:
@@ -5694,6 +6116,20 @@ class AutoPilotInvestor:
                 reasons=blind_reasons,
                 checks=str(row.get("QualityChecks", row.get("Checks", ""))).strip(),
                 suggested_qty=_suggested_qty,
+                off_high_pct=round(_off_high_pct, 2),
+                vwap_gap_pct=round(_vwap_gap_pct, 2),
+                support_gap_pct=round(_support_gap_pct, 2),
+                buyer_imbalance=round(_buyer_imbalance, 2),
+                turnover_cr=round(_turnover_cr_live, 2),
+                spread_pct=round(_spread_pct, 2),
+                range_pct=round(_range_pct_live, 2),
+                last_trade_qty=round(_last_trade_qty, 2),
+                fresh_buyer_confirmation=bool(
+                    _vwap > 0
+                    and price >= _vwap
+                    and _buyer_imbalance >= 1.6
+                    and _turnover_cr_live >= max(1.0, _min_turnover)
+                ),
             ))
             _candidate.suggested_qty, _ = self._cap_suggested_qty_to_broker(
                 price,
@@ -6189,6 +6625,15 @@ class AutoPilotInvestor:
                 reasons=str(pick.get("reasons", "") or ""),
                 original_action=str(pick.get("original_action", "") or ""),
                 source="opening buffer flush",
+                spread_pct=float(pick.get("spread_pct", 0) or 0),
+                range_pct=float(pick.get("range_pct", 0) or 0),
+                last_trade_qty=float(pick.get("last_trade_qty", 0) or 0),
+                turnover_cr=float(pick.get("turnover_cr", 0) or 0),
+                buyer_imbalance=float(pick.get("buyer_imbalance", 0) or 0),
+                vwap_gap_pct=float(pick.get("vwap_gap_pct", 0) or 0),
+                off_high_pct=float(pick.get("off_high_pct", 0) or 0),
+                support_gap_pct=float(pick.get("support_gap_pct", 0) or 0),
+                fresh_buyer_confirmation=bool(pick.get("fresh_buyer_confirmation", False)),
             )
             if auto_result:
                 auto_lines.append(auto_result)
@@ -6405,6 +6850,142 @@ class AutoPilotInvestor:
             return 0.0
         return round(((c.buy_above - c.price) / c.price) * 100, 2)
 
+    @staticmethod
+    def _has_fresh_buyer_confirmation(c: 'BlindBuyCandidate') -> bool:
+        if bool(getattr(c, "fresh_buyer_confirmation", False)):
+            return True
+        return (
+            float(getattr(c, "buyer_imbalance", 0.0) or 0.0) >= 1.6
+            and float(getattr(c, "turnover_cr", 0.0) or 0.0) >= 1.0
+            and float(getattr(c, "vwap_gap_pct", 0.0) or 0.0) >= 0.0
+        )
+
+    @classmethod
+    def _classify_entry_type(cls, c: 'BlindBuyCandidate') -> Tuple[str, str]:
+        change_pct = max(0.0, float(getattr(c, "change_pct", 0.0) or 0.0))
+        volume_ratio = max(0.0, float(getattr(c, "volume_ratio", 0.0) or 0.0))
+        confidence = max(0.0, float(getattr(c, "confidence", 0.0) or 0.0))
+        rr2 = cls._candidate_rr2(c)
+        gap_pct = cls._candidate_entry_gap_pct(c)
+        off_high_pct = max(0.0, float(getattr(c, "off_high_pct", 0.0) or 0.0))
+        vwap_gap_pct = float(getattr(c, "vwap_gap_pct", 0.0) or 0.0)
+        support_gap_pct = max(0.0, float(getattr(c, "support_gap_pct", 0.0) or 0.0))
+        imbalance = max(0.0, float(getattr(c, "buyer_imbalance", 0.0) or 0.0))
+        fresh_buyers = cls._has_fresh_buyer_confirmation(c)
+        strong_move = change_pct >= 4.5
+        has_live_structure = any(
+            abs(float(v or 0.0)) > 0.0
+            for v in (off_high_pct, vwap_gap_pct, support_gap_pct, imbalance)
+        )
+
+        if not strong_move:
+            return "EARLY_BREAKOUT", "move is still controlled and close to the breakout trigger"
+
+        if (
+            fresh_buyers
+            and 0.15 <= support_gap_pct <= 0.9
+            and 0.0 <= vwap_gap_pct <= 0.45
+            and 0.4 <= off_high_pct <= 1.8
+        ):
+            return "PULLBACK_RETEST", "price pulled back toward support, held, and buyers returned"
+
+        if (
+            fresh_buyers
+            and imbalance >= 2.0
+            and 0.0 <= vwap_gap_pct <= 0.5
+            and support_gap_pct <= 0.9
+            and off_high_pct <= 0.6
+        ):
+            return "SECOND_LEG_CONTINUATION", "rested continuation with VWAP support and renewed demand"
+
+        if has_live_structure:
+            if (
+                off_high_pct <= 0.35
+                and (
+                    vwap_gap_pct > 0.8
+                    or support_gap_pct > 1.1
+                    or not fresh_buyers
+                )
+            ):
+                return "LATE_CHASE", "price is hugging the high without a fresh support-backed entry"
+            if off_high_pct <= 0.8 and vwap_gap_pct <= 0.6 and support_gap_pct <= 1.0:
+                return "SWING_BREAKOUT", "strong breakout, but late enough that extra confirmation is needed"
+            return "LATE_CHASE", "move is extended away from VWAP/support without a clear reset"
+
+        if confidence >= 36 and volume_ratio >= 2.2 and rr2 >= 2.0 and gap_pct <= 0.7:
+            return "SWING_BREAKOUT", "strong breakout proxy setup; live structure was unavailable so stricter confirmation is required"
+
+        return "LATE_CHASE", "strong move lacks enough live structure to prove a safe continuation entry"
+
+    @classmethod
+    def _swing_entry_quality_gate(cls, c: 'BlindBuyCandidate') -> Tuple[bool, str]:
+        entry_type, entry_reason = cls._classify_entry_type(c)
+        if entry_type == "LATE_CHASE":
+            return False, f"entry type LATE_CHASE — {entry_reason}"
+        if entry_type != "SWING_BREAKOUT":
+            return True, entry_reason
+
+        failures = []
+        if c.confidence < 34:
+            failures.append(f"confidence {c.confidence:.0f}% < 34%")
+        if c.volume_ratio < 2.2:
+            failures.append(f"volume {c.volume_ratio:.1f}x < 2.2x")
+        rr2 = cls._candidate_rr2(c)
+        if rr2 < 1.9:
+            failures.append(f"R:R 1:{rr2:.1f} < 1:1.9")
+        gap_pct = cls._candidate_entry_gap_pct(c)
+        if gap_pct > 0.7:
+            failures.append(f"entry gap {gap_pct:.1f}% > 0.7%")
+        off_high_pct = max(0.0, float(getattr(c, "off_high_pct", 0.0) or 0.0))
+        if off_high_pct > 0.8:
+            failures.append(f"price is {off_high_pct:.1f}% off high")
+        vwap_gap_pct = float(getattr(c, "vwap_gap_pct", 0.0) or 0.0)
+        if vwap_gap_pct > 0.6:
+            failures.append(f"VWAP gap {vwap_gap_pct:.1f}% > 0.6%")
+        support_gap_pct = max(0.0, float(getattr(c, "support_gap_pct", 0.0) or 0.0))
+        if support_gap_pct > 1.0:
+            failures.append(f"support gap {support_gap_pct:.1f}% > 1.0%")
+        if not cls._has_fresh_buyer_confirmation(c):
+            failures.append("fresh buyer confirmation missing")
+        if failures:
+            return False, "entry type SWING_BREAKOUT needs stronger confirmation: " + "; ".join(failures)
+        return True, entry_reason
+
+    @classmethod
+    def _execution_quality_gate(cls, c: 'BlindBuyCandidate') -> Tuple[bool, str]:
+        price = max(0.0, float(getattr(c, "price", 0.0) or 0.0))
+        turnover_cr = max(0.0, float(getattr(c, "turnover_cr", 0.0) or 0.0))
+        spread_pct = max(0.0, float(getattr(c, "spread_pct", 0.0) or 0.0))
+        range_pct = max(0.0, float(getattr(c, "range_pct", 0.0) or 0.0))
+        last_trade_qty = max(0.0, float(getattr(c, "last_trade_qty", 0.0) or 0.0))
+        imbalance = max(0.0, float(getattr(c, "buyer_imbalance", 0.0) or 0.0))
+        volume_ratio = max(0.0, float(getattr(c, "volume_ratio", 0.0) or 0.0))
+        vwap_gap = float(getattr(c, "vwap_gap_pct", 0.0) or 0.0)
+        has_depth_context = spread_pct > 0 or last_trade_qty > 0 or imbalance > 0
+        has_live_context = has_depth_context or turnover_cr > 0 or abs(vwap_gap) > 0
+
+        if price <= 0:
+            return False, "live price is missing"
+        if not has_live_context:
+            return False, "VWAP/OHLCV/order-depth safety data is missing"
+        if turnover_cr > 0 and turnover_cr < 1.0:
+            return False, f"turnover ₹{turnover_cr:.1f}Cr is below the live execution floor"
+        if spread_pct >= 0.65:
+            return False, f"spread {spread_pct:.2f}% is too wide for safe auto-buy execution"
+        if price < 100 and turnover_cr < 5.0 and spread_pct > 0.35:
+            return False, f"spread {spread_pct:.2f}% is too wide for a sub-₹100 stock with only ₹{turnover_cr:.1f}Cr turnover"
+        if price < 100 and turnover_cr < 5.0 and last_trade_qty > 0 and last_trade_qty < 75:
+            return False, f"last traded quantity {last_trade_qty:.0f} is too small for stable execution"
+        if range_pct >= 8.0 and spread_pct > 0.30 and turnover_cr < 5.0:
+            return False, f"intraday range {range_pct:.1f}% looks too jumpy for auto-buy execution"
+        if imbalance >= 1.6 and turnover_cr < 3.0:
+            return False, f"buyer imbalance {imbalance:.1f}x is not backed by enough real turnover"
+        if imbalance >= 1.8 and spread_pct > 0.30 and last_trade_qty < 100:
+            return False, "buyer imbalance looks like thin order-book noise, not stable prints"
+        if volume_ratio < 0.5 and turnover_cr < 2.0:
+            return False, "volume and turnover are both too weak for reliable execution"
+        return True, "execution quality is stable enough for live auto-buy"
+
     @classmethod
     def _classify_entry_timing_lane(cls, c: 'BlindBuyCandidate') -> Tuple[str, str]:
         rr2 = cls._candidate_rr2(c)
@@ -6434,7 +7015,6 @@ class AutoPilotInvestor:
         price = max(0.0, float(getattr(c, "price", 0.0) or 0.0))
         below_trigger = buy_above > 0 and price > 0 and price < buy_above * 0.998
         near_trigger = buy_above <= 0 or price >= buy_above * 0.99
-
         if (
             str(getattr(c, "holding_horizon", "") or "") == "avoid"
             or rr2 < 1.0
@@ -6448,6 +7028,11 @@ class AutoPilotInvestor:
             if near_trigger and change_pct <= 3.5 and volume_ratio >= 0.8 and confidence >= 15 and rr2 >= 1.2:
                 return "WATCH EARLY", "strong stock preparing near breakout"
             return "WATCH EARLY", "buyers are building pressure but breakout has not started yet"
+
+        if c.holding_horizon in {"2-day swing", "5-day swing"}:
+            quality_ok, quality_reason = cls._swing_entry_quality_gate(c)
+            if not quality_ok:
+                return "MISSED", quality_reason
 
         if (
             near_trigger
@@ -6471,6 +7056,7 @@ class AutoPilotInvestor:
         *,
         off_high_pct: float = 0.0,
     ) -> 'BlindBuyCandidate':
+        c.entry_type, c.entry_type_reason = cls._classify_entry_type(c)
         stage, reason = cls._classify_trade_alert_stage(c, off_high_pct=off_high_pct)
         c.alert_stage = stage
         c.alert_stage_reason = reason
@@ -6483,13 +7069,8 @@ class AutoPilotInvestor:
         gap_pct = cls._candidate_entry_gap_pct(c)
         entry_lane, entry_reason = cls._classify_entry_timing_lane(c)
         alert_stage, alert_reason = cls._classify_trade_alert_stage(c)
+        entry_type, _entry_type_reason = cls._classify_entry_type(c)
         _avoid_horizon = c.holding_horizon == "avoid"
-        if alert_stage != "BUY":
-            if alert_stage == "WATCH EARLY":
-                return False, "setup is still early — wait for breakout to start"
-            if alert_stage == "MISSED":
-                return False, alert_reason
-            return False, "setup is risky or overextended"
         try:
             import pytz
             _ist = pytz.timezone("Asia/Kolkata")
@@ -6509,6 +7090,30 @@ class AutoPilotInvestor:
         _opening_starter_window = _swing_start_min <= now_min <= 10 * 60 + 0
         _early_engine_end_min = _env_time_min("ASSISTANT_EARLY_ENGINE_END", 10 * 60 + 45)
         _intraday_auto_buy_cutoff_min = _env_time_min("ASSISTANT_INTRADAY_AUTO_BUY_CUTOFF", 11 * 60 + 30)
+        _intraday_final_cutoff_min = _env_time_min("ASSISTANT_INTRADAY_FINAL_CUTOFF", 13 * 60 + 30)
+        _late_intraday_window = (
+            c.holding_horizon == "intraday"
+            and _intraday_auto_buy_cutoff_min < now_min <= _intraday_final_cutoff_min
+        )
+
+        if c.holding_horizon == "intraday" and now_min > _intraday_final_cutoff_min:
+            return False, f"intraday auto-buy is paused after {_format_ist_minute(_intraday_final_cutoff_min)} IST"
+
+        if alert_stage != "BUY":
+            if alert_stage == "WATCH EARLY":
+                return False, "setup is still early — wait for breakout to start"
+            if alert_stage == "MISSED" and _late_intraday_window:
+                pass
+            elif alert_stage == "MISSED":
+                return False, alert_reason
+            else:
+                return False, "setup is risky or overextended"
+
+        execution_ok, execution_reason = cls._execution_quality_gate(c)
+        if not execution_ok:
+            if _late_intraday_window:
+                return False, f"strict late-session MIS rejected: {execution_reason}"
+            return False, execution_reason
 
         if (
             cls._is_true_buy_action(getattr(c, "original_action", ""))
@@ -6545,19 +7150,26 @@ class AutoPilotInvestor:
                     return False, f"day move {c.change_pct:.1f}% is below the 9:15 lane zone (needs 0.4%-4.8%)"
                 if c.change_pct > 4.8:
                     return False, f"day move {c.change_pct:.1f}% is above the 9:15 lane zone (needs 0.4%-4.8%)"
-            elif now_min > _intraday_auto_buy_cutoff_min:
-                return False, f"intraday auto-buy is paused after {_format_ist_minute(_intraday_auto_buy_cutoff_min)} IST"
-            elif not (9 * 60 + 20 <= now_min <= 10 * 60 + 0):
-                return False, "intraday auto-buy is only allowed during the opening window"
-            if entry_lane != "early":
-                return False, "intraday auto-buy is reserved for early breakout entries only"
-            if grade not in {"A+", "A"}:
-                return False, "intraday auto-buy needs A or A+ grade"
+            elif now_min > _intraday_final_cutoff_min:
+                return False, f"intraday auto-buy is paused after {_format_ist_minute(_intraday_final_cutoff_min)} IST"
+            elif now_min <= _intraday_auto_buy_cutoff_min:
+                if entry_lane not in {"early", "continuation"}:
+                    return False, "intraday auto-buy needs an early breakout or clean continuation entry"
+                if grade not in {"A+", "A"}:
+                    return False, "intraday auto-buy needs A or A+ grade"
+            else:
+                late_ok, late_reason = cls._strict_late_session_intraday_gate(c)
+                if not late_ok:
+                    return False, f"strict late-session MIS rejected: {late_reason}"
+                return True, late_reason
         else:
             if not (_swing_start_min <= now_min <= _swing_end_min):
                 if now_min < _swing_start_min:
                     return False, "swing auto-buy starts at 9:15 AM IST"
                 return False, "swing auto-buy is paused after 1:30 PM IST"
+            quality_ok, quality_reason = cls._swing_entry_quality_gate(c)
+            if not quality_ok:
+                return False, quality_reason
 
         if (
             _late_comer_window
@@ -6571,6 +7183,7 @@ class AutoPilotInvestor:
             and rr2 >= _env_float("ASSISTANT_LATE_COMER_MIN_RR", 1.8)
             and gap_pct <= _env_float("ASSISTANT_LATE_COMER_MAX_GAP", 0.7)
             and not _avoid_horizon
+            and entry_type != "LATE_CHASE"
             and "bearish" not in str(getattr(c, "reasons", "") or "").lower()
         ):
             return True, "eligible now as a strict late-comer continuation swing auto-buy"
@@ -6587,6 +7200,7 @@ class AutoPilotInvestor:
             and c.confidence >= 18
             and c.volume_ratio >= 0.25
             and not _avoid_horizon
+            and entry_type != "LATE_CHASE"
         ):
             return True, "eligible now as an opening starter swing auto-buy"
 
@@ -6691,6 +7305,11 @@ class AutoPilotInvestor:
             "AVOID": "🔴 AVOID: `risky or overextended`",
         }.get(stage, "📝 WATCH: `monitor only`")
         return f"{label} — {reason}"
+
+    @classmethod
+    def _format_entry_type_line(cls, c: 'BlindBuyCandidate') -> str:
+        entry_type, reason = cls._classify_entry_type(c)
+        return f"🧩 Entry Type: `{entry_type}` — {reason}"
 
     @classmethod
     def _format_hold_product_line(cls, c: 'BlindBuyCandidate') -> str:
@@ -6979,19 +7598,23 @@ class AutoPilotInvestor:
             auto_sent = 0
             for c, grade, _, _ in main_picks:
                 auto_result = ""
-                auto_eligible = self._eligible_for_live_auto_buy(c, grade)
+                c, grade, auto_eligible, gate_reason = self._resolve_auto_buy_candidate(c)
                 capped_by_alert_limit = auto_eligible and self._AUTO_BUY_TOP_N > 0 and auto_sent >= self._AUTO_BUY_TOP_N
                 if not regime_ok and auto_eligible:
-                    auto_result = (
-                        f"⚠️ **IMPORTANT MISSED OPPORTUNITY — `{c.symbol}`**\n"
-                        f"Buyable setup blocked by market regime: {regime_reason}"
+                    auto_result = self._format_missed_or_late_message(
+                        c.symbol,
+                        reason=f"Buyable setup blocked by market regime: {regime_reason}",
+                        candidate=c,
+                        live_price=c.price,
                     )
                     self._log(f"Batch auto-buy regime block {c.symbol}: {regime_reason}")
                     self._record_no_buy_reason(regime_reason)
                 elif capped_by_alert_limit:
-                    auto_result = (
-                        f"⚠️ **IMPORTANT MISSED OPPORTUNITY — `{c.symbol}`**\n"
-                        f"Buyable setup missed because live auto-buy cap {self._AUTO_BUY_TOP_N} was already reached."
+                    auto_result = self._format_missed_or_late_message(
+                        c.symbol,
+                        reason=f"Buyable setup missed because live auto-buy cap {self._AUTO_BUY_TOP_N} was already reached.",
+                        candidate=c,
+                        live_price=c.price,
                     )
                     self._log(f"Batch auto-buy cap skip {c.symbol}: cap={self._AUTO_BUY_TOP_N}")
                 elif auto_eligible:
@@ -7006,8 +7629,12 @@ class AutoPilotInvestor:
                     self._log(f"Batch auto-buy result {c.symbol}: {auto_result}")
                     auto_sent += 1
                 else:
-                    gate_reason = self._live_auto_buy_gate_detail(c, grade)[1]
-                    auto_result = f"⚠️ **IMPORTANT MISSED OPPORTUNITY — `{c.symbol}`**\nBuyable setup missed because: {gate_reason}"
+                    auto_result = self._format_missed_or_late_message(
+                        c.symbol,
+                        reason=f"Buyable setup missed because: {gate_reason}",
+                        candidate=c,
+                        live_price=c.price,
+                    )
                     self._log(
                         f"Batch auto-buy skip {c.symbol}: grade={grade}, score={c.blind_score:.0f}, "
                         f"conf={c.confidence:.0f}%, rr={self._candidate_rr2(c):.1f}, "
@@ -7030,6 +7657,8 @@ class AutoPilotInvestor:
                     rr2=self._candidate_rr2(c),
                     grade=grade,
                     rank_score=self._candidate_rank(c),
+                    entry_type=c.entry_type,
+                    entry_type_reason=c.entry_type_reason,
                     auto_eligible=auto_eligible,
                     auto_result=auto_result,
                 )
@@ -7103,6 +7732,7 @@ class AutoPilotInvestor:
             ]
         else:
             entry_timing_line = self._format_entry_timing_line(c)
+            entry_type_line = self._format_entry_type_line(c)
             auto_status_line = self._format_auto_buy_status_line(c, grade)
             hold_product_line = self._format_hold_product_line(c)
             headline = {
@@ -7116,6 +7746,7 @@ class AutoPilotInvestor:
                 f"Price `{c.price:.2f}` ({pct}) | Buy Above `{c.buy_above:.2f}` | Volume `{c.volume_ratio:.1f}x avg`{f' | {mom_label}' if mom_label else ''}",
                 f"Stop Loss `{c.stop_loss:.2f}` | Target 1 `{c.target1:.2f}` | Target 2 `{c.target2:.2f}`{risk_reward}",
                 f"Why: {simple_reasons}",
+                entry_type_line,
                 entry_timing_line,
                 hold_product_line,
                 auto_status_line,
@@ -7401,6 +8032,8 @@ class AutoPilotInvestor:
         rr2: float,
         grade: str,
         rank_score: float,
+        entry_type: str,
+        entry_type_reason: str,
         auto_eligible: bool,
         auto_result: Optional[str],
     ) -> None:
@@ -7426,6 +8059,8 @@ class AutoPilotInvestor:
             "RR2": round(float(rr2 or 0), 2),
             "Grade": grade,
             "RankScore": round(float(rank_score or 0), 2),
+            "EntryType": str(entry_type or ""),
+            "EntryTypeReason": str(entry_type_reason or ""),
             "AutoEligible": bool(auto_eligible),
             "AutoStatus": auto_status,
             "AutoReason": auto_reason,
@@ -7443,6 +8078,16 @@ class AutoPilotInvestor:
         text = str(outcome or "").strip()
         lower = text.lower()
         if not auto_eligible:
+            if "late_discovery" in lower:
+                return "SKIPPED", "late_discovery"
+            if "strict_mode_rejected" in lower:
+                return "INELIGIBLE", "strict_mode_rejected"
+            if "swing_recheck_rejected" in lower:
+                return "INELIGIBLE", "swing_recheck_rejected"
+            if "blocked" in lower:
+                return "SKIPPED", "blocked"
+            if "rejected" in lower:
+                return "INELIGIBLE", "rejected"
             if "auto-buy cap" in lower or "alert-side auto-buy cap" in lower:
                 return "SKIPPED", "auto_buy_cap"
             if "intraday auto-buy is paused after" in lower:
@@ -7455,6 +8100,10 @@ class AutoPilotInvestor:
                 return "INELIGIBLE", "intraday_window_closed"
             if "entry is already stretched" in lower:
                 return "INELIGIBLE", "entry_stretched"
+            if "entry type late_chase" in lower:
+                return "INELIGIBLE", "late_chase"
+            if "entry type swing_breakout" in lower:
+                return "INELIGIBLE", "swing_breakout_unconfirmed"
             if "below trigger" in lower or "within 0.6% of trigger" in lower:
                 return "INELIGIBLE", "entry_not_tight"
             if "r:r" in lower:

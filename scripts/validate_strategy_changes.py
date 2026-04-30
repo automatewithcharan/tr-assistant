@@ -23,6 +23,7 @@ Exits non-zero if any check fails.
 from __future__ import annotations
 
 import os
+import re
 import sys
 import time
 import unittest
@@ -227,6 +228,7 @@ def _make_investor():
     inv._AUTO_BUY_TOP_N = 0
     inv._tick_confirmed_auto_buy_count = 0
     inv._daily_no_buy_reasons = __import__("collections").Counter()
+    inv._auto_buy_timeline = {}
     inv._daily_internal_watch = set()
     inv._daily_internal_avoid = set()
     inv._early_watch_list = {}
@@ -357,6 +359,417 @@ class SecondLegContinuationTests(unittest.TestCase):
     def test_missing_vwap_does_not_crash(self):
         # avg_px=0 → vwap_gap check skipped, but above_vwap=False below.
         self.assertFalse(self._qualifies(avg_px=0.0, above_vwap=False))
+
+
+class SwingEntryTypeTests(unittest.TestCase):
+    def setUp(self):
+        self.inv = _make_investor()
+        from pkscreener.classes.AutoPilotInvestor import BlindBuyCandidate
+        self.BlindBuyCandidate = BlindBuyCandidate
+
+    def _candidate(self, **overrides):
+        c = self.BlindBuyCandidate(
+            symbol="LATE_SWING_STOCK",
+            price=105.0,
+            buy_above=104.5,
+            stop_loss=100.0,
+            target1=110.0,
+            target2=115.0,
+            confidence=36.0,
+            volume_ratio=2.4,
+            change_pct=5.3,
+            blind_score=60.0,
+            holding_horizon="2-day swing",
+            product_preference="CNC",
+            off_high_pct=0.6,
+            vwap_gap_pct=0.4,
+            support_gap_pct=0.5,
+            buyer_imbalance=1.9,
+            turnover_cr=2.5,
+            fresh_buyer_confirmation=True,
+        )
+        for key, value in overrides.items():
+            setattr(c, key, value)
+        return c
+
+    def test_late_chase_is_blocked(self):
+        c = self._candidate(
+            off_high_pct=0.2,
+            vwap_gap_pct=1.1,
+            support_gap_pct=1.4,
+            buyer_imbalance=1.2,
+            fresh_buyer_confirmation=False,
+            confidence=30.0,
+            volume_ratio=2.1,
+        )
+        entry_type, _ = self.inv._classify_entry_type(c)
+        ok, reason = self.inv._swing_entry_quality_gate(c)
+        self.assertEqual(entry_type, "LATE_CHASE")
+        self.assertFalse(ok)
+        self.assertIn("LATE_CHASE", reason)
+
+    def test_pullback_retest_stays_allowed(self):
+        c = self._candidate(
+            off_high_pct=1.1,
+            vwap_gap_pct=0.2,
+            support_gap_pct=0.5,
+            buyer_imbalance=2.4,
+        )
+        entry_type, _ = self.inv._classify_entry_type(c)
+        ok, reason = self.inv._swing_entry_quality_gate(c)
+        self.assertEqual(entry_type, "PULLBACK_RETEST")
+        self.assertTrue(ok)
+        self.assertIn("buyers returned", reason)
+
+    def test_swing_breakout_needs_stronger_confirmation(self):
+        c = self._candidate(
+            off_high_pct=0.7,
+            vwap_gap_pct=0.5,
+            support_gap_pct=0.6,
+            confidence=30.0,
+            volume_ratio=2.1,
+            buyer_imbalance=1.7,
+        )
+        entry_type, _ = self.inv._classify_entry_type(c)
+        ok, reason = self.inv._swing_entry_quality_gate(c)
+        self.assertEqual(entry_type, "SWING_BREAKOUT")
+        self.assertFalse(ok)
+        self.assertIn("needs stronger confirmation", reason)
+
+    def test_confirmed_swing_breakout_stays_allowed(self):
+        c = self._candidate(
+            off_high_pct=0.7,
+            vwap_gap_pct=0.5,
+            support_gap_pct=0.6,
+            confidence=35.0,
+            volume_ratio=2.3,
+            buyer_imbalance=1.8,
+        )
+        entry_type, _ = self.inv._classify_entry_type(c)
+        ok, _ = self.inv._swing_entry_quality_gate(c)
+        self.assertEqual(entry_type, "SWING_BREAKOUT")
+        self.assertTrue(ok)
+
+
+class ExecutionQualityAndCutoffTests(unittest.TestCase):
+    def setUp(self):
+        self.inv = _make_investor()
+        from pkscreener.classes.AutoPilotInvestor import BlindBuyCandidate
+        self.BlindBuyCandidate = BlindBuyCandidate
+
+    def _freeze_ist_time(self, hour: int, minute: int):
+        class _FixedDateTime(datetime):
+            @classmethod
+            def now(cls, tz=None):
+                base = datetime(2026, 4, 30, hour, minute)
+                if tz is not None:
+                    if hasattr(tz, "localize"):
+                        return tz.localize(base)
+                    return base.replace(tzinfo=tz)
+                return base
+
+        return mock.patch("pkscreener.classes.AutoPilotInvestor.datetime", _FixedDateTime)
+
+    def _candidate(self, **overrides):
+        c = self.BlindBuyCandidate(
+            symbol="CHOPPY_STOCK",
+            price=72.0,
+            buy_above=72.0,
+            stop_loss=69.12,
+            target1=75.6,
+            target2=79.2,
+            confidence=40.0,
+            volume_ratio=2.5,
+            change_pct=4.2,
+            blind_score=72.0,
+            original_action="Buy Now",
+            reasons="volume surge 2.5x, gap-up +4.2%, near trigger",
+            holding_horizon="5-day swing",
+            product_preference="CNC",
+            off_high_pct=0.74,
+            vwap_gap_pct=0.0,
+            support_gap_pct=0.0,
+            buyer_imbalance=1.64,
+            turnover_cr=3.19,
+            fresh_buyer_confirmation=True,
+            spread_pct=0.54,
+            range_pct=3.58,
+            last_trade_qty=50,
+        )
+        for key, value in overrides.items():
+            setattr(c, key, value)
+        return c
+
+    def test_rnitai_style_execution_is_blocked(self):
+        c = self._candidate()
+        ok, reason = self.inv._live_auto_buy_gate_detail(c, "A")
+        self.assertFalse(ok)
+        self.assertIn("spread", reason.lower())
+
+    def test_imbalance_without_real_liquidity_is_blocked(self):
+        c = self._candidate(
+            symbol="THIN_MICROCAP_STOCK",
+            price=38.0,
+            buy_above=37.8,
+            stop_loss=36.4,
+            target1=39.9,
+            target2=41.8,
+            turnover_cr=1.4,
+            spread_pct=0.38,
+            last_trade_qty=40,
+            buyer_imbalance=2.4,
+            fresh_buyer_confirmation=False,
+        )
+        ok, reason = self.inv._live_auto_buy_gate_detail(c, "A")
+        self.assertFalse(ok)
+        self.assertTrue(
+            "imbalance" in reason.lower()
+            or "spread" in reason.lower()
+            or "traded quantity" in reason.lower()
+        )
+
+    def test_missing_safety_data_fails_closed(self):
+        c = self._candidate(
+            symbol="MISSING_DATA_STOCK",
+            turnover_cr=0.0,
+            spread_pct=0.0,
+            last_trade_qty=0.0,
+            buyer_imbalance=0.0,
+            vwap_gap_pct=0.0,
+            fresh_buyer_confirmation=False,
+        )
+        ok, reason = self.inv._live_auto_buy_gate_detail(c, "A")
+        self.assertFalse(ok)
+        self.assertIn("safety data", reason.lower())
+
+    def test_post_1130_intraday_rechecks_as_strict_swing(self):
+        self.inv._ist_now_minute = lambda: 12 * 60
+        c = self._candidate(
+            symbol="POST_CUTOFF_STOCK",
+            price=1544.0,
+            buy_above=1538.0,
+            stop_loss=1496.0,
+            target1=1595.0,
+            target2=1648.0,
+            confidence=37.0,
+            volume_ratio=2.3,
+            change_pct=5.1,
+            blind_score=64.0,
+            holding_horizon="intraday",
+            product_preference="MIS",
+            off_high_pct=0.7,
+            vwap_gap_pct=0.5,
+            support_gap_pct=0.6,
+            buyer_imbalance=1.8,
+            turnover_cr=8.5,
+            spread_pct=0.08,
+            range_pct=2.9,
+            last_trade_qty=650,
+            fresh_buyer_confirmation=True,
+        )
+        with self._freeze_ist_time(12, 0):
+            resolved, _grade, eligible, reason = self.inv._resolve_auto_buy_candidate(c)
+        self.assertTrue(eligible, reason)
+        self.assertEqual(resolved.product_preference, "CNC")
+        self.assertEqual(resolved.holding_horizon, "2-day swing")
+
+    def test_post_1130_intraday_only_stays_blocked_if_strict_swing_fails(self):
+        self.inv._ist_now_minute = lambda: 12 * 60
+        c = self._candidate(
+            symbol="POST_CUTOFF_STOCK",
+            holding_horizon="intraday",
+            product_preference="MIS",
+            spread_pct=0.42,
+            last_trade_qty=45,
+            turnover_cr=2.1,
+            buyer_imbalance=1.4,
+            fresh_buyer_confirmation=False,
+        )
+        with self._freeze_ist_time(12, 0):
+            resolved, _grade, eligible, reason = self.inv._resolve_auto_buy_candidate(c)
+        self.assertFalse(eligible)
+        self.assertEqual(resolved.product_preference, "CNC")
+        self.assertIn("strict cnc swing re-check failed", reason.lower())
+
+    def test_after_130_without_prior_buyable_becomes_late_discovery(self):
+        self.inv._ist_now_minute = lambda: 14 * 60
+        c = self._candidate(symbol="POST_CUTOFF_DISCOVERY_STOCK")
+        msg = self.inv._format_missed_or_late_message(
+            "POST_CUTOFF_DISCOVERY_STOCK",
+            reason="Signal surfaced only after the swing cutoff.",
+            candidate=c,
+            live_price=c.price,
+        )
+        self.assertIn("LATE_DISCOVERY", msg)
+
+    def test_buyable_before_1130_but_delayed_is_important_missed(self):
+        c = self._candidate(symbol="POST_CUTOFF_STOCK", holding_horizon="intraday", product_preference="MIS")
+        self.inv._ist_now_minute = lambda: 10 * 60 + 45
+        self.inv._note_auto_buy_timeline("POST_CUTOFF_STOCK", live_price=1542.0, entry_type="EARLY_BREAKOUT", holding_horizon="intraday", buyable_now=True)
+        self.inv._ist_now_minute = lambda: 12 * 60
+        msg = self.inv._format_missed_or_late_message(
+            "POST_CUTOFF_STOCK",
+            reason="Execution was delayed until after the MIS cutoff.",
+            candidate=c,
+            live_price=1548.0,
+        )
+        self.assertIn("IMPORTANT MISSED OPPORTUNITY", msg)
+
+    def test_buyable_before_130_swing_but_delayed_is_important_missed(self):
+        c = self._candidate(symbol="POST_CUTOFF_STOCK")
+        self.inv._ist_now_minute = lambda: 12 * 60 + 15
+        self.inv._note_auto_buy_timeline("POST_CUTOFF_STOCK", live_price=1540.0, entry_type="PULLBACK_RETEST", holding_horizon="2-day swing", buyable_now=True)
+        self.inv._ist_now_minute = lambda: 14 * 60
+        msg = self.inv._format_missed_or_late_message(
+            "POST_CUTOFF_STOCK",
+            reason="Execution slipped beyond the swing cutoff.",
+            candidate=c,
+            live_price=1556.0,
+        )
+        self.assertIn("IMPORTANT MISSED OPPORTUNITY", msg)
+
+    def test_before_1130_normal_mis_candidate_can_auto_buy(self):
+        self.inv._ist_now_minute = lambda: 10 * 60 + 30
+        c = self._candidate(
+            symbol="NORMAL_MIS_STOCK",
+            holding_horizon="intraday",
+            product_preference="MIS",
+            price=1544.0,
+            buy_above=1538.0,
+            stop_loss=1496.0,
+            target1=1595.0,
+            target2=1648.0,
+            confidence=37.0,
+            volume_ratio=2.3,
+            change_pct=4.8,
+            blind_score=64.0,
+            off_high_pct=0.6,
+            vwap_gap_pct=0.3,
+            support_gap_pct=0.5,
+            buyer_imbalance=2.1,
+            turnover_cr=8.5,
+            spread_pct=0.08,
+            range_pct=2.9,
+            last_trade_qty=650,
+            fresh_buyer_confirmation=True,
+        )
+        with self._freeze_ist_time(10, 30):
+            ok, reason = self.inv._live_auto_buy_gate_detail(c, "A")
+        self.assertTrue(ok, reason)
+
+    def test_after_1130_mis_uses_strict_mode_not_blunt_block(self):
+        self.inv._ist_now_minute = lambda: 12 * 60
+        c = self._candidate(
+            symbol="STRICT_LATE_MIS_STOCK",
+            holding_horizon="intraday",
+            product_preference="MIS",
+            price=1544.0,
+            buy_above=1538.0,
+            stop_loss=1496.0,
+            target1=1595.0,
+            target2=1648.0,
+            confidence=37.0,
+            volume_ratio=2.3,
+            change_pct=5.1,
+            blind_score=64.0,
+            off_high_pct=0.6,
+            vwap_gap_pct=0.3,
+            support_gap_pct=0.5,
+            buyer_imbalance=2.1,
+            turnover_cr=8.5,
+            spread_pct=0.08,
+            range_pct=2.9,
+            last_trade_qty=650,
+            fresh_buyer_confirmation=True,
+        )
+        with self._freeze_ist_time(12, 0):
+            ok, reason = self.inv._live_auto_buy_gate_detail(c, "A")
+        self.assertTrue(ok, reason)
+        self.assertIn("late-session MIS", reason)
+
+    def test_after_1130_weak_mis_gets_strict_mode_rejected(self):
+        self.inv._ist_now_minute = lambda: 12 * 60
+        c = self._candidate(
+            symbol="LATE_CHASE_MIS_STOCK",
+            holding_horizon="intraday",
+            product_preference="MIS",
+            off_high_pct=0.15,
+            vwap_gap_pct=1.1,
+            support_gap_pct=1.3,
+            buyer_imbalance=1.2,
+            fresh_buyer_confirmation=False,
+            spread_pct=0.41,
+            last_trade_qty=45,
+        )
+        with self._freeze_ist_time(12, 0):
+            ok, reason = self.inv._live_auto_buy_gate_detail(c, "A")
+        self.assertFalse(ok)
+        self.assertIn("strict late-session MIS rejected", reason)
+
+    def test_after_final_mis_cutoff_no_new_intraday_trade(self):
+        self.inv._ist_now_minute = lambda: 14 * 60
+        c = self._candidate(
+            symbol="PAST_FINAL_MIS_CUTOFF_STOCK",
+            holding_horizon="intraday",
+            product_preference="MIS",
+        )
+        with self._freeze_ist_time(14, 0):
+            ok, reason = self.inv._live_auto_buy_gate_detail(c, "A")
+        self.assertFalse(ok)
+        self.assertIn("paused after 1:30 PM", reason)
+
+    def test_amic_style_post_cutoff_case_uses_truthful_label(self):
+        self.inv._ist_now_minute = lambda: 12 * 60 + 5
+        c = self._candidate(
+            symbol="POST_CUTOFF_DISCOVERY_STOCK",
+            holding_horizon="intraday",
+            product_preference="MIS",
+            off_high_pct=0.2,
+            vwap_gap_pct=1.0,
+            support_gap_pct=1.2,
+            buyer_imbalance=1.1,
+            fresh_buyer_confirmation=False,
+            spread_pct=0.44,
+            last_trade_qty=35,
+        )
+        with self._freeze_ist_time(12, 5):
+            resolved, _grade, eligible, reason = self.inv._resolve_auto_buy_candidate(c)
+        self.assertFalse(eligible)
+        msg = self.inv._format_missed_or_late_message(
+            "POST_CUTOFF_DISCOVERY_STOCK",
+            reason=reason,
+            candidate=resolved,
+            live_price=resolved.price,
+        )
+        self.assertIn("SWING_RECHECK_REJECTED", msg)
+
+
+class NoHardcodedSymbolRulesTests(unittest.TestCase):
+    def test_production_files_do_not_contain_stock_specific_hacks(self):
+        roots = [
+            os.path.join(_REPO_ROOT, "pkscreener", "classes"),
+        ]
+        blocked_symbols = [
+            "RNITAI",
+            "BALRAMCHIN",
+            "SEAMECLTD",
+            "AMIC",
+            "THINMICRO",
+            "NODATA",
+        ]
+        offenders = []
+        for root in roots:
+            for dirpath, _dirnames, filenames in os.walk(root):
+                for filename in filenames:
+                    if not filename.endswith(".py"):
+                        continue
+                    path = os.path.join(dirpath, filename)
+                    with open(path, "r", encoding="utf-8") as fh:
+                        text = fh.read()
+                    for sym in blocked_symbols:
+                        if re.search(rf"\\b{re.escape(sym)}\\b", text):
+                            offenders.append(f"{path}:{sym}")
+        self.assertEqual(offenders, [])
 
 
 class FailedBreakoutFastExitTests(unittest.TestCase):
