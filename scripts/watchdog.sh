@@ -12,9 +12,7 @@ else
 fi
 LOG=/tmp/trade_watchdog.log
 WEBHOOK=$(grep DISCORD_WEBHOOK_URL $REPO/.env.dev 2>/dev/null | cut -d= -f2- || echo '')
-CLEANUP_STAMP=/tmp/trade_data_cleanup_last_date
 DISK_STATE_STAMP=/tmp/trade_disk_guard_state
-LOGS_DIR="$REPO/results/Data/assistant_logs"
 DISK_WARN_GB=$(grep '^TRADE_DISK_WARN_GB=' "$REPO/.env.dev" 2>/dev/null | tail -1 | cut -d= -f2- || echo '8')
 DISK_CRITICAL_GB=$(grep '^TRADE_DISK_CRITICAL_GB=' "$REPO/.env.dev" 2>/dev/null | tail -1 | cut -d= -f2- || echo '4')
 DISK_GUARD_STOPPED=0
@@ -43,45 +41,8 @@ send_discord_on_disk_state_change() {
     fi
 }
 
-run_aggressive_disk_cleanup() {
-    CLEANUP_OUT=$(cd "$REPO" && "$PYTHON" scripts/cleanup_results_data.py --apply --keep-days 7 --archive-instead-of-delete 2>&1)
-    CLEANUP_RC=$?
-    if [ -d "$LOGS_DIR" ]; then
-        find "$LOGS_DIR" -type f -name 'session_*.log' -mtime +14 ! -name '*.gz' -exec gzip -f {} \; >/dev/null 2>&1 || true
-        find "$LOGS_DIR" -type f -name 'session_*.log.gz' -mtime +60 -delete >/dev/null 2>&1 || true
-    fi
-    echo "$CLEANUP_OUT"
-    return "$CLEANUP_RC"
-}
-
 run_daily_data_cleanup() {
-    TODAY=$(date +%Y-%m-%d)
-    LAST_DONE=""
-    [ -f "$CLEANUP_STAMP" ] && LAST_DONE=$(cat "$CLEANUP_STAMP" 2>/dev/null || echo "")
-
-    # Run once per day only. Uses safe defaults:
-    # - keep *_latest files
-    # - keep portfolio history
-    # - keep cache directories
-    if [ "$LAST_DONE" = "$TODAY" ]; then
-        return
-    fi
-
-    CLEANUP_OUT=$(cd "$REPO" && "$PYTHON" scripts/cleanup_results_data.py --apply --keep-days 14 --archive-instead-of-delete 2>&1)
-    CLEANUP_RC=$?
-    if [ "$CLEANUP_RC" -eq 0 ]; then
-        DELETED_COUNT=$(echo "$CLEANUP_OUT" | grep 'Delete count:' | awk '{print $3}' | head -1)
-        ARCHIVED_COUNT=$(echo "$CLEANUP_OUT" | grep 'Archived count:' | awk '{print $3}' | head -1)
-        [ -z "$DELETED_COUNT" ] && DELETED_COUNT=0
-        [ -z "$ARCHIVED_COUNT" ] && ARCHIVED_COUNT=0
-        echo "$TODAY" > "$CLEANUP_STAMP"
-        echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Watchdog: data cleanup done (deleted=$DELETED_COUNT archived=$ARCHIVED_COUNT)" >> "$LOG"
-        send_discord "🧹 **Data cleanup completed** at $(TZ='Asia/Kolkata' date +'%H:%M') IST — archived $ARCHIVED_COUNT and deleted $DELETED_COUNT old files"
-    else
-        echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Watchdog: data cleanup failed" >> "$LOG"
-        echo "$CLEANUP_OUT" >> "$LOG"
-        send_discord "⚠️ **Data cleanup failed** at $(TZ='Asia/Kolkata' date +'%H:%M') IST — check /tmp/trade_watchdog.log"
-    fi
+    return
 }
 
 run_disk_guard() {
@@ -96,25 +57,17 @@ run_disk_guard() {
         return
     fi
 
-    BEFORE_GB=$(kb_to_gb "$FREE_KB")
-    echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Watchdog: low disk detected (free=${BEFORE_GB}G), running aggressive cleanup" >> "$LOG"
-    AGGR_CLEANUP_OUT=$(run_aggressive_disk_cleanup)
-    AGGR_CLEANUP_RC=$?
-    [ "$AGGR_CLEANUP_RC" -ne 0 ] && echo "$AGGR_CLEANUP_OUT" >> "$LOG"
-
-    FREE_KB=$(get_free_kb)
-    [ -z "$FREE_KB" ] && return
     AFTER_GB=$(kb_to_gb "$FREE_KB")
 
     if [ "$FREE_KB" -le "$CRIT_KB" ]; then
-        echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Watchdog: disk CRITICAL after cleanup (free=${AFTER_GB}G), stopping assistant to protect machine" >> "$LOG"
+        echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Watchdog: disk CRITICAL (free=${AFTER_GB}G), stopping assistant to protect machine" >> "$LOG"
         $PYTHON -m pkscreener.pkscreenercli --assistantstop all >> "$LOG" 2>&1 || true
         DISK_GUARD_STOPPED=1
-        send_discord_on_disk_state_change "critical" "🚨 **Disk critically low** — only ${AFTER_GB} GB free after aggressive cleanup. Assistant was stopped to protect login/session stability."
+        send_discord_on_disk_state_change "critical" "🚨 **Disk critically low** — only ${AFTER_GB} GB free. Assistant was stopped to protect login/session stability. Systemd disk guard remains responsible for storage cleanup."
         return
     fi
 
-    send_discord_on_disk_state_change "warning" "⚠️ **Disk space low** — free space is ${AFTER_GB} GB after aggressive cleanup. The assistant is still running, but storage should be checked."
+    send_discord_on_disk_state_change "warning" "⚠️ **Disk space low** — free space is ${AFTER_GB} GB. Systemd disk guard handles storage cleanup; the watchdog is only monitoring bot uptime."
     echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Watchdog: disk warning persists (free=${AFTER_GB}G)" >> "$LOG"
 }
 

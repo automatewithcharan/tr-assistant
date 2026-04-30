@@ -65,62 +65,31 @@ kb_to_gb() {
 }
 
 run_cleanup() {
-    "$PYTHON" scripts/cleanup_results_data.py --apply --keep-days "$CLEANUP_KEEP_DAYS" --archive-instead-of-delete >> "$LOG" 2>&1 || true
+    local args=(--diskusagereport --diskusageapply --diskusagenotify)
+    if [ -n "$ARCHIVE_BUCKET" ]; then
+        args+=(--diskusagebucket "$ARCHIVE_BUCKET")
+    fi
+    "$PYTHON" -m pkscreener.pkscreenercli "${args[@]}" >> "$LOG" 2>&1 || true
 }
 
 sync_archive_bucket() {
-    [ -z "$ARCHIVE_BUCKET" ] && return 0
-    [ ! -d "$ARCHIVE_DIR" ] && return 0
-    if command -v gcloud >/dev/null 2>&1; then
-        gcloud storage rsync --recursive "$ARCHIVE_DIR" "$ARCHIVE_BUCKET" >> "$LOG" 2>&1
-    else
-        gsutil -m rsync -r "$ARCHIVE_DIR" "$ARCHIVE_BUCKET" >> "$LOG" 2>&1
-    fi
+    return 0
 }
 
 sync_compressed_logs() {
-    [ -z "$ARCHIVE_BUCKET" ] && return 0
-    [ ! -d "$LOGS_DIR" ] && return 0
-    shopt -s nullglob
-    local files=("$LOGS_DIR"/session_*.log.gz)
-    shopt -u nullglob
-    [ "${#files[@]}" -eq 0 ] && return 0
-    if command -v gcloud >/dev/null 2>&1; then
-        gcloud storage cp "${files[@]}" "$ARCHIVE_BUCKET/assistant_logs/" >> "$LOG" 2>&1
-    else
-        gsutil -m cp "${files[@]}" "$ARCHIVE_BUCKET/assistant_logs/" >> "$LOG" 2>&1
-    fi
+    return 0
 }
 
 sync_critical_state() {
-    [ -z "$ARCHIVE_BUCKET" ] && return 0
-    shopt -s nullglob
-    local files=(
-        "$RUNTIME_DIR"/kite_orders_log.csv
-        "$RUNTIME_DIR"/kite_tracked_positions.json
-        "$RUNTIME_DIR"/assistant_runtime.db
-        "$RUNTIME_DIR"/autopilot_main_log.csv
-    )
-    shopt -u nullglob
-    [ "${#files[@]}" -eq 0 ] && return 0
-    if command -v gcloud >/dev/null 2>&1; then
-        gcloud storage cp "${files[@]}" "$ARCHIVE_BUCKET/state/" >> "$LOG" 2>&1
-    else
-        gsutil -m cp "${files[@]}" "$ARCHIVE_BUCKET/state/" >> "$LOG" 2>&1
-    fi
+    return 0
 }
 
 compress_old_logs() {
-    [ ! -d "$LOGS_DIR" ] && return 0
-    find "$LOGS_DIR" -type f -name 'session_*.log' -mmin +"$LOG_COMPRESS_MINUTES" -exec gzip -f {} \; >> "$LOG" 2>&1 || true
-    find "$LOGS_DIR" -type f -name 'session_*.log.gz' -mtime +"$LOG_DELETE_DAYS" -delete >> "$LOG" 2>&1 || true
+    return 0
 }
 
 prune_synced_archive() {
-    [ ! -d "$ARCHIVE_DIR" ] && return 0
-    [ "$ARCHIVE_PRUNE_DAYS" -lt 0 ] && return 0
-    find "$ARCHIVE_DIR" -type f -name '*.gz' -mtime +"$ARCHIVE_PRUNE_DAYS" -delete >> "$LOG" 2>&1 || true
-    find "$LOGS_DIR" -type f -name 'session_*.log.gz' -mtime +"$ARCHIVE_PRUNE_DAYS" -delete >> "$LOG" 2>&1 || true
+    return 0
 }
 
 WARN_KB=$((DISK_WARN_GB * 1024 * 1024))

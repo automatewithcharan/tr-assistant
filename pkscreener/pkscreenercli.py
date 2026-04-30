@@ -43,6 +43,7 @@ import sys
 import tempfile
 import time
 import traceback
+from pathlib import Path
 
 # Disable protobuf logging
 os.environ['PROTOCOL_BUFFERS_PYTHON_IMPLEMENTATION'] = 'python'
@@ -671,6 +672,29 @@ class ArgumentParser:
             "--assistantstatus",
             action="store_true",
             help="Show status for the simplified live assistant stack",
+            required=False,
+        )
+        parser.add_argument(
+            "--diskusagereport",
+            action="store_true",
+            help="Preview local disk usage, write paths, and storage cleanup candidates",
+            required=False,
+        )
+        parser.add_argument(
+            "--diskusageapply",
+            action="store_true",
+            help="Apply the storage cleanup/upload plan instead of only previewing it",
+            required=False,
+        )
+        parser.add_argument(
+            "--diskusagebucket",
+            help="Override the archive bucket path for disk usage cleanup/reporting",
+            required=False,
+        )
+        parser.add_argument(
+            "--diskusagenotify",
+            action="store_true",
+            help="Send the disk usage report summary to DISCORD_WEBHOOK_URL",
             required=False,
         )
         parser.add_argument(
@@ -1957,6 +1981,23 @@ def pkscreenercli():
                 sys.exit(1)
             supervisor = AssistantLiveSupervisor(config_manager=configManager, session_id=args.assistantsessionid)
             supervisor.run()
+            sys.exit(0)
+
+        if args.diskusagereport:
+            from pkscreener.classes.StorageManager import StorageManager
+
+            manager = StorageManager(
+                Path(__file__).resolve().parents[1],
+                bucket=str(args.diskusagebucket or "").strip(),
+            )
+            summary = manager.run(
+                apply_changes=bool(args.diskusageapply),
+                notify=bool(args.diskusagenotify),
+            )
+            OutputControls().printOutput(
+                manager.format_text_report(summary, apply_changes=bool(args.diskusageapply))
+            )
+            OutputControls().printOutput(f"  [+] Report written to: {summary.report_path}")
             sys.exit(0)
 
         if args.assistantstatus or args.assistantstop or args.assistantstart is not None:

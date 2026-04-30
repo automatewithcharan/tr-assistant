@@ -190,6 +190,8 @@ class BlindBuyCandidate:
     product_preference: str = ""
     max_hold_days: int = 0
     horizon_reason: str = ""
+    alert_stage: str = ""
+    alert_stage_reason: str = ""
 
 
 @dataclass
@@ -684,7 +686,7 @@ class AutoPilotInvestor:
         self._RESCAN_MIN_DAY_CHANGE = _env_float("ASSISTANT_RESCAN_MIN_DAY_CHANGE", 1.0)
         # must show live momentum now; lowered after honest replay showed the
         # +1% to +4.5% Buy Now lane had better edge than late top-gainer chases.
-        self._RESCAN_MAX_DAY_CHANGE = 12.0      # avoid very late chase entries
+        self._RESCAN_MAX_DAY_CHANGE = 7.5       # avoid very late chase entries
         # ── CONSISTENT DAILY INCOME: 5 trades/day ──
         # 5 × ₹50K = ₹2.5L = full MIS margin. Diversification ensures even if
         # 1 trade loses, the other 4 cover it. Most days: ₹5K-₹20K income.
@@ -716,7 +718,7 @@ class AutoPilotInvestor:
         self._TICK_ORDER_IMBALANCE_RATIO = 2.5  # buy_qty / sell_qty threshold
         self._TICK_VOLUME_BURST_FRACTION = 0.025  # 2.5% of day-vol in 60s
         self._TICK_HIGH_DAILY_CHANGE_PCT = 2.0   # daily change% to auto-flag (catch moves early, at 2% not 3%)
-        self._TICK_ALREADY_MOVED_PCT = 16.0      # above this % skip — too late to enter intraday. Correct fix: catch EARLIER at 3-5%, not buy LATER at 16%+
+        self._TICK_ALREADY_MOVED_PCT = 8.0       # above this % skip — too late to enter intraday. Focus on the early 1-5% zone instead.
         # Hard cutoff: never send BUY alerts after this IST minute-of-day
         self._BUY_ALERT_CUTOFF_MIN = 15 * 60 + 15  # 3:15 PM — last 15 min are exit zone
         # Intraday/MIS entries must stop much earlier than general alerts.
@@ -4018,6 +4020,12 @@ class AutoPilotInvestor:
                 reasons=blind_reasons,
                 suggested_qty=suggested_qty,
             ))
+            _off_high_pct = 0.0
+            _fresh_high = float(_fresh_tick.get("high") or _fresh_tick.get("ohlc", {}).get("high", 0) or 0)
+            if _fresh_high > 0 and _price_now > 0:
+                _off_high_pct = ((_fresh_high - _price_now) / _fresh_high) * 100
+            _alert_candidate.buy_above = _buy_above_display
+            self._enrich_candidate_alert_stage(_alert_candidate, off_high_pct=_off_high_pct)
             suggested_qty, _invest_amt = self._cap_suggested_qty_to_broker(
                 _price_now,
                 suggested_qty,
@@ -4029,6 +4037,19 @@ class AutoPilotInvestor:
             _entry_timing_line = self._format_entry_timing_line(_alert_candidate)
             _hold_product_line = self._format_hold_product_line(_alert_candidate)
             _auto_status_line = self._format_auto_buy_status_line(_alert_candidate, _alert_grade)
+            _stage = _alert_candidate.alert_stage or "BUY"
+            if _stage == "WATCH EARLY":
+                alert_header = f"**👀 EARLY WATCH — `{sym}`** — strong stock preparing"
+            elif _stage == "MISSED":
+                alert_header = f"**🟡 MISSED — `{sym}`** — good stock, but entry is late"
+            elif _stage == "AVOID":
+                alert_header = f"**🔴 AVOID — `{sym}`** — risky or overextended"
+            elif _is_definitely_buy:
+                alert_header = f"**🔥 STRONG BUY — `{sym}`** — Quality {score_label}\n✅ All checks passed: price ✓ | volume {volume_ratio:.1f}x above normal ✓ | {confidence:.0f}% indicators agree ✓"
+            elif is_early_mover:
+                alert_header = f"**🟢 BUY — `{sym}`** — move just started from fresh accumulation — Quality {score_label}"
+            else:
+                alert_header = f"**🟢 BUY — `{sym}`** — Quality {score_label}{swing_tag}"
             _growth_line = (
                 f"📈 **Expected swing upside {_expected_growth_pct:+.1f}% from alert price** | "
                 f"Price now: `₹{_price_now:.2f}` ({direction}{daily_change:.2f}% so far){_scope_line}\n"
@@ -4051,6 +4072,16 @@ class AutoPilotInvestor:
                 f"{_hold_product_line}\n"
                 f"{_auto_status_line}"
             )
+            if _stage in {"WATCH EARLY", "MISSED", "AVOID"}:
+                _watch_key = datetime.now().strftime("%Y-%m-%d")
+                if self._watch_alerted.get(sym) != _watch_key:
+                    self._watch_alerted[sym] = _watch_key
+                    self._send_to_channels(message)
+                self._log(
+                    f"{_stage} ALERT SENT: {sym} at ₹{_price_now:.2f} ({direction}{daily_change:.2f}%) "
+                    f"score={blind_score:.0f} vol={volume_ratio:.1f}x"
+                )
+                return
             # For re-alerts: only send if it's a DEFINITELY BUY upgrade
             if _is_re_alert and not _is_definitely_buy:
                 self._log(f"Skip re-alert for {sym}: already alerted, not a DEFINITELY BUY upgrade")
@@ -4196,6 +4227,33 @@ class AutoPilotInvestor:
                 sym, price, daily_change, _item_imbalance, _item_volume,
                 _item_reasons, f"score {blind_score:.0f} < {effective_min:.0f}"
             )
+            _watch_candidate = self._enrich_candidate_horizon(BlindBuyCandidate(
+                symbol=sym,
+                price=_price_now,
+                buy_above=_buy_above_display,
+                stop_loss=float(row.get("SellIfBelow", row.get("Sell If Below", 0)) or 0),
+                target1=float(row.get("TakeProfit1", row.get("Take Profit 1", 0)) or 0),
+                target2=float(row.get("TakeProfit2", row.get("Take Profit 2", 0)) or 0),
+                confidence=float(row.get("ConfidencePct", row.get("Signal Strength %", 0)) or 0),
+                volume_ratio=_vol_ratio_live,
+                change_pct=daily_change,
+                blind_score=blind_score,
+                original_action=str(row.get("NowAction", row.get("Action", ""))).strip(),
+                reasons=blind_reasons,
+            ))
+            self._enrich_candidate_alert_stage(_watch_candidate)
+            if _watch_candidate.alert_stage == "WATCH EARLY":
+                _watch_key = datetime.now().strftime("%Y-%m-%d")
+                if self._watch_alerted.get(sym) != _watch_key:
+                    self._watch_alerted[sym] = _watch_key
+                    self._send_to_channels(
+                        "\n".join([
+                            f"**👀 EARLY WATCH — `{sym}`** — strong stock preparing",
+                            f"Price `₹{_price_now:.2f}` | Buy Above `{_buy_above_display:.2f}` | Day move `{daily_change:+.2f}%` | Volume `{_vol_ratio_live:.1f}x`",
+                            "What to do: wait for the breakout to start. Upgrade to BUY only if price pushes through the trigger cleanly.",
+                            f"Why: {self._simplify_blind_reasons(blind_reasons)}",
+                        ])
+                    )
 
     def _load_ticks_snapshot(self) -> Dict[str, Dict]:
         """Read the latest ticks JSON saved by KiteTickerStream.
@@ -4394,8 +4452,8 @@ class AutoPilotInvestor:
 
         display_rows = (new_rows if new_rows else rows)[: self._EARLY_RADAR_MAX_LINES]
         lines = [
-            "**🔎 EARLY EXPANSION RADAR — forming now**",
-            "_Not a buy list. These are +1% to +4.5% names with early structure before the +5% radar._",
+            "**👀 EARLY WATCH RADAR — strong stocks preparing**",
+            "_These are early +1% to +4.5% setups building pressure before a bigger breakout. Watch now, buy only when the move starts cleanly._",
         ]
         for row in display_rows:
             vwap_tag = "VWAP+" if row["above_vwap"] else "VWAP-"
@@ -6069,12 +6127,78 @@ class AutoPilotInvestor:
         return "stretched", "entry is already stretched — alert-only unless manually justified"
 
     @classmethod
+    def _classify_trade_alert_stage(
+        cls,
+        c: 'BlindBuyCandidate',
+        *,
+        off_high_pct: float = 0.0,
+    ) -> Tuple[str, str]:
+        """Classify the setup as early, actionable, missed, or avoid."""
+        rr2 = cls._candidate_rr2(c)
+        gap_pct = cls._candidate_entry_gap_pct(c)
+        change_pct = max(0.0, float(getattr(c, "change_pct", 0.0) or 0.0))
+        volume_ratio = max(0.0, float(getattr(c, "volume_ratio", 0.0) or 0.0))
+        confidence = max(0.0, float(getattr(c, "confidence", 0.0) or 0.0))
+        buy_above = max(0.0, float(getattr(c, "buy_above", 0.0) or 0.0))
+        price = max(0.0, float(getattr(c, "price", 0.0) or 0.0))
+        below_trigger = buy_above > 0 and price > 0 and price < buy_above * 0.998
+        near_trigger = buy_above <= 0 or price >= buy_above * 0.99
+
+        if (
+            str(getattr(c, "holding_horizon", "") or "") == "avoid"
+            or rr2 < 1.0
+            or change_pct >= 8.0
+            or gap_pct > 1.2
+            or off_high_pct >= 3.0
+        ):
+            return "AVOID", "risky or overextended"
+
+        if below_trigger:
+            if near_trigger and change_pct <= 3.5 and volume_ratio >= 0.8 and confidence >= 15 and rr2 >= 1.2:
+                return "WATCH EARLY", "strong stock preparing near breakout"
+            return "WATCH EARLY", "buyers are building pressure but breakout has not started yet"
+
+        if (
+            near_trigger
+            and 0.4 <= change_pct <= 4.8
+            and volume_ratio >= 1.0
+            and confidence >= 18
+            and rr2 >= 1.3
+            and off_high_pct <= 1.8
+        ):
+            return "BUY", "move just started and entry is still safe"
+
+        if change_pct <= 7.0 and volume_ratio >= 1.0 and rr2 >= 1.1:
+            return "MISSED", "good stock, but late entry. Wait for pullback."
+
+        return "AVOID", "risky or overextended"
+
+    @classmethod
+    def _enrich_candidate_alert_stage(
+        cls,
+        c: 'BlindBuyCandidate',
+        *,
+        off_high_pct: float = 0.0,
+    ) -> 'BlindBuyCandidate':
+        stage, reason = cls._classify_trade_alert_stage(c, off_high_pct=off_high_pct)
+        c.alert_stage = stage
+        c.alert_stage_reason = reason
+        return c
+
+    @classmethod
     def _live_auto_buy_gate_detail(cls, c: 'BlindBuyCandidate', grade: str = "") -> Tuple[bool, str]:
         """Return auto-buy eligibility plus a human-readable reason."""
         rr2 = cls._candidate_rr2(c)
         gap_pct = cls._candidate_entry_gap_pct(c)
         entry_lane, entry_reason = cls._classify_entry_timing_lane(c)
+        alert_stage, alert_reason = cls._classify_trade_alert_stage(c)
         _avoid_horizon = c.holding_horizon == "avoid"
+        if alert_stage != "BUY":
+            if alert_stage == "WATCH EARLY":
+                return False, "setup is still early — wait for breakout to start"
+            if alert_stage == "MISSED":
+                return False, alert_reason
+            return False, "setup is risky or overextended"
         try:
             import pytz
             _ist = pytz.timezone("Asia/Kolkata")
@@ -6268,13 +6392,13 @@ class AutoPilotInvestor:
 
     @classmethod
     def _format_entry_timing_line(cls, c: 'BlindBuyCandidate') -> str:
-        lane, reason = cls._classify_entry_timing_lane(c)
+        stage, reason = cls._classify_trade_alert_stage(c)
         label = {
-            "early": "⚡ Entry: `early breakout`",
-            "continuation": "🟡 Entry: `late but still actionable`",
-            "stretched": "🔴 Entry: `too late / alert-only`",
-            "alert_only": "📝 Entry: `alert-only`",
-        }.get(lane, "📝 Entry: `alert-only`")
+            "WATCH EARLY": "👀 EARLY WATCH: `strong stock preparing`",
+            "BUY": "🟢 BUY: `move just started and entry is still safe`",
+            "MISSED": "🟡 MISSED: `good stock but entry is late`",
+            "AVOID": "🔴 AVOID: `risky or overextended`",
+        }.get(stage, "📝 WATCH: `monitor only`")
         return f"{label} — {reason}"
 
     @classmethod
@@ -6391,6 +6515,7 @@ class AutoPilotInvestor:
         c.product_preference = product
         c.max_hold_days = max_hold_days
         c.horizon_reason = horizon_reason
+        cls._enrich_candidate_alert_stage(c)
         return c
 
     @classmethod
@@ -6475,6 +6600,32 @@ class AutoPilotInvestor:
         Grades candidates A+/A/B, highlights top picks, caps main alert
         at 10 stocks, and sends the rest as a watchlist overflow.
         """
+        actionable_candidates: List[BlindBuyCandidate] = []
+        late_candidates: List[BlindBuyCandidate] = []
+        avoid_candidates: List[BlindBuyCandidate] = []
+        for c in candidates:
+            self._enrich_candidate_alert_stage(c)
+            if c.alert_stage == "BUY":
+                actionable_candidates.append(c)
+            elif c.alert_stage == "MISSED":
+                late_candidates.append(c)
+            else:
+                avoid_candidates.append(c)
+
+        candidates = actionable_candidates
+        if not candidates and (late_candidates or avoid_candidates):
+            late_lines = ["**🟡 WATCH FOR PULLBACK**"]
+            for c in late_candidates[:8]:
+                late_lines.append(
+                    f"`{c.symbol}` +{c.change_pct:.1f}% | ₹{c.price:.2f} | Vol `{c.volume_ratio:.1f}x` — Good stock, but late entry. Wait for pullback."
+                )
+            for c in avoid_candidates[:5]:
+                late_lines.append(
+                    f"`{c.symbol}` +{c.change_pct:.1f}% | ₹{c.price:.2f} — Avoid chasing; move is already extended."
+                )
+            self._send_to_channels("\n".join(late_lines))
+            return
+
         # Determine market context for time-of-day labeling
         try:
             import pytz
@@ -6603,6 +6754,17 @@ class AutoPilotInvestor:
             overflow_msg = "\n\n".join(overflow_sections)
             self._send_to_channels(overflow_msg)
 
+        if late_candidates:
+            late_sections = [
+                "**🟡 WATCH FOR PULLBACK**",
+                "Good stocks, but the clean entry is gone for now.",
+            ]
+            for c in late_candidates[:8]:
+                late_sections.append(
+                    f"`{c.symbol}` +{c.change_pct:.1f}% | ₹{c.price:.2f} | Vol `{c.volume_ratio:.1f}x` — Good stock, but late entry. Wait for pullback."
+                )
+            self._send_to_channels("\n".join(late_sections))
+
     def _format_candidate_block(self, sections: list, c: 'BlindBuyCandidate', grade: str,
                                  momentum: float, rank: int, total: int,
                                  compact: bool = False, risk_flag: str = "") -> None:
@@ -6670,8 +6832,14 @@ class AutoPilotInvestor:
             entry_timing_line = self._format_entry_timing_line(c)
             auto_status_line = self._format_auto_buy_status_line(c, grade)
             hold_product_line = self._format_hold_product_line(c)
+            headline = {
+                "WATCH EARLY": "👀 EARLY WATCH",
+                "BUY": "🟢 BUY",
+                "MISSED": "🟡 MISSED",
+                "AVOID": "🔴 AVOID",
+            }.get(c.alert_stage or "BUY", "🟢 BUY")
             block = [
-                f"**BUY `{c.symbol}`** [{grade_badge}] Score {score_label}{top_marker}{trade_tag}{horizon_tag}",
+                f"**{headline} `{c.symbol}`** [{grade_badge}] Score {score_label}{top_marker}{trade_tag}{horizon_tag}",
                 f"Price `{c.price:.2f}` ({pct}) | Buy Above `{c.buy_above:.2f}` | Volume `{c.volume_ratio:.1f}x avg`{f' | {mom_label}' if mom_label else ''}",
                 f"Stop Loss `{c.stop_loss:.2f}` | Target 1 `{c.target1:.2f}` | Target 2 `{c.target2:.2f}`{risk_reward}",
                 f"Why: {simple_reasons}",
