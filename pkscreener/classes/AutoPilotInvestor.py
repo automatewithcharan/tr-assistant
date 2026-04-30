@@ -817,6 +817,24 @@ class AutoPilotInvestor:
         self._EARLY_WATCH_MAX_SIZE = _env_int("ASSISTANT_EARLY_WATCH_MAX_SIZE", 40)
         self._EARLY_WATCH_WEAK_IMBALANCE = _env_float("ASSISTANT_EARLY_WATCH_WEAK_IMBALANCE", 1.0)
         self._EARLY_WATCH_PEAK_PULLBACK_PCT = _env_float("ASSISTANT_EARLY_WATCH_PEAK_PULLBACK_PCT", 0.6)
+        # Second-leg / continuation exception: a stock that already moved past
+        # _EARLY_RUNNER_AUTO_MAX_CHANGE is normally MISSED. The exception below
+        # allows a clean continuation IF the stock clearly rested (pulled back
+        # from intraday high) AND reclaimed VWAP AND buyer demand re-asserted.
+        self._SECOND_LEG_MAX_CHANGE = _env_float("ASSISTANT_SECOND_LEG_MAX_CHANGE", 8.0)
+        self._SECOND_LEG_MIN_PULLBACK_PCT = _env_float("ASSISTANT_SECOND_LEG_MIN_PULLBACK_PCT", 1.0)
+        self._SECOND_LEG_MIN_IMBALANCE = _env_float("ASSISTANT_SECOND_LEG_MIN_IMBALANCE", 2.5)
+        self._SECOND_LEG_MIN_TURNOVER_CR = _env_float("ASSISTANT_SECOND_LEG_MIN_TURNOVER_CR", 1.5)
+        self._SECOND_LEG_MIN_REST_SEC = _env_int("ASSISTANT_SECOND_LEG_MIN_REST_SEC", 300)
+        self._SECOND_LEG_MAX_VWAP_GAP_PCT = _env_float("ASSISTANT_SECOND_LEG_MAX_VWAP_GAP_PCT", 0.5)
+        # Market regime gating: instantiated lazily to avoid import-time failures.
+        self._market_context: Optional[Any] = None
+        self._market_context_init_failed: bool = False
+        self._market_regime_last_refresh: float = 0.0
+        self._MARKET_REGIME_REFRESH_SEC = _env_int("ASSISTANT_MARKET_REGIME_REFRESH_SEC", 30)
+        # Regimes in which auto-buy is allowed. "neutral" stays in to avoid
+        # blocking trades on quiet but non-bearish days.
+        self._MARKET_REGIME_BUY_OK = {"strong_bull", "bull", "neutral"}
         # NSE market hours (IST): 9:15 AM open, 3:30 PM close
         self._MARKET_OPEN_HOUR_IST = 9
         self._MARKET_OPEN_MIN_IST = 15
@@ -1336,6 +1354,9 @@ class AutoPilotInvestor:
                     except Exception as _rec_exc:
                         self._log(f"Day-start reconcile failed: {_rec_exc}")
             self._momentum_tracked_date = today_str
+            # Refresh market regime snapshot (cheap; throttled internally).
+            # Auto-buy gates consult this; failure is non-fatal.
+            self._refresh_market_context()
             # Pre-open auction scan: fires during 9:00-9:15 AM IST
             self._run_preopen_auction_scan()
             # Pre-market watchlist: fires once per day at 9:05 AM IST
@@ -1379,6 +1400,7 @@ class AutoPilotInvestor:
                 time.sleep(_tick_poll_interval)
                 _remaining -= _tick_poll_interval
                 self._run_tick_fast_scan()
+                self._refresh_market_context()
                 self._run_early_expansion_radar()
                 # Flush opening buffer every cycle (self-throttles internally)
                 self._flush_opening_buffer()
@@ -4562,6 +4584,7 @@ class AutoPilotInvestor:
                         "added_at": now_ts,
                         "first_change": change,
                         "peak_change": change,
+                        "peak_change_ts": now_ts,
                         "last_imbalance": _safe_float(row.get("imbalance")),
                         "last_turnover_cr": _safe_float(row.get("turnover_cr")),
                         "last_above_vwap": bool(row.get("above_vwap")),
@@ -4569,7 +4592,10 @@ class AutoPilotInvestor:
                         "last_seen": now_ts,
                     }
                 else:
-                    entry["peak_change"] = max(_safe_float(entry.get("peak_change")), change)
+                    prev_peak = _safe_float(entry.get("peak_change"))
+                    if change > prev_peak:
+                        entry["peak_change"] = change
+                        entry["peak_change_ts"] = now_ts
                     entry["last_imbalance"] = _safe_float(row.get("imbalance"))
                     entry["last_turnover_cr"] = _safe_float(row.get("turnover_cr"))
                     entry["last_above_vwap"] = bool(row.get("above_vwap"))
@@ -4578,6 +4604,55 @@ class AutoPilotInvestor:
 
         self._early_radar_last_summary = time.time()
         self._review_early_watch_list()
+
+    def _qualifies_as_second_leg_continuation(
+        self,
+        *,
+        change: float,
+        peak_change: float,
+        peak_change_ts: float,
+        now_ts: float,
+        price: float,
+        avg_px: float,
+        above_vwap: bool,
+        imbalance: float,
+        turnover_cr: float,
+        near_high: bool,
+    ) -> bool:
+        """Return True iff a stock past ``_EARLY_RUNNER_AUTO_MAX_CHANGE`` qualifies
+        as a clean continuation (rested → VWAP reclaim → renewed demand).
+
+        Default for exhausted movers stays MISSED. This narrow exception only
+        flips when *every* condition below is satisfied, so the path cannot
+        relax into a chase. All downstream safety checks (live recheck,
+        cash, dup, SL/target validation, liquidity, GTT/protection) still run
+        through the existing ``_try_auto_buy`` → ``KiteOrderManager`` path.
+        """
+        # Hard ceiling: never even consider beyond _SECOND_LEG_MAX_CHANGE.
+        if change > self._SECOND_LEG_MAX_CHANGE:
+            return False
+        # Must be above VWAP and not stretched far above it (avoid blow-off tops).
+        if not above_vwap:
+            return False
+        if avg_px > 0 and price > 0:
+            vwap_gap_pct = (price - avg_px) / avg_px * 100.0
+            if vwap_gap_pct > self._SECOND_LEG_MAX_VWAP_GAP_PCT:
+                return False
+        # Must have rested: peak unchanged for at least the rest interval.
+        if peak_change_ts > 0 and now_ts - peak_change_ts < self._SECOND_LEG_MIN_REST_SEC:
+            return False
+        # Must have pulled back from peak by a clear margin.
+        if peak_change - change < self._SECOND_LEG_MIN_PULLBACK_PCT:
+            return False
+        # Demand and liquidity must be re-asserting, not fading.
+        if imbalance < self._SECOND_LEG_MIN_IMBALANCE:
+            return False
+        if turnover_cr < self._SECOND_LEG_MIN_TURNOVER_CR:
+            return False
+        # Re-breaking near intraday high — the actual trigger.
+        if not near_high:
+            return False
+        return True
 
     def _review_early_watch_list(self) -> None:
         """Re-evaluate every internally tracked early-watch symbol every cycle.
@@ -4597,6 +4672,13 @@ class AutoPilotInvestor:
         _now_min = self._ist_now_minute()
         if _now_min > self._INTRADAY_AUTO_BUY_CUTOFF_MIN:
             return
+        # Market regime gate: block in crash/bear, fall through in neutral or
+        # missing-engine scenarios. Lifecycle housekeeping (MISSED/weak drops)
+        # below still runs so the watchlist does not stagnate during a pause.
+        regime_ok, regime_reason = self._is_safe_to_buy()
+        if not regime_ok:
+            self._record_no_buy_reason(regime_reason)
+            self._log(f"Early-watch auto-buy paused: {regime_reason}")
 
         today = datetime.now().strftime("%Y-%m-%d")
         if self._early_runner_auto_date != today:
@@ -4634,14 +4716,43 @@ class AutoPilotInvestor:
             near_high = True
             if high > 0 and low > 0 and high > low and price > 0:
                 near_high = ((high - price) / max(high - low, 0.01)) <= 0.30
-            peak_change = max(_safe_float(entry.get("peak_change")), change)
+            prev_peak = _safe_float(entry.get("peak_change"))
+            peak_change = max(prev_peak, change)
+            now_ts_review = time.time()
+            if change > prev_peak:
+                entry["peak_change_ts"] = now_ts_review
+            peak_change_ts = _safe_float(entry.get("peak_change_ts", entry.get("added_at", now_ts_review)))
             entry["peak_change"] = peak_change
             entry["last_imbalance"] = imbalance
             entry["last_turnover_cr"] = turnover_cr
             entry["last_above_vwap"] = above_vwap
 
-            # 1) Late: entry has run too far — record MISSED internally and stop tracking.
+            # 1) Late: entry has run too far. The default is MISSED. The
+            #    second-leg exception below allows a clean continuation IF the
+            #    move clearly rested AND reclaimed VWAP AND demand re-asserted.
             if change > self._EARLY_RUNNER_AUTO_MAX_CHANGE + threshold_epsilon:
+                second_leg = self._qualifies_as_second_leg_continuation(
+                    change=change,
+                    peak_change=peak_change,
+                    peak_change_ts=peak_change_ts,
+                    now_ts=now_ts_review,
+                    price=price,
+                    avg_px=avg_px,
+                    above_vwap=above_vwap,
+                    imbalance=imbalance,
+                    turnover_cr=turnover_cr,
+                    near_high=near_high,
+                )
+                if second_leg:
+                    clean_candidates.append({
+                        "symbol": sym,
+                        "price": price,
+                        "change": change,
+                        "imbalance": imbalance,
+                        "turnover_cr": turnover_cr,
+                        "second_leg": True,
+                    })
+                    continue
                 self._record_internal_stage(
                     "MISSED",
                     sym,
@@ -4692,6 +4803,11 @@ class AutoPilotInvestor:
         for sym in to_drop:
             self._early_watch_list.pop(sym, None)
 
+        if not regime_ok:
+            # Lifecycle housekeeping (MISSED / weak / forming) above has run.
+            # Skip auto-buy this cycle until the regime turns supportive.
+            return
+
         if not clean_candidates:
             return
 
@@ -4741,8 +4857,9 @@ class AutoPilotInvestor:
                 continue
 
             blind_score = min(88.0, 58.0 + _safe_float(cand.get("imbalance")) * 4.0 + _safe_float(cand.get("turnover_cr")) * 0.7)
+            lane_label = "second-leg continuation" if cand.get("second_leg") else "clean breakout"
             reasons = (
-                f"early-watch clean breakout | VWAP+ | near high | buyer demand "
+                f"early-watch {lane_label} | VWAP+ | near high | buyer demand "
                 f"{_safe_float(cand.get('imbalance')):.1f}x | turnover ₹{_safe_float(cand.get('turnover_cr')):.1f}Cr"
             )
             self._early_runner_auto_attempted.add(sym)
@@ -5832,6 +5949,63 @@ class AutoPilotInvestor:
     # Discord push alerts
     # ------------------------------------------------------------------
 
+    def _refresh_market_context(self, ticks: Optional[Dict[str, Dict]] = None) -> None:
+        """Lazily instantiate ``MarketContextEngine`` and refresh its regime snapshot.
+
+        The engine is optional: if it cannot be imported or update fails, we
+        flag ``_market_context_init_failed`` and the buy-side gates fall back
+        to a conservative skip. The engine is never required for the existing
+        non-auto-buy flows.
+        """
+        if self._market_context_init_failed:
+            return
+        now_ts = time.time()
+        if (
+            self._market_context is not None
+            and now_ts - self._market_regime_last_refresh < self._MARKET_REGIME_REFRESH_SEC
+        ):
+            return
+        try:
+            if self._market_context is None:
+                from pkscreener.classes.MarketContext import MarketContextEngine
+                self._market_context = MarketContextEngine()
+            tick_snapshot = ticks if ticks is not None else self._load_runner_radar_ticks()
+            if tick_snapshot:
+                self._market_context.update(tick_snapshot)
+            self._market_regime_last_refresh = now_ts
+        except Exception as exc:
+            # Disable market-context gating on init failure — we fall back to
+            # the existing behavior rather than crashing the bot.
+            self._market_context = None
+            self._market_context_init_failed = True
+            self._log(f"MarketContextEngine init/refresh failed, gating disabled: {exc}")
+
+    def _is_safe_to_buy(self) -> Tuple[bool, str]:
+        """Return ``(allow, reason)`` for the auto-buy gate based on market regime.
+
+        Behavior:
+          * engine missing or never refreshed → allow (fail-safe to existing logic)
+          * regime ∈ ``_MARKET_REGIME_BUY_OK`` → allow
+          * regime is ``crash`` / ``bear`` / ``strong_bear`` → block
+          * Nifty crash pause already active → block
+        """
+        if self._nifty_crash_pause:
+            return False, "Nifty crash pause active"
+        if self._market_context is None or self._market_context_init_failed:
+            # Fail-safe: do not block existing logic if the regime engine is
+            # unavailable. Other safety checks (cash, cutoff, dup, SL/target,
+            # liquidity, stale-tick) continue to run downstream.
+            return True, "regime engine unavailable; falling through to existing checks"
+        try:
+            regime = self._market_context.regime
+        except Exception as exc:
+            self._log(f"MarketContext regime read failed, falling through: {exc}")
+            return True, "regime read failed; falling through"
+        regime_label = str(getattr(regime, "regime", "") or "neutral")
+        if regime_label in self._MARKET_REGIME_BUY_OK:
+            return True, f"regime={regime_label}"
+        return False, f"regime={regime_label} — auto-buy blocked"
+
     def _past_buy_cutoff(self) -> bool:
         """Return True if current IST time is past the last BUY alert cutoff.
         After this time, only post-market preview alerts (next-day candidates) are allowed.
@@ -6797,13 +6971,24 @@ class AutoPilotInvestor:
         # Log every main pick, not just bought names, so the post-market truth
         # report can explain exactly why a good-looking alert was not bought.
         if not is_post_market:
+            # Market regime gate: block batch auto-buy in crash/bear regimes.
+            # Fail-safe: if the engine is unavailable, fall through to existing
+            # eligibility checks rather than blocking everything.
+            regime_ok, regime_reason = self._is_safe_to_buy()
             _auto_lines = []
             auto_sent = 0
             for c, grade, _, _ in main_picks:
                 auto_result = ""
                 auto_eligible = self._eligible_for_live_auto_buy(c, grade)
                 capped_by_alert_limit = auto_eligible and self._AUTO_BUY_TOP_N > 0 and auto_sent >= self._AUTO_BUY_TOP_N
-                if capped_by_alert_limit:
+                if not regime_ok and auto_eligible:
+                    auto_result = (
+                        f"⚠️ **IMPORTANT MISSED OPPORTUNITY — `{c.symbol}`**\n"
+                        f"Buyable setup blocked by market regime: {regime_reason}"
+                    )
+                    self._log(f"Batch auto-buy regime block {c.symbol}: {regime_reason}")
+                    self._record_no_buy_reason(regime_reason)
+                elif capped_by_alert_limit:
                     auto_result = (
                         f"⚠️ **IMPORTANT MISSED OPPORTUNITY — `{c.symbol}`**\n"
                         f"Buyable setup missed because live auto-buy cap {self._AUTO_BUY_TOP_N} was already reached."

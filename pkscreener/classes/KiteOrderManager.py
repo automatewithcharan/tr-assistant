@@ -143,6 +143,7 @@ class SellReason:
     EOD_SQUAREOFF = "eod_squareoff"
     REVERSAL = "intraday_reversal"
     REGIME_BREAK = "cusum_regime_break"
+    FAILED_BREAKOUT = "failed_breakout_fast_exit"
     MANUAL = "manual_sell"
     STALE_TRACKED = "stale_tracked_position"
 
@@ -303,6 +304,14 @@ class KiteOrderManager:
         self.trailing_trail_pct = float(_get_secret("KITE_TRAILING_STOP_TRAIL", "1.0"))
         self.swing_trail_activate_pct = float(_get_secret("KITE_SWING_TRAIL_ACTIVATE_PCT", "5.0"))
         self.swing_trail_dist_pct = float(_get_secret("KITE_SWING_TRAIL_DIST_PCT", "4.0"))
+        # Failed-breakout fast exit (intraday only). Applies inside a narrow
+        # window after entry: if the trade lost VWAP, is below entry by a clear
+        # margin, and the order book shows real sell pressure, exit before the
+        # full stop-loss is reached. Disabled by setting any threshold to 0.
+        self.failed_breakout_min_age_sec = max(0.0, _secret_float("KITE_FAILED_BREAKOUT_MIN_AGE_SEC", 180.0))
+        self.failed_breakout_max_age_sec = max(0.0, _secret_float("KITE_FAILED_BREAKOUT_MAX_AGE_SEC", 1800.0))
+        self.failed_breakout_min_drop_pct = max(0.0, _secret_float("KITE_FAILED_BREAKOUT_MIN_DROP_PCT", 0.4))
+        self.failed_breakout_sell_imbalance = max(1.0, _secret_float("KITE_FAILED_BREAKOUT_SELL_IMBALANCE", 1.3))
         self.max_hold_days = int(_get_secret("KITE_MAX_HOLD_DAYS", "10"))
         # Max positions from the same sector (0 = disabled)
         self.max_sector_concentration = int(_get_secret("KITE_MAX_SECTOR_POSITIONS", "3"))
@@ -1690,6 +1699,49 @@ class KiteOrderManager:
                 _log.info("%s hit T1 (₹%.2f): selling %d of %d, trailing rest from ₹%.2f",
                           sym, pos.target1, partial_qty, pos.qty, pos.trailing_stop)
 
+            # 3b. Failed-breakout fast exit (intraday only). Catches breakouts
+            # that immediately fail: lost VWAP, dropped under entry, with real
+            # sell-side pressure — exit before the 3% stop turns it into a
+            # bigger loser. Conservative by design:
+            #   * skips once T1 has already been booked (trade is in profit lane)
+            #   * needs all four signals at once (no single noisy tick can fire)
+            #   * fails safe when VWAP / depth data is missing
+            if (
+                is_intraday
+                and not pos.t1_booked
+                and self.failed_breakout_min_age_sec > 0
+                and self.failed_breakout_max_age_sec > 0
+            ):
+                age_sec = -1.0
+                try:
+                    age_sec = (now - datetime.fromisoformat(pos.buy_time)).total_seconds()
+                except Exception:
+                    age_sec = -1.0
+                if (
+                    age_sec >= self.failed_breakout_min_age_sec
+                    and age_sec <= self.failed_breakout_max_age_sec
+                    and live_price < pos.buy_price
+                    and pnl_pct <= -self.failed_breakout_min_drop_pct
+                ):
+                    vwap = float(tick.get("average_traded_price") or 0.0)
+                    total_buy = float(tick.get("total_buy_quantity") or 0.0)
+                    total_sell = float(tick.get("total_sell_quantity") or 0.0)
+                    has_vwap = vwap > 0
+                    has_depth = total_buy > 0 and total_sell > 0
+                    lost_vwap = has_vwap and live_price < vwap
+                    sell_pressure_confirmed = (
+                        has_depth
+                        and (total_sell / max(total_buy, 1.0)) >= self.failed_breakout_sell_imbalance
+                    )
+                    if lost_vwap and sell_pressure_confirmed:
+                        signals.append((sym, SellReason.FAILED_BREAKOUT, live_price, 0))
+                        _log.info(
+                            "%s failed-breakout fast exit: age=%.0fs P/L=%.1f%% LTP=%.2f<VWAP=%.2f sell/buy=%.1fx",
+                            sym, age_sec, pnl_pct, live_price, vwap,
+                            (total_sell / max(total_buy, 1.0)) if has_depth else 0.0,
+                        )
+                        continue
+
             # 4. Trailing stop — intraday uses tight trail; swing uses wide trail to let winners run
             # Swing: activates at swing_trail_activate_pct (default 5%), trails swing_trail_dist_pct (default 4%)
             # Intraday: activates at trailing_stop_pct (default 3%), trails trailing_trail_pct% (tighter)
@@ -1971,6 +2023,7 @@ class KiteOrderManager:
             SellReason.EOD_SQUAREOFF: "🕒 End-of-day MIS square-off",
             SellReason.REVERSAL: "🔻 Intraday reversal detected",
             SellReason.REGIME_BREAK: "📉 CUSUM regime break — momentum reversed",
+            SellReason.FAILED_BREAKOUT: "⚠️ Failed breakout — lost VWAP under entry with sell pressure",
             SellReason.MANUAL: "👤 Manual sell",
             SellReason.STALE_TRACKED: "🧹 Removed stale tracked position",
         }.get(reason, reason)
