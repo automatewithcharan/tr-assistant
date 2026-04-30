@@ -806,6 +806,17 @@ class AutoPilotInvestor:
         self._early_runner_auto_attempted: Set[str] = set()
         self._early_runner_auto_bought: Set[str] = set()
         self._early_runner_auto_date: Optional[str] = None
+        # Internal early-watch list. Stocks identified by the early radar are
+        # added here silently and re-evaluated every cycle. Lifecycle:
+        #   - tracked silently (no Discord)
+        #   - if entry becomes too late: marked MISSED internally, dropped
+        #   - if it weakens (below VWAP / buyer pressure fades): dropped silently
+        #   - if it becomes clean: auto-buy attempt, Discord AUTO-BOUGHT or AUTO-BUY FAILED
+        self._early_watch_list: Dict[str, Dict] = {}
+        self._early_watch_date: Optional[str] = None
+        self._EARLY_WATCH_MAX_SIZE = _env_int("ASSISTANT_EARLY_WATCH_MAX_SIZE", 40)
+        self._EARLY_WATCH_WEAK_IMBALANCE = _env_float("ASSISTANT_EARLY_WATCH_WEAK_IMBALANCE", 1.0)
+        self._EARLY_WATCH_PEAK_PULLBACK_PCT = _env_float("ASSISTANT_EARLY_WATCH_PEAK_PULLBACK_PCT", 0.6)
         # NSE market hours (IST): 9:15 AM open, 3:30 PM close
         self._MARKET_OPEN_HOUR_IST = 9
         self._MARKET_OPEN_MIN_IST = 15
@@ -1297,6 +1308,8 @@ class AutoPilotInvestor:
                 self._early_radar_seen.clear()
                 self._early_radar_date = today_str
                 self._early_radar_last_summary = 0.0
+                self._early_watch_list.clear()
+                self._early_watch_date = today_str
                 self._nifty_crash_pause = False
                 self._last_opening_priority_refresh = 0.0
                 self._opening_priority_state_df = None
@@ -4452,10 +4465,12 @@ class AutoPilotInvestor:
         return "SKIP", "not enough buyer pressure yet"
 
     def _run_early_expansion_radar(self) -> None:
-        """Show stocks forming early before they become visible top gainers.
+        """Identify early-expansion stocks and add them to an internal watchlist.
 
-        This is intentionally visibility-only. The actual buy engine still needs
-        OHLCV confirmation, risk/reward, VWAP/orderbook, and capital checks.
+        This is silent (no Discord). Stocks that match the early radar criteria
+        are added to ``self._early_watch_list`` and re-evaluated every cycle by
+        ``_review_early_watch_list`` which decides whether to auto-buy, drop, or
+        mark MISSED — Discord only fires on AUTO-BOUGHT / AUTO-BUY FAILED.
         """
         if not self._is_market_open():
             return
@@ -4464,9 +4479,14 @@ class AutoPilotInvestor:
             self._early_radar_seen.clear()
             self._early_radar_date = today
             self._early_radar_last_summary = 0.0
+        if self._early_watch_date != today:
+            self._early_watch_list.clear()
+            self._early_watch_date = today
 
         ticks = self._load_runner_radar_ticks()
         if not ticks:
+            # Even if no fresh ticks, still re-evaluate already tracked names.
+            self._review_early_watch_list()
             return
 
         rows: List[Dict] = []
@@ -4514,56 +4534,70 @@ class AutoPilotInvestor:
                 "imbalance": imbalance,
             })
 
-        if not rows:
-            return
-        rows.sort(
-            key=lambda r: (
-                1 if r["quality"] == "EARLY TRADE CANDIDATE" else 0,
-                r["imbalance"],
-                r["turnover_cr"],
-                r["change"],
-            ),
-            reverse=True,
-        )
+        # Track every qualifying row in the internal early-watch list (silent — no Discord).
+        # The lifecycle reviewer below decides each name's fate.
+        if rows:
+            now_ts = time.time()
+            for row in rows:
+                quality = str(row.get("quality", "") or "").strip().upper()
+                if quality not in {"EARLY TRADE CANDIDATE", "WATCH"}:
+                    continue
+                sym = str(row.get("symbol", "") or "").strip().upper()
+                if not sym:
+                    continue
+                if sym in self._early_runner_auto_bought or sym in self._early_runner_auto_attempted:
+                    continue
+                change = _safe_float(row.get("change"))
+                entry = self._early_watch_list.get(sym)
+                if entry is None:
+                    if len(self._early_watch_list) >= self._EARLY_WATCH_MAX_SIZE:
+                        # Capacity guard: drop the oldest tracked symbol so a fresher
+                        # candidate can be observed instead.
+                        oldest = min(
+                            self._early_watch_list.items(),
+                            key=lambda kv: kv[1].get("added_at", 0.0),
+                        )[0]
+                        self._early_watch_list.pop(oldest, None)
+                    self._early_watch_list[sym] = {
+                        "added_at": now_ts,
+                        "first_change": change,
+                        "peak_change": change,
+                        "last_imbalance": _safe_float(row.get("imbalance")),
+                        "last_turnover_cr": _safe_float(row.get("turnover_cr")),
+                        "last_above_vwap": bool(row.get("above_vwap")),
+                        "last_quality": quality,
+                        "last_seen": now_ts,
+                    }
+                else:
+                    entry["peak_change"] = max(_safe_float(entry.get("peak_change")), change)
+                    entry["last_imbalance"] = _safe_float(row.get("imbalance"))
+                    entry["last_turnover_cr"] = _safe_float(row.get("turnover_cr"))
+                    entry["last_above_vwap"] = bool(row.get("above_vwap"))
+                    entry["last_quality"] = quality
+                    entry["last_seen"] = now_ts
 
-        new_rows = [
-            row for row in rows
-            if row["bucket"] > self._early_radar_seen.get(row["symbol"], -1)
-        ]
-        now_ts = time.time()
-        should_summary = now_ts - self._early_radar_last_summary >= self._EARLY_RADAR_SUMMARY_INTERVAL_SEC
-        # Keep this calm: a +1% radar can produce many new names in a few seconds.
-        # Send a ranked snapshot on interval instead of dribbling alerts nonstop.
-        if not should_summary:
-            return
-        if not new_rows and not rows:
-            return
+        self._early_radar_last_summary = time.time()
+        self._review_early_watch_list()
 
-        display_rows = (new_rows if new_rows else rows)[: self._EARLY_RADAR_MAX_LINES]
-        for row in display_rows:
-            self._record_internal_stage("WATCH EARLY", str(row.get("symbol", "")), str(row.get("reason", "")))
-            self._early_radar_seen[row["symbol"]] = max(
-                self._early_radar_seen.get(row["symbol"], -1),
-                row["bucket"],
-            )
+    def _review_early_watch_list(self) -> None:
+        """Re-evaluate every internally tracked early-watch symbol every cycle.
 
-        self._early_radar_last_summary = now_ts
-        self._review_early_radar_rows_for_auto_buy(rows)
-
-    def _review_early_radar_rows_for_auto_buy(self, rows: List[Dict]) -> None:
-        """Auto-buy only the cleanest early radar names with fresh tick-derived levels."""
-        if (
-            not rows
-            or not self._EARLY_RUNNER_AUTO_BUY_ENABLED
-            or self._order_manager is None
-            or self._past_buy_cutoff()
-        ):
+        Lifecycle:
+          * still-forming     → keep tracking silently
+          * entry too late    → mark MISSED internally, drop from list
+          * weakening         → drop silently
+          * clean breakout    → place Kite order, send Discord AUTO-BOUGHT / AUTO-BUY FAILED
+        """
+        if not self._early_watch_list:
             return
-        # Early radar is intraday-only (MIS). After the intraday cutoff these
-        # small movers have no same-day upside left — skip silently.
+        if not self._EARLY_RUNNER_AUTO_BUY_ENABLED or self._order_manager is None or self._past_buy_cutoff():
+            return
+        # Early-watch lane is intraday only (MIS). After the cutoff there's no
+        # same-day upside left — fall through silently and let day rollover clear.
         _now_min = self._ist_now_minute()
         if _now_min > self._INTRADAY_AUTO_BUY_CUTOFF_MIN:
             return
+
         today = datetime.now().strftime("%Y-%m-%d")
         if self._early_runner_auto_date != today:
             self._early_runner_seen.clear()
@@ -4575,83 +4609,113 @@ class AutoPilotInvestor:
         if len(self._early_runner_auto_bought) >= self._EARLY_RUNNER_AUTO_MAX_PER_DAY:
             return
 
+        ticks = self._load_runner_radar_ticks()
         threshold_epsilon = 0.01
-        previous_seen = dict(self._early_runner_seen)
-        for row in rows:
-            sym = str(row.get("symbol", "") or "").strip().upper()
-            if sym:
-                self._early_runner_seen[sym] = _safe_float(row.get("change"))
+        clean_candidates: List[Dict] = []
+        to_drop: List[str] = []
 
-        auto_skip_notes: List[str] = []
-        candidates = []
-        for row in rows:
-            quality = str(row.get("quality", "") or "").strip().upper()
-            if quality not in {"EARLY TRADE CANDIDATE", "WATCH"}:
+        for sym, entry in list(self._early_watch_list.items()):
+            tick = ticks.get(sym) if ticks else None
+            if not tick:
                 continue
-            sym = str(row.get("symbol", "") or "").strip().upper()
-            change = _safe_float(row.get("change"))
-            turnover_cr = _safe_float(row.get("turnover_cr"))
-            imbalance = _safe_float(row.get("imbalance"))
-            above_vwap = bool(row.get("above_vwap"))
-            if not above_vwap:
-                auto_skip_notes.append(f"{sym}: below VWAP")
+            price = _safe_float(tick.get("last_price"))
+            if price <= 0:
                 continue
-            if change < self._EARLY_RUNNER_AUTO_MIN_CHANGE - threshold_epsilon:
-                auto_skip_notes.append(f"{sym}: move +{change:.2f}% below {self._EARLY_RUNNER_AUTO_MIN_CHANGE:.2f}%")
-                continue
+            change = _safe_float(tick.get("change"))
+            volume = _safe_float(tick.get("volume_traded", tick.get("volume", 0)))
+            avg_px = _safe_float(tick.get("average_traded_price", price))
+            turnover_cr = (volume * (avg_px if avg_px > 0 else price)) / 1e7
+            total_buy = _safe_float(tick.get("total_buy_quantity", tick.get("total_buy_qty", 0)))
+            total_sell = _safe_float(tick.get("total_sell_quantity", tick.get("total_sell_qty", 0)))
+            high = _safe_float(tick.get("high", tick.get("ohlc", {}).get("high", 0)))
+            low = _safe_float(tick.get("low", tick.get("ohlc", {}).get("low", 0)))
+            above_vwap = bool(avg_px > 0 and price >= avg_px)
+            imbalance = (total_buy / total_sell) if total_sell > 0 else 0.0
+            near_high = True
+            if high > 0 and low > 0 and high > low and price > 0:
+                near_high = ((high - price) / max(high - low, 0.01)) <= 0.30
+            peak_change = max(_safe_float(entry.get("peak_change")), change)
+            entry["peak_change"] = peak_change
+            entry["last_imbalance"] = imbalance
+            entry["last_turnover_cr"] = turnover_cr
+            entry["last_above_vwap"] = above_vwap
+
+            # 1) Late: entry has run too far — record MISSED internally and stop tracking.
             if change > self._EARLY_RUNNER_AUTO_MAX_CHANGE + threshold_epsilon:
-                auto_skip_notes.append(f"{sym}: move +{change:.2f}% above {self._EARLY_RUNNER_AUTO_MAX_CHANGE:.2f}%")
+                self._record_internal_stage(
+                    "MISSED",
+                    sym,
+                    f"early-watch entry too late at +{change:.2f}%",
+                )
+                to_drop.append(sym)
+                continue
+
+            # 2) Weak: signal has decayed — drop silently.
+            if not above_vwap:
+                to_drop.append(sym)
+                continue
+            if total_sell <= 0 and total_buy > 0:
+                # Locked book / circuit risk — can't trade in or out cleanly.
+                to_drop.append(sym)
+                continue
+            if imbalance < self._EARLY_WATCH_WEAK_IMBALANCE:
+                to_drop.append(sym)
+                continue
+            if peak_change - change >= self._EARLY_WATCH_PEAK_PULLBACK_PCT:
+                to_drop.append(sym)
+                continue
+
+            # 3) Forming: not yet in the actionable band — keep tracking silently.
+            if change < self._EARLY_RUNNER_AUTO_MIN_CHANGE - threshold_epsilon:
                 continue
             if turnover_cr < self._EARLY_RUNNER_AUTO_MIN_TURNOVER_CR - threshold_epsilon:
-                auto_skip_notes.append(f"{sym}: turnover ₹{turnover_cr:.2f}Cr below ₹{self._EARLY_RUNNER_AUTO_MIN_TURNOVER_CR:.2f}Cr")
                 continue
             if imbalance < self._EARLY_RUNNER_AUTO_MIN_IMBALANCE - threshold_epsilon:
-                auto_skip_notes.append(f"{sym}: demand {imbalance:.2f}x below {self._EARLY_RUNNER_AUTO_MIN_IMBALANCE:.2f}x")
                 continue
-            if quality == "WATCH":
+            if not near_high:
+                continue
+            if entry.get("last_quality") == "WATCH":
                 if imbalance < self._EARLY_RUNNER_AUTO_MIN_IMBALANCE + 0.8 - threshold_epsilon:
-                    auto_skip_notes.append(f"{sym}: watch demand {imbalance:.2f}x below fast-entry floor")
                     continue
                 if turnover_cr < max(self._EARLY_RUNNER_AUTO_MIN_TURNOVER_CR, 1.0) - threshold_epsilon:
-                    auto_skip_notes.append(f"{sym}: watch turnover ₹{turnover_cr:.2f}Cr below fast-entry floor")
                     continue
-            candidates.append(row)
-        if not candidates:
-            for note in auto_skip_notes[:20]:
-                self._record_no_buy_reason(note)
-            return
-        for note in auto_skip_notes[:20]:
-            self._record_no_buy_reason(note)
 
-        candidates.sort(
-            key=lambda row: (
-                _safe_float(row.get("imbalance")),
-                _safe_float(row.get("turnover_cr")),
-                -abs(_safe_float(row.get("change")) - 3.0),
+            # 4) Clean — eligible for auto-buy this cycle.
+            clean_candidates.append({
+                "symbol": sym,
+                "price": price,
+                "change": change,
+                "imbalance": imbalance,
+                "turnover_cr": turnover_cr,
+            })
+
+        for sym in to_drop:
+            self._early_watch_list.pop(sym, None)
+
+        if not clean_candidates:
+            return
+
+        clean_candidates.sort(
+            key=lambda r: (
+                _safe_float(r.get("imbalance")),
+                _safe_float(r.get("turnover_cr")),
+                -abs(_safe_float(r.get("change")) - 3.0),
             ),
             reverse=True,
         )
-        for row in candidates:
+
+        for cand in clean_candidates:
             if len(self._early_runner_auto_bought) >= self._EARLY_RUNNER_AUTO_MAX_PER_DAY:
                 break
             if self._AUTO_BUY_TOP_N > 0 and self._tick_confirmed_auto_buy_count >= self._AUTO_BUY_TOP_N:
                 break
-            sym = str(row.get("symbol", "") or "").strip().upper()
-            if not sym or sym in self._early_runner_auto_attempted:
+            sym = str(cand["symbol"])
+            if sym in self._early_runner_auto_attempted:
                 continue
-            change = _safe_float(row.get("change"))
-            previous_change = previous_seen.get(sym)
-            if (
-                previous_change is not None
-                and change < previous_change - self._EARLY_RUNNER_AUTO_MAX_PULLBACK_PCT
-            ):
-                self._log(
-                    f"Early-runner auto skip {sym}: fading from +{previous_change:.1f}% to +{change:.1f}%"
-                )
-                continue
-            price = _safe_float(row.get("price"))
+            price = _safe_float(cand.get("price"))
             if price <= 0:
                 continue
+            # Confirm against the freshest broker tick before placing the order.
             latest_price = 0.0
             try:
                 latest_price = float(self._order_manager._latest_tick_price(sym) or 0.0)
@@ -4661,9 +4725,10 @@ class AutoPilotInvestor:
                 stale_drop_pct = ((price - latest_price) / price * 100) if price > 0 else 0.0
                 if stale_drop_pct > self._EARLY_RUNNER_AUTO_MAX_TICK_STALE_DROP_PCT:
                     self._log(
-                        f"Early-runner auto skip {sym}: live tick faded "
-                        f"{stale_drop_pct:.1f}% from radar price ₹{price:.2f} to ₹{latest_price:.2f}"
+                        f"Early-watch auto skip {sym}: live tick faded "
+                        f"{stale_drop_pct:.1f}% from watch price ₹{price:.2f} to ₹{latest_price:.2f}"
                     )
+                    self._early_watch_list.pop(sym, None)
                     continue
                 price = latest_price
 
@@ -4672,13 +4737,13 @@ class AutoPilotInvestor:
             target2 = round(price * 1.075, 2)
             rr2 = _compute_long_rr(price, stop_loss, target2)
             if rr2 < self._EARLY_RUNNER_AUTO_MIN_RR:
-                self._log(f"Early-runner auto skip {sym}: R:R 1:{rr2:.1f} below floor")
+                self._log(f"Early-watch auto skip {sym}: R:R 1:{rr2:.1f} below floor")
                 continue
 
-            blind_score = min(88.0, 58.0 + _safe_float(row.get("imbalance")) * 4.0 + _safe_float(row.get("turnover_cr")) * 0.7)
+            blind_score = min(88.0, 58.0 + _safe_float(cand.get("imbalance")) * 4.0 + _safe_float(cand.get("turnover_cr")) * 0.7)
             reasons = (
-                f"early-runner auto lane | VWAP+ | near high | buyer demand "
-                f"{_safe_float(row.get('imbalance')):.1f}x | turnover ₹{_safe_float(row.get('turnover_cr')):.1f}Cr"
+                f"early-watch clean breakout | VWAP+ | near high | buyer demand "
+                f"{_safe_float(cand.get('imbalance')):.1f}x | turnover ₹{_safe_float(cand.get('turnover_cr')):.1f}Cr"
             )
             self._early_runner_auto_attempted.add(sym)
             result = self._try_auto_buy(
@@ -4693,12 +4758,14 @@ class AutoPilotInvestor:
                 holding_horizon="intraday",
                 max_hold_days=1,
             )
-            self._log(f"Early-runner auto-buy result {sym}: {result}")
+            self._log(f"Early-watch auto-buy result {sym}: {result}")
             if result:
                 self._handle_auto_buy_result(sym, result)
             if result and "auto-bought" in str(result).lower():
                 self._early_runner_auto_bought.add(sym)
                 self._tick_confirmed_auto_buy_count += 1
+            # Symbol has been acted on — stop tracking either way.
+            self._early_watch_list.pop(sym, None)
 
     def _classify_runner_radar_row(
         self,
