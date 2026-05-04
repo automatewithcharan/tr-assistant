@@ -208,7 +208,7 @@ class TrackedPosition:
         self.blind_score = blind_score
         self.reasons = reasons
         self.product_type = str(product_type or "MIS").upper()
-        self.holding_horizon = str(holding_horizon or "intraday")
+        self.holding_horizon = str(holding_horizon or ("intraday" if str(product_type or "MIS").upper() == "MIS" else "swing"))
         self.max_hold_days_override = int(max_hold_days_override or 0)
         self.buy_time = _ist_now().isoformat(timespec="seconds")
         self.highest_price = buy_price
@@ -245,7 +245,7 @@ class TrackedPosition:
             blind_score=d.get("blind_score", 0.0),
             reasons=d.get("reasons", ""),
             product_type=d.get("product_type", "MIS"),
-            holding_horizon=d.get("holding_horizon", "intraday"),
+            holding_horizon=d.get("holding_horizon") or ("intraday" if d.get("product_type", "MIS") == "MIS" else "swing"),
             max_hold_days_override=d.get("max_hold_days_override", 0),
         )
         pos.buy_time = d.get("buy_time", pos.buy_time)
