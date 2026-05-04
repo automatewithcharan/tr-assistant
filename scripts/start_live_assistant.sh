@@ -26,16 +26,20 @@ fi
 bash "$REPO_ROOT/scripts/ensure_required_indices.sh" || true
 
 echo "Starting trade assistant..."
-echo "  Universe : nifty500"
+echo "  Universe : all (NSE + BSE combined, ~2990 stocks)"
+echo "  Liquidity filter: min avg daily traded value ₹5 crore"
+echo "  Volume filter: min 2x average volume on signal day"
 echo "  Strong buy only (Grade A signals)"
 echo "  Kite auto-trade: ${KITE_AUTO_TRADE:-0}  dry-run: ${KITE_DRY_RUN:-0}"
 echo "  Swing capital: ₹${KITE_SWING_CAPITAL:-0}  per-order max: ₹${KITE_SWING_MAX_ORDER_VALUE:-0}"
 echo ""
 
 exec "$PYTHON" -m pkscreener.pkscreenercli \
-    --assistantstart nifty500 \
+    --assistantstart all \
     --assistantbudget "${KITE_SWING_MAX_ORDER_VALUE:-10000}" \
     --assistantinterval 60 \
     --assistantalerts discord \
     --assistantautopilot \
-    --assistantstrongbuyonly
+    --assistantstrongbuyonly \
+    --assistantminliquidity 50000000 \
+    --assistantminvolratio 2.0
