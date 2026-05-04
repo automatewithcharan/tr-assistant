@@ -4250,10 +4250,12 @@ class AutoPilotInvestor:
             # Base: risk ₹1000 per trade (1% of ₹1L budget), stop defined by ATR/SL.
             # Volatility cap: position value <= (target_vol% / asset_vol%) × portfolio.
             # Score multiplier: high-conviction signals (score>=70) get up to 1.5x size.
-            # Hard cap: ₹5000 max per position (5% of ₹1L budget).
-            _risk_amt = 1000        # ₹1000 base risk per trade
-            _max_position = 5000    # ₹5000 hard cap per position
-            _portfolio = 100000     # assumed ₹1L trading budget
+            # Hard cap: reads KITE_SWING_MAX_ORDER_VALUE from env (default ₹10000).
+            _swing_max = float(os.environ.get("KITE_SWING_MAX_ORDER_VALUE", "10000") or "10000")
+            _swing_capital = float(os.environ.get("KITE_SWING_CAPITAL", "30000") or "30000")
+            _risk_amt = max(500, _swing_max * 0.10)   # 10% of max order = risk per trade
+            _max_position = _swing_max                 # use configured per-order max
+            _portfolio = _swing_capital                # use configured swing capital
             _target_vol = 0.15      # 15% target portfolio volatility contribution
 
             _auto_qty, _auto_invest_amt = _compute_suggested_qty(
@@ -6092,8 +6094,9 @@ class AutoPilotInvestor:
 
             _suggested_qty = int(_safe_float(row.get("SuggestedQty", row.get("Suggested Qty", 0)), 0.0))
             if _suggested_qty <= 0:
-                # Use KITE_MAX_ORDER_VALUE for position sizing (default 25000)
-                _max_pos = float(os.environ.get("KITE_MAX_ORDER_VALUE", "25000"))
+                # Use KITE_SWING_MAX_ORDER_VALUE for CNC swing positions
+                _max_pos = float(os.environ.get("KITE_SWING_MAX_ORDER_VALUE",
+                                  os.environ.get("KITE_MAX_ORDER_VALUE", "10000")))
                 _suggested_qty, _ = _compute_suggested_qty(
                     price,
                     stop_loss=stop_loss,
