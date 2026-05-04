@@ -1349,8 +1349,6 @@ class KiteOrderManager:
             }
             if kite_order_type == "LIMIT" and reference_price > 0:
                 order_params["price"] = aggressive_limit_price or _round_to_tick(reference_price, tick_size, direction="up")
-            elif kite_order_type == "MARKET":
-                order_params["market_protection"] = -1
 
             order_id = client.place_order(**order_params)
             order_id = str(order_id or "")
@@ -1495,15 +1493,23 @@ class KiteOrderManager:
         try:
             client = self._get_client()
             reference_price = float(price or 0.0)
-            if reference_price <= 0 and order_type == "MARKET":
-                reference_price = self._latest_tick_price(symbol)
             exchange, tick_size = self._resolve_exchange_and_tick_size(symbol)
-            if reference_price > 0 and order_type == "MARKET":
-                aggressive_limit_price = _round_to_tick(max(reference_price * 0.997, tick_size), tick_size, direction="down")
+            if reference_price <= 0:
+                # Try tick snapshot first, fall back to live broker quote
+                reference_price = self._latest_tick_price(symbol)
+                if reference_price <= 0:
+                    reference_price = self._broker_last_price(symbol)
+                if reference_price <= 0 and hasattr(pos, "buy_price") and float(pos.buy_price or 0) > 0:
+                    # Last resort: use entry price (aggressive limit 3% below to guarantee fill)
+                    reference_price = float(pos.buy_price)
+            # Always use an aggressive LIMIT order for sells — bare MARKET orders are
+            # rejected by Kite API when market_protection is not a valid positive %.
+            if reference_price > 0:
+                aggressive_limit_price = _round_to_tick(max(reference_price * 0.993, tick_size), tick_size, direction="down")
                 kite_order_type = "LIMIT"
             else:
                 aggressive_limit_price = 0.0
-                kite_order_type = "MARKET" if order_type == "MARKET" or price <= 0 else "LIMIT"
+                kite_order_type = "LIMIT" if order_type != "MARKET" else "MARKET"
 
             order_params = {
                 "tradingsymbol": symbol,
@@ -1516,8 +1522,6 @@ class KiteOrderManager:
             }
             if kite_order_type == "LIMIT" and reference_price > 0:
                 order_params["price"] = aggressive_limit_price or _round_to_tick(reference_price, tick_size, direction="down")
-            elif kite_order_type == "MARKET":
-                order_params["market_protection"] = -1
             
             order_id = client.place_order(**order_params)
             order_id = str(order_id or "")
