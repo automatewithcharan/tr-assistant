@@ -146,6 +146,14 @@ class SellReason:
     FAILED_BREAKOUT = "failed_breakout_fast_exit"
     MANUAL = "manual_sell"
     STALE_TRACKED = "stale_tracked_position"
+    # Swing-specific exits
+    SWING_FAILED_STRUCTURE = "swing_failed_structure"  # broke entry level same day
+    MOMENTUM_FADE = "momentum_fade"        # profit slipping + volume fading
+    SECTOR_WEAKNESS = "sector_weakness"    # sector turned significantly weak
+    MARKET_WEAKNESS = "market_weakness"    # broad market turned weak
+    GAP_RISK_EXIT = "gap_risk_exit"        # gap-down broke thesis
+    RUNNER_EXIT = "runner_exit"            # deliberate runner position closed
+    BREAKEVEN_EXIT = "breakeven_exit"      # exited at breakeven to protect capital
 
 
 # ---------------------------------------------------------------------------
@@ -189,6 +197,10 @@ class TrackedPosition:
         self.gtt_last_error = ""
         self.sell_block_reason = ""
         self.sell_blocked_at = ""
+        # Swing position lifecycle tracking (CNC/NRML only)
+        self.swing_stage: str = "NEW"  # NEW/PROTECTED/CONFIRMED/PARTIAL_BOOKED/BREAKEVEN_PROTECTED/RUNNER/WEAKENING/EXITED
+        self.initial_qty: int = qty    # original entry qty — never mutated
+        self.gtt_needs_reissue: bool = False  # True after T1 partial; triggers cancel+reissue in audit
 
     def to_dict(self) -> Dict[str, Any]:
         return self.__dict__.copy()
@@ -223,6 +235,9 @@ class TrackedPosition:
         pos.gtt_last_error = str(d.get("gtt_last_error", "") or "")
         pos.sell_block_reason = str(d.get("sell_block_reason", "") or "")
         pos.sell_blocked_at = str(d.get("sell_blocked_at", "") or "")
+        pos.swing_stage = str(d.get("swing_stage", "NEW") or "NEW")
+        pos.initial_qty = int(d.get("initial_qty", pos.qty) or pos.qty)
+        pos.gtt_needs_reissue = bool(d.get("gtt_needs_reissue", False))
         return pos
 
     @property
@@ -263,6 +278,8 @@ class KiteOrderManager:
         KITE_SWING_MIN_TARGET2_PCT=5.0  Minimum target2 for CNC orders (% above entry)
         KITE_SWING_MAX_TARGET2_PCT=20.0 Maximum target2 for CNC orders (% above entry)
         KITE_SWING_DEFAULT_SL_PCT=5.0   Default stop-loss % below entry if signal has none
+        KITE_SWING_FAILED_MIN_AGE_SEC=900    Swing failed-structure: min seconds held before eligible (default 15 min)
+        KITE_SWING_FAILED_MIN_DROP_PCT=1.5   Swing failed-structure: min % drop below entry to trigger (default 1.5%)
         KITE_MAX_HOLD_DAYS=10           Max days to hold losing position before time-decay exit
         KITE_DRY_RUN=0                  1=log orders without placing them
         KITE_PRODUCT_TYPE=MIS            MIS=intraday margin (5x leverage), CNC=delivery (full capital)
@@ -304,6 +321,11 @@ class KiteOrderManager:
         self.trailing_trail_pct = float(_get_secret("KITE_TRAILING_STOP_TRAIL", "1.0"))
         self.swing_trail_activate_pct = float(_get_secret("KITE_SWING_TRAIL_ACTIVATE_PCT", "5.0"))
         self.swing_trail_dist_pct = float(_get_secret("KITE_SWING_TRAIL_DIST_PCT", "4.0"))
+        # Swing failed-structure exit: if a CNC/NRML trade breaks out and then
+        # immediately falls back through entry on the same calendar day, exit
+        # rather than waiting for the full stop. Set either to 0 to disable.
+        self.swing_failed_min_age_sec = max(0.0, _secret_float("KITE_SWING_FAILED_MIN_AGE_SEC", 900.0))
+        self.swing_failed_min_drop_pct = max(0.0, _secret_float("KITE_SWING_FAILED_MIN_DROP_PCT", 1.5))
         # Failed-breakout fast exit (intraday only). Applies inside a narrow
         # window after entry: if the trade lost VWAP, is below entry by a clear
         # margin, and the order book shows real sell pressure, exit before the
@@ -1627,6 +1649,23 @@ class KiteOrderManager:
     # Position monitoring & sell signals
     # ------------------------------------------------------------------
 
+    def _compute_swing_stage(self, pos: "TrackedPosition", pnl_pct: float) -> str:
+        """Derive lifecycle stage of a CNC/NRML position from its current state."""
+        if pos.status != "open":
+            return "EXITED"
+        if pos.t1_booked:
+            if pnl_pct >= 10.0:
+                return "RUNNER"
+            ts = float(getattr(pos, "trailing_stop", 0) or 0)
+            if ts > 0 and ts >= float(getattr(pos, "buy_price", 0) or 0):
+                return "BREAKEVEN_PROTECTED"
+            return "PARTIAL_BOOKED"
+        if pnl_pct >= 2.0:
+            return "CONFIRMED"
+        if str(getattr(pos, "gtt_trigger_id", "") or ""):
+            return "PROTECTED"
+        return "NEW"
+
     def check_sell_signals(self, ticks: Dict[str, Dict] = None) -> List[Tuple[str, str, float, int]]:
         """Check all open positions for sell conditions.
 
@@ -1660,6 +1699,14 @@ class KiteOrderManager:
             is_intraday = getattr(pos, "product_type", self.product_type) == "MIS" or getattr(pos, "holding_horizon", "") == "intraday"
             hold_days_limit = int(getattr(pos, "max_hold_days_override", 0) or 0) or self.max_hold_days
             now_min = now.hour * 60 + now.minute
+
+            # Update swing lifecycle stage (CNC/NRML only; intraday positions skip)
+            if not is_intraday:
+                _new_stage = self._compute_swing_stage(pos, pnl_pct)
+                if _new_stage != getattr(pos, "swing_stage", "NEW"):
+                    _log.info("%s swing stage: %s → %s (P/L %.1f%%)",
+                              sym, getattr(pos, "swing_stage", "NEW"), _new_stage, pnl_pct)
+                    pos.swing_stage = _new_stage
 
             # 0. Hard intraday square-off before broker auto square-off.
             if is_intraday and now_min >= 15 * 60 + 10:
@@ -1696,6 +1743,10 @@ class KiteOrderManager:
                 pos.t1_booked = True
                 _t1_trail_dist = (self.trailing_trail_pct / 100) if is_intraday else (self.swing_trail_dist_pct / 100)
                 pos.trailing_stop = max(pos.buy_price, pos.target1 * (1 - _t1_trail_dist))
+                if not is_intraday:
+                    # GTT was placed for original qty; remaining is pos.qty // 2.
+                    # Flag for cancel + reissue on next audit cycle.
+                    pos.gtt_needs_reissue = True
                 _log.info("%s hit T1 (₹%.2f): selling %d of %d, trailing rest from ₹%.2f",
                           sym, pos.target1, partial_qty, pos.qty, pos.trailing_stop)
 
@@ -1741,6 +1792,36 @@ class KiteOrderManager:
                             (total_sell / max(total_buy, 1.0)) if has_depth else 0.0,
                         )
                         continue
+
+            # 3c. Swing failed-structure exit (CNC/NRML only).
+            # If a breakout immediately reverses on the same calendar day, exit
+            # rather than waiting for the full 5% stop. Does not require VWAP or
+            # depth data — price action and trade age are sufficient.
+            # Disabled by setting KITE_SWING_FAILED_MIN_AGE_SEC=0 or MIN_DROP_PCT=0.
+            if (
+                not is_intraday
+                and not pos.t1_booked
+                and self.swing_failed_min_age_sec > 0
+                and self.swing_failed_min_drop_pct > 0
+            ):
+                try:
+                    _entry_date = datetime.fromisoformat(pos.buy_time).date()
+                    _age_sec = (now - datetime.fromisoformat(pos.buy_time)).total_seconds()
+                    _same_day = now.date() == _entry_date
+                except Exception:
+                    _same_day = False
+                    _age_sec = -1.0
+                if (
+                    _same_day
+                    and _age_sec >= self.swing_failed_min_age_sec
+                    and pnl_pct <= -self.swing_failed_min_drop_pct
+                ):
+                    signals.append((sym, SellReason.SWING_FAILED_STRUCTURE, live_price, 0))
+                    _log.info(
+                        "%s swing failed-structure exit: age=%.0fs P/L=%.1f%%",
+                        sym, _age_sec, pnl_pct,
+                    )
+                    continue
 
             # 4. Trailing stop — intraday uses tight trail; swing uses wide trail to let winners run
             # Swing: activates at swing_trail_activate_pct (default 5%), trails swing_trail_dist_pct (default 4%)
@@ -2026,6 +2107,13 @@ class KiteOrderManager:
             SellReason.FAILED_BREAKOUT: "⚠️ Failed breakout — lost VWAP under entry with sell pressure",
             SellReason.MANUAL: "👤 Manual sell",
             SellReason.STALE_TRACKED: "🧹 Removed stale tracked position",
+            SellReason.SWING_FAILED_STRUCTURE: "⚠️ Swing failed-structure — broke entry same day",
+            SellReason.MOMENTUM_FADE: "📉 Momentum fading — profit slipping with weak volume",
+            SellReason.SECTOR_WEAKNESS: "📊 Sector turned weak",
+            SellReason.MARKET_WEAKNESS: "🌐 Broad market weakness",
+            SellReason.GAP_RISK_EXIT: "📭 Gap-down broke trade thesis",
+            SellReason.RUNNER_EXIT: "🏁 Runner position closed",
+            SellReason.BREAKEVEN_EXIT: "⚖️ Exited at breakeven to protect capital",
         }.get(reason, reason)
 
     # ------------------------------------------------------------------
@@ -2370,6 +2458,51 @@ class KiteOrderManager:
                     "message": "Skipped GTT audit because symbol is not present in broker portfolio",
                     "trigger_id": str(getattr(pos, "gtt_trigger_id", "") or ""),
                 })
+                continue
+
+            # If T1 partial was booked on a swing position, the existing GTT still
+            # covers the original (larger) qty. Cancel it and reissue for the
+            # remaining qty before the normal "verified / repair" path runs.
+            # This is not counted toward max_repairs — it is a deliberate reissue.
+            if getattr(pos, "gtt_needs_reissue", False):
+                old_id = str(getattr(pos, "gtt_trigger_id", "") or "")
+                if old_id:
+                    self.delete_gtt(old_id)
+                    _log.info("%s: cancelled stale GTT %s (qty mismatch after T1 partial)", symbol, old_id)
+                _new_sl = float(getattr(pos, "trailing_stop", 0) or 0)
+                _orig_sl = float(getattr(pos, "stop_loss", 0) or 0)
+                if _new_sl <= 0 or _new_sl < _orig_sl:
+                    _new_sl = _orig_sl
+                _reissue = self.place_gtt_oco(
+                    symbol=symbol,
+                    qty=int(getattr(pos, "qty", 0) or 0),
+                    buy_price=float(getattr(pos, "buy_price", 0) or 0),
+                    stop_loss=_new_sl,
+                    target=float(getattr(pos, "target2", 0) or 0),
+                    product_type=product,
+                )
+                if _reissue.get("success"):
+                    _new_id = str(_reissue.get("trigger_id", "") or "")
+                    pos.gtt_needs_reissue = False
+                    self.update_position_gtt(symbol, trigger_id=_new_id, status="active", expires_at="", error="")
+                    self._save_positions()
+                    actions.append({
+                        "symbol": symbol,
+                        "action": "reissued_after_partial",
+                        "ok": True,
+                        "message": f"GTT reissued for remaining {pos.qty} shares after T1 partial (ID {_new_id})",
+                        "trigger_id": _new_id,
+                    })
+                else:
+                    _err = str(_reissue.get("message", "") or "unknown error")
+                    self.update_position_gtt(symbol, status="reissue_failed", error=_err)
+                    actions.append({
+                        "symbol": symbol,
+                        "action": "reissue_failed",
+                        "ok": False,
+                        "message": f"GTT reissue after T1 partial failed: {_err}",
+                        "trigger_id": old_id,
+                    })
                 continue
 
             trigger_id = str(getattr(pos, "gtt_trigger_id", "") or "")

@@ -1126,11 +1126,51 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
         try:
             from pkscreener.classes.KiteOrderManager import KiteOrderManager
             mgr = KiteOrderManager(output_dir=Archiver.get_user_outputs_dir())
+
+            # Snapshot system recommendation BEFORE executing the sell.
+            # If the system wasn't flagging an exit, this is a manual override.
+            _sym_upper = symbol.strip().upper()
+            _sys_rec = ""
+            _entry_price = 0.0
+            _pos_before = mgr.get_position(_sym_upper)
+            if _pos_before and _pos_before.status == "open":
+                _entry_price = float(_pos_before.buy_price or 0)
+                _stage = str(getattr(_pos_before, "swing_stage", "") or "")
+                _trail = float(getattr(_pos_before, "trailing_stop", 0) or 0)
+                _pnl_pct = (
+                    (_pos_before.highest_price - _pos_before.buy_price) / _pos_before.buy_price * 100
+                    if _pos_before.buy_price > 0 else 0
+                )
+                if _stage in ("CONFIRMED", "BREAKEVEN_PROTECTED", "RUNNER"):
+                    _sys_rec = f"HOLD (stage={_stage}, trail={_trail:.2f}, peak_pnl={_pnl_pct:.1f}%)"
+                elif _stage == "PARTIAL_BOOKED":
+                    _sys_rec = f"HOLD_RUNNER (stage={_stage}, trail={_trail:.2f})"
+                elif _stage in ("NEW", "PROTECTED"):
+                    _sys_rec = f"HOLD (stage={_stage}, no trail yet)"
+                # If stage is WEAKENING or empty, system may already agree — no override note
+
             result = mgr.place_sell_order(symbol=symbol, reason="manual_sell")
             if result.success:
-                pos = mgr.get_position(symbol.strip().upper())
+                pos = mgr.get_position(_sym_upper)
                 pnl_text = f" | P/L: ₹{pos.pnl:+,.0f}" if pos and pos.sell_price > 0 else ""
-                message = f"✅ Sold `{symbol.upper()}` x{result.qty} (ID: {result.order_id}){pnl_text}"
+                message = f"✅ Sold `{_sym_upper}` x{result.qty} (ID: {result.order_id}){pnl_text}"
+
+                # Log override if system recommendation was to hold
+                if _sys_rec and "HOLD" in _sys_rec:
+                    try:
+                        import os
+                        from pathlib import Path
+                        from pkscreener.classes.LivePortfolio import LivePortfolioStore
+                        _db = str(Path(Archiver.get_user_outputs_dir()) / "assistant_portfolio.db")
+                        LivePortfolioStore(_db).log_override(
+                            symbol=_sym_upper,
+                            manual_action=f"MANUAL_SELL at {float(result.price or 0):.2f}",
+                            system_recommendation=_sys_rec,
+                            entry_price=_entry_price,
+                            override_price=float(result.price or 0),
+                        )
+                    except Exception:
+                        pass
             else:
                 message = f"⚠️ Sell failed: {result.message}"
         except Exception as exc:

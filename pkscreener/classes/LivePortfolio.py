@@ -99,6 +99,25 @@ class LivePortfolioStore:
                     ON live_cashflows(account_name, id);
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_live_trades_account_trade
                     ON live_trades(account_name, trade_id);
+
+                CREATE TABLE IF NOT EXISTS trade_overrides (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    account_name TEXT DEFAULT '',
+                    system_recommendation TEXT DEFAULT '',
+                    system_confidence REAL DEFAULT 0,
+                    manual_action TEXT NOT NULL,
+                    override_reason TEXT DEFAULT '',
+                    entry_price REAL DEFAULT 0,
+                    override_price REAL DEFAULT 0,
+                    outcome_pct REAL,
+                    outcome_date TEXT,
+                    helped INTEGER
+                );
+
+                CREATE INDEX IF NOT EXISTS idx_trade_overrides_symbol
+                    ON trade_overrides(symbol, timestamp);
                 """
             )
 
@@ -112,6 +131,122 @@ class LivePortfolioStore:
             connection.execute("DELETE FROM live_trades WHERE account_name = ?", (account,))
             connection.execute("DELETE FROM live_accounts WHERE account_name = ?", (account,))
             connection.commit()
+
+    # ------------------------------------------------------------------
+    # Manual override logging — did human decisions help or hurt?
+    # ------------------------------------------------------------------
+
+    def log_override(
+        self,
+        symbol: str,
+        manual_action: str,
+        system_recommendation: str = "",
+        system_confidence: float = 0.0,
+        override_reason: str = "",
+        entry_price: float = 0.0,
+        override_price: float = 0.0,
+        account_name: str = "",
+    ) -> int:
+        """Log a manual decision that overrides the system recommendation.
+
+        Returns the row id of the new record (0 on failure).
+        Call update_override_outcome() later when the trade closes to record
+        whether the override helped or hurt.
+        """
+        import datetime as _dt
+        ts = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+        try:
+            with self._connect() as conn:
+                cursor = conn.execute(
+                    """
+                    INSERT INTO trade_overrides
+                      (timestamp, symbol, account_name, system_recommendation,
+                       system_confidence, manual_action, override_reason,
+                       entry_price, override_price)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        ts,
+                        str(symbol or "").upper(),
+                        str(account_name or ""),
+                        str(system_recommendation or ""),
+                        float(system_confidence or 0.0),
+                        str(manual_action or ""),
+                        str(override_reason or ""),
+                        float(entry_price or 0.0),
+                        float(override_price or 0.0),
+                    ),
+                )
+                return int(cursor.lastrowid or 0)
+        except Exception:
+            return 0
+
+    def update_override_outcome(self, override_id: int, outcome_pct: float) -> None:
+        """Record the outcome of an override after the trade closes.
+
+        outcome_pct > 0 means the override helped (e.g. sold before a further drop).
+        outcome_pct < 0 means the override hurt (e.g. sold before a big rally).
+        """
+        import datetime as _dt
+        outcome_date = _dt.datetime.now(_dt.timezone.utc).isoformat(timespec="seconds")
+        helped = 1 if outcome_pct > 0 else 0
+        try:
+            with self._connect() as conn:
+                conn.execute(
+                    """
+                    UPDATE trade_overrides
+                    SET outcome_pct=?, outcome_date=?, helped=?
+                    WHERE id=?
+                    """,
+                    (float(outcome_pct), outcome_date, helped, int(override_id)),
+                )
+        except Exception:
+            pass
+
+    def get_override_stats(self, account_name: str = "") -> dict:
+        """Summarize all logged overrides: did manual decisions help or hurt?
+
+        Returns a dict with keys: total, helped, hurt, avg_outcome, pending,
+        help_rate_pct. pending = overrides where outcome not yet recorded.
+        """
+        try:
+            where = "WHERE account_name = ?" if account_name else ""
+            params = (str(account_name),) if account_name else ()
+            with self._connect() as conn:
+                row = conn.execute(
+                    f"""
+                    SELECT
+                        COUNT(*) as total,
+                        SUM(CASE WHEN helped=1 THEN 1 ELSE 0 END) as helped,
+                        SUM(CASE WHEN helped=0 THEN 1 ELSE 0 END) as hurt,
+                        AVG(outcome_pct) as avg_outcome,
+                        SUM(CASE WHEN outcome_pct IS NULL THEN 1 ELSE 0 END) as pending
+                    FROM trade_overrides {where}
+                    """,
+                    params,
+                ).fetchone()
+                if not row or (row["total"] or 0) == 0:
+                    return {
+                        "total": 0, "helped": 0, "hurt": 0,
+                        "avg_outcome": 0.0, "pending": 0, "help_rate_pct": 0.0,
+                    }
+                total = int(row["total"] or 0)
+                helped = int(row["helped"] or 0)
+                pending = int(row["pending"] or 0)
+                closed = total - pending
+                return {
+                    "total": total,
+                    "helped": helped,
+                    "hurt": int(row["hurt"] or 0),
+                    "avg_outcome": round(float(row["avg_outcome"] or 0), 2),
+                    "pending": pending,
+                    "help_rate_pct": round(100.0 * helped / max(closed, 1), 1) if closed > 0 else 0.0,
+                }
+        except Exception:
+            return {
+                "total": 0, "helped": 0, "hurt": 0,
+                "avg_outcome": 0.0, "pending": 0, "help_rate_pct": 0.0,
+            }
 
     def load_initial_capital(self, account_name: str, default: float, legacy_summary_path: Optional[str] = None) -> float:
         """Load initial capital, falling back to legacy summary CSV once if needed."""
