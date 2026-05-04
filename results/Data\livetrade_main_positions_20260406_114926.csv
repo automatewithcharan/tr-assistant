@@ -1,3 +1,0 @@
-TradeId,Symbol,EntryDate,Quantity,EntryPrice,InvestedAmount,CurrentPrice,CurrentValue,StopLoss,Target1,Target2,UnrealizedPnL,UnrealizedReturnPct,LastAction,LastSignal,LastConfidencePct,LastUpdatedAt
-2,ABCAPITAL,2026-04-06,10.0,303.2,3032.0,297.55,2975.5,281.73,324.11,341.05,-63.17,-2.08,Watch for Buy,WEAK BUY,33.5,2026-04-06 11:49:26
-1,DIVISLAB,2026-04-02,2.0,5835.0,11670.0,5856.0,11712.0,0.0,0.0,0.0,16.05,0.14,Hold / Do Nothing,NEUTRAL,28.1,2026-04-06 11:49:26

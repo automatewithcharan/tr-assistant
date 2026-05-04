@@ -1,2 +1,0 @@
-Stock,What To Do,Signal Strength %,Price Now,Buy Above,Entry Gap %,Sell If Below,Take Profit 1,Take Profit 2,Risk %,Volume vs Avg,Avg Daily Value,Checks,Why,Checked At
-DIVISLAB,Hold / Do Nothing,6.0,5910.0,5910.0,0.0,0.0,0.0,0.0,0.0,1.79,157.37 Cr,"confidence low, trigger hit, liquidity ok, volume ok, strong liquidity, strong volume",RSI approaching oversold (35.8) | Price above ATR trailing stop | Above average volume (1.8x) with loss,2026-04-02 13:34:24

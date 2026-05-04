@@ -1,4 +1,0 @@
-TradeId,Universe,Symbol,Side,Status,EntryDate,EntryPrice,Quantity,InvestedAmount,StopLoss,Target1,Target2,EntrySignal,EntryConfidencePct,EntryReason,CurrentPrice,CurrentValue,UnrealizedPnL,UnrealizedReturnPct,LastAction,LastSignal,LastConfidencePct,LastReason,LastUpdatedAt,ExitDate,ExitPrice,ExitValue,ExitReason,RealizedPnL,RealizedReturnPct
-1,allstocks,DIVISLAB,LONG,OPEN,2026-04-02,5835.0,2.0,11670.0,0.0,0.0,0.0,WEAK BUY,12.0,Manual buy entry,5957.5,11915.0,218.84,1.87,,,0.0,,2026-04-08 09:18:15,,0.0,0.0,,0.0,0.0
-2,allstocks,ABCAPITAL,LONG,OPEN,2026-04-06,303.2,10.0,3032.0,0.0,0.0,0.0,WEAK BUY,33.5,Manual buy entry,329.25,3292.5,253.5,8.35,,,0.0,,2026-04-08 09:18:15,,0.0,0.0,,0.0,0.0
-5,allstocks,360ONE,LONG,OPEN,2026-04-06,930.0,5.0,4650.0,0.0,0.0,0.0,,0.0,Manual buy entry,966.3,4831.5,170.99,3.67,,,0.0,,2026-04-08 09:18:15,,0.0,0.0,,0.0,0.0

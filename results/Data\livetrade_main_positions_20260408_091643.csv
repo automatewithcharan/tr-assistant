@@ -1,4 +1,0 @@
-TradeId,Symbol,EntryDate,Quantity,EntryPrice,InvestedAmount,CurrentPrice,CurrentValue,StopLoss,Target1,Target2,UnrealizedPnL,UnrealizedReturnPct,LastAction,LastSignal,LastConfidencePct,LastUpdatedAt
-2,ABCAPITAL,2026-04-06,10.0,303.2,3032.0,329.25,3292.5,0.0,0.0,0.0,253.5,8.35,,,0.0,2026-04-08 09:16:43
-1,DIVISLAB,2026-04-02,2.0,5835.0,11670.0,5982.0,11964.0,0.0,0.0,0.0,267.79,2.29,,,0.0,2026-04-08 09:16:43
-5,360ONE,2026-04-06,5.0,930.0,4650.0,967.45,4837.25,0.0,0.0,0.0,176.73,3.8,,,0.0,2026-04-08 09:16:43
