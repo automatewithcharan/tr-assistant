@@ -2221,17 +2221,25 @@ class KiteOrderManager:
             for sym, pos in tracked_open.items():
                 bp = broker_holdings.get(sym)
                 if bp is None:
-                    if pos.product_type == "MIS":
-                        # MIS position not at broker → broker auto-squared it off
-                        pos.status = "closed"
-                        pos.sell_reason = "broker_auto_square_off"
-                        if not pos.sell_time:
-                            pos.sell_time = _ist_now().isoformat(timespec="seconds")
-                        report["auto_closed"].append(sym)
-                        changed = True
-                        _log.info("Reconcile: closed stale MIS position %s (broker auto-squared off)", sym)
-                    else:
-                        report["mismatches"].append(f"{sym}: tracked but not in broker")
+                    # Position not at broker at all — it was sold (GTT triggered, manual
+                    # sell, or auto-squareoff) without our system recording the sell.
+                    sell_reason = "broker_auto_square_off" if pos.product_type == "MIS" else "gtt_or_manual_sell"
+                    # Best-effort sell price: fetch fresh quote, fall back to entry price
+                    sell_price = self._broker_last_price(sym) or float(pos.buy_price or 0)
+                    pos.status = "closed"
+                    pos.sell_reason = sell_reason
+                    pos.sell_price = sell_price
+                    if not pos.sell_time:
+                        pos.sell_time = _ist_now().isoformat(timespec="seconds")
+                    report["auto_closed"].append(sym)
+                    changed = True
+                    _log.info("Reconcile: closed ghost position %s (reason=%s, est_sell=%.2f)", sym, sell_reason, sell_price)
+                    # Write a synthetic sell record to the order log so portfolio_report.py stays accurate
+                    self._log_order(OrderResult(
+                        True, symbol=sym, side="SELL", qty=pos.qty, price=sell_price,
+                        status="RECONCILED",
+                        message=f"Reconciled: position not found in broker ({sell_reason}). Estimated sell @ {sell_price:.2f}",
+                    ))
                 elif bp["qty"] != pos.qty:
                     report["mismatches"].append(
                         f"{sym}: tracked qty={pos.qty}, broker qty={bp['qty']}"
