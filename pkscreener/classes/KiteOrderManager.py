@@ -103,6 +103,35 @@ def _normalize_gtt_trigger_id(value: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Discord alert helper (module-level, deduplication via a daily set)
+# ---------------------------------------------------------------------------
+
+_discord_alerted_today: set = set()
+_discord_alerted_date: str = ""
+
+
+def _send_discord_alert(message: str, dedup_key: str = "") -> None:
+    """Send one Discord webhook message. Skips duplicate keys within the same day."""
+    global _discord_alerted_today, _discord_alerted_date
+    today = date.today().isoformat()
+    if today != _discord_alerted_date:
+        _discord_alerted_today = set()
+        _discord_alerted_date = today
+    if dedup_key and dedup_key in _discord_alerted_today:
+        return
+    if dedup_key:
+        _discord_alerted_today.add(dedup_key)
+    webhook_url = _get_secret("DISCORD_WEBHOOK_URL", "")
+    if not webhook_url:
+        return
+    try:
+        import requests
+        requests.post(webhook_url, json={"content": message[:1900]}, timeout=10)
+    except Exception as exc:
+        _log.debug("Discord alert failed: %s", exc)
+
+
+# ---------------------------------------------------------------------------
 # Order result dataclass-like dict
 # ---------------------------------------------------------------------------
 
@@ -1574,6 +1603,20 @@ class KiteOrderManager:
                     "Authorise the shares in Kite/CDSL and place a fresh sell order."
                 )
                 self._mark_cdsl_authorization_required(symbol, result.message)
+                _send_discord_alert(
+                    f"🔐 **CDSL AUTH REQUIRED — {symbol}**\n"
+                    f"Cannot sell `{symbol}` x{sell_qty} — CDSL TPIN not authorized.\n"
+                    f"**Action:** Open Kite app → Holdings → Authorize → enter TPIN.\n"
+                    f"Reason triggered: `{reason}`",
+                    dedup_key=f"cdsl_{symbol}_{date.today().isoformat()}",
+                )
+            else:
+                _send_discord_alert(
+                    f"🚨 **SELL FAILED — {symbol}**\n"
+                    f"Tried to sell `{symbol}` x{sell_qty} (reason: `{reason}`) but order was NOT filled.\n"
+                    f"Status: `{result.status}` | Message: {result.message[:200]}",
+                    dedup_key=f"sellfail_{symbol}_{date.today().isoformat()}",
+                )
             return self._return_logged_result(result)
 
         except Exception as exc:
@@ -1589,6 +1632,20 @@ class KiteOrderManager:
                     "Authorise the shares in Kite/CDSL and place a fresh sell order."
                 )
                 self._mark_cdsl_authorization_required(symbol, result.message)
+                _send_discord_alert(
+                    f"🔐 **CDSL AUTH REQUIRED — {symbol}**\n"
+                    f"Cannot sell `{symbol}` x{sell_qty} — CDSL TPIN not authorized.\n"
+                    f"**Action:** Open Kite app → Holdings → Authorize → enter TPIN.\n"
+                    f"Reason triggered: `{reason}`",
+                    dedup_key=f"cdsl_{symbol}_{date.today().isoformat()}",
+                )
+            else:
+                _send_discord_alert(
+                    f"🚨 **SELL FAILED (exception) — {symbol}**\n"
+                    f"Tried to sell `{symbol}` x{sell_qty} (reason: `{reason}`) but got exception.\n"
+                    f"Error: {str(exc)[:300]}",
+                    dedup_key=f"sellfail_{symbol}_{date.today().isoformat()}",
+                )
             self._log_order(result)
             return result
 

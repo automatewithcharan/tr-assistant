@@ -7874,7 +7874,8 @@ class AutoPilotInvestor:
             self._save_daily_sell_alerted(a.symbol)
 
         message = "\n\n".join(sections)
-        self._log(f"Sell alerts prepared for {len(alerts)} position(s); Discord execution-only mode suppresses them.")
+        self._log(f"Sending sell alerts for {len(alerts)} position(s) to Discord.")
+        self._send_to_channels(message)
 
     def _send_to_channels(self, message: str) -> None:
         """Send message to all configured alert channels."""
