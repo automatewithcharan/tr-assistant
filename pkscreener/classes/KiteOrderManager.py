@@ -2344,6 +2344,7 @@ class KiteOrderManager:
         target: float,
         exchange: str = "NSE",
         product_type: str = "",
+        current_price: float = 0.0,
     ) -> Dict[str, Any]:
         """Place a Kite GTT OCO (One-Cancels-Other) order for stop-loss AND target.
 
@@ -2353,12 +2354,14 @@ class KiteOrderManager:
         Whichever fires first cancels the other.
 
         Args:
-            symbol:     NSE trading symbol (e.g. RELIANCE)
-            qty:        Shares to sell (must match your holding)
-            buy_price:  Your entry price (used as Kite's last_price reference)
-            stop_loss:  SL trigger price (below buy_price)
-            target:     Profit target price (above buy_price)
-            exchange:   Usually "NSE" (default)
+            symbol:        NSE trading symbol (e.g. RELIANCE)
+            qty:           Shares to sell (must match your holding)
+            buy_price:     Your entry price
+            stop_loss:     SL trigger price (can be above buy_price for trailing stops)
+            target:        Profit target price (above current price)
+            exchange:      Usually "NSE" (default)
+            current_price: Live market price (used as Kite last_price reference).
+                           Falls back to buy_price if not provided.
 
         Returns:
             dict with keys: success (bool), trigger_id (str), message (str)
@@ -2366,10 +2369,16 @@ class KiteOrderManager:
         symbol = symbol.strip().upper()
         if stop_loss <= 0 or target <= 0:
             return {"success": False, "message": "stop_loss and target must both be > 0"}
-        if stop_loss >= buy_price:
-            return {"success": False, "message": f"stop_loss {stop_loss} must be below buy_price {buy_price}"}
-        if target <= buy_price:
-            return {"success": False, "message": f"target {target} must be above buy_price {buy_price}"}
+        if stop_loss >= target:
+            return {"success": False, "message": f"stop_loss {stop_loss} must be below target {target}"}
+
+        # Kite's last_price must sit between stop_loss and target for the OCO
+        # condition to be evaluatable. Use live price when available (trailing
+        # stop reissues often have stop_loss > original buy_price).
+        last_price_ref = current_price if current_price > 0 else buy_price
+        if last_price_ref <= stop_loss or last_price_ref >= target:
+            # Clamp into valid range as a safety fallback
+            last_price_ref = (stop_loss + target) / 2
 
         if self.dry_run:
             _log.info(
@@ -2399,7 +2408,7 @@ class KiteOrderManager:
                     _round_to_tick(stop_loss, tick_size, direction="down"),
                     _round_to_tick(target, tick_size, direction="up"),
                 ],
-                last_price=_round_to_tick(buy_price, tick_size, direction="nearest"),
+                last_price=_round_to_tick(last_price_ref, tick_size, direction="nearest"),
                 orders=[
                     # Leg 1: stop-loss — fires when price <= stop_loss
                     {
@@ -2542,6 +2551,7 @@ class KiteOrderManager:
                 _orig_sl = float(getattr(pos, "stop_loss", 0) or 0)
                 if _new_sl <= 0 or _new_sl < _orig_sl:
                     _new_sl = _orig_sl
+                _live_price = self._latest_tick_price(symbol)
                 _reissue = self.place_gtt_oco(
                     symbol=symbol,
                     qty=int(getattr(pos, "qty", 0) or 0),
@@ -2549,6 +2559,7 @@ class KiteOrderManager:
                     stop_loss=_new_sl,
                     target=float(getattr(pos, "target2", 0) or 0),
                     product_type=product,
+                    current_price=_live_price,
                 )
                 if _reissue.get("success"):
                     _new_id = str(_reissue.get("trigger_id", "") or "")
@@ -2638,13 +2649,19 @@ class KiteOrderManager:
                 })
                 continue
 
+            _live_price_repair = self._latest_tick_price(symbol)
+            # Use trailing_stop if it was raised above original SL (breakeven protection)
+            _repair_sl = float(getattr(pos, "trailing_stop", 0) or 0)
+            if _repair_sl <= 0 or _repair_sl < float(getattr(pos, "stop_loss", 0) or 0):
+                _repair_sl = float(getattr(pos, "stop_loss", 0) or 0)
             recreate = self.place_gtt_oco(
                 symbol=symbol,
                 qty=int(getattr(pos, "qty", 0) or 0),
                 buy_price=float(getattr(pos, "buy_price", 0) or 0),
-                stop_loss=float(getattr(pos, "stop_loss", 0) or 0),
+                stop_loss=_repair_sl,
                 target=float(getattr(pos, "target2", 0) or 0),
                 product_type=product,
+                current_price=_live_price_repair,
             )
             repaired += 1
             if recreate.get("success"):
