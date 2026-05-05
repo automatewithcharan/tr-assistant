@@ -444,19 +444,47 @@ class SignalPerformanceTracker:
         return scorecard_df
 
     def _save_outputs(self, ledger_df: pd.DataFrame, scorecard_df: pd.DataFrame) -> None:
-        """Persist the ledger and scorecard snapshots."""
+        """Persist the ledger and scorecard snapshots.
+
+        Always overwrites _latest. Once per day after 3:20 PM IST, also writes
+        a daily YYYYMMDD snapshot. Snapshots older than 30 days are purged.
+        """
         ledger_df.to_csv(self._ledger_latest_path(), index=False)
         scorecard_df.to_csv(self._scorecard_latest_path(), index=False)
+        self._maybe_write_daily_snapshot(ledger_df, scorecard_df)
 
-        timestamp = self.run_at.strftime("%Y%m%d_%H%M%S")
-        ledger_df.to_csv(
-            os.path.join(self.output_dir, f"signalperf_{self.universe}_ledger_{timestamp}.csv"),
-            index=False,
-        )
+    def _maybe_write_daily_snapshot(self, ledger_df: pd.DataFrame, scorecard_df: pd.DataFrame) -> None:
+        """Write one end-of-day snapshot per trading day; purge files older than 30 days."""
+        import glob as _glob
+        try:
+            import pytz as _pytz
+            _ist = _pytz.timezone("Asia/Kolkata")
+            _now = datetime.now(_ist)
+        except Exception:
+            _now = datetime.now()
+        if not (15 * 60 + 20 <= _now.hour * 60 + _now.minute <= 15 * 60 + 35):
+            return
+        today_stamp = _now.strftime("%Y%m%d")
+        sentinel = os.path.join(self.output_dir, f"signalperf_{self.universe}_ledger_{today_stamp}.csv")
+        if os.path.exists(sentinel):
+            return
+        ledger_df.to_csv(sentinel, index=False)
         scorecard_df.to_csv(
-            os.path.join(self.output_dir, f"signalperf_{self.universe}_scorecard_{timestamp}.csv"),
+            os.path.join(self.output_dir, f"signalperf_{self.universe}_scorecard_{today_stamp}.csv"),
             index=False,
         )
+        # Purge daily snapshots older than 30 days
+        cutoff = datetime.now() - timedelta(days=30)
+        for pattern in [f"signalperf_{self.universe}_ledger_????????.csv",
+                        f"signalperf_{self.universe}_scorecard_????????.csv"]:
+            for path in _glob.glob(os.path.join(self.output_dir, pattern)):
+                parts = os.path.basename(path).replace(".csv", "").rsplit("_", 1)
+                if len(parts) == 2 and len(parts[1]) == 8 and parts[1].isdigit():
+                    try:
+                        if datetime.strptime(parts[1], "%Y%m%d") < cutoff:
+                            os.remove(path)
+                    except Exception:
+                        pass
 
     def _ledger_latest_path(self) -> str:
         return os.path.join(self.output_dir, f"signalperf_{self.universe}_ledger_latest.csv")

@@ -476,10 +476,7 @@ class StorageManager:
                     summary.cleanup_failures.append(f"{item.path} ({exc})")
 
     def _write_reports(self, summary: StorageSummary, *, apply_changes: bool) -> str:
-        stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        json_path = self.report_dir / f"disk_usage_report_{stamp}.json"
         latest_json_path = self.report_dir / "disk_usage_report_latest.json"
-        txt_path = self.report_dir / f"disk_usage_report_{stamp}.txt"
         latest_txt_path = self.report_dir / "disk_usage_report_latest.txt"
         payload = {
             "generated_at": datetime.now(timezone.utc).isoformat(),
@@ -498,9 +495,7 @@ class StorageManager:
             "candidate_items": [asdict(item) for item in summary.candidate_items],
         }
         text_report = self.format_text_report(summary, apply_changes=apply_changes)
-        json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
         latest_json_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
-        txt_path.write_text(text_report, encoding="utf-8")
         latest_txt_path.write_text(text_report, encoding="utf-8")
         return str(latest_txt_path)
 

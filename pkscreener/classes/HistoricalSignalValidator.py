@@ -379,17 +379,42 @@ class HistoricalSignalValidator:
         }
 
     def _save_outputs(self, ledger_df: pd.DataFrame, scorecard_df: pd.DataFrame) -> None:
-        """Save dated and latest validator outputs."""
-        timestamp = PKDateUtilities.currentDateTime().strftime("%Y%m%d_%H%M%S")
+        """Save latest validator outputs and one daily snapshot after 3:20 PM IST."""
+        import glob as _glob
         ledger_latest = os.path.join(self.output_dir, f"signalvalidate_{self.universe}_ledger_latest.csv")
-        ledger_dated = os.path.join(self.output_dir, f"signalvalidate_{self.universe}_ledger_{timestamp}.csv")
         scorecard_latest = os.path.join(self.output_dir, f"signalvalidate_{self.universe}_scorecard_latest.csv")
-        scorecard_dated = os.path.join(self.output_dir, f"signalvalidate_{self.universe}_scorecard_{timestamp}.csv")
-
         ledger_df.to_csv(ledger_latest, index=False)
-        ledger_df.to_csv(ledger_dated, index=False)
         scorecard_df.to_csv(scorecard_latest, index=False)
-        scorecard_df.to_csv(scorecard_dated, index=False)
+
+        try:
+            import pytz as _pytz
+            _ist = _pytz.timezone("Asia/Kolkata")
+            _now = datetime.now(_ist)
+        except Exception:
+            _now = datetime.now()
+        if not (15 * 60 + 20 <= _now.hour * 60 + _now.minute <= 15 * 60 + 35):
+            return
+        today_stamp = _now.strftime("%Y%m%d")
+        sentinel = os.path.join(self.output_dir, f"signalvalidate_{self.universe}_ledger_{today_stamp}.csv")
+        if os.path.exists(sentinel):
+            return
+        ledger_df.to_csv(sentinel, index=False)
+        scorecard_df.to_csv(
+            os.path.join(self.output_dir, f"signalvalidate_{self.universe}_scorecard_{today_stamp}.csv"),
+            index=False,
+        )
+        # Purge daily snapshots older than 30 days
+        cutoff = datetime.now() - timedelta(days=30)
+        for pattern in [f"signalvalidate_{self.universe}_ledger_????????.csv",
+                        f"signalvalidate_{self.universe}_scorecard_????????.csv"]:
+            for path in _glob.glob(os.path.join(self.output_dir, pattern)):
+                parts = os.path.basename(path).replace(".csv", "").rsplit("_", 1)
+                if len(parts) == 2 and len(parts[1]) == 8 and parts[1].isdigit():
+                    try:
+                        if datetime.strptime(parts[1], "%Y%m%d") < cutoff:
+                            os.remove(path)
+                    except Exception:
+                        pass
 
     def _direction_for_action(self, action: str) -> int:
         """Map action text to long/short direction."""

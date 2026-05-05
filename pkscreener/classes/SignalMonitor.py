@@ -1378,59 +1378,85 @@ class SignalMonitorRunner:
         alerts_df: pd.DataFrame,
         summary_df: pd.DataFrame,
     ) -> None:
-        """Persist CSV and HTML monitor outputs."""
-        outputs = {
-            "signals_latest": self._latest_path("signals"),
-            "signals_dated": self._dated_path("signals"),
-            "signals_simple_latest": self._latest_path("signals_simple"),
-            "signals_simple_dated": self._dated_path("signals_simple"),
-            "signals_momentum_latest": self._latest_path("signals_momentum"),
-            "signals_momentum_dated": self._dated_path("signals_momentum"),
-            "actionable_latest": self._latest_path("actionable"),
-            "actionable_dated": self._dated_path("actionable"),
-            "summary_latest": self._latest_path("summary"),
-            "summary_dated": self._dated_path("summary"),
-            "state_latest": self._latest_path("state"),
-            "state_dated": self._dated_path("state"),
-            "alerts_latest": self._latest_path("alerts"),
-            "alerts_dated": self._dated_path("alerts"),
-            "dashboard_latest": self._dashboard_latest_path(),
-            "dashboard_dated": self._dashboard_dated_path(),
-        }
+        """Persist CSV and HTML monitor outputs.
 
+        Always overwrites the *_latest files (what the bot reads).
+        Once per trading day, near market close (after 3:20 PM IST), also
+        writes a *_YYYYMMDD daily snapshot for forensic use.  Snapshots
+        older than 30 days are deleted automatically.
+        """
         report_to_save = report_df.copy()
         actionable_to_save = actionable_df.copy()
         report_to_save.drop(columns=["ActionRank", "NowActionRank"], inplace=True, errors="ignore")
         actionable_to_save.drop(columns=["ActionRank", "NowActionRank"], inplace=True, errors="ignore")
-
-        report_to_save.to_csv(outputs["signals_latest"], index=False)
-        report_to_save.to_csv(outputs["signals_dated"], index=False)
-        simple_df.to_csv(outputs["signals_simple_latest"], index=False)
-        simple_df.to_csv(outputs["signals_simple_dated"], index=False)
         momentum_df = self._build_momentum_board(simple_df)
-        momentum_df.to_csv(outputs["signals_momentum_latest"], index=False)
-        momentum_df.to_csv(outputs["signals_momentum_dated"], index=False)
-        actionable_to_save.to_csv(outputs["actionable_latest"], index=False)
-        actionable_to_save.to_csv(outputs["actionable_dated"], index=False)
-        summary_df.to_csv(outputs["summary_latest"], index=False)
-        summary_df.to_csv(outputs["summary_dated"], index=False)
-        state_df.to_csv(outputs["state_latest"], index=False)
-        state_df.to_csv(outputs["state_dated"], index=False)
-        alerts_df.to_csv(outputs["alerts_latest"], index=False)
-        alerts_df.to_csv(outputs["alerts_dated"], index=False)
+
+        # Always write _latest (overwrite)
+        report_to_save.to_csv(self._latest_path("signals"), index=False)
+        simple_df.to_csv(self._latest_path("signals_simple"), index=False)
+        momentum_df.to_csv(self._latest_path("signals_momentum"), index=False)
+        actionable_to_save.to_csv(self._latest_path("actionable"), index=False)
+        summary_df.to_csv(self._latest_path("summary"), index=False)
+        state_df.to_csv(self._latest_path("state"), index=False)
+        alerts_df.to_csv(self._latest_path("alerts"), index=False)
+        dashboard_latest = self._dashboard_latest_path()
         self._save_dashboard(
-            latest_path=outputs["dashboard_latest"],
-            dated_path=outputs["dashboard_dated"],
+            latest_path=dashboard_latest,
+            dated_path=dashboard_latest,
             summary_df=summary_df,
             alerts_df=alerts_df,
             simple_df=simple_df,
         )
 
-        OutputControls().printOutput(f"  [+] Saved monitor summary: {outputs['summary_latest']}")
-        OutputControls().printOutput(f"  [+] Saved monitor board: {outputs['signals_simple_latest']}")
-        OutputControls().printOutput(f"  [+] Saved momentum board: {outputs['signals_momentum_latest']}")
-        OutputControls().printOutput(f"  [+] Saved monitor alerts: {outputs['alerts_latest']}")
-        OutputControls().printOutput(f"  [+] Saved monitor dashboard: {outputs['dashboard_latest']}")
+        OutputControls().printOutput(f"  [+] Saved monitor summary: {self._latest_path('summary')}")
+        OutputControls().printOutput(f"  [+] Saved monitor board: {self._latest_path('signals_simple')}")
+        OutputControls().printOutput(f"  [+] Saved momentum board: {self._latest_path('signals_momentum')}")
+        OutputControls().printOutput(f"  [+] Saved monitor alerts: {self._latest_path('alerts')}")
+        OutputControls().printOutput(f"  [+] Saved monitor dashboard: {dashboard_latest}")
+
+        # Write one daily end-of-day snapshot after 3:20 PM IST (once per day)
+        self._maybe_write_daily_snapshot(
+            report_to_save, actionable_to_save, simple_df,
+            momentum_df, state_df, alerts_df, summary_df,
+        )
+
+    def _maybe_write_daily_snapshot(
+        self,
+        report_df: "pd.DataFrame",
+        actionable_df: "pd.DataFrame",
+        simple_df: "pd.DataFrame",
+        momentum_df: "pd.DataFrame",
+        state_df: "pd.DataFrame",
+        alerts_df: "pd.DataFrame",
+        summary_df: "pd.DataFrame",
+    ) -> None:
+        """Write one end-of-day snapshot per trading day; purge files older than 30 days."""
+        import glob as _glob
+        try:
+            import pytz as _pytz
+            _ist = _pytz.timezone("Asia/Kolkata")
+            _now = datetime.now(_ist)
+        except Exception:
+            _now = datetime.now()
+        # Only snapshot in the 3:20–3:35 PM IST window
+        if not (15 * 60 + 20 <= _now.hour * 60 + _now.minute <= 15 * 60 + 35):
+            return
+        today_stamp = _now.strftime("%Y%m%d")
+        # Check if today's snapshot was already written (any of the 9 files)
+        sentinel = self._daily_path("signals", today_stamp)
+        if os.path.exists(sentinel):
+            return
+        # Write all daily snapshots
+        report_df.to_csv(self._daily_path("signals", today_stamp), index=False)
+        simple_df.to_csv(self._daily_path("signals_simple", today_stamp), index=False)
+        momentum_df.to_csv(self._daily_path("signals_momentum", today_stamp), index=False)
+        actionable_df.to_csv(self._daily_path("actionable", today_stamp), index=False)
+        summary_df.to_csv(self._daily_path("summary", today_stamp), index=False)
+        state_df.to_csv(self._daily_path("state", today_stamp), index=False)
+        alerts_df.to_csv(self._daily_path("alerts", today_stamp), index=False)
+        OutputControls().printOutput(f"  [+] Saved daily EOD snapshot: {today_stamp}")
+        # Purge daily snapshots older than 30 days
+        self._purge_old_daily_snapshots(keep_days=30)
 
     def _save_latest_outputs_only(
         self,
@@ -2059,6 +2085,28 @@ class SignalMonitorRunner:
     def _dated_path(self, name: str) -> str:
         """Return the dated CSV path for a named monitor output."""
         return os.path.join(self.output_dir, f"signalmonitor_{self.universe}_{name}_{self.timestamp}.csv")
+
+    def _daily_path(self, name: str, date_stamp: str) -> str:
+        """Return the daily end-of-day snapshot path (one per trading day)."""
+        return os.path.join(self.output_dir, f"signalmonitor_{self.universe}_{name}_{date_stamp}.csv")
+
+    def _purge_old_daily_snapshots(self, keep_days: int = 30) -> None:
+        """Delete daily snapshots older than keep_days from the output directory."""
+        import glob as _glob
+        from datetime import timedelta
+        cutoff = datetime.now() - timedelta(days=keep_days)
+        pattern = os.path.join(self.output_dir, f"signalmonitor_{self.universe}_*_????????.csv")
+        for path in _glob.glob(pattern):
+            fname = os.path.basename(path)
+            # Extract 8-digit date stamp from filename
+            parts = fname.replace(".csv", "").rsplit("_", 1)
+            if len(parts) == 2 and len(parts[1]) == 8 and parts[1].isdigit():
+                try:
+                    file_date = datetime.strptime(parts[1], "%Y%m%d")
+                    if file_date < cutoff:
+                        os.remove(path)
+                except Exception:
+                    pass
 
     def _dashboard_latest_path(self) -> str:
         """Return the latest monitor dashboard path."""
