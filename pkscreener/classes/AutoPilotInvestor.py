@@ -886,6 +886,7 @@ class AutoPilotInvestor:
         self._daily_execution_summary_sent_date: Optional[str] = None
         self._daily_auto_bought: List[str] = []
         self._daily_auto_buy_failed: List[str] = []
+        self._daily_auto_buy_skipped: List[str] = []
         self._daily_protection_failed: List[str] = []
         self._daily_missed_opportunities: List[str] = []
         self._auto_buy_timeline: Dict[str, Dict[str, Any]] = {}
@@ -1671,6 +1672,7 @@ class AutoPilotInvestor:
                 self._daily_execution_summary_sent_date = None
                 self._daily_auto_bought = []
                 self._daily_auto_buy_failed = []
+                self._daily_auto_buy_skipped = []
                 self._daily_protection_failed = []
                 self._daily_missed_opportunities = []
                 self._daily_internal_watch.clear()
@@ -2933,6 +2935,7 @@ class AutoPilotInvestor:
             f"**📘 DAILY SUMMARY — {now_ist.strftime('%d %b %Y')}**",
             f"Auto-bought stocks: {', '.join(self._daily_auto_bought[:12]) if self._daily_auto_bought else 'none'}",
             f"Failed buys: {', '.join(self._daily_auto_buy_failed[:12]) if self._daily_auto_buy_failed else 'none'}",
+            f"Skipped buys: {', '.join(self._daily_auto_buy_skipped[:12]) if self._daily_auto_buy_skipped else 'none'}",
             f"Missed opportunities: {', '.join(self._daily_missed_opportunities[:12]) if self._daily_missed_opportunities else 'none'}",
             f"Watched internally: {len(self._daily_internal_watch)}",
             f"Avoided internally: {len(self._daily_internal_avoid)}",
@@ -2975,6 +2978,18 @@ class AutoPilotInvestor:
             return
         if "important missed opportunity" in lower:
             self._daily_missed_opportunities.append(sym)
+            self._record_no_buy_reason(text.split("\n", 1)[-1])
+            self._send_to_channels(text)
+            return
+        if (
+            "auto-buy skipped" in lower
+            or "**blocked" in lower
+            or "**late_discovery" in lower
+            or "**rejected" in lower
+            or "**strict_mode_rejected" in lower
+            or "**swing_recheck_rejected" in lower
+        ):
+            self._daily_auto_buy_skipped.append(sym)
             self._record_no_buy_reason(text.split("\n", 1)[-1])
             self._send_to_channels(text)
             return
