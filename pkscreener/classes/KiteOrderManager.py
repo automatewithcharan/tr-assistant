@@ -1173,18 +1173,15 @@ class KiteOrderManager:
                 )
                 qty = affordable_qty_by_pool
 
-        # For CNC/NRML entries, cap delivery exposure to effective broker cash.
-        # Some Kite margin responses behave like a total cash pool rather than
-        # "free cash after open delivery positions", so account for already-open
-        # CNC/NRML value only when that pool is larger than current deployed cash.
+        # For CNC/NRML entries, size against actual Kite idle/available cash.
+        # Kite's equity.available.live_balance is the LIVE balance net of
+        # already-utilised funds (delivery, MIS, etc.) — trust it directly.
+        # The previous heuristic that subtracted our tracked position value was
+        # double-counting and starved the bot when broker cash was healthy.
         if order_product in ("CNC", "NRML") and price > 0:
             available_cash = self._extract_available_funds()
             if available_cash > 0:
-                open_delivery_value = self._current_open_delivery_value()
-                if open_delivery_value > 0 and available_cash >= open_delivery_value:
-                    free_delivery_cash = max(0.0, available_cash - open_delivery_value)
-                else:
-                    free_delivery_cash = available_cash
+                free_delivery_cash = available_cash
                 if configured_capital_limit > 0:
                     free_delivery_cash = min(free_delivery_cash, remaining_pool)
                 affordable_qty = int(free_delivery_cash // price) if free_delivery_cash > 0 else 0
@@ -1198,21 +1195,19 @@ class KiteOrderManager:
                             price=price,
                             status="FUNDS_SHORT",
                             message=(
-                                f"Broker cash cap reached for delivery buys. "
-                                f"Free cash about ₹{free_delivery_cash:,.0f} after open CNC exposure "
-                                f"₹{open_delivery_value:,.0f}."
+                                f"Insufficient idle cash in Kite for this delivery buy. "
+                                f"Available ₹{free_delivery_cash:,.0f} < price ₹{price:,.0f}."
                             ),
                         )
                     )
                 if affordable_qty < qty:
                     _log.info(
                         "CNC cash cap: reducing %s qty from %d to %d "
-                        "(available_cash=₹%.2f, open_delivery=₹%.2f, price=₹%.2f)",
+                        "(available_cash=₹%.2f, price=₹%.2f)",
                         symbol,
                         qty,
                         affordable_qty,
                         available_cash,
-                        open_delivery_value,
                         price,
                     )
                     qty = affordable_qty
