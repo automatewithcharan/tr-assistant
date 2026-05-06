@@ -15,6 +15,27 @@ WATCHDOG_TIMES=(
 TMP_DIR="$(mktemp -d)"
 trap 'rm -rf "$TMP_DIR"' EXIT
 
+cat > "$TMP_DIR/trade-assistant-stop.service" <<'EOF'
+[Unit]
+Description=Stop trade assistant session
+
+[Service]
+Type=oneshot
+ExecStart=/bin/systemctl stop trade-assistant.service
+EOF
+
+cat > "$TMP_DIR/trade-assistant-watchdog.service" <<'EOF'
+[Unit]
+Description=Trade assistant watchdog
+After=network-online.target trade-assistant.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/default/trade-assistant
+ExecStart=/bin/bash -lc 'cd "$REPO_ROOT" && exec ./scripts/watchdog.sh'
+EOF
+
 cat > "$TMP_DIR/trade-assistant.timer" <<EOF
 [Unit]
 Description=Start trade assistant for pre-market window (8:45 AM IST = ${START_UTC} UTC)
@@ -58,7 +79,9 @@ EOF
 } > "$TMP_DIR/trade-assistant-watchdog.timer"
 
 sudo install -m 0644 "$TMP_DIR/trade-assistant.timer" /etc/systemd/system/trade-assistant.timer
+sudo install -m 0644 "$TMP_DIR/trade-assistant-stop.service" /etc/systemd/system/trade-assistant-stop.service
 sudo install -m 0644 "$TMP_DIR/trade-assistant-stop.timer" /etc/systemd/system/trade-assistant-stop.timer
+sudo install -m 0644 "$TMP_DIR/trade-assistant-watchdog.service" /etc/systemd/system/trade-assistant-watchdog.service
 sudo install -m 0644 "$TMP_DIR/trade-assistant-watchdog.timer" /etc/systemd/system/trade-assistant-watchdog.timer
 
 sudo systemctl daemon-reload

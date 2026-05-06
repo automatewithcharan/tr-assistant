@@ -2,7 +2,7 @@
 # Dual-check: (1) --assistantstatus DB says running, (2) supervisor PID is actually alive.
 # If either fails, kills stale state and restarts cleanly.
 
-REPO=/home/charan_sai/tr-assistant
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [ -x "$REPO/.venv/bin/python3" ]; then
     PYTHON="$REPO/.venv/bin/python3"
 elif [ -x "$REPO/venv/bin/python3" ]; then
@@ -20,6 +20,32 @@ DISK_GUARD_STOPPED=0
 send_discord() {
     [ -z "$WEBHOOK" ] && return
     curl -s -X POST "$WEBHOOK"          -H 'Content-Type: application/json'          -d "{\"content\": \"$1\"}" > /dev/null 2>&1 || true
+}
+
+has_systemd_service() {
+    command -v systemctl >/dev/null 2>&1 && systemctl cat trade-assistant.service >/dev/null 2>&1
+}
+
+stop_assistant() {
+    if has_systemd_service; then
+        systemctl stop trade-assistant.service >> "$LOG" 2>&1 || true
+    else
+        $PYTHON -m pkscreener.pkscreenercli --assistantstop all >> "$LOG" 2>&1 || true
+    fi
+}
+
+restart_assistant() {
+    if has_systemd_service; then
+        systemctl restart trade-assistant.service >> "$LOG" 2>&1
+    else
+        TERM=xterm $PYTHON -m pkscreener.pkscreenercli \
+            --assistantstart all \
+            --assistantautotune \
+            --assistantbudget 100000 \
+            --assistantinterval 60 \
+            --assistantalerts discord \
+            --assistantautopilot >> "$LOG" 2>&1
+    fi
 }
 
 get_free_kb() {
@@ -61,7 +87,7 @@ run_disk_guard() {
 
     if [ "$FREE_KB" -le "$CRIT_KB" ]; then
         echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Watchdog: disk CRITICAL (free=${AFTER_GB}G), stopping assistant to protect machine" >> "$LOG"
-        $PYTHON -m pkscreener.pkscreenercli --assistantstop all >> "$LOG" 2>&1 || true
+        stop_assistant
         DISK_GUARD_STOPPED=1
         send_discord_on_disk_state_change "critical" "🚨 **Disk critically low** — only ${AFTER_GB} GB free. Assistant was stopped to protect login/session stability. Systemd disk guard remains responsible for storage cleanup."
         return
@@ -101,11 +127,12 @@ fi
 echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Watchdog: supervisor down ($REASON), restarting..." >> $LOG
 
 # Clean up stale state
-$PYTHON -m pkscreener.pkscreenercli --assistantstop all >> $LOG 2>&1 || true
+stop_assistant
 sleep 3
 
-# Restart with combined NSE+BSE universe
-TERM=xterm $PYTHON -m pkscreener.pkscreenercli     --assistantstart all     --assistantautotune     --assistantbudget 100000     --assistantinterval 60     --assistantalerts discord     --assistantautopilot >> $LOG 2>&1
+# Restart using the systemd service when available so the detached supervisor
+# is owned by the persistent unit rather than the short-lived watchdog timer.
+restart_assistant
 
 if [ $? -eq 0 ]; then
     echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Watchdog: restart succeeded" >> $LOG
