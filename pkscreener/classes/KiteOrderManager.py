@@ -672,15 +672,37 @@ class KiteOrderManager:
             _log.debug("Funds lookup failed: %s", exc)
         return 0.0
 
-    def _latest_tick_price(self, symbol: str) -> float:
-        """Best-effort live price lookup from the saved tick snapshot."""
+    def _latest_tick_price(self, symbol: str, max_stale_seconds: int = 300) -> float:
+        """Best-effort live price lookup from the saved tick snapshot.
+
+        Returns 0.0 if the tick for this symbol is older than max_stale_seconds
+        (default 5 min) — caller should fall back to broker quote in that case.
+        """
         symbol = str(symbol or "").strip().upper()
         if not symbol:
             return 0.0
         try:
             ticks = self._load_ticks()
             tick = ticks.get(symbol, {}) if isinstance(ticks, dict) else {}
-            return float(tick.get("last_price") or 0.0)
+            price = float(tick.get("last_price") or 0.0)
+            if price <= 0:
+                return 0.0
+            # Reject ticks that are too old — stale file from yesterday causes
+            # false "price faded" blocks (e.g. previous close ₹686 vs live ₹745).
+            received_at_str = tick.get("received_at") or ""
+            if received_at_str and max_stale_seconds > 0:
+                try:
+                    received_dt = datetime.fromisoformat(received_at_str)
+                    age_seconds = (datetime.now() - received_dt).total_seconds()
+                    if age_seconds > max_stale_seconds:
+                        _log.debug(
+                            "%s tick is %.0fs stale (received_at=%s); ignoring",
+                            symbol, age_seconds, received_at_str,
+                        )
+                        return 0.0
+                except Exception:
+                    pass
+            return price
         except Exception:
             return 0.0
 
@@ -1312,27 +1334,54 @@ class KiteOrderManager:
             )
 
         latest_price = self._latest_tick_price(symbol) if price > 0 else 0.0
-        if latest_price > 0 and price > 0 and self.max_buy_price_stale_drop_pct > 0:
-            stale_drop_pct = ((price - latest_price) / price) * 100
-            # CNC swing trades can tolerate a larger pullback from signal — targeting 10%+ over days
+        if price > 0 and self.max_buy_price_stale_drop_pct > 0:
             _is_cnc = order_product in ("CNC", "NRML")
             _stale_threshold = self.max_buy_price_stale_drop_pct * 3 if _is_cnc else self.max_buy_price_stale_drop_pct
-            if stale_drop_pct > _stale_threshold:
-                return self._return_logged_result(
-                    OrderResult(
-                        False,
-                        symbol=symbol,
-                        side="BUY",
-                        qty=qty,
-                        price=price,
-                        status="SKIPPED",
-                        message=(
-                            f"Live price faded {stale_drop_pct:.1f}% from signal "
-                            f"(signal ₹{price:.2f}, now ₹{latest_price:.2f}); "
-                            f"threshold {_stale_threshold:.1f}% for {order_product}"
-                        ),
+
+            # If tick is missing/stale, confirm via broker quote before proceeding
+            if latest_price <= 0:
+                latest_price = self._broker_last_price(symbol)
+                if latest_price > 0:
+                    _log.info(
+                        "%s tick stale/missing — confirmed via broker quote ₹%.2f",
+                        symbol, latest_price,
                     )
-                )
+
+            if latest_price > 0:
+                stale_drop_pct = ((price - latest_price) / price) * 100
+                # If tick shows a large drop, confirm with broker before blocking —
+                # stale ticks can show yesterday's close and falsely block valid buys.
+                if stale_drop_pct > _stale_threshold:
+                    broker_price = self._broker_last_price(symbol)
+                    if broker_price > 0:
+                        broker_drop_pct = ((price - broker_price) / price) * 100
+                        if broker_drop_pct <= _stale_threshold:
+                            _log.info(
+                                "%s tick ₹%.2f was stale (%.1f%% drop); broker confirms ₹%.2f (%.1f%% drop) — proceeding",
+                                symbol, latest_price, stale_drop_pct, broker_price, broker_drop_pct,
+                            )
+                            latest_price = broker_price
+                            stale_drop_pct = broker_drop_pct
+                        else:
+                            # Both tick and broker agree price has dropped — honour the block
+                            latest_price = broker_price
+                            stale_drop_pct = broker_drop_pct
+                    if stale_drop_pct > _stale_threshold:
+                        return self._return_logged_result(
+                            OrderResult(
+                                False,
+                                symbol=symbol,
+                                side="BUY",
+                                qty=qty,
+                                price=price,
+                                status="SKIPPED",
+                                message=(
+                                    f"Live price faded {stale_drop_pct:.1f}% from signal "
+                                    f"(signal ₹{price:.2f}, now ₹{latest_price:.2f}); "
+                                    f"threshold {_stale_threshold:.1f}% for {order_product}"
+                                ),
+                            )
+                        )
             if latest_price < price:
                 _log.info(
                     "%s buy reference refreshed from signal ₹%.2f to live ₹%.2f",
