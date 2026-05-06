@@ -36,6 +36,7 @@ echo ""
 
 exec "$PYTHON" -m pkscreener.pkscreenercli \
     --assistantstart all \
+    --assistantforeground \
     --assistantbudget "${KITE_SWING_MAX_ORDER_VALUE:-10000}" \
     --assistantinterval 60 \
     --assistantalerts discord \

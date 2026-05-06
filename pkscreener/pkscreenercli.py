@@ -816,6 +816,12 @@ class ArgumentParser:
             required=False,
         )
         parser.add_argument(
+            "--assistantforeground",
+            action="store_true",
+            help="Run the simplified live assistant in the foreground for process supervisors like systemd",
+            required=False,
+        )
+        parser.add_argument(
             "--assistantsessionid",
             type=int,
             help=argparse.SUPPRESS,
@@ -2111,6 +2117,14 @@ def pkscreenercli():
                     ),
                 )
                 try:
+                    if args.assistantforeground:
+                        OutputControls().printOutput(
+                            colorText.GREEN
+                            + f"  [+] Starting live assistant in foreground mode for {settings.universe}."
+                            + colorText.END
+                        )
+                        launcher.run_foreground(settings, configManager)
+                        sys.exit(0)
                     session_id = launcher.start(settings)
                 except Exception as exc:
                     OutputControls().printOutput(

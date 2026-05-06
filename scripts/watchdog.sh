@@ -10,9 +10,11 @@ elif [ -x "$REPO/venv/bin/python3" ]; then
 else
     PYTHON="python3"
 fi
-LOG=/tmp/trade_watchdog.log
+LOG_DIR="$REPO/results/Data"
+mkdir -p "$LOG_DIR"
+LOG="$LOG_DIR/trade_watchdog.log"
 WEBHOOK=$(grep DISCORD_WEBHOOK_URL $REPO/.env.dev 2>/dev/null | cut -d= -f2- || echo '')
-DISK_STATE_STAMP=/tmp/trade_disk_guard_state
+DISK_STATE_STAMP="$LOG_DIR/trade_disk_guard_state"
 DISK_WARN_GB=$(grep '^TRADE_DISK_WARN_GB=' "$REPO/.env.dev" 2>/dev/null | tail -1 | cut -d= -f2- || echo '8')
 DISK_CRITICAL_GB=$(grep '^TRADE_DISK_CRITICAL_GB=' "$REPO/.env.dev" 2>/dev/null | tail -1 | cut -d= -f2- || echo '4')
 DISK_GUARD_STOPPED=0

@@ -36,13 +36,12 @@ After=network-online.target
 Wants=network-online.target
 
 [Service]
-Type=oneshot
-RemainAfterExit=yes
+Type=simple
 User=%i
 EnvironmentFile=/etc/default/trade-assistant
-ExecStartPre=/bin/bash -lc 'cd "$REPO_ROOT" && source .venv/bin/activate && python3 -m pkscreener.pkscreenercli --assistantstop || true'
-ExecStart=/bin/bash -lc 'cd "$REPO_ROOT" && source .venv/bin/activate && python3 -m pkscreener.pkscreenercli --assistantstart "$UNIVERSE" --assistantautotune --assistantstrongbuyonly --assistantbudget "$BUDGET" --assistantinterval "$INTERVAL" --assistantalerts discord'
-ExecStop=/bin/bash -lc 'cd "$REPO_ROOT" && source .venv/bin/activate && python3 -m pkscreener.pkscreenercli --assistantstop || true'
+ExecStart=/bin/bash -lc 'cd "$REPO_ROOT" && source .venv/bin/activate && exec ./scripts/start_live_assistant.sh'
+ExecStop=/bin/bash -lc 'cd "$REPO_ROOT" && source .venv/bin/activate && python3 -m pkscreener.pkscreenercli --assistantstop all || true'
+KillMode=control-group
 TimeoutStopSec=30
 
 [Install]

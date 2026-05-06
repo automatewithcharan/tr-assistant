@@ -398,8 +398,10 @@ class AssistantLiveSupervisor:
         self.stop_requested = False
         self._code_commit: Optional[str] = self._read_git_head()
         self._code_check_counter: int = 0
+        self._signal_handlers_installed = False
 
     def run(self) -> None:
+        self._install_signal_handlers()
         self.store.mark_session_running(self.session_id, os.getpid())
         try:
             if self.settings.prewarm:
@@ -424,6 +426,25 @@ class AssistantLiveSupervisor:
             self._stop_children()
             if (self.store.get_session(self.session_id) or {}).get("status") not in ["failed", "stopped"]:
                 self.store.mark_session_stopped(self.session_id, "Live assistant stopped.")
+
+    def _install_signal_handlers(self) -> None:
+        if self._signal_handlers_installed:
+            return
+        try:
+            signal.signal(signal.SIGTERM, self._handle_shutdown_signal)
+            signal.signal(signal.SIGINT, self._handle_shutdown_signal)
+            self._signal_handlers_installed = True
+        except Exception:
+            pass
+
+    def _handle_shutdown_signal(self, signum, _frame) -> None:
+        self.stop_requested = True
+        self.store.add_event(
+            self.session_id,
+            "info",
+            "supervisor",
+            f"Shutdown requested via signal {signum}.",
+        )
 
     def _run_prewarm(self) -> None:
         command = [
@@ -740,7 +761,7 @@ class AssistantLiveLauncher:
             except Exception:
                 pass
 
-    def start(self, settings: AssistantLiveSettings) -> int:
+    def _prepare_session(self, settings: AssistantLiveSettings) -> int:
         settings = settings.normalized()
         active = self.store.get_active_session()
         if active:
@@ -754,8 +775,11 @@ class AssistantLiveLauncher:
                 int(active["id"]),
                 "Marked as failed because the supervisor process was no longer running.",
             )
+        return self.store.create_session(settings)
 
-        session_id = self.store.create_session(settings)
+    def start(self, settings: AssistantLiveSettings) -> int:
+        settings = settings.normalized()
+        session_id = self._prepare_session(settings)
         command = [
             sys.executable,
             "-m",
@@ -802,6 +826,14 @@ class AssistantLiveLauncher:
             str(supervisor_log),
         )
         self.store.add_event(session_id, "info", "launcher", "Detached live supervisor launched.")
+        return session_id
+
+    def run_foreground(self, settings: AssistantLiveSettings, config_manager) -> int:
+        settings = settings.normalized()
+        session_id = self._prepare_session(settings)
+        self.store.add_event(session_id, "info", "launcher", "Foreground live supervisor launched.")
+        supervisor = AssistantLiveSupervisor(config_manager=config_manager, session_id=session_id)
+        supervisor.run()
         return session_id
 
     def stop(self) -> Optional[int]:
