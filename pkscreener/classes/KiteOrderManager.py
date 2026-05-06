@@ -607,6 +607,27 @@ class KiteOrderManager:
             pos.gtt_last_error = str(message or "CDSL authorisation required before selling CNC/delivery shares.")
             self._save_positions()
 
+    def _looks_like_sell_temporarily_blocked(self, message: str) -> bool:
+        text = str(message or "").lower()
+        patterns = (
+            "lower circuit limit",
+            "periodic call auction",
+            "place your orders in this window",
+            "traded in periodic call auction",
+        )
+        return any(pattern in text for pattern in patterns)
+
+    def _mark_sell_temporarily_blocked(self, symbol: str, message: str = "") -> None:
+        symbol = str(symbol or "").strip().upper()
+        with self._lock:
+            pos = self._positions.get(symbol)
+            if not pos:
+                return
+            pos.sell_block_reason = "TEMPORARY_MARKET_BLOCK"
+            pos.sell_blocked_at = _ist_now().isoformat(timespec="seconds")
+            pos.gtt_last_error = str(message or "Sell blocked by exchange trading rules or circuit limits.")
+            self._save_positions()
+
     def clear_sell_block(self, symbol: str) -> None:
         """Clear a manual sell block after the user has handled broker-side auth."""
         symbol = str(symbol or "").strip().upper()
@@ -1497,6 +1518,24 @@ class KiteOrderManager:
                         ),
                     )
                 )
+        if str(getattr(pos, "sell_block_reason", "") or "") == "TEMPORARY_MARKET_BLOCK":
+            if str(reason or "").lower() in {SellReason.MANUAL, "manual_sell"}:
+                self.clear_sell_block(symbol)
+            else:
+                return self._return_logged_result(
+                    OrderResult(
+                        False,
+                        symbol=symbol,
+                        side="SELL",
+                        qty=sell_qty,
+                        price=price,
+                        status="SKIPPED",
+                        message=str(
+                            getattr(pos, "gtt_last_error", "")
+                            or "Sell temporarily blocked by exchange trading rules or circuit limits."
+                        ),
+                    )
+                )
 
         if sell_qty > pos.qty:
             return OrderResult(
@@ -1516,6 +1555,21 @@ class KiteOrderManager:
 
         try:
             client = self._get_client()
+            circuit_blocked, circuit_reason = self._is_at_circuit_limit(symbol)
+            if circuit_blocked:
+                block_message = f"Circuit limit: {circuit_reason}"
+                self._mark_sell_temporarily_blocked(symbol, block_message)
+                return self._return_logged_result(
+                    OrderResult(
+                        False,
+                        symbol=symbol,
+                        side="SELL",
+                        qty=sell_qty,
+                        price=price,
+                        status="SKIPPED",
+                        message=block_message,
+                    )
+                )
             reference_price = float(price or 0.0)
             exchange, tick_size = self._resolve_exchange_and_tick_size(symbol)
             if reference_price <= 0:
@@ -1605,6 +1659,9 @@ class KiteOrderManager:
                     f"Reason triggered: `{reason}`",
                     dedup_key=f"cdsl_{symbol}_{date.today().isoformat()}",
                 )
+            elif self._looks_like_sell_temporarily_blocked(result.message):
+                result.status = "SELL_TEMP_BLOCKED"
+                self._mark_sell_temporarily_blocked(symbol, result.message)
             else:
                 _send_discord_alert(
                     f"🚨 **SELL FAILED — {symbol}**\n"
@@ -1634,6 +1691,9 @@ class KiteOrderManager:
                     f"Reason triggered: `{reason}`",
                     dedup_key=f"cdsl_{symbol}_{date.today().isoformat()}",
                 )
+            elif self._looks_like_sell_temporarily_blocked(result.message):
+                result.status = "SELL_TEMP_BLOCKED"
+                self._mark_sell_temporarily_blocked(symbol, result.message)
             else:
                 _send_discord_alert(
                     f"🚨 **SELL FAILED (exception) — {symbol}**\n"
@@ -1737,7 +1797,7 @@ class KiteOrderManager:
         for sym, pos in list(self._positions.items()):
             if pos.status != "open":
                 continue
-            if str(getattr(pos, "sell_block_reason", "") or "") == "CDSL_AUTH_REQUIRED":
+            if str(getattr(pos, "sell_block_reason", "") or "") in {"CDSL_AUTH_REQUIRED", "TEMPORARY_MARKET_BLOCK"}:
                 continue
 
             tick = ticks.get(sym, {})
@@ -2139,6 +2199,9 @@ class KiteOrderManager:
             block_info = ""
             if str(getattr(p, "sell_block_reason", "") or "") == "CDSL_AUTH_REQUIRED":
                 block_info = " | ⚠️ CDSL auth needed before sell"
+            elif str(getattr(p, "sell_block_reason", "") or "") == "TEMPORARY_MARKET_BLOCK":
+                detail = str(getattr(p, "gtt_last_error", "") or "exchange/circuit blocked")
+                block_info = f" | ⚠️ Sell blocked: {detail[:60]}"
             lines.append(
                 f"{emoji} `{p.symbol}` x{p.qty} | buy ₹{p.buy_price:.0f} → ₹{live:.0f} "
                 f"| P/L ₹{pnl:+,.0f} ({pnl_pct:+.1f}%)"
