@@ -39,6 +39,7 @@ echo "  Early quality mode: Buy Now + Strong Buy Now"
 echo "  Scan interval: 10s"
 echo "  Fast mode: on (lean live monitor, changed symbols cap ${SIGNALMONITOR_MAX_CHANGED_PER_CYCLE})"
 echo "  Mode: alerts only (manual buys in Groww / broker app)"
+echo "  Tick-confirmed alerts: enabled (autopilot in alert-only mode — KITE_AUTO_TRADE not set)"
 echo "  Kite auto-trade: disabled from this launcher"
 echo "  Swing capital: ₹${KITE_SWING_CAPITAL:-0}  per-order max: ₹${KITE_SWING_MAX_ORDER_VALUE:-0}"
 echo ""
@@ -51,4 +52,5 @@ exec "$PYTHON" -m pkscreener.pkscreenercli \
     --assistantinterval 10 \
     --assistantalerts discord \
     --assistantminliquidity 50000000 \
-    --assistantminvolratio 2.0
+    --assistantminvolratio 2.0 \
+    --assistantautopilot
