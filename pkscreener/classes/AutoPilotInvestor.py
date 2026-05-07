@@ -698,7 +698,7 @@ class AutoPilotInvestor:
         self._RESCAN_MIN_DAY_CHANGE = _env_float("ASSISTANT_RESCAN_MIN_DAY_CHANGE", 1.0)
         # must show live momentum now; lowered after honest replay showed the
         # +1% to +4.5% Buy Now lane had better edge than late top-gainer chases.
-        self._RESCAN_MAX_DAY_CHANGE = 7.5       # avoid very late chase entries
+        self._RESCAN_MAX_DAY_CHANGE = 14.0      # allow strong movers up to 14% (tagged SWING ONLY above 8%)
         # ── CONSISTENT DAILY INCOME: 5 trades/day ──
         # 5 × ₹50K = ₹2.5L = full MIS margin. Diversification ensures even if
         # 1 trade loses, the other 4 cover it. Most days: ₹5K-₹20K income.
@@ -730,7 +730,7 @@ class AutoPilotInvestor:
         self._TICK_ORDER_IMBALANCE_RATIO = 2.5  # buy_qty / sell_qty threshold
         self._TICK_VOLUME_BURST_FRACTION = 0.025  # 2.5% of day-vol in 60s
         self._TICK_HIGH_DAILY_CHANGE_PCT = 2.0   # daily change% to auto-flag (catch moves early, at 2% not 3%)
-        self._TICK_ALREADY_MOVED_PCT = 8.0       # above this % skip — too late to enter intraday. Focus on the early 1-5% zone instead.
+        self._TICK_ALREADY_MOVED_PCT = 15.0      # above this % skip — at upper circuit, no sellers. 8-15% runners still tradeable as swing.
         # Hard cutoff: never send BUY alerts after this IST minute-of-day
         self._BUY_ALERT_CUTOFF_MIN = 15 * 60 + 15  # 3:15 PM — last 15 min are exit zone
         # 11:30 AM IST is now the switch to strict late-session MIS mode, not a

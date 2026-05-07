@@ -41,7 +41,7 @@ class SignalMonitorRunner:
     HIGH_DAILY_CHANGE_PCT = 2.0        # Force full OHLCV rescan when live daily change exceeds this
     ORDER_BOOK_IMBALANCE_RATIO = 2.5   # Pre-jump: buyers/sellers ratio threshold
     VOLUME_BURST_FRACTION = 0.025      # Pre-jump: 2.5% of accumulated day vol traded in last 60s
-    MAX_BUY_DAILY_CHANGE_PCT = 5.0    # Skip buy alerts only after the move is meaningfully extended
+    MAX_BUY_DAILY_CHANGE_PCT = 10.0   # Alert up to 10% moves; tag 8%+ as SWING ONLY
     MIN_MOMENTUM_EXTENSION_PCT = 3.0  # Minimum daily gain to qualify as a momentum extension alert (3% → 20% chaser)
     REPEAT_BUY_ALERT_SECONDS = int(os.environ.get("SIGNALMONITOR_REPEAT_BUY_ALERT_SECONDS", "60") or 60)
     FAST_MODE = str(os.environ.get("SIGNALMONITOR_FAST_MODE", "0") or "0").strip().lower() in {"1", "true", "yes", "y", "on"}
