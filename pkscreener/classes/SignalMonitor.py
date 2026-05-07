@@ -1258,6 +1258,11 @@ class SignalMonitorRunner:
                     )
                     continue
 
+            # Suggested quantity from budget — same approach as OHLCV alerts
+            suggested_qty = 0
+            if self.budget_amount and self.budget_amount > 0 and entry > 0:
+                suggested_qty = int(self.budget_amount // float(entry))
+
             alert_rows.append({
                 "When": self.run_at_str,
                 "Symbol": c.symbol,
@@ -1271,7 +1276,7 @@ class SignalMonitorRunner:
                     "SellIfBelow": stop_loss,
                     "TakeProfit1": target1,
                     "TakeProfit2": target2,
-                "SuggestedQty": "",
+                "SuggestedQty": suggested_qty,
                 "SignalStrengthPct": round(c.quality_score, 1),
                 "Checks": " | ".join(checks_parts),
                 "Why": c.narrative,
