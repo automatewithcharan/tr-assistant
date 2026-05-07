@@ -686,6 +686,7 @@ class ActionableReportRunner:
             "VolRegime": vol_regime,
             "GARCHAtrMult": garch_atr_mult,
             "RunAt": run_at_text or PKDateUtilities.currentDateTime().strftime("%Y-%m-%d %H:%M:%S"),
+            "Week52High": round(float(data["high"].tail(252).max()), 2) if "high" in data.columns and len(data) >= 10 else 0.0,
         }
 
     def _score_momentum_setup(
@@ -1186,6 +1187,7 @@ class ActionableReportRunner:
                 "Checks": quality_checks_series,
                 "Why": reason_series,
                 "Checked At": run_at_series,
+                "Week52High": df["Week52High"] if "Week52High" in df.columns else 0.0,
             }
         )
         if self.budget_amount is not None and self.budget_amount > 0:

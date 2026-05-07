@@ -86,6 +86,7 @@ class SignalMonitorRunner:
         "Checks",
         "Why",
         "CheckedAt",
+        "Week52High",
     ]
 
     ALERT_COLUMNS = [
@@ -944,6 +945,11 @@ class SignalMonitorRunner:
                 "Checks": simple_df["Checks"],
                 "Why": simple_df["Why"],
                 "CheckedAt": simple_df["Checked At"],
+                "Week52High": (
+                    simple_df["Week52High"]
+                    if "Week52High" in simple_df.columns
+                    else 0.0
+                ),
             }
         )
         return state_df[self.STATE_COLUMNS].copy()
@@ -1075,6 +1081,19 @@ class SignalMonitorRunner:
                         f"{symbol} (RSI {rsi_val:.0f} — overbought, skip)"
                     )
                     continue
+
+            # Block Buy Now when 52-week high resistance is within 3% above current price
+            # and the stock hasn't broken above it — almost no upside room before annual sellers.
+            if now_action in allowed_buy_actions:
+                week52_high = self._to_float(row.get("Week52High"))
+                price_now = self._to_float(row.get("PriceNow"))
+                if week52_high and week52_high > 0 and price_now and price_now > 0 and price_now < week52_high:
+                    gap_to_52wk = (week52_high - price_now) / price_now * 100.0
+                    if gap_to_52wk < 3.0:
+                        skipped_already_ran.append(
+                            f"{symbol} (52wk-high ₹{week52_high:.2f} only {gap_to_52wk:.1f}% away)"
+                        )
+                        continue
 
             alert_rows.append(
                 {
