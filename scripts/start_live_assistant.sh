@@ -25,12 +25,19 @@ fi
 # Ensure indices exist
 bash "$REPO_ROOT/scripts/ensure_required_indices.sh" || true
 
+# Live-speed tuning: keep the alert path lean during market hours.
+export SIGNALMONITOR_FAST_MODE=1
+export SIGNALMONITOR_MAX_CHANGED_PER_CYCLE="${SIGNALMONITOR_MAX_CHANGED_PER_CYCLE:-40}"
+export SIGNALMONITOR_STREAM_BOOTSTRAP_MAX_SYMBOLS="${SIGNALMONITOR_STREAM_BOOTSTRAP_MAX_SYMBOLS:-40}"
+export SIGNALMONITOR_REPEAT_BUY_ALERT_SECONDS="${SIGNALMONITOR_REPEAT_BUY_ALERT_SECONDS:-60}"
+
 echo "Starting trade assistant..."
 echo "  Universe : all (NSE + BSE combined, ~2990 stocks)"
 echo "  Liquidity filter: min avg daily traded value ₹5 crore"
 echo "  Volume filter: min 2x average volume on signal day"
 echo "  Early quality mode: Buy Now + Strong Buy Now"
 echo "  Scan interval: 10s"
+echo "  Fast mode: on (lean live monitor, changed symbols cap ${SIGNALMONITOR_MAX_CHANGED_PER_CYCLE})"
 echo "  Mode: alerts only (manual buys in Groww / broker app)"
 echo "  Kite auto-trade: disabled from this launcher"
 echo "  Swing capital: ₹${KITE_SWING_CAPITAL:-0}  per-order max: ₹${KITE_SWING_MAX_ORDER_VALUE:-0}"
@@ -40,6 +47,7 @@ exec "$PYTHON" -m pkscreener.pkscreenercli \
     --assistantstart all \
     --assistantforeground \
     --assistantbudget "${KITE_SWING_MAX_ORDER_VALUE:-10000}" \
+    --assistantworkers "${KITE_ASSISTANT_WORKERS:-24}" \
     --assistantinterval 10 \
     --assistantalerts discord \
     --assistantminliquidity 50000000 \

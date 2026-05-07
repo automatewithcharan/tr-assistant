@@ -2,8 +2,9 @@
 Continuous monitor-only signal scanning for local PKScreener usage.
 
 This mode continuously scans a universe, saves plain-English signal outputs,
-tracks the last seen decision per symbol, and sends alerts only when a symbol
-freshly changes into Buy Now or Sell Now.
+tracks the last seen decision per symbol, and sends alerts when a symbol
+freshly changes into Buy Now or Sell Now, with a small cooldown-based re-alert
+for active buy candidates so valid setups do not go silent.
 """
 
 import html
@@ -42,6 +43,8 @@ class SignalMonitorRunner:
     VOLUME_BURST_FRACTION = 0.025      # Pre-jump: 2.5% of accumulated day vol traded in last 60s
     MAX_BUY_DAILY_CHANGE_PCT = 5.0    # Skip buy alerts only after the move is meaningfully extended
     MIN_MOMENTUM_EXTENSION_PCT = 3.0  # Minimum daily gain to qualify as a momentum extension alert (3% → 20% chaser)
+    REPEAT_BUY_ALERT_SECONDS = int(os.environ.get("SIGNALMONITOR_REPEAT_BUY_ALERT_SECONDS", "60") or 60)
+    FAST_MODE = str(os.environ.get("SIGNALMONITOR_FAST_MODE", "0") or "0").strip().lower() in {"1", "true", "yes", "y", "on"}
     MARKET_OPEN_MINUTES_IST = 9 * 60 + 15
     MARKET_CLOSE_MINUTES_IST = 15 * 60 + 30
 
@@ -91,6 +94,9 @@ class SignalMonitorRunner:
         "PreviousAction",
         "NowAction",
         "PriceNow",
+        "ChangePct",
+        "EntryGapPct",
+        "RSI",
         "BuyAbove",
         "SellIfBelow",
         "TakeProfit1",
@@ -145,6 +151,14 @@ class SignalMonitorRunner:
         self._previous_live_ticks_by_symbol: Dict[str, Dict] = {}
         self._cycle_number = 0
         self._preload_done = False
+        self.fast_mode = bool(self.FAST_MODE)
+        self.enable_dashboard = not self.fast_mode and str(os.environ.get("SIGNALMONITOR_ENABLE_DASHBOARD", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
+        self.enable_anomaly_detection = not self.fast_mode and str(os.environ.get("SIGNALMONITOR_ENABLE_ANOMALY", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
+        self.enable_followthrough = not self.fast_mode and str(os.environ.get("SIGNALMONITOR_ENABLE_FOLLOWTHROUGH", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
+        self.enable_missed_opportunity = not self.fast_mode and str(os.environ.get("SIGNALMONITOR_ENABLE_MISSED_OPPORTUNITY", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
+        self.enable_scorecard = not self.fast_mode and str(os.environ.get("SIGNALMONITOR_ENABLE_SCORECARD", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
+        self.enable_paper_tracking = not self.fast_mode and str(os.environ.get("SIGNALMONITOR_ENABLE_PAPER_TRACKING", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
+        self.save_full_outputs = not self.fast_mode and str(os.environ.get("SIGNALMONITOR_SAVE_FULL_OUTPUTS", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
         self.actionable_runner = ActionableReportRunner(
             config_manager=config_manager,
             universe=universe,
@@ -162,7 +176,7 @@ class SignalMonitorRunner:
             config_manager=config_manager,
             universe=universe,
             use_live_kite=use_live_kite,
-        )
+        ) if self.enable_scorecard else None
         self.last_guardrail_status = None
         self._anomaly_detector: Optional[VolumeAnomalyDetector] = None
         self._anomaly_profiles_loaded = False
@@ -179,11 +193,6 @@ class SignalMonitorRunner:
         self.run_at = PKDateUtilities.currentDateTime()
         self.run_at_str = self.run_at.strftime("%Y-%m-%d %H:%M:%S")
         self.timestamp = self.run_at.strftime("%Y%m%d_%H%M%S")
-        self.performance_tracker = SignalPerformanceTracker(
-            config_manager=self.config_manager,
-            universe=self.universe,
-            use_live_kite=self.use_live_kite,
-        )
         symbols = self.actionable_runner.get_universe_symbols()
         if self.limit and self.limit > 0:
             symbols = symbols[: self.limit]
@@ -282,14 +291,16 @@ class SignalMonitorRunner:
         if not anomaly_alerts_df.empty:
             alerts_df = pd.concat([alerts_df, anomaly_alerts_df], ignore_index=True)
         # V2: Follow-through check + exit monitoring
-        followthrough_alerts = self._check_followthrough_and_exits()
+        self._check_followthrough_and_exits()
         # V2: End-of-day missed opportunity analysis
         self._run_missed_opportunity_analysis()
         self._paper_track_alerts(alerts_df)
         self._close_paper_trades_if_eod()
         summary_df = self._build_summary_from_simple(merged_simple_df, total, len(alerts_df))
         summary_df = self._annotate_summary_timing(summary_df, cycle_started, cycle_total)
-        _, scorecard_df = self.performance_tracker.register_and_update(alerts_df)
+        scorecard_df = None
+        if self.performance_tracker is not None:
+            _, scorecard_df = self.performance_tracker.register_and_update(alerts_df)
 
         self._save_outputs(report_df, actionable_df, merged_simple_df, merged_state_df, alerts_df, summary_df)
         self._print_summary(summary_df, merged_simple_df, alerts_df, scorecard_df)
@@ -971,9 +982,14 @@ class SignalMonitorRunner:
             return pd.DataFrame(columns=self.ALERT_COLUMNS)
 
         previous_map = {}
+        previous_checked_at_map = {}
         if previous_state_df is not None and not previous_state_df.empty:
             previous_map = {
                 str(rec["Symbol"]).strip().upper(): str(rec["NowAction"]).strip()
+                for rec in previous_state_df.to_dict(orient="records")
+            }
+            previous_checked_at_map = {
+                str(rec["Symbol"]).strip().upper(): str(rec.get("CheckedAt", "")).strip()
                 for rec in previous_state_df.to_dict(orient="records")
             }
 
@@ -988,7 +1004,15 @@ class SignalMonitorRunner:
 
             previous_action = previous_map.get(symbol, "")
             if previous_action == now_action:
-                continue
+                if now_action not in allowed_buy_actions:
+                    continue
+                previous_checked_at = self._parse_state_timestamp(previous_checked_at_map.get(symbol, ""))
+                current_checked_at = self._parse_state_timestamp(row.get("CheckedAt"))
+                if previous_checked_at is None or current_checked_at is None:
+                    continue
+                elapsed_seconds = (current_checked_at - previous_checked_at).total_seconds()
+                if elapsed_seconds < self.REPEAT_BUY_ALERT_SECONDS:
+                    continue
 
             # Smart "already ran" filter for buy alerts:
             # Suppress regular Buy Now when the stock has moved >= 5% today AND
@@ -1026,6 +1050,9 @@ class SignalMonitorRunner:
                     "PreviousAction": previous_action or "None",
                     "NowAction": now_action,
                     "PriceNow": row["PriceNow"],
+                    "ChangePct": row.get("ChangePct", ""),
+                    "EntryGapPct": row.get("EntryGapPct", ""),
+                    "RSI": row.get("RSI", ""),
                     "BuyAbove": row["BuyAbove"],
                     "SellIfBelow": row["SellIfBelow"],
                     "TakeProfit1": row["TakeProfit1"],
@@ -1054,12 +1081,31 @@ class SignalMonitorRunner:
             )
         return alerts_df[self.ALERT_COLUMNS].copy()
 
+    def _parse_state_timestamp(self, value) -> Optional[datetime]:
+        """Parse saved monitor timestamps safely for cooldown checks."""
+        if value is None:
+            return None
+        text = str(value).strip()
+        if not text or text.lower() == "nan":
+            return None
+        try:
+            parsed = pd.to_datetime(text, errors="coerce")
+        except Exception:
+            return None
+        if pd.isna(parsed):
+            return None
+        if hasattr(parsed, "to_pydatetime"):
+            return parsed.to_pydatetime()
+        return parsed
+
     def _run_anomaly_detection(self) -> pd.DataFrame:
         """Run V2 volume anomaly detection with market context awareness.
 
         Returns an alerts DataFrame matching ALERT_COLUMNS for any detected
         volume anomaly candidates (labelled by confidence tier).
         """
+        if not self.enable_anomaly_detection:
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
         if not self.use_live_kite:
             return pd.DataFrame(columns=self.ALERT_COLUMNS)
 
@@ -1139,12 +1185,15 @@ class SignalMonitorRunner:
                 "When": self.run_at_str,
                 "Symbol": c.symbol,
                 "PreviousAction": "None",
-                "NowAction": action_label,
-                "PriceNow": c.last_price,
-                "BuyAbove": entry,
-                "SellIfBelow": stop_loss,
-                "TakeProfit1": target1,
-                "TakeProfit2": target2,
+                    "NowAction": action_label,
+                    "PriceNow": c.last_price,
+                    "ChangePct": round(c.price_from_open_pct, 2),
+                    "EntryGapPct": 0.0,
+                    "RSI": "",
+                    "BuyAbove": entry,
+                    "SellIfBelow": stop_loss,
+                    "TakeProfit1": target1,
+                    "TakeProfit2": target2,
                 "SuggestedQty": "",
                 "SignalStrengthPct": round(c.quality_score, 1),
                 "Checks": " | ".join(checks_parts),
@@ -1169,6 +1218,8 @@ class SignalMonitorRunner:
 
     def _check_followthrough_and_exits(self) -> None:
         """Check follow-through on recent alerts and exit signals on active positions."""
+        if not self.enable_followthrough:
+            return
         if not self.use_live_kite or self._anomaly_detector is None:
             return
 
@@ -1214,6 +1265,8 @@ class SignalMonitorRunner:
 
     def _run_missed_opportunity_analysis(self) -> None:
         """Run end-of-day missed opportunity analysis. Call after 15:00."""
+        if not self.enable_missed_opportunity:
+            return
         if not self.use_live_kite or self._anomaly_detector is None:
             return
 
@@ -1314,6 +1367,9 @@ class SignalMonitorRunner:
                     "PreviousAction": prev_setup or "None",
                     "NowAction": "Momentum Buy",
                     "PriceNow": rec.get("Price Now", ""),
+                    "ChangePct": change_pct,
+                    "EntryGapPct": rec.get("Entry Gap %", ""),
+                    "RSI": rec.get("RSI", ""),
                     "BuyAbove": rec.get("Buy Above", ""),
                     "SellIfBelow": rec.get("Sell If Below", ""),
                     "TakeProfit1": rec.get("Take Profit 1", ""),
@@ -1389,30 +1445,39 @@ class SignalMonitorRunner:
         actionable_to_save = actionable_df.copy()
         report_to_save.drop(columns=["ActionRank", "NowActionRank"], inplace=True, errors="ignore")
         actionable_to_save.drop(columns=["ActionRank", "NowActionRank"], inplace=True, errors="ignore")
-        momentum_df = self._build_momentum_board(simple_df)
+        momentum_df = (
+            self._build_momentum_board(simple_df)
+            if not self.fast_mode
+            else pd.DataFrame()
+        )
 
         # Always write _latest (overwrite)
-        report_to_save.to_csv(self._latest_path("signals"), index=False)
+        if self.save_full_outputs:
+            report_to_save.to_csv(self._latest_path("signals"), index=False)
         simple_df.to_csv(self._latest_path("signals_simple"), index=False)
         momentum_df.to_csv(self._latest_path("signals_momentum"), index=False)
-        actionable_to_save.to_csv(self._latest_path("actionable"), index=False)
+        if self.save_full_outputs:
+            actionable_to_save.to_csv(self._latest_path("actionable"), index=False)
         summary_df.to_csv(self._latest_path("summary"), index=False)
         state_df.to_csv(self._latest_path("state"), index=False)
         alerts_df.to_csv(self._latest_path("alerts"), index=False)
         dashboard_latest = self._dashboard_latest_path()
-        self._save_dashboard(
-            latest_path=dashboard_latest,
-            dated_path=dashboard_latest,
-            summary_df=summary_df,
-            alerts_df=alerts_df,
-            simple_df=simple_df,
-        )
+        if self.enable_dashboard:
+            self._save_dashboard(
+                latest_path=dashboard_latest,
+                dated_path=dashboard_latest,
+                summary_df=summary_df,
+                alerts_df=alerts_df,
+                simple_df=simple_df,
+            )
 
         OutputControls().printOutput(f"  [+] Saved monitor summary: {self._latest_path('summary')}")
         OutputControls().printOutput(f"  [+] Saved monitor board: {self._latest_path('signals_simple')}")
-        OutputControls().printOutput(f"  [+] Saved momentum board: {self._latest_path('signals_momentum')}")
+        if not self.fast_mode:
+            OutputControls().printOutput(f"  [+] Saved momentum board: {self._latest_path('signals_momentum')}")
         OutputControls().printOutput(f"  [+] Saved monitor alerts: {self._latest_path('alerts')}")
-        OutputControls().printOutput(f"  [+] Saved monitor dashboard: {dashboard_latest}")
+        if self.enable_dashboard:
+            OutputControls().printOutput(f"  [+] Saved monitor dashboard: {dashboard_latest}")
 
         # Write one daily end-of-day snapshot after 3:20 PM IST (once per day)
         self._maybe_write_daily_snapshot(
@@ -1480,7 +1545,8 @@ class SignalMonitorRunner:
 
         report_to_save.to_csv(self._latest_path("signals"), index=False)
         simple_to_save.to_csv(self._latest_path("signals_simple"), index=False)
-        self._build_momentum_board(simple_to_save).to_csv(self._latest_path("signals_momentum"), index=False)
+        momentum_to_save = self._build_momentum_board(simple_to_save) if not self.fast_mode else pd.DataFrame()
+        momentum_to_save.to_csv(self._latest_path("signals_momentum"), index=False)
         actionable_to_save.to_csv(self._latest_path("actionable"), index=False)
         summary_to_save.to_csv(self._latest_path("summary"), index=False)
         state_to_save.to_csv(self._latest_path("state"), index=False)
@@ -1565,6 +1631,8 @@ class SignalMonitorRunner:
 
     def _paper_track_alerts(self, alerts_df: pd.DataFrame) -> None:
         """Paper-track every live buy-style alert so we can prove signal quality safely."""
+        if not self.enable_paper_tracking:
+            return
         if alerts_df is None or alerts_df.empty:
             return
         if not self._is_regular_market_hours():
@@ -1613,6 +1681,8 @@ class SignalMonitorRunner:
 
     def _close_paper_trades_if_eod(self) -> None:
         """Close monitor paper trades near EOD using the latest Kite tick snapshot."""
+        if not self.enable_paper_tracking:
+            return
         try:
             now_ist = PKDateUtilities.currentDateTime()
         except Exception:
@@ -1928,6 +1998,9 @@ class SignalMonitorRunner:
             strength = f"{float(row['SignalStrengthPct']):.1f}%"
             checks = str(row["Checks"]).strip()
             why = str(row["Why"]).strip()
+            change_pct = self._to_float(row.get("ChangePct"))
+            entry_gap_pct = self._to_float(row.get("EntryGapPct"))
+            rsi = self._to_float(row.get("RSI"))
             # Calculate risk:reward for clarity
             try:
                 price_now = float(row["PriceNow"])
@@ -1956,9 +2029,9 @@ class SignalMonitorRunner:
                 action_emoji = "🔴"
             block_lines = [
                 f"{action_emoji} **{action}** `{row['Symbol']}` — Strength `{strength}`",
-                f"Price `{self._fmt_price(row['PriceNow'])}` | Buy Above `{self._fmt_price(row['BuyAbove'])}`",
+                f"Price `{self._fmt_price(row['PriceNow'])}` | Day `{change_pct:+.1f}%` | Buy Above `{self._fmt_price(row['BuyAbove'])}`",
                 f"Stop Loss `{self._fmt_price(row['SellIfBelow'])}` | Target 1 `{self._fmt_price(row['TakeProfit1'])}` | Target 2 `{self._fmt_price(row['TakeProfit2'])}`{rr_text}",
-                f"Qty `{qty}`",
+                f"Qty `{qty}` | Gap to Buy `{entry_gap_pct:+.2f}%`" + (f" | RSI `{rsi:.1f}`" if rsi > 0 else ""),
             ]
             if checks:
                 block_lines.append(f"Quality: `{self._simplify_checks_text(checks)}`")

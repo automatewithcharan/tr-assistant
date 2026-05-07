@@ -620,6 +620,8 @@ class ActionableReportRunner:
             kalman_quality=kalman_quality,
             kalman_trend=kalman_trend,
             vol_regime=vol_regime,
+            change_pct=change_pct,
+            rsi=float(result.indicators.get("RSI", 50)),
         )
         momentum_score, momentum_setup, momentum_reason = self._score_momentum_setup(
             action=action,
@@ -996,6 +998,8 @@ class ActionableReportRunner:
         kalman_quality: float = 50.0,
         kalman_trend: str = "flat",
         vol_regime: str = "normal",
+        change_pct: float = 0.0,
+        rsi: float = 50.0,
     ) -> Tuple[str, str]:
         """Turn a raw signal into a stricter real-time decision label."""
         checks = []
@@ -1041,11 +1045,21 @@ class ActionableReportRunner:
         )
         if bearish_trend:
             checks.append("BEARISH TREND")
+        stretched_chase = (
+            change_pct >= 8.0
+            and rsi >= 88.0
+            and not trigger_ready
+        )
+        if stretched_chase:
+            checks.append("stretched chase")
 
         normalized = str(action).strip().upper()
         if normalized in ["BUY", "WATCH BUY"]:
             # Never promote to Buy Now if stock is in a bearish trend
             if bearish_trend:
+                return "Watch for Buy", ", ".join(checks)
+            # Avoid chasing names that are already very extended intraday.
+            if stretched_chase:
                 return "Watch for Buy", ", ".join(checks)
             # Kalman quality gate: block Buy Now for weak signals
             if kalman_quality < 30 or (kalman_trend == "down" and kalman_quality < 35):
