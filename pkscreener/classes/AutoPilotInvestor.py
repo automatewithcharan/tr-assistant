@@ -2188,107 +2188,29 @@ class AutoPilotInvestor:
             if scope_t2 > 0:
                 _scope_parts.append(f"+{scope_t2:.1f}% to max target")
             _scope_str = f" | **Profit potential: {' | '.join(_scope_parts)}**" if _scope_parts else ""
-            header = "🔍 MISSED EARLIER, NOW STRONG" if is_engine_confirmed_buy else "👀 WATCHLIST IMPROVING"
-            auto_note = (
-                "_Auto-buy status will be shown explicitly below._"
-                if is_engine_confirmed_buy
-                else "_Alert-only for now: engine has not upgraded this to Buy Now yet._"
-            )
-            temp_candidate = self._enrich_candidate_horizon(BlindBuyCandidate(
-                symbol=sym,
-                price=live_price,
-                buy_above=live_price,
-                stop_loss=stop_loss,
-                target1=target1,
-                target2=target2,
-                confidence=confidence,
-                volume_ratio=vol_ratio,
-                change_pct=daily_change,
-                blind_score=blind_score,
-                original_action=current_action,
-                reasons=blind_reasons,
-            )) if is_engine_confirmed_buy else None
+            header_emoji = "🔍" if is_engine_confirmed_buy else "👀"
+            header_label = "BUY (engine confirmed)" if is_engine_confirmed_buy else "WATCH (improving)"
+            temp_candidate = None
             candidate_grade = ""
             candidate_rank = 0.0
-            auto_status_line = ""
             auto_eligible = False
-            if temp_candidate is not None:
-                temp_candidate, candidate_grade, auto_eligible, auto_gate_reason = self._resolve_auto_buy_candidate(temp_candidate)
-                candidate_rank = self._candidate_rank(temp_candidate)
-                auto_status_line = (
-                    f"{'🤖 Auto-buy: yes' if auto_eligible else '🤖 Auto-buy: no'} — {auto_gate_reason}"
-                )
-                suggested_qty, approx_cost = self._cap_suggested_qty_to_broker(
-                    live_price,
-                    suggested_qty,
-                    product_preference=temp_candidate.product_preference,
-                    holding_horizon=temp_candidate.holding_horizon,
-                )
-            entry_timing_line = self._format_entry_timing_line(temp_candidate) if temp_candidate is not None else ""
-            growth_line = (
-                f"📈 **Expected swing upside {_expected_growth:+.1f}% from alert price** | "
-                f"Price now: `₹{live_price:.2f}` (+{daily_change:.1f}% so far){_scope_str}\n"
-                if temp_candidate is not None and temp_candidate.holding_horizon in {"2-day swing", "5-day swing"}
-                else f"📈 **Expected to grow {_expected_growth:+.1f}% today** | "
-                f"Price now: `₹{live_price:.2f}` (+{daily_change:.1f}% so far){_scope_str}\n"
-            )
-            hold_product_line = self._format_hold_product_line(temp_candidate) if temp_candidate is not None else ""
+            swing_tag = f"\n⏰ **SWING ONLY** — already +{daily_change:.1f}% today. Do NOT enter for intraday — swing trade only (hold 2-5 days)." if daily_change >= 8.0 else ""
+            rr_text = ""
+            if stop_loss > 0 and target2 > live_price and live_price > stop_loss:
+                rr2 = round((target2 - live_price) / (live_price - stop_loss), 1)
+                rr_text = f" | R:R `1:{rr2}`"
+            _qty_line = f"\nSuggested: Buy **`{suggested_qty}` shares** (≈ ₹{approx_cost:,.0f})" if suggested_qty > 0 else ""
             msg = (
-                f"\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n"
-                f"**{header} — `{sym}`** — Quality {score_label}\n"
-                f"{growth_line}"
-                f"📊 Volume: `{vol_ratio:.1f}x` above normal | `{confidence:.0f}%` indicators agree\n\n"
-                f"**What to do:**\n"
-                f"Buy **{suggested_qty} shares** (≈ ₹{approx_cost:,.0f})\n"
-                f"🔴 EXIT if price drops to `₹{stop_loss:.2f}` (you lose ₹{_risk_ps:.0f}/share)\n"
-                f"🟢 SELL at `₹{target1:.2f}` (safe profit) or `₹{target2:.2f}` (max profit — ₹{_reward_ps:.0f}/share gain)\n\n"
-                f"**Why:** {self._simplify_blind_reasons(blind_reasons)}\n"
-                f"{auto_note}"
-                f"{f'\\n{entry_timing_line}' if entry_timing_line else ''}"
-                f"{f'\\n{hold_product_line}' if hold_product_line else ''}"
-                f"{f'\\n{auto_status_line}' if auto_status_line else ''}"
+                f"**{header_emoji} {header_label} `{sym}`** — Score {score_label}{swing_tag}\n"
+                f"Price `{live_price:.2f}` (+{daily_change:.1f}%) | Buy Above `{live_price:.2f}`\n"
+                f"Stop Loss `{stop_loss:.2f}` | Target 1 `{target1:.2f}` | Target 2 `{target2:.2f}`{rr_text}\n"
+                f"Volume `{vol_ratio:.1f}x avg` | Confidence `{confidence:.0f}%`\n"
+                f"Why: {self._simplify_blind_reasons(blind_reasons)}"
+                f"{_qty_line}\n"
+                f"_Open Groww → Buy → then use `/buy {sym} QTY PRICE` to record_"
             )
+            self._send_to_channels(msg)
 
-            if temp_candidate is not None:
-                self._record_internal_stage(temp_candidate.alert_stage or "BUY", sym, auto_status_line)
-            # Auto-buy via Kite only for tighter engine-confirmed buys.
-            _auto_result = None
-            if is_engine_confirmed_buy:
-                if auto_eligible:
-                    _auto_result = self._try_auto_buy(
-                        sym, live_price, stop_loss, target1, target2, blind_score, blind_reasons,
-                        product_preference=temp_candidate.product_preference,
-                        holding_horizon=temp_candidate.holding_horizon,
-                        max_hold_days=temp_candidate.max_hold_days,
-                    )
-                else:
-                    _auto_result = self._format_missed_or_late_message(
-                        sym,
-                        reason=f"Buyable setup missed because: {auto_gate_reason}",
-                        candidate=temp_candidate,
-                        live_price=live_price,
-                    )
-                if _auto_result:
-                    self._handle_auto_buy_result(sym, _auto_result)
-                self._log_engine_confirmed_buy_candidate(
-                    symbol=sym,
-                    action=current_action,
-                    live_price=live_price,
-                    stop_loss=stop_loss,
-                    target1=target1,
-                    target2=target2,
-                    blind_score=blind_score,
-                    confidence=confidence,
-                    volume_ratio=vol_ratio,
-                    daily_change=daily_change,
-                    rr2=rr2,
-                    grade=candidate_grade,
-                    rank_score=candidate_rank,
-                    entry_type=temp_candidate.entry_type,
-                    entry_type_reason=temp_candidate.entry_type_reason,
-                    auto_eligible=auto_eligible,
-                    auto_result=_auto_result,
-                )
             self._already_alerted_buys.add(sym)
             self._save_daily_alerted(sym)
             self._rescan_alert_count += 1
@@ -4570,32 +4492,21 @@ class AutoPilotInvestor:
             elif _stage == "AVOID":
                 alert_header = f"**🔴 AVOID — `{sym}`** — risky or overextended"
             elif _is_definitely_buy:
-                alert_header = f"**🔥 STRONG BUY — `{sym}`** — Quality {score_label}\n✅ All checks passed: price ✓ | volume {volume_ratio:.1f}x above normal ✓ | {confidence:.0f}% indicators agree ✓"
+                alert_header = f"**🔥 STRONG BUY `{sym}`** (tick-confirmed in ~2s) — Score {score_label}"
             elif is_early_mover:
-                alert_header = f"**🟢 BUY — `{sym}`** — move just started from fresh accumulation — Quality {score_label}"
+                alert_header = f"**🌱 EARLY MOVER `{sym}`** (accumulation detected, low % — target 5-10%) — Score {score_label}"
             else:
-                alert_header = f"**🟢 BUY — `{sym}`** — Quality {score_label}{swing_tag}"
-            _growth_line = (
-                f"📈 **Expected swing upside {_expected_growth_pct:+.1f}% from alert price** | "
-                f"Price now: `₹{_price_now:.2f}` ({direction}{daily_change:.2f}% so far){_scope_line}\n"
-                if _alert_candidate.holding_horizon in {"2-day swing", "5-day swing"}
-                else f"📈 **Expected to grow {_expected_growth_pct:+.1f}% today** | "
-                f"Price now: `₹{_price_now:.2f}` ({direction}{daily_change:.2f}% so far){_scope_line}\n"
-            )
+                alert_header = f"**🟢 BUY `{sym}`** (tick-confirmed in ~2s) — Score {score_label}{swing_tag}"
+            _qty_display_line = f"\nSuggested: Buy **`{suggested_qty}` shares** (≈ ₹{_invest_amt:,.0f})" if suggested_qty > 0 else ""
             message = (
                 f"{alert_header}\n"
-                f"{_growth_line}"
-                f"📊 Volume: `{volume_ratio:.1f}x` above normal | `{confidence:.0f}%` indicators agree\n"
-                f"ℹ️ Alert only unless a separate `✅ Auto-bought` confirmation follows.\n\n"
-                f"**What to do:**\n"
-                f"Buy {f'**{suggested_qty} shares** (≈ ₹{_invest_amt:,.0f})' if suggested_qty > 0 else 'at market price'}\n"
-                f"🔴 EXIT if price drops to `₹{stop_loss:.2f}` (you lose ₹{_risk_per_share:.0f}/share)\n"
-                f"🟢 SELL at `₹{target1:.2f}` (safe profit) or `₹{target2:.2f}` (max profit — ₹{_reward_per_share:.0f}/share gain){risk_reward}\n\n"
-                f"**Why this stock:**\n{reasons_text}\n"
-                f"{_ohlcv_reasons_text}\n\n"
-                f"{_entry_timing_line}\n"
-                f"{_hold_product_line}\n"
-                f"{_auto_status_line}"
+                f"Price `{_price_now:.2f}` ({direction}{daily_change:.2f}%) | Buy Above `{_buy_above_display:.2f}`\n"
+                f"Stop Loss `{stop_loss:.2f}` | Target 1 `{target1:.2f}` | Target 2 `{target2:.2f}`{risk_reward}\n"
+                f"Volume `{volume_ratio:.1f}x avg` | Confidence `{confidence:.0f}%`\n"
+                f"Tick signals:\n{reasons_text}\n"
+                f"OHLCV confirms: {_ohlcv_reasons_text}"
+                f"{_qty_display_line}\n"
+                f"_Open Groww → Buy → then use `/buy {sym} QTY PRICE` to record_"
             )
             if _stage in {"WATCH EARLY", "MISSED", "AVOID"}:
                 self._record_internal_stage(_stage, sym, _alert_candidate.alert_stage_reason)

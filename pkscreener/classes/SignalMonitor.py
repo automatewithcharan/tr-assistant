@@ -153,7 +153,7 @@ class SignalMonitorRunner:
         self._preload_done = False
         self.fast_mode = bool(self.FAST_MODE)
         self.enable_dashboard = not self.fast_mode and str(os.environ.get("SIGNALMONITOR_ENABLE_DASHBOARD", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
-        self.enable_anomaly_detection = not self.fast_mode and str(os.environ.get("SIGNALMONITOR_ENABLE_ANOMALY", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
+        self.enable_anomaly_detection = str(os.environ.get("SIGNALMONITOR_ENABLE_ANOMALY", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
         self.enable_followthrough = not self.fast_mode and str(os.environ.get("SIGNALMONITOR_ENABLE_FOLLOWTHROUGH", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
         self.enable_missed_opportunity = not self.fast_mode and str(os.environ.get("SIGNALMONITOR_ENABLE_MISSED_OPPORTUNITY", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
         self.enable_scorecard = not self.fast_mode and str(os.environ.get("SIGNALMONITOR_ENABLE_SCORECARD", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
@@ -2029,9 +2029,9 @@ class SignalMonitorRunner:
                 action_emoji = "🔴"
             block_lines = [
                 f"{action_emoji} **{action}** `{row['Symbol']}` — Strength `{strength}`",
-                f"Price `{self._fmt_price(row['PriceNow'])}` | Day `{change_pct:+.1f}%` | Buy Above `{self._fmt_price(row['BuyAbove'])}`",
+                f"Price `{self._fmt_price(row['PriceNow'])}` | Buy Above `{self._fmt_price(row['BuyAbove'])}`",
                 f"Stop Loss `{self._fmt_price(row['SellIfBelow'])}` | Target 1 `{self._fmt_price(row['TakeProfit1'])}` | Target 2 `{self._fmt_price(row['TakeProfit2'])}`{rr_text}",
-                f"Qty `{qty}` | Gap to Buy `{entry_gap_pct:+.2f}%`" + (f" | RSI `{rsi:.1f}`" if rsi > 0 else ""),
+                f"Qty `{qty}`",
             ]
             if checks:
                 block_lines.append(f"Quality: `{self._simplify_checks_text(checks)}`")
