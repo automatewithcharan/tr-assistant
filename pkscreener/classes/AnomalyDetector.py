@@ -362,8 +362,15 @@ class VolumeAnomalyDetector:
 
         candidates = []
 
+        # ETF/index suffixes that should never trigger buy alerts
+        _ETF_SUFFIXES = ("BEES", "ETF", "LIQUID", "NIFTY", "SENSEX", "GOLDBEES",
+                         "BANKBEES", "JUNIORBEES", "MON100", "LIQUID1")
+
         for symbol, tick in ticks.items():
             sym = str(symbol).strip().upper()
+            # Skip ETFs and index funds — no point alerting on them
+            if any(sym == etf or sym.endswith(etf) for etf in _ETF_SUFFIXES):
+                continue
             profile = self._profiles.get(sym)
             if not profile or not profile.loaded:
                 continue
