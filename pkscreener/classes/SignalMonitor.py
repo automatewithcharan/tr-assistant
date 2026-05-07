@@ -286,7 +286,13 @@ class SignalMonitorRunner:
         alerts_df = self._build_alerts(previous_state_df, merged_state_df)
         momentum_alerts_df = self._build_momentum_alerts(previous_simple_df, merged_simple_df)
         if not momentum_alerts_df.empty:
-            alerts_df = pd.concat([alerts_df, momentum_alerts_df], ignore_index=True)
+            # Drop Momentum Buy rows for symbols already emitted as Buy Now this cycle
+            already_alerted = set(alerts_df["Symbol"].str.upper()) if not alerts_df.empty else set()
+            momentum_alerts_df = momentum_alerts_df[
+                ~momentum_alerts_df["Symbol"].str.upper().isin(already_alerted)
+            ]
+            if not momentum_alerts_df.empty:
+                alerts_df = pd.concat([alerts_df, momentum_alerts_df], ignore_index=True)
         anomaly_alerts_df = self._run_anomaly_detection()
         if not anomaly_alerts_df.empty:
             alerts_df = pd.concat([alerts_df, anomaly_alerts_df], ignore_index=True)
@@ -1003,15 +1009,32 @@ class SignalMonitorRunner:
                 continue
 
             previous_action = previous_map.get(symbol, "")
-            if previous_action == now_action:
+            is_repeat_buy = previous_action == now_action
+            if is_repeat_buy:
                 if now_action not in allowed_buy_actions:
                     continue
                 previous_checked_at = self._parse_state_timestamp(previous_checked_at_map.get(symbol, ""))
                 current_checked_at = self._parse_state_timestamp(row.get("CheckedAt"))
-                if previous_checked_at is None or current_checked_at is None:
+                if previous_checked_at is not None and current_checked_at is not None:
+                    elapsed_seconds = (current_checked_at - previous_checked_at).total_seconds()
+                    if elapsed_seconds < self.REPEAT_BUY_ALERT_SECONDS:
+                        continue
+                # else: timestamps missing → treat cooldown as expired, send the alert
+                # For repeat Buy Now alerts, use a tighter day-gain cap (5%) — the stock
+                # was already in Buy Now last cycle, so anything above 5% means the entry
+                # window closed and the stock has already made its intraday move.
+                repeat_change_pct = self._to_float(row.get("ChangePct"))
+                if repeat_change_pct >= 5.0:
+                    skipped_already_ran.append(
+                        f"{symbol} ({repeat_change_pct:+.1f}% repeat)"
+                    )
                     continue
-                elapsed_seconds = (current_checked_at - previous_checked_at).total_seconds()
-                if elapsed_seconds < self.REPEAT_BUY_ALERT_SECONDS:
+                # RSI > 80 on a repeat alert = overbought, likely to pull back, skip
+                repeat_rsi = self._to_float(row.get("RSI"))
+                if repeat_rsi is not None and repeat_rsi > 80:
+                    skipped_already_ran.append(
+                        f"{symbol} (RSI {repeat_rsi:.0f} overbought repeat)"
+                    )
                     continue
 
             # Smart "already ran" filter for buy alerts:
@@ -1042,6 +1065,16 @@ class SignalMonitorRunner:
                             f"{symbol} ({change_pct:+.1f}% day, {pct_past:.1f}% past entry)"
                         )
                         continue
+
+            # Block any Buy Now alert (fresh or repeat) when RSI is severely overbought —
+            # RSI > 85 means the stock has already run hard and "may pull back" is real.
+            if now_action in allowed_buy_actions:
+                rsi_val = self._to_float(row.get("RSI"))
+                if rsi_val is not None and rsi_val > 85:
+                    skipped_already_ran.append(
+                        f"{symbol} (RSI {rsi_val:.0f} — overbought, skip)"
+                    )
+                    continue
 
             alert_rows.append(
                 {
