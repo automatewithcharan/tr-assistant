@@ -2361,6 +2361,10 @@ class KiteOrderManager:
 
         return report
 
+    def get_broker_exposure(self) -> Dict[str, Dict[str, Any]]:
+        """Return the current broker-side live exposure across holdings and positions."""
+        return self._get_broker_exposure()
+
     def _get_broker_exposure(self) -> Dict[str, Dict[str, Any]]:
         """Return broker-side live exposure across holdings and open positions."""
         client = self._get_client()

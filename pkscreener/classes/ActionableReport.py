@@ -90,14 +90,14 @@ class ActionableReportRunner:
         self.max_workers = max(1, int(max_workers or 0)) if max_workers else auto_workers
         self.use_live_kite = bool(use_live_kite)
         self.strong_buy_only = bool(strong_buy_only)
-        self.buy_ready_max_gap_pct = 0.50
-        self.strong_buy_max_gap_pct = 0.25
-        self.momentum_buy_min_score = 80.0
-        self.momentum_watch_min_score = 65.0
+        self.buy_ready_max_gap_pct = 0.60
+        self.strong_buy_max_gap_pct = 0.35
+        self.momentum_buy_min_score = 75.0
+        self.momentum_watch_min_score = 60.0
         self.buy_now_min_volume_ratio = 1.3
-        self.strong_buy_min_confidence = max(float(self.min_confidence) + 10.0, 25.0)
-        self.strong_buy_min_volume_ratio = max(float(self.min_volume_ratio) + 0.5, 1.5)
-        self.strong_buy_min_trade_value = max(float(self.min_trade_value) * 2.0, 20000000.0)
+        self.strong_buy_min_confidence = max(float(self.min_confidence) + 7.5, 22.5)
+        self.strong_buy_min_volume_ratio = max(float(self.min_volume_ratio) + 0.35, 1.35)
+        self.strong_buy_min_trade_value = max(float(self.min_trade_value) * 1.5, 15000000.0)
         self.fetcher = screenerStockDataFetcher(config_manager)
         self.signals = TradingSignals(config_manager)
         self._thread_local = threading.local()
@@ -582,11 +582,12 @@ class ActionableReportRunner:
         returns_arr = data["close"].pct_change().dropna().values
         garch_atr_mult = self._garch.adaptive_atr_multiplier(returns_arr, base_multiplier=2.0)
 
-        # Downgrade action for noisy/downtrend signals
+        # Keep the anti-junk protections, but don't demote strong live movers as
+        # aggressively as the late-April tuning did.
         if action in ["BUY", "WATCH BUY"]:
-            if kalman_trend == "down" and kalman_quality < 40:
+            if kalman_trend == "down" and kalman_quality < 30:
                 action = "HOLD"  # Kalman says downtrend despite noisy price spike
-            elif sq.get("noise_spike", False) and kalman_quality < 45:
+            elif sq.get("noise_spike", False) and kalman_quality < 40:
                 action = "WATCH BUY"  # noise spike, demote from BUY
 
         entry, stop_loss, target_1, target_2, risk_pct = self._build_trade_plan(
@@ -1047,7 +1048,7 @@ class ActionableReportRunner:
             if bearish_trend:
                 return "Watch for Buy", ", ".join(checks)
             # Kalman quality gate: block Buy Now for weak signals
-            if kalman_quality < 35 or kalman_trend == "down":
+            if kalman_quality < 30 or (kalman_trend == "down" and kalman_quality < 35):
                 return "Watch for Buy", ", ".join(checks)
             # Vol regime gate: block in extreme volatility
             if vol_regime == "extreme":
@@ -1058,7 +1059,7 @@ class ActionableReportRunner:
                 and strong_trigger
                 and strong_liquidity_ok
                 and strong_volume_ok
-                and kalman_quality >= 55
+                and kalman_quality >= 50
             ):
                 return "Strong Buy Now", ", ".join(checks)
             if (
@@ -1067,7 +1068,7 @@ class ActionableReportRunner:
                 and near_trigger
                 and liquidity_ok
                 and volume_ok
-                and kalman_quality >= 40
+                and kalman_quality >= 35
             ):
                 return "Buy Now", ", ".join(checks)
             return "Watch for Buy", ", ".join(checks)

@@ -40,7 +40,7 @@ class SignalMonitorRunner:
     HIGH_DAILY_CHANGE_PCT = 2.0        # Force full OHLCV rescan when live daily change exceeds this
     ORDER_BOOK_IMBALANCE_RATIO = 2.5   # Pre-jump: buyers/sellers ratio threshold
     VOLUME_BURST_FRACTION = 0.025      # Pre-jump: 2.5% of accumulated day vol traded in last 60s
-    MAX_BUY_DAILY_CHANGE_PCT = 3.0    # Skip buy alerts if stock already moved this much % today (already-ran filter)
+    MAX_BUY_DAILY_CHANGE_PCT = 5.0    # Skip buy alerts only after the move is meaningfully extended
     MIN_MOMENTUM_EXTENSION_PCT = 3.0  # Minimum daily gain to qualify as a momentum extension alert (3% → 20% chaser)
     MARKET_OPEN_MINUTES_IST = 9 * 60 + 15
     MARKET_CLOSE_MINUTES_IST = 15 * 60 + 30
@@ -991,13 +991,13 @@ class SignalMonitorRunner:
                 continue
 
             # Smart "already ran" filter for buy alerts:
-            # Suppress regular Buy Now when the stock has moved >= 3% today AND
+            # Suppress regular Buy Now when the stock has moved >= 5% today AND
             # is already AT or PAST its entry trigger (the breakout window has closed).
             # KEEP the alert when the stock is still approaching its trigger even if
-            # it is up 3%+ today — e.g. TITAN +4.45% but still 0.29% BELOW BuyAbove
+            # it is up 5%+ today — e.g. TITAN +4.45% but still 0.29% BELOW BuyAbove
             # is a valid first-time approach alert.
             #
-            # Stocks at/past trigger + 3%+ daily gain will instead be caught by the
+            # Stocks at/past trigger + 5%+ daily gain will instead be caught by the
             # dedicated _build_momentum_alerts() path (requires vol >= 1.3x + score >= 75).
             if now_action in allowed_buy_actions:
                 change_pct = self._to_float(row.get("ChangePct"))
