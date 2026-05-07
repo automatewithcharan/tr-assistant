@@ -181,6 +181,7 @@ class SignalMonitorRunner:
         self.last_guardrail_status = None
         self._anomaly_detector: Optional[VolumeAnomalyDetector] = None
         self._anomaly_profiles_loaded = False
+        self._week52_high_map: dict = {}
         self._market_context = None  # Lazy-init MarketContextEngine
         self._last_partial_save_ts = 0.0
         self._paper_tracker = PaperTradeTracker()
@@ -952,7 +953,13 @@ class SignalMonitorRunner:
                 ),
             }
         )
-        return state_df[self.STATE_COLUMNS].copy()
+        result = state_df[self.STATE_COLUMNS].copy()
+        # Build a symbol→52wk-high lookup so anomaly detection can filter too
+        if "Week52High" in result.columns:
+            self._week52_high_map = dict(
+                zip(result["Symbol"].str.upper(), result["Week52High"].astype(float))
+            )
+        return result
 
     def _load_previous_state(self) -> pd.DataFrame:
         """Load the last saved state so we only alert on fresh changes."""
@@ -1232,6 +1239,16 @@ class SignalMonitorRunner:
                 checks_parts.append("Compressed📐")
             if not c.market_safe:
                 checks_parts.append("⚠️CRASH")
+
+            # Skip if 52-week high resistance is within 3% — very little upside room
+            week52 = self._week52_high_map.get(str(c.symbol).strip().upper(), 0.0)
+            if week52 > 0 and entry > 0 and entry < week52:
+                gap = (week52 - entry) / entry * 100.0
+                if gap < 3.0:
+                    OutputControls().printOutput(
+                        f"  [!] Anomaly {c.symbol} skipped — 52wk-high ₹{week52:.2f} only {gap:.1f}% away"
+                    )
+                    continue
 
             alert_rows.append({
                 "When": self.run_at_str,
