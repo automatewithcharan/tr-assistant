@@ -470,10 +470,40 @@ class AssistantLiveSupervisor:
                 f"Fix this first: {report.get('error')}"
             )
         self._launch_process("ticker", self._ticker_command())
+        self._wait_for_initial_tick_snapshot()
         self._launch_process("monitor", self._monitor_command())
         self._launch_process("discord", self._discord_command())
         if self.settings.autopilot_enabled:
             self._launch_process("autopilot", self._autopilot_command())
+
+    def _wait_for_initial_tick_snapshot(self, timeout_seconds: int = 20) -> None:
+        """Give the ticker a brief head start so the monitor can start from live ticks."""
+        universe = str(self.settings.universe or "all").strip().lower()
+        candidate_paths = [
+            self.store.output_dir / f"kiteticker_{universe}_ticks_latest.json",
+            self.store.output_dir / f"kiteticker_{universe}_ticks_latest.csv",
+        ]
+        deadline = time.time() + max(1, int(timeout_seconds or 1))
+        while time.time() < deadline and not self.stop_requested:
+            for path in candidate_paths:
+                try:
+                    if path.exists() and path.stat().st_size > 0:
+                        self.store.add_event(
+                            self.session_id,
+                            "info",
+                            "ticker",
+                            f"Initial tick snapshot ready: {path.name}",
+                        )
+                        return
+                except Exception:
+                    continue
+            time.sleep(1)
+        self.store.add_event(
+            self.session_id,
+            "warn",
+            "ticker",
+            "Timed out waiting for initial tick snapshot; starting monitor anyway.",
+        )
 
     def _ticker_command(self) -> List[str]:
         command = [
