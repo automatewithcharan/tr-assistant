@@ -1231,8 +1231,9 @@ class SignalMonitorRunner:
             )
             return pd.DataFrame(columns=self.ALERT_COLUMNS)
         for c in candidates:
-            # Skip Grade-C "Pre-Move Watch" — too low quality, mostly noise
-            if c.confidence_tier == "C":
+            # Only Grade-A "Runner" alerts pass — Grade-B and Grade-C generate
+            # too much volume-spike noise without strong setup confirmation.
+            if c.confidence_tier != "A":
                 continue
             # Skip when sell pressure dominates — more sellers than buyers
             # means the institutional volume is being absorbed, not driving the price up
