@@ -1061,10 +1061,17 @@ class SignalMonitorRunner:
             # dedicated _build_momentum_alerts() path (requires vol >= 1.3x + score >= 75).
             if now_action in allowed_buy_actions:
                 change_pct = self._to_float(row.get("ChangePct"))
+                # Hard cap: if stock is up 10%+ today, suppress regardless of trigger
+                # position. SCILAL +14% with BuyAbove ₹0.4 above current price was being
+                # allowed via the "still approaching" exception — too late to enter.
                 if change_pct >= self.MAX_BUY_DAILY_CHANGE_PCT:
+                    skipped_already_ran.append(
+                        f"{symbol} ({change_pct:+.1f}% day gain over cap)"
+                    )
+                    continue
+                # (Previous "already at/past trigger" check kept for stocks 5-10% up)
+                if change_pct >= 5.0:
                     entry_gap_pct = self._to_float(row.get("EntryGapPct"))
-                    # entry_gap_pct > 0  → price is BELOW BuyAbove → still approaching → ALLOW
-                    # entry_gap_pct <= 0 → price is AT or PAST BuyAbove → window closed → SUPPRESS
                     already_at_or_past_trigger = entry_gap_pct <= 0.0
                     if already_at_or_past_trigger:
                         buy_above = self._to_float(row.get("BuyAbove"))
@@ -2122,11 +2129,22 @@ class SignalMonitorRunner:
                 action_emoji = "🚀"
             elif action == "Volume Anomaly":
                 action_emoji = "🔥"
+            elif action.startswith("🔥") or action.startswith("⚡") or action.startswith("👀"):
+                # Anomaly buy candidates — green dot for "go/buy"
+                action_emoji = "🟢"
+            elif action == "Sell / Exit":
+                action_emoji = "🔴"
             else:
                 action_emoji = "🔴"
+            # Show day % change so user immediately sees how much it has already moved
+            try:
+                day_pct = float(row.get("ChangePct", 0) or 0)
+                day_pct_text = f" (Day {day_pct:+.1f}%)" if day_pct else ""
+            except (TypeError, ValueError):
+                day_pct_text = ""
             block_lines = [
                 f"{action_emoji} **{action}** `{row['Symbol']}` — Strength `{strength}`",
-                f"Price `{self._fmt_price(row['PriceNow'])}` | Buy Above `{self._fmt_price(row['BuyAbove'])}`",
+                f"Price `{self._fmt_price(row['PriceNow'])}`{day_pct_text} | Buy Above `{self._fmt_price(row['BuyAbove'])}`",
                 f"Stop Loss `{self._fmt_price(row['SellIfBelow'])}` | Target 1 `{self._fmt_price(row['TakeProfit1'])}` | Target 2 `{self._fmt_price(row['TakeProfit2'])}`{rr_text}",
                 f"Qty `{qty}`",
             ]
