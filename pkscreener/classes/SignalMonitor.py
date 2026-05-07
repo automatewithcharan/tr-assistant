@@ -1216,6 +1216,20 @@ class SignalMonitorRunner:
 
         # Convert V2 candidates to alert rows
         alert_rows = []
+        # Late-day cutoff: don't fire intraday-style anomaly alerts in the last
+        # 45 minutes. Liquidity dries up, prices jump erratically, and the user
+        # has no time to act before close.
+        try:
+            _now_ist = PKDateUtilities.currentDateTime()
+        except Exception:
+            _now_ist = datetime.now()
+        _ist_minute = int(_now_ist.hour) * 60 + int(_now_ist.minute)
+        _late_day_cutoff_min = 14 * 60 + 45  # 14:45 IST
+        if _ist_minute > _late_day_cutoff_min:
+            OutputControls().printOutput(
+                f"  [!] Anomaly batch skipped — too late ({_now_ist.strftime('%H:%M')} IST > 14:45)"
+            )
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
         for c in candidates:
             # Skip Grade-C "Pre-Move Watch" — too low quality, mostly noise
             if c.confidence_tier == "C":
@@ -1223,6 +1237,20 @@ class SignalMonitorRunner:
             # Skip when sell pressure dominates — more sellers than buyers
             # means the institutional volume is being absorbed, not driving the price up
             if c.buy_sell_ratio < 1.0:
+                continue
+            # Day gain cap: stock has already moved too far from open — chasing
+            # at +10%+ usually means buying the top of the move
+            if c.price_from_open_pct > 10.0:
+                OutputControls().printOutput(
+                    f"  [!] Anomaly {c.symbol} skipped — already +{c.price_from_open_pct:.1f}% from open (cap 10%)"
+                )
+                continue
+            # Min price filter: penny stocks (< ₹50) are easily manipulated and
+            # have wide bid-ask spreads. Skip them even on volume anomalies.
+            if c.last_price < 50.0:
+                OutputControls().printOutput(
+                    f"  [!] Anomaly {c.symbol} skipped — price ₹{c.last_price:.2f} below ₹50 floor"
+                )
                 continue
 
             entry = c.last_price

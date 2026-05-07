@@ -1348,11 +1348,17 @@ class AutoPilotInvestor:
             if action.get("action") == "recreated" and action.get("ok"):
                 self._log(f"GTT restored for {action['symbol']}: {action['message']}")
             elif action.get("action") == "repair_failed":
+                sym = str(action["symbol"])
+                # Dedupe: each symbol's protection failure alerts only once per
+                # day. Audit runs every cycle so the same failure repeats —
+                # firing once per minute spams Discord.
+                if sym in self._daily_protection_failed:
+                    continue
                 failure_message = (
-                    f"⚠️ **PROTECTION FAILED — `{action['symbol']}`**\n"
+                    f"⚠️ **PROTECTION FAILED — `{sym}`**\n"
                     f"{action['message']}"
                 )
-                self._daily_protection_failed.append(str(action["symbol"]))
+                self._daily_protection_failed.append(sym)
                 self._send_to_channels(failure_message)
         results = self._order_manager.execute_sell_signals()
         for r in results:
