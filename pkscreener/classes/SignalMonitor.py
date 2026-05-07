@@ -1210,6 +1210,14 @@ class SignalMonitorRunner:
         # Convert V2 candidates to alert rows
         alert_rows = []
         for c in candidates:
+            # Skip Grade-C "Pre-Move Watch" — too low quality, mostly noise
+            if c.confidence_tier == "C":
+                continue
+            # Skip when sell pressure dominates — more sellers than buyers
+            # means the institutional volume is being absorbed, not driving the price up
+            if c.buy_sell_ratio < 1.0:
+                continue
+
             entry = c.last_price
             # V2: Tighter SL for high-quality, wider for lower
             sl_pct = 0.03 if c.confidence_tier == "A" else 0.05
@@ -1428,6 +1436,21 @@ class SignalMonitorRunner:
             change_pct = self._to_float(rec.get("Change %"))
             if change_pct < self.MIN_MOMENTUM_EXTENSION_PCT:
                 continue
+
+            # Apply same quality filters as Buy Now alerts
+            # Cap: day gain too high — already ran past viable entry
+            if change_pct >= 8.0:
+                continue
+            # RSI severely overbought — scanner says "may pull back"
+            rsi_val = self._to_float(rec.get("RSI"))
+            if rsi_val is not None and rsi_val > 80:
+                continue
+            # 52-week high resistance within 3% — limited upside before annual sellers
+            week52 = self._to_float(rec.get("Week52High"))
+            price_now = self._to_float(rec.get("Price Now"))
+            if week52 and week52 > 0 and price_now and price_now > 0 and price_now < week52:
+                if (week52 - price_now) / price_now * 100.0 < 3.0:
+                    continue
 
             alert_rows.append(
                 {
