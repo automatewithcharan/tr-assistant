@@ -2170,9 +2170,24 @@ class SignalMonitorRunner:
                 day_pct_text = f" (Day {day_pct:+.1f}%)" if day_pct else ""
             except (TypeError, ValueError):
                 day_pct_text = ""
+            # Buy zone: trigger to trigger × 1.015 (1.5% chase tolerance).
+            # Above this ceiling the move has run too far to enter safely.
+            try:
+                _buy_above_val = float(row.get("BuyAbove", 0) or 0)
+            except (TypeError, ValueError):
+                _buy_above_val = 0.0
+            _buy_ceiling_val = _buy_above_val * 1.015 if _buy_above_val > 0 else 0.0
+            if _buy_above_val > 0:
+                buy_zone_line = (
+                    f"🎯 **BUY ZONE**: ₹{self._fmt_price(_buy_above_val)} – ₹{self._fmt_price(_buy_ceiling_val)}  "
+                    f"(skip if price > ₹{self._fmt_price(_buy_ceiling_val)})"
+                )
+            else:
+                buy_zone_line = f"🎯 **BUY ZONE**: ₹{self._fmt_price(row['BuyAbove'])}"
             block_lines = [
                 f"{action_emoji} **{action}** `{row['Symbol']}` — Strength `{strength}`",
-                f"Price `{self._fmt_price(row['PriceNow'])}`{day_pct_text} | Buy Above `{self._fmt_price(row['BuyAbove'])}`",
+                buy_zone_line,
+                f"At alert: ₹{self._fmt_price(row['PriceNow'])}{day_pct_text}",
                 f"Stop Loss `{self._fmt_price(row['SellIfBelow'])}` | Target 1 `{self._fmt_price(row['TakeProfit1'])}` | Target 2 `{self._fmt_price(row['TakeProfit2'])}`{rr_text}",
                 f"Qty `{qty}`",
             ]
