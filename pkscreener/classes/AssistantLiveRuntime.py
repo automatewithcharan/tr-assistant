@@ -797,14 +797,23 @@ class AssistantLiveLauncher:
         if active:
             active_pid = _safe_int(active.get("supervisor_pid"))
             if self._is_pid_running(active_pid):
-                raise RuntimeError(
-                    f"A live session is already running for {active.get('universe')} (session {active.get('id')}, pid {active_pid}). "
-                    "Stop it first with --assistantstop."
+                # Allow self-restart: os.execv replaces the process in-place so the
+                # new process has the same PID as the registered supervisor. This is
+                # a legitimate code-update restart, not a conflicting second instance.
+                if active_pid == os.getpid():
+                    self.store.mark_session_stopped(
+                        int(active["id"]), "Self-restart via code update (execv)."
+                    )
+                else:
+                    raise RuntimeError(
+                        f"A live session is already running for {active.get('universe')} (session {active.get('id')}, pid {active_pid}). "
+                        "Stop it first with --assistantstop."
+                    )
+            else:
+                self.store.mark_session_failed(
+                    int(active["id"]),
+                    "Marked as failed because the supervisor process was no longer running.",
                 )
-            self.store.mark_session_failed(
-                int(active["id"]),
-                "Marked as failed because the supervisor process was no longer running.",
-            )
         return self.store.create_session(settings)
 
     def start(self, settings: AssistantLiveSettings) -> int:
