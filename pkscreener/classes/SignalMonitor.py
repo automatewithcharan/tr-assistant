@@ -1294,22 +1294,43 @@ class SignalMonitorRunner:
                 f"  [!] Anomaly batch skipped — too late ({_now_ist.strftime('%H:%M')} IST > 14:45)"
             )
             return pd.DataFrame(columns=self.ALERT_COLUMNS)
-        # Look up live ticks once for the "already played out" pullback check.
+        # Look up live ticks once for day-high comparisons.
         _live_ticks_for_anomaly = self.actionable_runner.live_ticks or {}
         for c in candidates:
+            # Compute day-high pullback up front — used for both lane logic and
+            # the "already played out" skip below.
+            _tick = _live_ticks_for_anomaly.get(str(c.symbol).strip().upper(), {})
+            _day_high = float(_tick.get("high", 0) or 0)
+            _pullback_pct = (
+                (_day_high - c.last_price) / c.last_price * 100.0
+                if _day_high > 0 and c.last_price > 0
+                else 0.0
+            )
+            _near_new_high = _day_high > 0 and _pullback_pct < 0.5
+
             # Grade-A: sector-confirmed runners — always pass quality bar.
-            # Grade-B: two acceptance lanes (whichever passes first wins):
+            # Grade-B: three acceptance lanes (whichever passes first wins):
             #   (a) Strong directional: B/S >= 2.0  — confirmed buying overpowering selling.
             #   (b) Early-breakout: B/S >= 1.5 AND day gain <= 3%  — volume building
-            #       BEFORE the price has run, the highest-edge anomaly window. This is
-            #       the DIACABS pattern: 70x volume, 10x B/S, only +0.9% from open.
+            #       BEFORE the price has run, the highest-edge anomaly window.
+            #       Pattern: DIACABS at 70x volume, 10x B/S, only +0.9% from open.
+            #   (c) Continuation breakout: at/near new day high (within 0.5%) with
+            #       strong volume (>=5x) and 2-7% from open and basic buy pressure.
+            #       Pattern: SURYODAY at 10:30 — making new day high, +3.4% from open,
+            #       moderate B/S ~1.2x — too tame for (a) or (b) but a real breakout.
             # Grade-C: skip — too noisy.
             if c.confidence_tier == "C":
                 continue
             if c.confidence_tier == "B":
                 _strong_directional = c.buy_sell_ratio >= 2.0
                 _early_breakout = c.buy_sell_ratio >= 1.5 and c.price_from_open_pct <= 3.0
-                if not (_strong_directional or _early_breakout):
+                _continuation = (
+                    _near_new_high
+                    and c.volume_ratio_time_adj >= 5.0
+                    and 2.0 <= c.price_from_open_pct <= 7.0
+                    and c.buy_sell_ratio >= 1.0
+                )
+                if not (_strong_directional or _early_breakout or _continuation):
                     continue
             # Skip when sell pressure dominates overall
             if c.buy_sell_ratio < 1.0:
@@ -1318,16 +1339,12 @@ class SignalMonitorRunner:
             # current price, the breakout already happened and reversed. The volume
             # spike is historical, not actionable. (e.g. THYROCARE: high ₹526 at
             # 09:45, alerting at ₹494 at 11:02 = 6% off the peak — not "early".)
-            _tick = _live_ticks_for_anomaly.get(str(c.symbol).strip().upper(), {})
-            _day_high = float(_tick.get("high", 0) or 0)
-            if _day_high > 0 and c.last_price > 0:
-                _pullback_pct = (_day_high - c.last_price) / c.last_price * 100.0
-                if _pullback_pct > 2.0:
-                    OutputControls().printOutput(
-                        f"  [!] Anomaly {c.symbol} skipped — already pulled back "
-                        f"{_pullback_pct:.1f}% from day high ₹{_day_high:.2f} (move played out)"
-                    )
-                    continue
+            if _pullback_pct > 2.0:
+                OutputControls().printOutput(
+                    f"  [!] Anomaly {c.symbol} skipped — already pulled back "
+                    f"{_pullback_pct:.1f}% from day high ₹{_day_high:.2f} (move played out)"
+                )
+                continue
             # Day gain cap: stock has already moved too far from open — chasing
             # at +10%+ usually means buying the top of the move
             if c.price_from_open_pct > 10.0:
