@@ -1169,6 +1169,24 @@ class SignalMonitorRunner:
                     )
                     continue
 
+            # "Already played out" check: if today's high (from live tick) is more
+            # than 2% above the current price, the breakout already played out and
+            # reversed. Don't fire — bought into the fade. (Same logic as anomaly
+            # path; e.g. MIRCELECTR peaked at 09:28 ₹44.75, fired at 11:29 ₹42.30
+            # = 5.8% below peak, sell pressure 2.5x buy pressure.)
+            if now_action in allowed_buy_actions:
+                _live_ticks_bn = self.actionable_runner.live_ticks or {}
+                _bn_tick = _live_ticks_bn.get(symbol, {})
+                _bn_day_high = self._to_float(_bn_tick.get("high", 0))
+                _bn_price = self._to_float(row.get("PriceNow"))
+                if _bn_day_high > 0 and _bn_price > 0:
+                    _bn_pullback = (_bn_day_high - _bn_price) / _bn_price * 100.0
+                    if _bn_pullback > 2.0:
+                        skipped_already_ran.append(
+                            f"{symbol} (pulled back {_bn_pullback:.1f}% from day high ₹{_bn_day_high:.2f})"
+                        )
+                        continue
+
             alert_rows.append(
                 {
                     "When": self.run_at_str,
@@ -1616,6 +1634,16 @@ class SignalMonitorRunner:
             mom_strength = self._to_float(rec.get("Signal Strength %"))
             if mom_strength is not None and mom_strength < 40.0:
                 continue
+
+            # Same pullback-from-peak guard as Buy Now: skip if stock already
+            # rolled over more than 2% from today's high.
+            _mom_ticks = self.actionable_runner.live_ticks or {}
+            _mom_tick = _mom_ticks.get(sym, {})
+            _mom_day_high = self._to_float(_mom_tick.get("high", 0))
+            if _mom_day_high > 0 and price_now > 0:
+                _mom_pullback = (_mom_day_high - price_now) / price_now * 100.0
+                if _mom_pullback > 2.0:
+                    continue
 
             alert_rows.append(
                 {
