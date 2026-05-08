@@ -1137,6 +1137,30 @@ class SignalMonitorRunner:
                         )
                         continue
 
+            # Suppress when live price has already moved above the buy zone ceiling.
+            # EntryGapPct in state can be stale (computed at scan time, not updated
+            # by tick refresh), so recompute from live PriceNow vs BuyAbove.
+            if now_action in allowed_buy_actions:
+                _buy_above = self._to_float(row.get("BuyAbove"))
+                _price_now = self._to_float(row.get("PriceNow"))
+                if _buy_above > 0 and _price_now > 0:
+                    _buy_ceiling = _buy_above * 1.015
+                    if _price_now > _buy_ceiling:
+                        skipped_already_ran.append(
+                            f"{symbol} (price ₹{_price_now:.2f} > ceiling ₹{_buy_ceiling:.2f})"
+                        )
+                        continue
+
+            # Minimum signal strength: skip weak signals < 40%.
+            # The scanner produces scores 0-100; anything below 40 has weak structure.
+            if now_action in allowed_buy_actions:
+                strength = self._to_float(row.get("SignalStrengthPct"))
+                if strength is not None and strength < 40.0:
+                    skipped_already_ran.append(
+                        f"{symbol} (strength {strength:.0f}% < 40% min)"
+                    )
+                    continue
+
             alert_rows.append(
                 {
                     "When": self.run_at_str,
@@ -1263,12 +1287,15 @@ class SignalMonitorRunner:
             )
             return pd.DataFrame(columns=self.ALERT_COLUMNS)
         for c in candidates:
-            # Only Grade-A "Runner" alerts pass — Grade-B and Grade-C generate
-            # too much volume-spike noise without strong setup confirmation.
-            if c.confidence_tier != "A":
+            # Grade-A: sector-confirmed runners — always pass quality bar.
+            # Grade-B: pass only when buy pressure is clearly confirmed (B/S ≥ 2.0)
+            #          — strong directional buying even without sector-wide confirmation.
+            # Grade-C: skip — too noisy.
+            if c.confidence_tier == "C":
                 continue
-            # Skip when sell pressure dominates — more sellers than buyers
-            # means the institutional volume is being absorbed, not driving the price up
+            if c.confidence_tier == "B" and c.buy_sell_ratio < 2.0:
+                continue
+            # Skip when sell pressure dominates overall
             if c.buy_sell_ratio < 1.0:
                 continue
             # Day gain cap: stock has already moved too far from open — chasing
