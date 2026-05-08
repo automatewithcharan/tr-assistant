@@ -65,7 +65,10 @@ kb_to_gb() {
 }
 
 run_cleanup() {
-    local args=(--diskusagereport --diskusageapply --diskusagenotify)
+    # No --diskusagenotify on routine 15-min runs — the script's own
+    # send_discord_on_state_change handles disk-warning/critical pings.
+    # Posting the storage report every 15 min spams the Discord channel.
+    local args=(--diskusagereport --diskusageapply)
     if [ -n "$ARCHIVE_BUCKET" ]; then
         args+=(--diskusagebucket "$ARCHIVE_BUCKET")
     fi
