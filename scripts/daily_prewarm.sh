@@ -57,20 +57,33 @@ for fname in os.listdir(cache_dir):
         results.append({'Symbol': sym, 'AvgTurnover': avg_to, 'Exchange': 'NSE' if sym in nse_syms else 'BSE'})
     except: continue
 df = pd.DataFrame(results)
-nse_all = df[df['Exchange']=='NSE']
-# Include ALL BSE tradeable equities (not just liquid ones) — tick-only scoring
-# filters by intraday turnover, so micro-caps won't generate false alerts.
-# Skip govt bonds/debentures (symbols starting with digits).
+nse_in_cache = df[df['Exchange']=='NSE']
+# Build universe in priority order so the 2990-cap protects what matters:
+#   1. ALL NSE equities (cached + uncached) — official listings always included.
+#      Uncached entries (NUVAMA, MARICO, JIOFIN style) are flagged with priority
+#      so they survive truncation alongside their cached peers.
+#   2. BSE tradeable equities — fill remaining slots ranked by turnover.
+nse_nocache = {s for s in nse_syms if s not in set(df['Symbol'])}
+nse_extra = pd.DataFrame([{'Symbol': s, 'AvgTurnover': 0, 'Exchange': 'NSE'} for s in nse_nocache])
+nse_all = pd.concat([nse_in_cache, nse_extra])
+print(f'NSE pool: {len(nse_all)} ({len(nse_in_cache)} cached + {len(nse_nocache)} uncached)')
+
+# Skip govt bonds/debentures (symbols starting with digits) on BSE side
 is_equity = ~df['Symbol'].str.match(r'^\d')
 bse_in_cache = df[(df['Exchange']=='BSE') & is_equity]
-# Also add BSE_TRADEABLE stocks without cache (new listings etc.)
 bse_nocache = {s for s in bse_tradeable if s not in set(df['Symbol']) and not re.match(r'^\d', s)}
 bse_extra = pd.DataFrame([{'Symbol': s, 'AvgTurnover': 0, 'Exchange': 'BSE'} for s in bse_nocache])
-combined = pd.concat([nse_all, bse_in_cache, bse_extra]).drop_duplicates('Symbol')
-# Hard cap at 2990 to stay within 3000 WebSocket limit with buffer
-combined = combined.sort_values('AvgTurnover', ascending=False).head(2990)
+bse_all = pd.concat([bse_in_cache, bse_extra]).drop_duplicates('Symbol')
+
+# WebSocket cap = 2990 (3000 limit minus 10 buffer).
+# Always preserve full NSE first; trim BSE if capacity is tight.
+nse_dedup = nse_all.drop_duplicates('Symbol')
+nse_take = nse_dedup.sort_values('AvgTurnover', ascending=False)
+bse_capacity = max(0, 2990 - len(nse_take))
+bse_take = bse_all.sort_values('AvgTurnover', ascending=False).head(bse_capacity)
+combined = pd.concat([nse_take, bse_take]).drop_duplicates('Symbol').head(2990)
 combined[['Symbol']].to_csv('results/Indices/NSE_BSE_COMBINED.csv', index=False)
-print(f'Combined universe: {len(combined)} symbols (NSE={len(nse_all)}, BSE={len(combined)-len(nse_all)})')
+print(f'Combined universe: {len(combined)} symbols (NSE={len(nse_take)}, BSE={len(bse_take)})')
 " >> $LOG 2>&1
 
 EXIT_CODE=$?
