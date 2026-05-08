@@ -2898,6 +2898,10 @@ class AutoPilotInvestor:
         if not text or not sym:
             return
         lower = text.lower()
+        # Auto-trade intentionally OFF — not a failure. Swallow silently so
+        # Discord doesn't spam "AUTO-BUY FAILED" on every tick in manual mode.
+        if "auto-trade is disabled" in lower or "auto_trade_disabled" in lower:
+            return
         if "auto-bought" in lower:
             self._daily_auto_bought.append(sym)
             self._send_to_channels(text)
