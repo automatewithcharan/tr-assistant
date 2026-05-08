@@ -194,6 +194,10 @@ class SignalMonitorRunner:
         self._ob_history: Dict[str, List[Tuple[datetime, float]]] = {}
         # Track which symbols already fired an order-book imbalance alert today.
         self._ob_alerted_today: Set[str] = set()
+        # Tick-velocity tracking: rolling 5-min history of (timestamp, vol_per_sec)
+        # per symbol. Used to detect when a quiet stock suddenly gets active
+        # and boost its scan priority before price has time to confirm.
+        self._vol_rate_history: Dict[str, List[Tuple[datetime, float]]] = {}
 
     def run(
         self,
@@ -482,7 +486,7 @@ class SignalMonitorRunner:
                 current_tick,
                 previous_simple_map.get(normalized_symbol),
             ):
-                priority = self._symbol_priority(current_tick, previous_tick)
+                priority = self._symbol_priority(current_tick, previous_tick, symbol=normalized_symbol)
                 changed_symbols.append((priority, normalized_symbol))
 
         # Process highest-priority symbols first so that if the cycle is long,
@@ -655,13 +659,16 @@ class SignalMonitorRunner:
         scored.sort()
         return [sym for _, sym in scored]
 
-    def _symbol_priority(self, current_tick: Dict, previous_tick: Dict) -> float:
+    def _symbol_priority(self, current_tick: Dict, previous_tick: Dict, symbol: Optional[str] = None) -> float:
         """Compute a sortable priority score for a flagged symbol.
 
         Higher = process first in the cycle.  Components:
           - abs daily change% (big movers go first)
           - order book imbalance (strong buy pressure = early)
-          - volume burst in last 60s
+          - volume burst in last 60s (cycle-to-cycle ratio)
+          - tick-velocity surge: current vol/sec vs 5-min baseline
+            (catches quiet stocks that just turned active — the
+            critical "missed by the 40-stock cap" case)
         """
         score = 0.0
         # Daily move component
@@ -675,12 +682,47 @@ class SignalMonitorRunner:
         imbalance = abs(total_buy - total_sell) / denom  # 0..1
         score += imbalance * 50.0
 
-        # Volume burst component
+        # Volume burst component (cycle-to-cycle delta ratio)
         current_vol = self._to_float(current_tick.get("volume_traded"))
         previous_vol = self._to_float(previous_tick.get("volume_traded")) if previous_tick else 0.0
         if previous_vol > 0 and current_vol > previous_vol:
             burst = (current_vol - previous_vol) / previous_vol
             score += burst * 100.0
+
+        # Tick-velocity surge: compare current cycle's vol/sec to the
+        # symbol's own 5-min rolling baseline. A previously-quiet stock
+        # that just got active scores high here even when its absolute
+        # vol burst from previous tick is modest.
+        if symbol is not None and previous_vol > 0 and current_vol > previous_vol:
+            try:
+                now = PKDateUtilities.currentDateTime()
+            except Exception:
+                now = datetime.now()
+            # Estimate this cycle's vol/sec — use received_at delta if
+            # available, fall back to nominal 10s scan interval.
+            try:
+                cur_t = current_tick.get("received_at")
+                prev_t = previous_tick.get("received_at") if previous_tick else None
+                if isinstance(cur_t, str) and isinstance(prev_t, str):
+                    cur_dt = datetime.fromisoformat(cur_t.replace("Z", ""))
+                    prev_dt = datetime.fromisoformat(prev_t.replace("Z", ""))
+                    elapsed = max(1.0, (cur_dt - prev_dt).total_seconds())
+                else:
+                    elapsed = 10.0
+            except Exception:
+                elapsed = 10.0
+            cur_rate = (current_vol - previous_vol) / elapsed
+            history = self._vol_rate_history.setdefault(symbol, [])
+            cutoff = now - timedelta(minutes=5)
+            history[:] = [(ts, r) for ts, r in history if ts >= cutoff]
+            if len(history) >= 6 and cur_rate > 0:
+                baseline = sum(r for _, r in history) / len(history)
+                if baseline > 0 and cur_rate > baseline * 2.0:
+                    # Cap the multiplier so a single huge spike doesn't
+                    # drown out everything else in the cycle.
+                    surge_factor = min(10.0, cur_rate / baseline)
+                    score += surge_factor * 30.0
+            history.append((now, cur_rate))
 
         return score
 
