@@ -1069,8 +1069,17 @@ class SignalMonitorRunner:
                         f"{symbol} ({change_pct:+.1f}% day gain over cap)"
                     )
                     continue
-                # (Previous "already at/past trigger" check kept for stocks 5-10% up)
-                if change_pct >= 5.0:
+                # Opening gap exception: first 45 min (9:15-10:00 IST), a stock
+                # gapping 5-7% with high volume is a gap-and-go setup, not a chase.
+                # Raise the suppress threshold to 8% during opening window only.
+                try:
+                    _now_ist = PKDateUtilities.currentDateTime()
+                except Exception:
+                    _now_ist = datetime.now()
+                _ist_min = _now_ist.hour * 60 + _now_ist.minute
+                _opening_window = (9 * 60 + 15) <= _ist_min <= (10 * 60 + 0)
+                _suppress_threshold = 8.0 if _opening_window else 5.0
+                if change_pct >= _suppress_threshold:
                     entry_gap_pct = self._to_float(row.get("EntryGapPct"))
                     already_at_or_past_trigger = entry_gap_pct <= 0.0
                     if already_at_or_past_trigger:

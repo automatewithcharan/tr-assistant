@@ -1018,6 +1018,10 @@ class AutoPilotInvestor:
                     candidate=candidate_stub,
                     live_price=price,
                 )
+            # Auto-trade intentionally disabled — not a failure, just manual mode.
+            # Return None so the caller skips sending anything to Discord.
+            if "auto_trade_disabled" in lower or "auto-trade is disabled" in lower:
+                return None
             return f"⚠️ **AUTO-BUY FAILED — `{symbol}`**\n{raw_message}"
 
     def _ist_now_minute(self) -> int:
