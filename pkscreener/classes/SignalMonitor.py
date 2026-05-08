@@ -1388,13 +1388,21 @@ class SignalMonitorRunner:
             if self.budget_amount and self.budget_amount > 0 and entry > 0:
                 suggested_qty = int(self.budget_amount // float(entry))
 
+            # Match broker convention: report ChangePct from PREVIOUS CLOSE,
+            # not today's open. Google/Kite/Groww all show "today %" against
+            # prev close — using open caused +2.8% vs +2.57% confusion on UNOMINDA.
+            _pct_from_prev_close = (
+                (c.last_price - c.prev_close) / c.prev_close * 100.0
+                if c.prev_close and c.prev_close > 0
+                else c.price_from_open_pct
+            )
             alert_rows.append({
                 "When": self.run_at_str,
                 "Symbol": c.symbol,
                 "PreviousAction": "None",
                     "NowAction": action_label,
                     "PriceNow": c.last_price,
-                    "ChangePct": round(c.price_from_open_pct, 2),
+                    "ChangePct": round(_pct_from_prev_close, 2),
                     "EntryGapPct": 0.0,
                     "RSI": "",
                     "BuyAbove": entry,
