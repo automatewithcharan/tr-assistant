@@ -95,6 +95,13 @@ class ActionableReportRunner:
         self.momentum_buy_min_score = 75.0
         self.momentum_watch_min_score = 60.0
         self.buy_now_min_volume_ratio = 1.3
+        self.early_momentum_buy_min_score = 90.0
+        self.early_momentum_buy_max_gap_pct = 1.10
+        self.early_momentum_buy_min_volume_ratio = 1.05
+        self.early_momentum_buy_max_change_pct = 7.0
+        self.early_momentum_buy_max_rsi = 75.0
+        self.stretched_momentum_buy_min_change_pct = 8.0
+        self.stretched_momentum_buy_min_rsi = 78.0
         self.strong_buy_min_confidence = max(float(self.min_confidence) + 7.5, 22.5)
         self.strong_buy_min_volume_ratio = max(float(self.min_volume_ratio) + 0.35, 1.35)
         self.strong_buy_min_trade_value = max(float(self.min_trade_value) * 1.5, 15000000.0)
@@ -639,13 +646,20 @@ class ActionableReportRunner:
             not self.strong_buy_only
             and now_action == "Watch for Buy"
             and momentum_setup == "Momentum Buy"
-            and float(result.confidence) >= self.min_confidence
-            and volume_ratio >= self.buy_now_min_volume_ratio
-            and kalman_quality >= 50
-            and kalman_trend != "down"
         ):
-            now_action = "Buy Now"
-            quality_checks = f"{quality_checks}, momentum promotion".strip(", ")
+            now_action, quality_checks = self._promote_momentum_watch(
+                now_action=now_action,
+                quality_checks=quality_checks,
+                confidence=float(result.confidence),
+                volume_ratio=volume_ratio,
+                momentum_score=momentum_score,
+                entry_gap_pct=entry_gap_pct,
+                change_pct=change_pct,
+                liquidity_ok=liquidity_ok,
+                kalman_quality=kalman_quality,
+                kalman_trend=kalman_trend,
+                rsi=float(result.indicators.get("RSI", 50)),
+            )
 
         return {
             "Symbol": symbol,
@@ -774,6 +788,59 @@ class ActionableReportRunner:
         elif score >= self.momentum_watch_min_score:
             setup = "Momentum Watch"
         return score, setup, ", ".join(reasons)
+
+    def _promote_momentum_watch(
+        self,
+        now_action: str,
+        quality_checks: str,
+        confidence: float,
+        volume_ratio: float,
+        momentum_score: float,
+        entry_gap_pct: float,
+        change_pct: float,
+        liquidity_ok: bool,
+        kalman_quality: float,
+        kalman_trend: str,
+        rsi: float,
+    ) -> Tuple[str, str]:
+        """Promote strong momentum watch names into Buy Now before they run too far.
+
+        The early lane is intentionally stricter on setup quality and intraday stretch
+        so we can catch controlled breakouts sooner without turning late chases into buys.
+        """
+        if now_action != "Watch for Buy" or confidence < self.min_confidence:
+            return now_action, quality_checks
+
+        stretched_continuation = (
+            change_pct >= self.stretched_momentum_buy_min_change_pct
+            and rsi >= self.stretched_momentum_buy_min_rsi
+            and entry_gap_pct > 0.0
+        )
+        if stretched_continuation:
+            return now_action, quality_checks
+
+        early_promotion = (
+            momentum_score >= self.early_momentum_buy_min_score
+            and volume_ratio >= self.early_momentum_buy_min_volume_ratio
+            and entry_gap_pct <= self.early_momentum_buy_max_gap_pct
+            and change_pct <= self.early_momentum_buy_max_change_pct
+            and liquidity_ok
+            and kalman_quality >= 60
+            and kalman_trend == "up"
+            and rsi <= self.early_momentum_buy_max_rsi
+        )
+        if early_promotion:
+            return "Buy Now", f"{quality_checks}, early momentum promotion".strip(", ")
+
+        regular_promotion = (
+            volume_ratio >= self.buy_now_min_volume_ratio
+            and kalman_quality >= 50
+            and kalman_trend != "down"
+        )
+        if regular_promotion:
+            return "Buy Now", f"{quality_checks}, momentum promotion".strip(", ")
+
+        return now_action, quality_checks
 
     def _prepare_ohlcv_data(self, symbol: str, data: Optional[pd.DataFrame]) -> pd.DataFrame:
         """Normalize the fetched frame and, if needed, fall back to official Kite history."""
