@@ -1294,6 +1294,8 @@ class SignalMonitorRunner:
                 f"  [!] Anomaly batch skipped — too late ({_now_ist.strftime('%H:%M')} IST > 14:45)"
             )
             return pd.DataFrame(columns=self.ALERT_COLUMNS)
+        # Look up live ticks once for the "already played out" pullback check.
+        _live_ticks_for_anomaly = self.actionable_runner.live_ticks or {}
         for c in candidates:
             # Grade-A: sector-confirmed runners — always pass quality bar.
             # Grade-B: two acceptance lanes (whichever passes first wins):
@@ -1312,6 +1314,20 @@ class SignalMonitorRunner:
             # Skip when sell pressure dominates overall
             if c.buy_sell_ratio < 1.0:
                 continue
+            # "Already played out" check: if today's high is more than 2% above the
+            # current price, the breakout already happened and reversed. The volume
+            # spike is historical, not actionable. (e.g. THYROCARE: high ₹526 at
+            # 09:45, alerting at ₹494 at 11:02 = 6% off the peak — not "early".)
+            _tick = _live_ticks_for_anomaly.get(str(c.symbol).strip().upper(), {})
+            _day_high = float(_tick.get("high", 0) or 0)
+            if _day_high > 0 and c.last_price > 0:
+                _pullback_pct = (_day_high - c.last_price) / c.last_price * 100.0
+                if _pullback_pct > 2.0:
+                    OutputControls().printOutput(
+                        f"  [!] Anomaly {c.symbol} skipped — already pulled back "
+                        f"{_pullback_pct:.1f}% from day high ₹{_day_high:.2f} (move played out)"
+                    )
+                    continue
             # Day gain cap: stock has already moved too far from open — chasing
             # at +10%+ usually means buying the top of the move
             if c.price_from_open_pct > 10.0:
