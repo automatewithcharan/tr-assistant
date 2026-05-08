@@ -1180,13 +1180,22 @@ class SignalMonitorRunner:
                         )
                         continue
 
-            # Minimum signal strength: skip weak signals < 40%.
-            # The scanner produces scores 0-100; anything below 40 has weak structure.
+            # Minimum signal strength: skip weak signals.
+            # 9:15-10:00 IST: 35% floor (morning runners often score 30-38% before
+            #                  full structure forms — relaxed floor catches them earlier).
+            # 10:00-15:30 IST: 40% floor (full quality bar after morning settles).
             if now_action in allowed_buy_actions:
                 strength = self._to_float(row.get("SignalStrengthPct"))
-                if strength is not None and strength < 40.0:
+                try:
+                    _now_ist_for_strength = PKDateUtilities.currentDateTime()
+                except Exception:
+                    _now_ist_for_strength = datetime.now()
+                _ist_min_strength = _now_ist_for_strength.hour * 60 + _now_ist_for_strength.minute
+                _morning_window = (9 * 60 + 15) <= _ist_min_strength <= (10 * 60 + 0)
+                _strength_floor = 35.0 if _morning_window else 40.0
+                if strength is not None and strength < _strength_floor:
                     skipped_already_ran.append(
-                        f"{symbol} (strength {strength:.0f}% < 40% min)"
+                        f"{symbol} (strength {strength:.0f}% < {_strength_floor:.0f}% min)"
                     )
                     continue
 
@@ -1661,9 +1670,17 @@ class SignalMonitorRunner:
             if buy_above > 0 and price_now > 0 and price_now > buy_above * 1.015:
                 continue
 
-            # Same minimum strength as Buy Now: 40% floor, no weak momentum signals
+            # Same minimum strength as Buy Now: 35% floor in opening window
+            # (9:15-10:00 IST), 40% floor afterwards.
             mom_strength = self._to_float(rec.get("Signal Strength %"))
-            if mom_strength is not None and mom_strength < 40.0:
+            try:
+                _mom_now = PKDateUtilities.currentDateTime()
+            except Exception:
+                _mom_now = datetime.now()
+            _mom_min = _mom_now.hour * 60 + _mom_now.minute
+            _mom_morning = (9 * 60 + 15) <= _mom_min <= (10 * 60 + 0)
+            _mom_floor = 35.0 if _mom_morning else 40.0
+            if mom_strength is not None and mom_strength < _mom_floor:
                 continue
 
             # Same pullback-from-peak guard as Buy Now: skip if stock already
