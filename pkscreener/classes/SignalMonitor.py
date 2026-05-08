@@ -12,7 +12,7 @@ import json
 import os
 import subprocess
 import time
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Set, Tuple
 
 import pandas as pd
@@ -189,6 +189,11 @@ class SignalMonitorRunner:
         # Wall-clock tracking: first time we alert a symbol today → skip repeat caps.
         # Keyed by symbol, value is "YYYY-MM-DD" of last alert day.
         self._daily_alerted: Dict[str, str] = {}
+        # Order book history per symbol: list of (timestamp, b/s ratio).
+        # Rolling 5-minute window for shift detection.
+        self._ob_history: Dict[str, List[Tuple[datetime, float]]] = {}
+        # Track which symbols already fired an order-book imbalance alert today.
+        self._ob_alerted_today: Set[str] = set()
 
     def run(
         self,
@@ -309,6 +314,20 @@ class SignalMonitorRunner:
                 ]
             if not anomaly_alerts_df.empty:
                 alerts_df = pd.concat([alerts_df, anomaly_alerts_df], ignore_index=True)
+
+        # Order book imbalance: catches institutional accumulation in real time
+        # by tracking B/S ratio velocity (1.5x → 3x+ in 5 min). De-dupe against
+        # everything else so we don't repeat a stock already alerted via OHLCV
+        # or volume anomaly paths.
+        ob_alerts_df = self._run_orderbook_imbalance()
+        if not ob_alerts_df.empty:
+            already = set(alerts_df["Symbol"].astype(str).str.upper()) if not alerts_df.empty else set()
+            if already:
+                ob_alerts_df = ob_alerts_df[
+                    ~ob_alerts_df["Symbol"].astype(str).str.upper().isin(already)
+                ]
+            if not ob_alerts_df.empty:
+                alerts_df = pd.concat([alerts_df, ob_alerts_df], ignore_index=True)
         # V2: Follow-through check + exit monitoring
         self._check_followthrough_and_exits()
         # V2: End-of-day missed opportunity analysis
@@ -1493,6 +1512,153 @@ class SignalMonitorRunner:
         # Register for follow-through monitoring (5-min recheck)
         if candidates:
             self._anomaly_detector.register_for_followthrough(candidates)
+
+        return pd.DataFrame(alert_rows, columns=self.ALERT_COLUMNS)
+
+    def _run_orderbook_imbalance(self) -> pd.DataFrame:
+        """Detect institutional accumulation via buy/sell ratio velocity.
+
+        Tracks B/S ratio per symbol in a rolling 5-min window. Fires an alert
+        when current ratio jumps from <=1.5x to >=3x within 5 minutes — a
+        signature of fresh institutional buying that the regular anomaly
+        path (which uses point-in-time B/S) would only catch later.
+
+        Also flags "0 sellers" books as a NO-BUY warning (RPSGVENT pattern:
+        thin liquidity, can't actually fill orders at current price).
+        """
+        if not self.use_live_kite:
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+        if not self._is_regular_market_hours():
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+
+        live_ticks = self.actionable_runner.live_ticks or {}
+        if not live_ticks:
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+
+        try:
+            now_ist = PKDateUtilities.currentDateTime()
+        except Exception:
+            now_ist = datetime.now()
+
+        # Drop history samples older than 6 minutes (keep ~5-min window + buffer)
+        cutoff = now_ist - timedelta(minutes=6)
+        for sym in list(self._ob_history.keys()):
+            self._ob_history[sym] = [
+                (ts, r) for ts, r in self._ob_history[sym] if ts >= cutoff
+            ]
+            if not self._ob_history[sym]:
+                del self._ob_history[sym]
+
+        alert_rows: List[Dict] = []
+        today_str = now_ist.strftime("%Y-%m-%d")
+
+        for sym, tick in live_ticks.items():
+            sym_u = str(sym).strip().upper()
+            try:
+                bq = float(tick.get("total_buy_quantity", 0) or 0)
+                sq = float(tick.get("total_sell_quantity", 0) or 0)
+                price = float(tick.get("last_price", 0) or 0)
+                day_high = float(tick.get("high", 0) or 0)
+                day_open = float(tick.get("open", 0) or 0)
+                prev_close = float(tick.get("close", 0) or 0)
+                volume = float(tick.get("volume_traded", 0) or 0)
+            except (TypeError, ValueError):
+                continue
+
+            # Liquidity & price floors — no penny stocks, no thinly-depth books
+            if price < 50.0:
+                continue
+            if volume < 50000:
+                continue
+            if bq < 50000:
+                continue  # not enough buy depth to be meaningful
+
+            # Compute current ratio. 0 sellers gets a special handling.
+            zero_sellers = sq == 0
+            ratio = bq / sq if sq > 0 else float("inf")
+
+            # Update history
+            self._ob_history.setdefault(sym_u, []).append((now_ist, ratio if not zero_sellers else 99.0))
+
+            # Need at least 90s of history to detect a shift
+            history = self._ob_history[sym_u]
+            if len(history) < 6:  # ~60-90s at 10s cycles
+                continue
+
+            # Find earliest sample within last 5 minutes
+            five_min_ago = now_ist - timedelta(minutes=5)
+            old_samples = [r for ts, r in history if ts <= five_min_ago + timedelta(seconds=30)]
+            if not old_samples:
+                # Don't have 5 min of history yet
+                continue
+
+            old_avg = sum(old_samples) / len(old_samples)
+
+            # Skip if already alerted on this symbol today
+            if sym_u in self._ob_alerted_today:
+                continue
+
+            # Same pullback-from-peak guard as other paths — don't catch fades
+            if day_high > 0 and price > 0:
+                pullback_pct = (day_high - price) / price * 100.0
+                if pullback_pct > 2.0:
+                    continue
+
+            # Day gain cap — skip exhausted runners
+            day_change_pct = (price - prev_close) / prev_close * 100.0 if prev_close > 0 else 0.0
+            if day_change_pct > 8.0 or day_change_pct < -2.0:
+                continue
+
+            # Detection criteria:
+            #   shift = current B/S >= 3.0 AND old avg <= 1.5
+            #   sustained = current B/S >= 5.0 (always strong even if no shift detected)
+            shift = ratio >= 3.0 and old_avg <= 1.5 and not zero_sellers
+            sustained = ratio >= 5.0 and not zero_sellers
+            if not (shift or sustained):
+                continue
+
+            # Build alert row in the standard ALERT_COLUMNS shape so the message
+            # builder + de-dup logic work without changes.
+            buy_above = round(price, 2)
+            stop_loss = round(price * 0.95, 2)  # -5% stop
+            target1 = round(price * 1.06, 2)  # +6% — modest first target since unconfirmed by OHLCV
+            target2 = round(price * 1.10, 2)  # +10%
+            qty = int(self.budget_amount // price) if self.budget_amount and price > 0 else 0
+            tag = "🌊 OB Surge" if shift else "🌊 OB Sustained"
+            why_parts = [
+                f"Buy/Sell ratio jumped from {old_avg:.1f}x → {ratio:.1f}x in 5 min" if shift
+                else f"Buy/Sell ratio sustained at {ratio:.1f}x — heavy directional buying",
+                f"Buy depth: {int(bq):,} shares vs Sell depth: {int(sq):,} shares",
+            ]
+            if day_change_pct >= 1.0:
+                why_parts.append(f"Day +{day_change_pct:.1f}% (still actionable)")
+            checks = f"OB B/S {ratio:.1f}x | depth {int(bq/1000)}k buy | day {day_change_pct:+.1f}%"
+
+            alert_rows.append({
+                "When": self.run_at_str,
+                "Symbol": sym_u,
+                "PreviousAction": "None",
+                "NowAction": tag,
+                "PriceNow": price,
+                "ChangePct": round(day_change_pct, 2),
+                "EntryGapPct": 0.0,
+                "RSI": "",
+                "BuyAbove": buy_above,
+                "SellIfBelow": stop_loss,
+                "TakeProfit1": target1,
+                "TakeProfit2": target2,
+                "SuggestedQty": qty,
+                "SignalStrengthPct": 50.0,  # placeholder
+                "Checks": checks,
+                "Why": " | ".join(why_parts),
+            })
+            self._ob_alerted_today.add(sym_u)
+
+        if alert_rows:
+            OutputControls().printOutput(
+                f"  [+] 🌊 Order book surge: {len(alert_rows)} alert(s) — "
+                + ", ".join(r["Symbol"] for r in alert_rows[:5])
+            )
 
         return pd.DataFrame(alert_rows, columns=self.ALERT_COLUMNS)
 
