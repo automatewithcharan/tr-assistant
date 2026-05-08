@@ -1552,6 +1552,16 @@ class SignalMonitorRunner:
                 if (week52 - price_now) / price_now * 100.0 < 3.0:
                     continue
 
+            # Same buy-zone-ceiling check as Buy Now: skip if live price already past ceiling
+            buy_above = self._to_float(rec.get("Buy Above"))
+            if buy_above > 0 and price_now > 0 and price_now > buy_above * 1.015:
+                continue
+
+            # Same minimum strength as Buy Now: 40% floor, no weak momentum signals
+            mom_strength = self._to_float(rec.get("Signal Strength %"))
+            if mom_strength is not None and mom_strength < 40.0:
+                continue
+
             alert_rows.append(
                 {
                     "When": self.run_at_str,
