@@ -1521,16 +1521,26 @@ class SignalMonitorRunner:
         except Exception as exc:
             default_logger().debug(f"Follow-through check error: {exc}")
 
-        # 2. Exit signal check on active positions
+        # 2. Exit signal check on active positions — push to Discord, not just console
         try:
             exits = self._anomaly_detector.check_exits(current_ticks)
             for ex in exits:
                 pnl_emoji = "🟢" if ex["pnl_pct"] > 0 else "🔴"
-                OutputControls().printOutput(
+                console_line = (
                     f"  [{pnl_emoji}] EXIT {ex['symbol']}: {ex['pnl_pct']:+.2f}% "
                     f"(₹{ex['entry_price']:.2f} → ₹{ex['current_price']:.2f}) | "
                     f"{ex['exit_reason']}"
                 )
+                OutputControls().printOutput(console_line)
+                # Push to Discord too — this is what the user needs to act
+                if "discord" in self.alert_channels and self._is_regular_market_hours():
+                    discord_msg = (
+                        f"{pnl_emoji} **EXIT — `{ex['symbol']}`**\n"
+                        f"P&L: **{ex['pnl_pct']:+.2f}%** (entry ₹{ex['entry_price']:.2f} → now ₹{ex['current_price']:.2f})\n"
+                        f"Reason: {ex['exit_reason']}\n"
+                        f"_Sell in Groww / use `/sell {ex['symbol']} QTY PRICE` to record_"
+                    )
+                    self._send_discord_alert(discord_msg)
         except Exception as exc:
             default_logger().debug(f"Exit check error: {exc}")
 
