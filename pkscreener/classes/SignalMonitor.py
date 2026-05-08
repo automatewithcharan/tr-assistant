@@ -695,10 +695,11 @@ class SignalMonitorRunner:
         if not os.path.exists(path):
             return pd.DataFrame()
         try:
-            return pd.read_csv(path)
+            simple_df = pd.read_csv(path)
         except Exception as exc:
             default_logger().debug(f"Failed loading monitor simple board: {exc}", exc_info=True)
             return pd.DataFrame()
+        return self._drop_stale_previous_rows(simple_df, "Checked At", "simple board")
 
     def _merge_with_previous(
         self,
@@ -987,24 +988,44 @@ class SignalMonitorRunner:
             default_logger().debug(f"Failed loading monitor state: {exc}", exc_info=True)
             return pd.DataFrame(columns=self.STATE_COLUMNS)
 
-        # Auto-reset if the state file is from a previous trading day.
-        # This prevents stale cross-day state (e.g. from another machine) from
-        # generating false alerts on stocks that already ran 3-9% since then.
-        if "CheckedAt" in state_df.columns:
-            today_str = self.run_at.strftime("%Y-%m-%d")
-            checked_dates = state_df["CheckedAt"].astype(str).str[:10]
-            if not checked_dates.empty and (checked_dates != today_str).all():
-                stale_date = checked_dates.max()
-                OutputControls().printOutput(
-                    f"  [!] State file for {self.universe} is from a previous day ({stale_date}) — "
-                    f"resetting to avoid stale alerts on stocks that already moved."
-                )
-                return pd.DataFrame(columns=self.STATE_COLUMNS)
+        # Drop stale cross-day rows before merging changed-only live scans.
+        # Otherwise the board can show fresh Kite prices on top of yesterday's
+        # action/levels/RSI and accidentally alert from mixed data.
+        state_df = self._drop_stale_previous_rows(state_df, "CheckedAt", "state")
 
         for column in self.STATE_COLUMNS:
             if column not in state_df.columns:
                 state_df[column] = ""
         return state_df[self.STATE_COLUMNS].copy()
+
+    def _drop_stale_previous_rows(
+        self,
+        df: pd.DataFrame,
+        timestamp_column: str,
+        label: str,
+    ) -> pd.DataFrame:
+        """Keep only rows checked today from a persisted monitor board/state."""
+        if df is None or df.empty or timestamp_column not in df.columns:
+            return df
+
+        today_str = self.run_at.strftime("%Y-%m-%d")
+        checked_dates = df[timestamp_column].astype(str).str[:10]
+        stale_mask = checked_dates.ne(today_str)
+        if not stale_mask.any():
+            return df
+
+        stale_count = int(stale_mask.sum())
+        stale_dates = sorted(
+            date
+            for date in checked_dates[stale_mask].dropna().unique().tolist()
+            if date and date.lower() != "nan"
+        )
+        OutputControls().printOutput(
+            f"  [!] Dropping {stale_count} stale {label} row(s) for {self.universe}"
+            + (f" from {', '.join(stale_dates[:3])}" if stale_dates else "")
+            + " before live merge."
+        )
+        return df.loc[~stale_mask].copy()
 
     def _build_alerts(self, previous_state_df: pd.DataFrame, state_df: pd.DataFrame) -> pd.DataFrame:
         """Return newly actionable rows that changed into Buy Now or Sell Now."""
