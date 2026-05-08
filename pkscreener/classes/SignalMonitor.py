@@ -186,6 +186,9 @@ class SignalMonitorRunner:
         self._last_partial_save_ts = 0.0
         self._paper_tracker = PaperTradeTracker()
         self._paper_closed_date: Optional[str] = None
+        # Wall-clock tracking: first time we alert a symbol today → skip repeat caps.
+        # Keyed by symbol, value is "YYYY-MM-DD" of last alert day.
+        self._daily_alerted: Dict[str, str] = {}
 
     def run(
         self,
@@ -1014,6 +1017,11 @@ class SignalMonitorRunner:
 
         alert_rows = []
         skipped_already_ran = []
+        today_str = self.run_at.strftime("%Y-%m-%d")
+        # Cap how many first-alerts fire in one cycle to avoid Discord bursts.
+        # Remaining un-alerted stocks will fire in subsequent cycles as they pass filters.
+        MAX_FIRST_ALERTS_PER_CYCLE = 5
+        first_alerts_this_cycle = 0
         allowed_buy_actions = ["Strong Buy Now"] if self.strong_buy_only else ["Strong Buy Now", "Buy Now"]
         for row in state_df.to_dict(orient="records"):
             symbol = str(row["Symbol"]).strip().upper()
@@ -1023,6 +1031,17 @@ class SignalMonitorRunner:
 
             previous_action = previous_map.get(symbol, "")
             is_repeat_buy = previous_action == now_action
+
+            # First-alert promotion: if this symbol has NOT been alerted today (even if it
+            # was already Buy Now pre-market), treat it as a fresh alert so it gets one
+            # chance to fire against the day-gain / RSI / 52wk filters below.
+            already_alerted_today = self._daily_alerted.get(symbol) == today_str
+            if is_repeat_buy and not already_alerted_today and now_action in allowed_buy_actions:
+                if first_alerts_this_cycle >= MAX_FIRST_ALERTS_PER_CYCLE:
+                    # Defer to a later cycle so we don't burst the Discord channel.
+                    continue
+                is_repeat_buy = False  # promote to fresh alert path
+
             if is_repeat_buy:
                 if now_action not in allowed_buy_actions:
                     continue
@@ -1138,6 +1157,10 @@ class SignalMonitorRunner:
                     "Why": row["Why"],
                 }
             )
+            if now_action in allowed_buy_actions:
+                self._daily_alerted[symbol] = today_str
+                if not already_alerted_today:
+                    first_alerts_this_cycle += 1
 
         if skipped_already_ran:
             OutputControls().printOutput(
