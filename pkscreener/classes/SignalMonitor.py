@@ -198,6 +198,12 @@ class SignalMonitorRunner:
         # per symbol. Used to detect when a quiet stock suddenly gets active
         # and boost its scan priority before price has time to confirm.
         self._vol_rate_history: Dict[str, List[Tuple[datetime, float]]] = {}
+        # Sector-spread tracking: sectors with 2+ stocks moving >= 3% from prev close
+        # become "hot" — all peers in those sectors get priority boost so we catch
+        # sector rotations early (e.g. PHARMA spike where MANKIND/BIOCON/LALPATHLAB
+        # move together — when 2 light up, scan all 30 PHARMA stocks immediately).
+        self._hot_sectors: Set[str] = set()
+        self._hot_sectors_refreshed_at: Optional[datetime] = None
 
     def run(
         self,
@@ -448,6 +454,9 @@ class SignalMonitorRunner:
             return self._sort_symbols_by_change(symbols, current_ticks)[: self.MAX_CHANGED_SYMBOLS_PER_CYCLE]
 
         previous_simple_map = self._simple_row_map(previous_simple_df)
+        # Refresh hot sectors at most once every 60s — cheap O(N_ticks) scan
+        # over current ticks finds sectors with 2+ movers >= 3%.
+        self._refresh_hot_sectors(current_ticks)
         changed_symbols: List[Tuple[float, str]] = []
         for symbol in symbols:
             normalized_symbol = str(symbol).strip().upper()
@@ -659,6 +668,54 @@ class SignalMonitorRunner:
         scored.sort()
         return [sym for _, sym in scored]
 
+    def _refresh_hot_sectors(self, current_ticks: Dict[str, Dict]) -> None:
+        """Identify sectors with 2+ stocks moving >= 3% from prev close.
+
+        These are likely sector rotations — boost priority for all peers
+        so we catch the leaders AND laggards within the rotating sector.
+        Throttled: only recomputes once per 60s.
+        """
+        try:
+            now = PKDateUtilities.currentDateTime()
+        except Exception:
+            now = datetime.now()
+        if self._hot_sectors_refreshed_at is not None:
+            if (now - self._hot_sectors_refreshed_at).total_seconds() < 60:
+                return
+        try:
+            from pkscreener.classes.MarketContext import get_sector
+        except Exception:
+            return
+        sector_movers: Dict[str, int] = {}
+        for sym, tick in current_ticks.items():
+            try:
+                price = float(tick.get("last_price", 0) or 0)
+                pc = float(tick.get("close", 0) or 0)
+                if pc <= 0 or price <= 0:
+                    continue
+                day_chg = abs((price - pc) / pc * 100.0)
+                if day_chg < 3.0:
+                    continue
+                vol = float(tick.get("volume_traded", 0) or 0)
+                if vol < 50000:
+                    continue  # ignore illiquid noise
+            except (TypeError, ValueError):
+                continue
+            sector = get_sector(str(sym).strip().upper())
+            if not sector or sector == "UNKNOWN":
+                continue
+            sector_movers[sector] = sector_movers.get(sector, 0) + 1
+        new_hot = {s for s, n in sector_movers.items() if n >= 2}
+        if new_hot != self._hot_sectors:
+            added = new_hot - self._hot_sectors
+            if added:
+                OutputControls().printOutput(
+                    f"  [+] 🔥 Hot sector(s): {', '.join(sorted(added))} "
+                    f"({sum(sector_movers[s] for s in added)} movers >=3%)"
+                )
+        self._hot_sectors = new_hot
+        self._hot_sectors_refreshed_at = now
+
     def _symbol_priority(self, current_tick: Dict, previous_tick: Dict, symbol: Optional[str] = None) -> float:
         """Compute a sortable priority score for a flagged symbol.
 
@@ -688,6 +745,17 @@ class SignalMonitorRunner:
         if previous_vol > 0 and current_vol > previous_vol:
             burst = (current_vol - previous_vol) / previous_vol
             score += burst * 100.0
+
+        # Hot-sector boost: if this symbol's sector has 2+ peers running today,
+        # bump its priority so we scan it before unrelated quiet stocks.
+        if symbol is not None and self._hot_sectors:
+            try:
+                from pkscreener.classes.MarketContext import get_sector
+                sym_sector = get_sector(symbol)
+                if sym_sector and sym_sector in self._hot_sectors:
+                    score += 80.0  # comparable to a strong B/S imbalance signal
+            except Exception:
+                pass
 
         # Tick-velocity surge: compare current cycle's vol/sec to the
         # symbol's own 5-min rolling baseline. A previously-quiet stock
