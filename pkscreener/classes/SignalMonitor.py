@@ -300,7 +300,15 @@ class SignalMonitorRunner:
                 alerts_df = pd.concat([alerts_df, momentum_alerts_df], ignore_index=True)
         anomaly_alerts_df = self._run_anomaly_detection()
         if not anomaly_alerts_df.empty:
-            alerts_df = pd.concat([alerts_df, anomaly_alerts_df], ignore_index=True)
+            # De-dupe: skip anomaly alerts for symbols already alerted as Buy Now /
+            # Momentum Buy this cycle (they'd just spam Discord with the same stock).
+            already_alerted_now = set(alerts_df["Symbol"].astype(str).str.upper()) if not alerts_df.empty else set()
+            if already_alerted_now:
+                anomaly_alerts_df = anomaly_alerts_df[
+                    ~anomaly_alerts_df["Symbol"].astype(str).str.upper().isin(already_alerted_now)
+                ]
+            if not anomaly_alerts_df.empty:
+                alerts_df = pd.concat([alerts_df, anomaly_alerts_df], ignore_index=True)
         # V2: Follow-through check + exit monitoring
         self._check_followthrough_and_exits()
         # V2: End-of-day missed opportunity analysis
@@ -1288,13 +1296,19 @@ class SignalMonitorRunner:
             return pd.DataFrame(columns=self.ALERT_COLUMNS)
         for c in candidates:
             # Grade-A: sector-confirmed runners — always pass quality bar.
-            # Grade-B: pass only when buy pressure is clearly confirmed (B/S ≥ 2.0)
-            #          — strong directional buying even without sector-wide confirmation.
+            # Grade-B: two acceptance lanes (whichever passes first wins):
+            #   (a) Strong directional: B/S >= 2.0  — confirmed buying overpowering selling.
+            #   (b) Early-breakout: B/S >= 1.5 AND day gain <= 3%  — volume building
+            #       BEFORE the price has run, the highest-edge anomaly window. This is
+            #       the DIACABS pattern: 70x volume, 10x B/S, only +0.9% from open.
             # Grade-C: skip — too noisy.
             if c.confidence_tier == "C":
                 continue
-            if c.confidence_tier == "B" and c.buy_sell_ratio < 2.0:
-                continue
+            if c.confidence_tier == "B":
+                _strong_directional = c.buy_sell_ratio >= 2.0
+                _early_breakout = c.buy_sell_ratio >= 1.5 and c.price_from_open_pct <= 3.0
+                if not (_strong_directional or _early_breakout):
+                    continue
             # Skip when sell pressure dominates overall
             if c.buy_sell_ratio < 1.0:
                 continue
@@ -2254,11 +2268,35 @@ class SignalMonitorRunner:
                 )
             else:
                 buy_zone_line = f"🎯 **BUY ZONE**: ₹{self._fmt_price(row['BuyAbove'])}"
+            # Compute SL/T1/T2 percentages off the trigger price (BuyAbove),
+            # which is what Kite GTT uses. Groww users can read the ₹ amount;
+            # Kite users can read the % offset.
+            try:
+                _sl_val = float(row.get("SellIfBelow", 0) or 0)
+                _t1_val = float(row.get("TakeProfit1", 0) or 0)
+                _t2_val = float(row.get("TakeProfit2", 0) or 0)
+            except (TypeError, ValueError):
+                _sl_val = _t1_val = _t2_val = 0.0
+            if _buy_above_val > 0:
+                _sl_pct = (_sl_val - _buy_above_val) / _buy_above_val * 100.0 if _sl_val > 0 else 0.0
+                _t1_pct = (_t1_val - _buy_above_val) / _buy_above_val * 100.0 if _t1_val > 0 else 0.0
+                _t2_pct = (_t2_val - _buy_above_val) / _buy_above_val * 100.0 if _t2_val > 0 else 0.0
+                sl_t_line = (
+                    f"Stop Loss `₹{self._fmt_price(_sl_val)}` (`{_sl_pct:+.1f}%`) | "
+                    f"Target 1 `₹{self._fmt_price(_t1_val)}` (`{_t1_pct:+.1f}%`) | "
+                    f"Target 2 `₹{self._fmt_price(_t2_val)}` (`{_t2_pct:+.1f}%`){rr_text}"
+                )
+            else:
+                sl_t_line = (
+                    f"Stop Loss `{self._fmt_price(row['SellIfBelow'])}` | "
+                    f"Target 1 `{self._fmt_price(row['TakeProfit1'])}` | "
+                    f"Target 2 `{self._fmt_price(row['TakeProfit2'])}`{rr_text}"
+                )
             block_lines = [
                 f"{action_emoji} **{action}** `{row['Symbol']}` — Strength `{strength}`",
                 buy_zone_line,
                 f"At alert: ₹{self._fmt_price(row['PriceNow'])}{day_pct_text}",
-                f"Stop Loss `{self._fmt_price(row['SellIfBelow'])}` | Target 1 `{self._fmt_price(row['TakeProfit1'])}` | Target 2 `{self._fmt_price(row['TakeProfit2'])}`{rr_text}",
+                sl_t_line,
                 f"Qty `{qty}`",
             ]
             if checks:
