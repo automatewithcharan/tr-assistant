@@ -1831,6 +1831,9 @@ class AutoPilotInvestor:
         if picks:
             msg = self._preopen_analyzer.format_alert(picks, current_phase)
             if msg:
+                # Actually push to Discord/configured channels — was previously
+                # only logging "sent N picks" without ever sending the message.
+                self._send_to_channels(msg)
                 self._log(f"Pre-open auction: sent {len(picks)} picks for phase={current_phase}")
         else:
             # Only send "no signals" during buffer phase (most reliable)
