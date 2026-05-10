@@ -1495,10 +1495,12 @@ class SignalMonitorRunner:
             #       strong volume (>=5x) and 2-7% from open and basic buy pressure.
             #       Pattern: SURYODAY at 10:30 — making new day high, +3.4% from open,
             #       moderate B/S ~1.2x — too tame for (a) or (b) but a real breakout.
-            # Grade-C: skip — too noisy.
-            if c.confidence_tier == "C":
-                continue
-            if c.confidence_tier == "B":
+            # Grade-B and Grade-C: require evidence of legitimate buying via
+            # one of three patterns. Grade-C was previously hard-suppressed,
+            # but a 35-sample audit (anomaly_history.csv) showed C has
+            # shallower drawdowns (-2.32% vs -3.72%) and comparable upside
+            # to B, so we now apply the same gate to both tiers.
+            if c.confidence_tier in ("B", "C"):
                 _strong_directional = c.buy_sell_ratio >= 2.0
                 _early_breakout = c.buy_sell_ratio >= 1.5 and c.price_from_open_pct <= 3.0
                 _continuation = (
@@ -1618,12 +1620,80 @@ class SignalMonitorRunner:
             OutputControls().printOutput(
                 f"  [+] 🔥 V2 Anomaly ({regime_str} market): {len(alert_rows)} candidate(s) — {summary}"
             )
+            self._persist_anomaly_history(alert_rows, regime_str)
 
         # Register for follow-through monitoring (5-min recheck)
         if candidates:
             self._anomaly_detector.register_for_followthrough(candidates)
 
         return pd.DataFrame(alert_rows, columns=self.ALERT_COLUMNS)
+
+    def _persist_anomaly_history(self, alert_rows: List[Dict], regime: str) -> None:
+        """Append-only log of first V2 Anomaly detection per (symbol, date).
+
+        Writes to results/Data/anomaly_history.csv. Deduplicates against
+        existing rows so re-detections within the same day don't pile up.
+        """
+        import csv as _csv
+        try:
+            out_dir = Archiver.get_user_data_dir()
+        except Exception:
+            out_dir = os.path.join(os.getcwd(), "results", "Data")
+        out_path = os.path.join(out_dir, "anomaly_history.csv")
+
+        fieldnames = [
+            "Date", "When", "Symbol", "Tier", "Action", "PriceNow",
+            "ChangePct", "BuyAbove", "SellIfBelow", "TakeProfit1", "TakeProfit2",
+            "SuggestedQty", "QualityScore", "Regime", "Checks", "Why",
+        ]
+        existing: Set[Tuple[str, str]] = set()
+        if os.path.exists(out_path):
+            try:
+                with open(out_path, newline="") as f:
+                    for r in _csv.DictReader(f):
+                        existing.add(((r.get("Symbol") or "").strip().upper(), (r.get("Date") or "")[:10]))
+            except Exception:
+                existing = set()
+
+        new_rows = []
+        for r in alert_rows:
+            sym = str(r.get("Symbol", "")).strip().upper()
+            when = str(r.get("When", ""))
+            date = when[:10]
+            if not sym or not date or (sym, date) in existing:
+                continue
+            action = str(r.get("NowAction", ""))
+            tier = "?"
+            if "Grade-A" in action:
+                tier = "A"
+            elif "Grade-B" in action:
+                tier = "B"
+            elif "Pre-Move" in action:
+                tier = "C"
+            new_rows.append({
+                "Date": date, "When": when, "Symbol": sym, "Tier": tier,
+                "Action": action, "PriceNow": r.get("PriceNow", ""),
+                "ChangePct": r.get("ChangePct", ""),
+                "BuyAbove": r.get("BuyAbove", ""), "SellIfBelow": r.get("SellIfBelow", ""),
+                "TakeProfit1": r.get("TakeProfit1", ""), "TakeProfit2": r.get("TakeProfit2", ""),
+                "SuggestedQty": r.get("SuggestedQty", ""),
+                "QualityScore": r.get("SignalStrengthPct", ""),
+                "Regime": regime,
+                "Checks": r.get("Checks", ""), "Why": r.get("Why", ""),
+            })
+            existing.add((sym, date))
+
+        if not new_rows:
+            return
+        write_header = not os.path.exists(out_path)
+        try:
+            with open(out_path, "a", newline="") as f:
+                w = _csv.DictWriter(f, fieldnames=fieldnames)
+                if write_header:
+                    w.writeheader()
+                w.writerows(new_rows)
+        except Exception as exc:
+            default_logger().warning(f"Failed to persist anomaly history: {exc}")
 
     def _run_orderbook_imbalance(self) -> pd.DataFrame:
         """Detect institutional accumulation via buy/sell ratio velocity.

@@ -275,6 +275,16 @@ def main():
     ]
     configs.extend(v2_configs)
 
+    # 3%/day plan: tight target, tight SL — what the user actually wants
+    daily3_configs = [
+        ("3%/day: T=3% SL=2% Top5",       2, 2, 3, 3, 2, 5, False, False),
+        ("3%/day: T=3% SL=1.5% Top5",     2, 1.5, 3, 3, 2, 5, False, False),
+        ("3%/day: T=3% SL=2% Top3",       2, 2, 3, 3, 2, 3, False, False),
+        ("3%/day: T=3% SL=2% Vol>=5x Top3", 2, 2, 3, 5, 2, 3, False, False),
+        ("3%/day: T=2.5% SL=1.5% Top3",   2, 1.5, 2.5, 3, 2, 3, False, False),
+    ]
+    configs.extend(daily3_configs)
+
     for label, entry_off, sl, tgt, vol, gap, maxp, compress, adaptive in configs:
         trades = run_backtest(
             stocks, dates,
