@@ -7456,6 +7456,26 @@ class AutoPilotInvestor:
         Grades candidates A+/A/B, highlights top picks, caps main alert
         at 10 stocks, and sends the rest as a watchlist overflow.
         """
+        def _send_section_chunks(section_list: List[str], label: str) -> None:
+            chunks: List[str] = []
+            current = ""
+            for section in section_list:
+                section_text = str(section or "").strip()
+                if not section_text:
+                    continue
+                candidate = section_text if not current else f"{current}\n\n{section_text}"
+                if len(candidate) > 1800 and current:
+                    chunks.append(current)
+                    current = section_text
+                else:
+                    current = candidate
+            if current:
+                chunks.append(current)
+            for chunk in chunks:
+                self._send_to_channels(chunk)
+            if chunks:
+                self._log(f"Sent {label} buy alert message(s): {len(chunks)} chunk(s).")
+
         actionable_candidates: List[BlindBuyCandidate] = []
         late_candidates: List[BlindBuyCandidate] = []
         avoid_candidates: List[BlindBuyCandidate] = []
@@ -7608,10 +7628,17 @@ class AutoPilotInvestor:
                     auto_eligible=auto_eligible,
                     auto_result=auto_result,
                 )
+        _send_section_chunks(sections, "main")
+
         # Send overflow as a separate watchlist message
         if overflow_picks:
+            overflow_sections = [
+                "**📋 BUY WATCHLIST OVERFLOW**",
+                f"**{len(overflow_picks)}** additional stock{'s' if len(overflow_picks) != 1 else ''} after the top {len(main_picks)}:",
+            ]
             for rank, (c, grade, momentum, risk_flag) in enumerate(overflow_picks, _MAX_MAIN + 1):
-                self._format_candidate_block([], c, grade, momentum, rank, len(candidates), compact=True, risk_flag=risk_flag)
+                self._format_candidate_block(overflow_sections, c, grade, momentum, rank, len(candidates), compact=True, risk_flag=risk_flag)
+            _send_section_chunks(overflow_sections, "overflow")
 
     def _format_candidate_block(self, sections: list, c: 'BlindBuyCandidate', grade: str,
                                  momentum: float, rank: int, total: int,
