@@ -508,7 +508,13 @@ class VolumeAnomalyDetector:
                 elif regime_str == "neutral":
                     quality += 5
                 elif regime_str == "bear":
-                    quality += 0  # no bonus
+                    # Defensive sectors decouple from market — treat like neutral
+                    _defensive = sector in ("PHARMA", "FMCG", "GOLD", "SILVER", "CONSUMER")
+                    # High conviction: heavy volume AND strong buy pressure
+                    _high_conviction = vol_ratio_time_adj >= 10.0 and buy_sell_ratio >= 5.0
+                    if _defensive or _high_conviction:
+                        quality += 5  # same as neutral — let these through
+                    # else: quality += 0 (suppressed but not blocked)
                 elif regime_str == "crash":
                     quality -= 20  # penalty
                     market_safe = False
