@@ -422,10 +422,18 @@ class VolumeAnomalyDetector:
                 pre_move_score += 2.0
                 is_pre_move = True
 
+            # Opening burst mode: first 45 min (9:25–10:00 AM), use relaxed thresholds.
+            # Gap-up runners move fast — waiting for 3x volume + 2% means we catch them
+            # 90+ minutes late. At 1.5x volume + 1% we still require clear confirmation
+            # but fire before the move is exhausted.
+            _is_opening_burst = minutes <= 45
+            _vol_min = 2.0 if _is_opening_burst else self.VOLUME_RATIO_TIME_ADJ_MIN
+            _price_min = 1.0 if _is_opening_burst else self.PRICE_FROM_OPEN_MIN_PCT
+
             # Standard anomaly: requires price confirmation
             is_standard_anomaly = (
-                price_from_open >= self.PRICE_FROM_OPEN_MIN_PCT
-                and vol_ratio_time_adj >= self.VOLUME_RATIO_TIME_ADJ_MIN
+                price_from_open >= _price_min
+                and vol_ratio_time_adj >= _vol_min
             )
 
             # Pre-move anomaly: lower thresholds but needs compression + creep
