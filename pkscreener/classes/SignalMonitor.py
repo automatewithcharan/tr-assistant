@@ -1826,7 +1826,7 @@ class SignalMonitorRunner:
                 "TakeProfit1": target1,
                 "TakeProfit2": target2,
                 "SuggestedQty": qty,
-                "SignalStrengthPct": 50.0,  # placeholder
+                "SignalStrengthPct": round(min(ratio / 20.0 * 100, 100.0), 1),
                 "Checks": checks,
                 "Why": " | ".join(why_parts),
             })
