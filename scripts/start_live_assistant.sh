@@ -16,6 +16,11 @@ if [[ -f .env.dev ]]; then
     set +a
 fi
 
+# Pull latest code from GitHub so every morning's session uses the newest fixes.
+# --ff-only: only fast-forward (never merge); fails silently if network is down.
+echo "Pulling latest code from GitHub..."
+git -C "$REPO_ROOT" pull --ff-only origin main 2>&1 || echo "git pull skipped (network/conflict) — using existing code"
+
 PYTHON="$REPO_ROOT/.venv/bin/python3"
 if [[ ! -x "$PYTHON" ]]; then
     echo "ERROR: venv not found at $REPO_ROOT/.venv — run: python3 -m venv .venv && pip install -r requirements.txt"
