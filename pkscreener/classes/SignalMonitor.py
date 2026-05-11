@@ -1813,6 +1813,7 @@ class SignalMonitorRunner:
             ]
             if day_change_pct >= 1.0:
                 why_parts.append(f"Day +{day_change_pct:.1f}% (still actionable)")
+            why_parts.append("⚡ INTRADAY ONLY — exit before market close, do not hold overnight")
             checks = f"OB B/S {ratio:.1f}x | depth {int(bq/1000)}k buy | day {day_change_pct:+.1f}%"
 
             alert_rows.append({
@@ -2828,6 +2829,8 @@ class SignalMonitorRunner:
                 action_emoji = "🟢"
             elif action == "Sell / Exit":
                 action_emoji = "🔴"
+            elif "OB" in action:
+                action_emoji = "🌊"
             else:
                 action_emoji = "🔴"
             # Show day % change so user immediately sees how much it has already moved
@@ -2881,6 +2884,8 @@ class SignalMonitorRunner:
                 sl_t_line,
                 f"Qty `{qty}`",
             ]
+            if "OB" in action:
+                block_lines.append("**⚡ INTRADAY SCALP ONLY** — exit before 3:15 PM, not a swing trade")
             if checks:
                 block_lines.append(f"Quality: `{self._simplify_checks_text(checks)}`")
             if why:
