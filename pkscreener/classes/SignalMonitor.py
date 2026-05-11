@@ -194,6 +194,11 @@ class SignalMonitorRunner:
         self._ob_history: Dict[str, List[Tuple[datetime, float]]] = {}
         # Track which symbols already fired an order-book imbalance alert today.
         self._ob_alerted_today: Set[str] = set()
+        # Track which symbols have been shown in the "Current Buy Now board"
+        # section today — each stock only gets surfaced once per day to prevent
+        # the repeat-display fatigue (JKPAPER seen 25 times in one day).
+        self._board_shown_today: Set[str] = set()
+        self._board_shown_date: str = ""
         # Tick-velocity tracking: rolling 5-min history of (timestamp, vol_per_sec)
         # per symbol. Used to detect when a quiet stock suddenly gets active
         # and boost its scan priority before price has time to confirm.
@@ -2743,7 +2748,27 @@ class SignalMonitorRunner:
 
         # Apply the same blind-buy filters as the live alert path — the board must
         # only show stocks that would pass the alert gate, otherwise it misleads.
-        board = board[(board["_change"] < 5.0) & ((board["_rsi"] == 0.0) | (board["_rsi"] < 70.0))]
+        # Also enforce the strength floor (40% — matches fresh alert path) so we
+        # never surface low-conviction names like JKPAPER 21.7% or JBMA 21.5%.
+        board = board[
+            (board["_change"] < 5.0)
+            & ((board["_rsi"] == 0.0) | (board["_rsi"] < 70.0))
+            & (board["_strength"] >= 40.0)
+        ]
+        if board.empty:
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+
+        # Alert-fatigue guard: each symbol surfaces in the board ONCE per day.
+        # Reset the set at day boundary so tomorrow starts fresh.
+        try:
+            _today = PKDateUtilities.currentDateTime().strftime("%Y-%m-%d")
+        except Exception:
+            _today = datetime.now().strftime("%Y-%m-%d")
+        if self._board_shown_date != _today:
+            self._board_shown_today.clear()
+            self._board_shown_date = _today
+        if "Stock" in board.columns and self._board_shown_today:
+            board = board[~board["Stock"].astype(str).str.upper().isin(self._board_shown_today)]
         if board.empty:
             return pd.DataFrame(columns=self.ALERT_COLUMNS)
 
@@ -2755,10 +2780,12 @@ class SignalMonitorRunner:
 
         rows = []
         for rec in board.head(limit).to_dict(orient="records"):
+            _sym = str(rec.get("Stock", "")).strip().upper()
+            self._board_shown_today.add(_sym)
             rows.append(
                 {
                     "When": self.run_at_str,
-                    "Symbol": str(rec.get("Stock", "")).strip().upper(),
+                    "Symbol": _sym,
                     "PreviousAction": "Already Active",
                     "NowAction": str(rec.get("What To Do", "")).strip(),
                     "PriceNow": rec.get("Price Now", ""),
