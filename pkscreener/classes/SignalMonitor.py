@@ -41,7 +41,7 @@ class SignalMonitorRunner:
     HIGH_DAILY_CHANGE_PCT = 2.0        # Force full OHLCV rescan when live daily change exceeds this
     ORDER_BOOK_IMBALANCE_RATIO = 2.5   # Pre-jump: buyers/sellers ratio threshold
     VOLUME_BURST_FRACTION = 0.025      # Pre-jump: 2.5% of accumulated day vol traded in last 60s
-    MAX_BUY_DAILY_CHANGE_PCT = 10.0   # Alert up to 10% moves; tag 8%+ as SWING ONLY
+    MAX_BUY_DAILY_CHANGE_PCT = 9.0    # Hard cap: anything up 9%+ has already made its move
     MIN_MOMENTUM_EXTENSION_PCT = 3.0  # Minimum daily gain to qualify as a momentum extension alert (3% → 20% chaser)
     REPEAT_BUY_ALERT_SECONDS = int(os.environ.get("SIGNALMONITOR_REPEAT_BUY_ALERT_SECONDS", "60") or 60)
     FAST_MODE = str(os.environ.get("SIGNALMONITOR_FAST_MODE", "0") or "0").strip().lower() in {"1", "true", "yes", "y", "on"}
@@ -1273,11 +1273,14 @@ class SignalMonitorRunner:
                         )
                         continue
 
-            # Block any Buy Now alert (fresh or repeat) when RSI is severely overbought —
-            # RSI > 85 means the stock has already run hard and "may pull back" is real.
+            # Block any Buy Now alert (fresh or repeat) when RSI is overbought.
+            # Threshold 80 matches the repeat-alert block above — pkscreener itself
+            # labels RSI>=70 as "overbought", so anything above 80 means the Why text
+            # says "overheated — may pull back" while the action says "Buy Now", which
+            # is a direct contradiction we must suppress.
             if now_action in allowed_buy_actions:
                 rsi_val = self._to_float(row.get("RSI"))
-                if rsi_val is not None and rsi_val > 85:
+                if rsi_val is not None and rsi_val > 80:
                     skipped_already_ran.append(
                         f"{symbol} (RSI {rsi_val:.0f} — overbought, skip)"
                     )
