@@ -303,6 +303,7 @@ class SignalMonitorRunner:
             merged_simple_df,
             merged_state_df,
         )
+        self._last_simple_df = merged_simple_df
         alerts_df = self._build_alerts(previous_state_df, merged_state_df)
         momentum_alerts_df = self._build_momentum_alerts(previous_simple_df, merged_simple_df)
         if not momentum_alerts_df.empty:
@@ -2461,7 +2462,11 @@ class SignalMonitorRunner:
             self._send_telegram_alert(message)
         if "discord" in self.alert_channels:
             self._send_discord_alert(
-                self._build_discord_monitor_message(alerts_df, summary)
+                self._build_discord_monitor_message(
+                    alerts_df,
+                    summary,
+                    current_simple_df=getattr(self, "_last_simple_df", None),
+                )
             )
 
     def _is_regular_market_hours(self) -> bool:
@@ -2651,7 +2656,105 @@ class SignalMonitorRunner:
             simple.append(p.strip())
         return " | ".join(simple) if simple else why
 
-    def _build_discord_monitor_message(self, alerts_df: pd.DataFrame, summary: Dict, max_alerts: int = 3) -> str:
+    @staticmethod
+    def _is_direct_buy_action(action: str) -> bool:
+        return str(action or "").strip() in {"Strong Buy Now", "Buy Now"}
+
+    @staticmethod
+    def _is_anomaly_action(action: str) -> bool:
+        action_text = str(action or "").strip()
+        action_lower = action_text.lower()
+        return (
+            "anomaly" in action_lower
+            or "runner" in action_lower
+            or "pre-move" in action_lower
+            or action_text.startswith("🔥")
+            or action_text.startswith("⚡")
+            or action_text.startswith("👀")
+        )
+
+    def _rank_discord_alert_rows(self, alerts_df: pd.DataFrame, max_alerts: int) -> pd.DataFrame:
+        """Put fresh direct Buy Now alerts before anomaly/runner alerts."""
+        if alerts_df is None or alerts_df.empty:
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+        work = alerts_df.copy()
+        work["_discord_rank"] = work["NowAction"].astype(str).apply(
+            lambda action: (
+                0 if action == "Strong Buy Now"
+                else 1 if action == "Buy Now"
+                else 2 if action == "Momentum Buy"
+                else 3 if self._is_anomaly_action(action)
+                else 4 if action == "Sell / Exit"
+                else 5
+            )
+        )
+        work["_discord_strength"] = pd.to_numeric(work.get("SignalStrengthPct", 0), errors="coerce").fillna(0.0)
+        work.sort_values(
+            by=["_discord_rank", "_discord_strength", "Symbol"],
+            ascending=[True, False, True],
+            inplace=True,
+        )
+        return work.drop(columns=["_discord_rank", "_discord_strength"], errors="ignore").head(max_alerts)
+
+    def _current_buy_board_rows(
+        self,
+        current_simple_df: Optional[pd.DataFrame],
+        exclude_symbols: Set[str],
+        limit: int = 2,
+    ) -> pd.DataFrame:
+        """Return active Buy Now board rows when fresh alerts are anomaly-only."""
+        if current_simple_df is None or current_simple_df.empty or "What To Do" not in current_simple_df.columns:
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+        board = current_simple_df[
+            current_simple_df["What To Do"].astype(str).isin(["Strong Buy Now", "Buy Now"])
+        ].copy()
+        if board.empty:
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+        if "Stock" in board.columns and exclude_symbols:
+            board = board[~board["Stock"].astype(str).str.upper().isin(exclude_symbols)]
+        if board.empty:
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+
+        board["_strength"] = pd.to_numeric(board.get("Signal Strength %", 0), errors="coerce").fillna(0.0)
+        board["_gap"] = pd.to_numeric(board.get("Entry Gap %", 999), errors="coerce").fillna(999.0)
+        board["_change"] = pd.to_numeric(board.get("Change %", 0), errors="coerce").fillna(0.0)
+        board.sort_values(
+            by=["What To Do", "_gap", "_strength", "_change", "Stock"],
+            ascending=[False, True, False, True, True],
+            inplace=True,
+        )
+
+        rows = []
+        for rec in board.head(limit).to_dict(orient="records"):
+            rows.append(
+                {
+                    "When": self.run_at_str,
+                    "Symbol": str(rec.get("Stock", "")).strip().upper(),
+                    "PreviousAction": "Already Active",
+                    "NowAction": str(rec.get("What To Do", "")).strip(),
+                    "PriceNow": rec.get("Price Now", ""),
+                    "ChangePct": rec.get("Change %", ""),
+                    "EntryGapPct": rec.get("Entry Gap %", ""),
+                    "RSI": rec.get("RSI", ""),
+                    "BuyAbove": rec.get("Buy Above", ""),
+                    "SellIfBelow": rec.get("Sell If Below", ""),
+                    "TakeProfit1": rec.get("Take Profit 1", ""),
+                    "TakeProfit2": rec.get("Take Profit 2", ""),
+                    "SuggestedQty": rec.get("Suggested Qty", 0),
+                    "SignalStrengthPct": rec.get("Signal Strength %", 0),
+                    "Checks": rec.get("Checks", ""),
+                    "Why": rec.get("Why", ""),
+                }
+            )
+        return pd.DataFrame(rows, columns=self.ALERT_COLUMNS)
+
+    def _build_discord_monitor_message(
+        self,
+        alerts_df: pd.DataFrame,
+        summary: Dict,
+        max_alerts: int = 6,
+        current_simple_df: Optional[pd.DataFrame] = None,
+    ) -> str:
         """Build a phone-friendly Discord webhook message."""
         sections = [
             f"**PKScreener Live Alert**",
@@ -2672,7 +2775,23 @@ class SignalMonitorRunner:
                 "Guardrail `" + "; ".join(self.last_guardrail_status.reasons) + "`"
             )
 
-        for _, row in alerts_df.head(max_alerts).iterrows():
+        ranked_alerts = self._rank_discord_alert_rows(alerts_df, max_alerts=max_alerts)
+        has_fresh_direct_buy = (
+            not ranked_alerts.empty
+            and ranked_alerts["NowAction"].astype(str).apply(self._is_direct_buy_action).any()
+        )
+        if not has_fresh_direct_buy:
+            exclude_symbols = (
+                set(alerts_df["Symbol"].astype(str).str.upper())
+                if alerts_df is not None and not alerts_df.empty and "Symbol" in alerts_df.columns
+                else set()
+            )
+            board_rows = self._current_buy_board_rows(current_simple_df, exclude_symbols, limit=2)
+            if not board_rows.empty:
+                sections.append("**Current Buy Now board** _(already active; not new this cycle)_")
+                ranked_alerts = pd.concat([board_rows, ranked_alerts], ignore_index=True).head(max_alerts)
+
+        for _, row in ranked_alerts.iterrows():
             qty = int(float(row["SuggestedQty"])) if str(row["SuggestedQty"]).strip() else 0
             strength = f"{float(row['SignalStrengthPct']):.1f}%"
             checks = str(row["Checks"]).strip()
