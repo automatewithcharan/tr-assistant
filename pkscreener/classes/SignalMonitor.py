@@ -1220,9 +1220,9 @@ class SignalMonitorRunner:
                         f"{symbol} ({repeat_change_pct:+.1f}% repeat)"
                     )
                     continue
-                # RSI > 80 on a repeat alert = overbought, likely to pull back, skip
+                # RSI >= 70 on a repeat alert = overbought, skip
                 repeat_rsi = self._to_float(row.get("RSI"))
-                if repeat_rsi is not None and repeat_rsi > 80:
+                if repeat_rsi is not None and repeat_rsi >= 70:
                     skipped_already_ran.append(
                         f"{symbol} (RSI {repeat_rsi:.0f} overbought repeat)"
                     )
@@ -1258,29 +1258,22 @@ class SignalMonitorRunner:
                 _opening_window = (9 * 60 + 15) <= _ist_min <= (10 * 60 + 0)
                 _suppress_threshold = 8.0 if _opening_window else 5.0
                 if change_pct >= _suppress_threshold:
-                    entry_gap_pct = self._to_float(row.get("EntryGapPct"))
-                    already_at_or_past_trigger = entry_gap_pct <= 0.0
-                    if already_at_or_past_trigger:
-                        buy_above = self._to_float(row.get("BuyAbove"))
-                        price_now = self._to_float(row.get("PriceNow"))
-                        pct_past = (
-                            (price_now - buy_above) / buy_above * 100.0
-                            if buy_above > 0 and price_now >= buy_above
-                            else 0.0
-                        )
-                        skipped_already_ran.append(
-                            f"{symbol} ({change_pct:+.1f}% day, {pct_past:.1f}% past entry)"
-                        )
-                        continue
+                    # Unconditional: a stock up 5%+ post-opening (8%+ in opening
+                    # window) has already made its move. Don't alert regardless of
+                    # where price sits relative to BuyAbove — entering a 5%+ gapper
+                    # is chasing, not a blind-buyable setup.
+                    skipped_already_ran.append(
+                        f"{symbol} ({change_pct:+.1f}% day — already ran)"
+                    )
+                    continue
 
-            # Block any Buy Now alert (fresh or repeat) when RSI is overbought.
-            # Threshold 80 matches the repeat-alert block above — pkscreener itself
-            # labels RSI>=70 as "overbought", so anything above 80 means the Why text
-            # says "overheated — may pull back" while the action says "Buy Now", which
-            # is a direct contradiction we must suppress.
+            # Block Buy Now when RSI is at or above pkscreener's own overbought
+            # line (~70). If the scanner itself labels the stock "overbought", the
+            # Why text says "overheated — may pull back" which directly contradicts
+            # a Buy Now action. Only surface stocks with room to run (RSI < 70).
             if now_action in allowed_buy_actions:
                 rsi_val = self._to_float(row.get("RSI"))
-                if rsi_val is not None and rsi_val > 80:
+                if rsi_val is not None and rsi_val >= 70:
                     skipped_already_ran.append(
                         f"{symbol} (RSI {rsi_val:.0f} — overbought, skip)"
                     )
@@ -1794,11 +1787,12 @@ class SignalMonitorRunner:
                 continue
 
             # Detection criteria:
-            #   shift = current B/S >= 3.0 AND old avg <= 1.5
-            #   sustained = current B/S >= 5.0 (always strong even if no shift detected)
-            shift = ratio >= 3.0 and old_avg <= 1.5 and not zero_sellers
-            sustained = ratio >= 5.0 and not zero_sellers
-            if not (shift or sustained):
+            #   sustained = B/S >= 8.0 (institutional-grade, persistent imbalance)
+            # OB Surge (sudden B/S jump from <=1.5x to >=3x) is removed — too
+            # speculative, frequently reverses before fill. Only sustained heavy
+            # imbalance is blind-buyable.
+            sustained = ratio >= 8.0 and not zero_sellers
+            if not sustained:
                 continue
 
             # Build alert row in the standard ALERT_COLUMNS shape so the message
@@ -1808,10 +1802,9 @@ class SignalMonitorRunner:
             target1 = round(price * 1.06, 2)  # +6% — modest first target since unconfirmed by OHLCV
             target2 = round(price * 1.10, 2)  # +10%
             qty = int(self.budget_amount // price) if self.budget_amount and price > 0 else 0
-            tag = "🌊 OB Surge" if shift else "🌊 OB Sustained"
+            tag = "🌊 OB Sustained"
             why_parts = [
-                f"Buy/Sell ratio jumped from {old_avg:.1f}x → {ratio:.1f}x in 5 min" if shift
-                else f"Buy/Sell ratio sustained at {ratio:.1f}x — heavy directional buying",
+                f"Buy/Sell ratio sustained at {ratio:.1f}x — heavy directional buying",
                 f"Buy depth: {int(bq):,} shares vs Sell depth: {int(sq):,} shares",
             ]
             if day_change_pct >= 1.0:

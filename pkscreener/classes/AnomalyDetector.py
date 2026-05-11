@@ -606,13 +606,9 @@ class VolumeAnomalyDetector:
         # Return top 3 Grade-A/B only (the "make me rich" filter)
         top = [c for c in candidates if c.confidence_tier in ("A", "B")][:self.MAX_CANDIDATES_PER_SCAN]
 
-        # If no A/B candidates, allow top C as pre-move watchlist
-        # — but ONLY when market is safe (not crash) and quality has a floor
-        if not top:
-            top = [
-                c for c in candidates
-                if c.pre_move_score >= 5.0 and c.market_safe and c.quality_score >= 30
-            ][:3]
+        # Grade C / Pre-Move Watch intentionally removed — only Grade A/B
+        # anomalies are blind-buyable. Grade C signals require human judgment
+        # ("watch and decide") which defeats the purpose of an alert system.
 
         # Mark cooldown for alerted symbols
         with self._lock:
