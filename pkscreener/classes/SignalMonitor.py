@@ -1343,6 +1343,17 @@ class SignalMonitorRunner:
                         )
                         continue
 
+            # Suppress when budget can't afford even one share. 139 historical
+            # alerts fired with Qty 0 (e.g., ESABINDIA at ₹5174 with ₹10k budget).
+            # A zero-qty alert is useless — user can't act on it.
+            if now_action in allowed_buy_actions:
+                _qty_check = self._to_float(row.get("SuggestedQty"))
+                if _qty_check is None or _qty_check < 1:
+                    skipped_already_ran.append(
+                        f"{symbol} (budget can't afford 1 share)"
+                    )
+                    continue
+
             alert_rows.append(
                 {
                     "When": self.run_at_str,
