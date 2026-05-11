@@ -1749,6 +1749,11 @@ class SignalMonitorRunner:
                 continue
             if bq < 50000:
                 continue  # not enough buy depth to be meaningful
+            # Value-based depth floor: 50k shares of a ₹58 stock is only ₹29
+            # lakhs — not institutional. AGIIL had ₹55 crore in buy depth.
+            # Require at least ₹2 crore of standing buy interest.
+            if bq * price < 20_000_000:
+                continue
 
             # Compute current ratio. 0 sellers gets a special handling.
             zero_sellers = sq == 0
