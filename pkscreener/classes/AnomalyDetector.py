@@ -599,8 +599,12 @@ class VolumeAnomalyDetector:
         top = [c for c in candidates if c.confidence_tier in ("A", "B")][:self.MAX_CANDIDATES_PER_SCAN]
 
         # If no A/B candidates, allow top C as pre-move watchlist
+        # — but ONLY when market is safe (not crash) and quality has a floor
         if not top:
-            top = [c for c in candidates if c.pre_move_score >= 5.0][:3]
+            top = [
+                c for c in candidates
+                if c.pre_move_score >= 5.0 and c.market_safe and c.quality_score >= 30
+            ][:3]
 
         # Mark cooldown for alerted symbols
         with self._lock:
