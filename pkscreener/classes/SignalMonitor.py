@@ -1707,6 +1707,14 @@ class SignalMonitorRunner:
             return pd.DataFrame(columns=self.ALERT_COLUMNS)
         if not self._is_regular_market_hours():
             return pd.DataFrame(columns=self.ALERT_COLUMNS)
+        # OB is intraday-only — exit deadline is 3:15 PM. Firing an OB alert
+        # after 3:00 PM gives the user no time to enter and exit, so suppress.
+        try:
+            _now = PKDateUtilities.currentDateTime()
+        except Exception:
+            _now = datetime.now()
+        if _now.hour * 60 + _now.minute >= 15 * 60:  # 3:00 PM IST
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
 
         live_ticks = self.actionable_runner.live_ticks or {}
         if not live_ticks:
