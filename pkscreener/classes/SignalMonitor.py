@@ -2896,7 +2896,13 @@ class SignalMonitorRunner:
                 block_lines.append(f"Why: {self._simplify_why_text(why)}")
             sections.append("\n".join(block_lines))
 
-        return "\n\n".join(sections)[:1900]
+        msg = "\n\n".join(sections)
+        if len(msg) <= 1900:
+            return msg
+        # Truncate at the last complete section boundary so we never cut mid-alert.
+        # A partial alert (missing Qty, Target, Why) is worse than a missing alert.
+        cut = msg[:1900].rfind("\n\n")
+        return msg[:cut] if cut > 0 else msg[:1900]
 
     def _fmt_price(self, value) -> str:
         """Format numeric prices consistently for alerts."""
