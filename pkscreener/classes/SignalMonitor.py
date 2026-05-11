@@ -2715,6 +2715,14 @@ class SignalMonitorRunner:
         board["_strength"] = pd.to_numeric(board.get("Signal Strength %", 0), errors="coerce").fillna(0.0)
         board["_gap"] = pd.to_numeric(board.get("Entry Gap %", 999), errors="coerce").fillna(999.0)
         board["_change"] = pd.to_numeric(board.get("Change %", 0), errors="coerce").fillna(0.0)
+        board["_rsi"] = pd.to_numeric(board.get("RSI", 0), errors="coerce").fillna(0.0)
+
+        # Apply the same blind-buy filters as the live alert path — the board must
+        # only show stocks that would pass the alert gate, otherwise it misleads.
+        board = board[(board["_change"] < 5.0) & ((board["_rsi"] == 0.0) | (board["_rsi"] < 70.0))]
+        if board.empty:
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+
         board.sort_values(
             by=["What To Do", "_gap", "_strength", "_change", "Stock"],
             ascending=[False, True, False, True, True],
