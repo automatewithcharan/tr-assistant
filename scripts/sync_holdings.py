@@ -49,6 +49,13 @@ def main():
             print(f"  ✅ {sym}")
         print()
 
+    if result.get("adopted"):
+        print(f"Adopted {len(result['adopted'])} broker position(s) into bot tracking:")
+        for sym in result["adopted"]:
+            print(f"  ✅ {sym}")
+        print("  ⚠️  Review/create protective GTTs manually; broker-sync adoption does not place orders.")
+        print()
+
     if result["mismatches"]:
         print("Qty mismatches (need manual review):")
         for m in result["mismatches"]:

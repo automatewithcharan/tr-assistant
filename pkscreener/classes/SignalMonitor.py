@@ -43,6 +43,9 @@ class SignalMonitorRunner:
     VOLUME_BURST_FRACTION = 0.025      # Pre-jump: 2.5% of accumulated day vol traded in last 60s
     MAX_BUY_DAILY_CHANGE_PCT = 9.0    # Hard cap: anything up 9%+ has already made its move
     MIN_MOMENTUM_EXTENSION_PCT = 3.0  # Minimum daily gain to qualify as a momentum extension alert (3% → 20% chaser)
+    RUNNER_CONTINUATION_MIN_PCT = 5.0
+    RUNNER_CONTINUATION_MAX_PCT = 12.5
+    RUNNER_CONTINUATION_MAX_PULLBACK_PCT = 1.5
     REPEAT_BUY_ALERT_SECONDS = int(os.environ.get("SIGNALMONITOR_REPEAT_BUY_ALERT_SECONDS", "60") or 60)
     FAST_MODE = str(os.environ.get("SIGNALMONITOR_FAST_MODE", "0") or "0").strip().lower() in {"1", "true", "yes", "y", "on"}
     MARKET_OPEN_MINUTES_IST = 9 * 60 + 15
@@ -199,6 +202,10 @@ class SignalMonitorRunner:
         # the repeat-display fatigue (JKPAPER seen 25 times in one day).
         self._board_shown_today: Set[str] = set()
         self._board_shown_date: str = ""
+        # Runner continuation alerts are intentionally separate from first-entry
+        # Buy Now alerts. Each symbol gets one continuation alert per day.
+        self._runner_alerted_today: Set[str] = set()
+        self._runner_alerted_date: str = ""
         # Tick-velocity tracking: rolling 5-min history of (timestamp, vol_per_sec)
         # per symbol. Used to detect when a quiet stock suddenly gets active
         # and boost its scan priority before price has time to confirm.
@@ -319,6 +326,15 @@ class SignalMonitorRunner:
             ]
             if not momentum_alerts_df.empty:
                 alerts_df = pd.concat([alerts_df, momentum_alerts_df], ignore_index=True)
+        runner_alerts_df = self._build_runner_continuation_alerts(merged_simple_df)
+        if not runner_alerts_df.empty:
+            already_alerted = set(alerts_df["Symbol"].astype(str).str.upper()) if not alerts_df.empty else set()
+            if already_alerted:
+                runner_alerts_df = runner_alerts_df[
+                    ~runner_alerts_df["Symbol"].astype(str).str.upper().isin(already_alerted)
+                ]
+            if not runner_alerts_df.empty:
+                alerts_df = pd.concat([alerts_df, runner_alerts_df], ignore_index=True)
         anomaly_alerts_df = self._run_anomaly_detection()
         if not anomaly_alerts_df.empty:
             # De-dupe: skip anomaly alerts for symbols already alerted as Buy Now /
@@ -1386,8 +1402,8 @@ class SignalMonitorRunner:
 
         if skipped_already_ran:
             OutputControls().printOutput(
-                f"  [!] Suppressed {len(skipped_already_ran)} buy alert(s) — stocks already up "
-                f">={self.MAX_BUY_DAILY_CHANGE_PCT:.0f}% today (already ran): "
+                f"  [!] Suppressed {len(skipped_already_ran)} buy alert(s) — entry gate filtered "
+                f"day gain / RSI / strength / resistance / pullback risk: "
                 + ", ".join(skipped_already_ran[:10])
                 + (" ..." if len(skipped_already_ran) > 10 else "")
             )
@@ -1440,6 +1456,10 @@ class SignalMonitorRunner:
                     OutputControls().printOutput(
                         f"  [+] Anomaly detector: loaded {count} volume profiles (all cached)"
                     )
+                if count < 1000:
+                    OutputControls().printOutput(
+                        f"  [!] Anomaly detector coverage low: {count} profiles for universe `{self.universe}`"
+                    )
             except Exception as exc:
                 default_logger().warning(f"AnomalyDetector profile load failed: {exc}")
                 return pd.DataFrame(columns=self.ALERT_COLUMNS)
@@ -1455,6 +1475,7 @@ class SignalMonitorRunner:
         # Get current ticks
         current_ticks = self.actionable_runner.live_ticks or {}
         if not current_ticks:
+            OutputControls().printOutput("  [!] Anomaly detector skipped — no live Kite ticks loaded")
             return pd.DataFrame(columns=self.ALERT_COLUMNS)
 
         try:
@@ -1466,6 +1487,10 @@ class SignalMonitorRunner:
             return pd.DataFrame(columns=self.ALERT_COLUMNS)
 
         if not candidates:
+            if int(getattr(self, "_cycle_number", 0) or 0) <= 1 or int(getattr(self, "_cycle_number", 0) or 0) % 20 == 0:
+                OutputControls().printOutput(
+                    f"  [+] Anomaly detector: 0 candidates from {len(current_ticks)} live ticks"
+                )
             return pd.DataFrame(columns=self.ALERT_COLUMNS)
 
         # Convert V2 candidates to alert rows
@@ -2105,6 +2130,123 @@ class SignalMonitorRunner:
                 )
             )
         return mom_df[self.ALERT_COLUMNS].copy()
+
+    def _build_runner_continuation_alerts(self, current_simple_df: pd.DataFrame) -> pd.DataFrame:
+        """Surface controlled continuation entries for stocks already up 5-12%.
+
+        The regular Buy Now lane intentionally avoids chasing 5%+ moves. This
+        lane covers the separate case where a stock is still near the day high
+        with strong volume and enough quality to justify a smaller runner entry.
+        """
+        if current_simple_df is None or current_simple_df.empty:
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+
+        try:
+            today = PKDateUtilities.currentDateTime().strftime("%Y-%m-%d")
+        except Exception:
+            today = datetime.now().strftime("%Y-%m-%d")
+        if getattr(self, "_runner_alerted_date", "") != today:
+            self._runner_alerted_today = set()
+            self._runner_alerted_date = today
+
+        live_ticks = self.actionable_runner.live_ticks or {}
+        rows = []
+        for rec in current_simple_df.to_dict(orient="records"):
+            sym = str(rec.get("Stock", "")).strip().upper()
+            if not sym or sym in self._runner_alerted_today:
+                continue
+
+            action = str(rec.get("What To Do", "")).strip()
+            setup = str(rec.get("Momentum Setup", "")).strip()
+            if action not in {"Strong Buy Now", "Buy Now"} and setup != "Momentum Buy":
+                continue
+
+            change_pct = self._to_float(rec.get("Change %"))
+            if not (self.RUNNER_CONTINUATION_MIN_PCT <= change_pct <= self.RUNNER_CONTINUATION_MAX_PCT):
+                continue
+
+            volume_ratio = self._to_float(rec.get("Volume vs Avg"))
+            if volume_ratio < 2.0:
+                continue
+
+            strength = self._to_float(rec.get("Signal Strength %"))
+            if strength < 30.0:
+                continue
+
+            rsi_val = self._to_float(rec.get("RSI"))
+            if rsi_val is not None and rsi_val >= 88.0:
+                continue
+
+            price_now = self._to_float(rec.get("Price Now"))
+            if price_now <= 0:
+                continue
+
+            tick = live_ticks.get(sym, {})
+            day_high = self._to_float(tick.get("high", 0))
+            if day_high > 0:
+                pullback = (day_high - price_now) / price_now * 100.0
+                if pullback > self.RUNNER_CONTINUATION_MAX_PULLBACK_PCT:
+                    continue
+            else:
+                pullback = 0.0
+
+            total_buy = self._to_float(tick.get("total_buy_quantity", 0))
+            total_sell = self._to_float(tick.get("total_sell_quantity", 0))
+            bs_ratio = total_buy / total_sell if total_sell > 0 else (9.99 if total_buy > 0 else 0.0)
+            if total_sell > 0 and bs_ratio < 0.8:
+                continue
+
+            suggested_qty = self._to_float(rec.get("Suggested Qty"))
+            if suggested_qty < 1:
+                continue
+
+            entry = price_now
+            stop = max(self._to_float(rec.get("Sell If Below")), round(entry * 0.965, 2))
+            target1 = max(self._to_float(rec.get("Take Profit 1")), round(entry * 1.04, 2))
+            target2 = max(self._to_float(rec.get("Take Profit 2")), round(entry * 1.08, 2))
+            checks = str(rec.get("Checks", "")).strip()
+            runner_checks = [
+                checks,
+                f"runner continuation +{change_pct:.1f}%",
+                f"vol {volume_ratio:.1f}x",
+            ]
+            if day_high > 0:
+                runner_checks.append(f"near high pullback {pullback:.1f}%")
+            if bs_ratio > 0:
+                runner_checks.append(f"B/S {bs_ratio:.1f}x")
+
+            rows.append(
+                {
+                    "When": self.run_at_str,
+                    "Symbol": sym,
+                    "PreviousAction": action or setup or "None",
+                    "NowAction": "🚀 Runner Continuation",
+                    "PriceNow": entry,
+                    "ChangePct": round(change_pct, 2),
+                    "EntryGapPct": rec.get("Entry Gap %", ""),
+                    "RSI": rec.get("RSI", ""),
+                    "BuyAbove": entry,
+                    "SellIfBelow": stop,
+                    "TakeProfit1": target1,
+                    "TakeProfit2": target2,
+                    "SuggestedQty": int(suggested_qty),
+                    "SignalStrengthPct": strength,
+                    "Checks": " | ".join(p for p in runner_checks if p),
+                    "Why": str(rec.get("Why", "")).strip()
+                    + " | Continuation lane: already moving but still near day high",
+                }
+            )
+            self._runner_alerted_today.add(sym)
+
+        if not rows:
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+        out = pd.DataFrame(rows, columns=self.ALERT_COLUMNS)
+        out.sort_values(by=["SignalStrengthPct", "ChangePct", "Symbol"], ascending=[False, False, True], inplace=True)
+        OutputControls().printOutput(
+            "  [+] Runner continuation alert(s): "
+            + ", ".join(f"{r['Symbol']} (+{float(r['ChangePct']):.1f}%)" for _, r in out.head(5).iterrows())
+        )
+        return out[self.ALERT_COLUMNS].copy()
 
     def _build_summary(self, report_df: pd.DataFrame, scanned_symbols: int, alert_count: int) -> pd.DataFrame:
         """Create a compact monitor summary for CSV and dashboard use."""

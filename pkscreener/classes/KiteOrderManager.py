@@ -315,7 +315,7 @@ class KiteOrderManager:
     """
 
     def __init__(self, output_dir: str = ""):
-        self.output_dir = output_dir or Archiver.get_user_outputs_dir()
+        self.output_dir = output_dir or Archiver.get_user_data_dir()
         self._positions_file = Path(self.output_dir) / "kite_tracked_positions.json"
         self._orders_log_file = Path(self.output_dir) / "kite_orders_log.csv"
         self._pending_buys_file = Path(self.output_dir) / "kite_pending_buys.json"
@@ -2318,7 +2318,8 @@ class KiteOrderManager:
             return {"error": str(exc), "reconciled": False}
 
         report = {"broker_positions": len(broker_holdings), "tracked_positions": 0,
-                  "auto_closed": [], "mismatches": [], "untracked": [], "reconciled": True}
+                  "auto_closed": [], "mismatches": [], "untracked": [], "adopted": [],
+                  "reconciled": True}
 
         with self._lock:
             tracked_open = {sym: pos for sym, pos in self._positions.items() if pos.status == "open"}
@@ -2355,9 +2356,48 @@ class KiteOrderManager:
             if changed:
                 self._save_positions()
 
-        for sym in broker_holdings:
-            if sym not in tracked_open:
-                report["untracked"].append(sym)
+        adopt_untracked = str(os.environ.get("KITE_ADOPT_UNTRACKED_POSITIONS", "1") or "1").strip().lower() not in {
+            "0", "false", "no", "n", "off"
+        }
+        with self._lock:
+            changed = False
+            for sym, bp in broker_holdings.items():
+                if sym in tracked_open:
+                    continue
+                qty = int(bp.get("qty", 0) or 0)
+                if qty <= 0:
+                    report["untracked"].append(sym)
+                    continue
+                if not adopt_untracked:
+                    report["untracked"].append(sym)
+                    continue
+
+                avg_price = float(bp.get("avg_price", 0) or 0)
+                last_price = float(bp.get("last_price", 0) or 0)
+                ref_price = avg_price if avg_price > 0 else last_price
+                pos = TrackedPosition(
+                    symbol=sym,
+                    qty=qty,
+                    buy_price=ref_price,
+                    buy_order_id="BROKER_SYNC",
+                    stop_loss=round(ref_price * 0.95, 2) if ref_price > 0 else 0.0,
+                    target1=round(ref_price * 1.06, 2) if ref_price > 0 else 0.0,
+                    target2=round(ref_price * 1.10, 2) if ref_price > 0 else 0.0,
+                    blind_score=0.0,
+                    reasons="Adopted from live Kite broker exposure during reconciliation",
+                    product_type=str(bp.get("product") or "CNC"),
+                    holding_horizon="broker-sync",
+                )
+                pos.highest_price = max(ref_price, last_price)
+                pos.gtt_status = "needs_review"
+                pos.gtt_last_error = "Adopted from broker; protective GTT not created automatically"
+                self._positions[sym] = pos
+                report["adopted"].append(sym)
+                changed = True
+                _log.info("Reconcile: adopted untracked broker position %s qty=%s avg=%.2f", sym, qty, ref_price)
+
+            if changed:
+                self._save_positions()
 
         return report
 

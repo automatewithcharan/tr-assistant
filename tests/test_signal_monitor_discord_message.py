@@ -1,4 +1,5 @@
 import pandas as pd
+from types import SimpleNamespace
 
 from pkscreener.classes.SignalMonitor import SignalMonitorRunner
 
@@ -8,6 +9,8 @@ def _make_runner() -> SignalMonitorRunner:
     runner.universe = "all"
     runner.run_at_str = "2026-05-08 10:15:00"
     runner.last_guardrail_status = None
+    runner._board_shown_today = set()
+    runner._board_shown_date = ""
     return runner
 
 
@@ -85,3 +88,46 @@ def test_discord_message_shows_current_buy_board_when_fresh_alert_is_anomaly_onl
 
     assert "Current Buy Now board" in message
     assert message.index("`WELCORP`") < message.index("`AEROFLEX`")
+
+
+def test_runner_continuation_surfaces_five_to_twelve_percent_runner():
+    runner = _make_runner()
+    runner.actionable_runner = SimpleNamespace(
+        live_ticks={
+            "BBOX": {
+                "high": 110.5,
+                "total_buy_quantity": 250000,
+                "total_sell_quantity": 120000,
+            }
+        }
+    )
+    runner._runner_alerted_today = set()
+    runner._runner_alerted_date = ""
+
+    current_simple_df = pd.DataFrame(
+        [
+            {
+                "Stock": "BBOX",
+                "What To Do": "Buy Now",
+                "Momentum Setup": "Momentum Buy",
+                "Price Now": 110.0,
+                "Change %": 8.5,
+                "Volume vs Avg": 3.0,
+                "Signal Strength %": 42.0,
+                "RSI": 72.0,
+                "Entry Gap %": 0.2,
+                "Buy Above": 111.0,
+                "Sell If Below": 104.0,
+                "Take Profit 1": 118.0,
+                "Take Profit 2": 124.0,
+                "Suggested Qty": 10,
+                "Checks": "confidence ok, volume ok",
+                "Why": "Price above ATR trailing stop",
+            }
+        ]
+    )
+
+    alerts = runner._build_runner_continuation_alerts(current_simple_df)
+
+    assert list(alerts["Symbol"]) == ["BBOX"]
+    assert alerts.iloc[0]["NowAction"] == "🚀 Runner Continuation"

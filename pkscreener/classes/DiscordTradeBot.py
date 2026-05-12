@@ -593,7 +593,7 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
                         kite_line = ""
                         try:
                             from pkscreener.classes.KiteOrderManager import KiteOrderManager
-                            _km = KiteOrderManager(output_dir=Archiver.get_user_outputs_dir())
+                            _km = KiteOrderManager(output_dir=Archiver.get_user_data_dir())
                             if _km.auto_trade:
                                 kite_line = f"\n• 🤖 Kite auto-trade **ON** (dry_run={'Yes' if _km.dry_run else 'No'})"
                         except Exception:
@@ -1108,7 +1108,7 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
 
         try:
             from pkscreener.classes.KiteOrderManager import KiteOrderManager
-            mgr = KiteOrderManager(output_dir=Archiver.get_user_outputs_dir())
+            mgr = KiteOrderManager(output_dir=Archiver.get_user_data_dir())
             message = mgr.format_positions_summary()
         except Exception as exc:
             message = f"⚠️ kitepositions failed: {exc}"
@@ -1125,7 +1125,7 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
         await interaction.response.defer(thinking=True)
         try:
             from pkscreener.classes.KiteOrderManager import KiteOrderManager
-            mgr = KiteOrderManager(output_dir=Archiver.get_user_outputs_dir())
+            mgr = KiteOrderManager(output_dir=Archiver.get_user_data_dir())
 
             # Snapshot system recommendation BEFORE executing the sell.
             # If the system wasn't flagging an exit, this is a manual override.
@@ -1191,7 +1191,7 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
         await interaction.response.defer(thinking=True)
         try:
             from pkscreener.classes.KiteOrderManager import KiteOrderManager
-            mgr = KiteOrderManager(output_dir=Archiver.get_user_outputs_dir())
+            mgr = KiteOrderManager(output_dir=Archiver.get_user_data_dir())
 
             # Get live price from ticks
             ticks = mgr._load_ticks()
@@ -1223,7 +1223,7 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
         await interaction.response.defer(thinking=True)
         try:
             from pkscreener.classes.KiteOrderManager import KiteOrderManager
-            mgr = KiteOrderManager(output_dir=Archiver.get_user_outputs_dir())
+            mgr = KiteOrderManager(output_dir=Archiver.get_user_data_dir())
             report = await asyncio.to_thread(mgr.reconcile_with_broker)
             if report.get("error"):
                 message = f"⚠️ Reconciliation error: {report['error']}"
@@ -1255,7 +1255,7 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
 
         try:
             from pkscreener.classes.KiteOrderManager import KiteOrderManager
-            mgr = KiteOrderManager(output_dir=Archiver.get_user_outputs_dir())
+            mgr = KiteOrderManager(output_dir=Archiver.get_user_data_dir())
             open_pos = mgr.get_open_positions()
             closed_pos = mgr.get_closed_positions()
             total_pnl = mgr.get_total_pnl()
@@ -1376,7 +1376,7 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
         if stop_loss > 0 and target > 0:
             try:
                 from pkscreener.classes.KiteOrderManager import KiteOrderManager
-                mgr = KiteOrderManager(output_dir=Archiver.get_user_outputs_dir())
+                mgr = KiteOrderManager(output_dir=Archiver.get_user_data_dir())
                 gtt = await asyncio.to_thread(
                     mgr.place_gtt_oco, symbol, qty, price, stop_loss, target
                 )
@@ -1400,7 +1400,7 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
         # Reconcile with Kite portfolio to confirm holding
         try:
             from pkscreener.classes.KiteOrderManager import KiteOrderManager
-            mgr = KiteOrderManager(output_dir=Archiver.get_user_outputs_dir())
+            mgr = KiteOrderManager(output_dir=Archiver.get_user_data_dir())
             rec = await asyncio.to_thread(mgr.reconcile_with_broker)
             kite_holdings = rec.get("broker_positions", []) or []
             found = any(

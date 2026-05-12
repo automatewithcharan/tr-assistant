@@ -128,6 +128,37 @@ def _fifo_pnl(orders: List[Dict]) -> Tuple[Dict, List[Dict]]:
     return open_pos, closed
 
 
+def _broker_open_positions() -> Dict:
+    """Prefer fresh Kite broker exposure for open-position health when available."""
+    try:
+        from pkscreener.classes.KiteOrderManager import KiteOrderManager
+
+        mgr = KiteOrderManager(output_dir=str(_ROOT / "results" / "Data"))
+        exposure = mgr.get_broker_exposure()
+    except Exception:
+        return {}
+
+    open_pos = {}
+    today = date.today().isoformat()
+    for sym, row in exposure.items():
+        qty = float(row.get("qty") or 0)
+        avg = float(row.get("avg_price") or 0)
+        live = float(row.get("last_price") or 0)
+        if not sym or qty == 0 or avg <= 0:
+            continue
+        invested = abs(qty) * avg
+        open_pos[sym] = {
+            "qty": qty,
+            "avg_cost": avg,
+            "invested": invested,
+            "entry_date": today,
+            "live": live if live > 0 else avg,
+            "broker_pnl": float(row.get("pnl") or 0),
+            "source": row.get("source", "broker"),
+        }
+    return open_pos
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Failure analysis
 # ─────────────────────────────────────────────────────────────────────────────
@@ -175,10 +206,18 @@ def _analyse_failures(all_rows: List[Dict]) -> Dict:
 def _position_health(open_pos: Dict) -> List[Dict]:
     rows = []
     for sym, pos in open_pos.items():
-        live = _current_price(sym)
+        live = float(pos.get("live") or 0)
+        broker_pnl = pos.get("broker_pnl")
+        if live <= 0:
+            live = _current_price(sym)
         if live <= 0:
             live = pos["avg_cost"]
-        pnl_pct = (live - pos["avg_cost"]) / pos["avg_cost"] * 100
+        if broker_pnl is not None and pos.get("invested", 0) > 0:
+            pnl_pct = float(broker_pnl) / float(pos["invested"]) * 100
+        elif float(pos.get("qty", 0) or 0) < 0:
+            pnl_pct = (pos["avg_cost"] - live) / pos["avg_cost"] * 100
+        else:
+            pnl_pct = (live - pos["avg_cost"]) / pos["avg_cost"] * 100
         hold_days = (date.today() - date.fromisoformat(pos["entry_date"])).days
         sl_level  = pos["avg_cost"] * 0.95
         trail_activated = pnl_pct >= 5.0
@@ -334,6 +373,9 @@ def build_report(today_only: bool = False) -> str:
         all_rows = [r for r in all_rows if r.get("timestamp", "")[:10] >= since]
 
     open_pos, closed = _fifo_pnl(orders)
+    broker_open = _broker_open_positions()
+    if broker_open:
+        open_pos = broker_open
     failures  = _analyse_failures(all_rows)
     health    = _position_health(open_pos)
     feedback  = _generate_feedback(closed, health, failures)
