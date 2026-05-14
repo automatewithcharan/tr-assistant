@@ -6,7 +6,10 @@
 set -e
 
 REPO=/home/charan_sai/tr-assistant
-PYTHON=$REPO/venv/bin/python3
+PYTHON=$REPO/.venv/bin/python
+if [ ! -x "$PYTHON" ]; then
+    PYTHON=$REPO/venv/bin/python3
+fi
 LOG=/tmp/daily_prewarm.log
 WEBHOOK=$(grep DISCORD_WEBHOOK_URL $REPO/.env.dev 2>/dev/null | cut -d= -f2- || echo '')
 

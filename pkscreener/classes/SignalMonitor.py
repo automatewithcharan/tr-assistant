@@ -163,6 +163,12 @@ class SignalMonitorRunner:
         self.enable_scorecard = not self.fast_mode and str(os.environ.get("SIGNALMONITOR_ENABLE_SCORECARD", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
         self.enable_paper_tracking = not self.fast_mode and str(os.environ.get("SIGNALMONITOR_ENABLE_PAPER_TRACKING", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
         self.save_full_outputs = not self.fast_mode and str(os.environ.get("SIGNALMONITOR_SAVE_FULL_OUTPUTS", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
+        self.enable_standalone_ob_alerts = str(os.environ.get("SIGNALMONITOR_ENABLE_STANDALONE_OB", "0") or "0").strip().lower() in {"1", "true", "yes", "y", "on"}
+        self.enable_intraday_goal_mode = str(os.environ.get("SIGNALMONITOR_INTRADAY_GOAL_MODE", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
+        self.goal_max_trades_per_day = max(1, int(float(os.environ.get("SIGNALMONITOR_GOAL_MAX_TRADES_PER_DAY", "1") or "1")))
+        self.goal_stop_pct = max(0.25, float(os.environ.get("SIGNALMONITOR_GOAL_STOP_PCT", "1.0") or "1.0"))
+        self.goal_target1_pct = max(0.5, float(os.environ.get("SIGNALMONITOR_GOAL_TARGET1_PCT", "3.0") or "3.0"))
+        self.goal_target2_pct = max(self.goal_target1_pct, float(os.environ.get("SIGNALMONITOR_GOAL_TARGET2_PCT", "5.0") or "5.0"))
         self.actionable_runner = ActionableReportRunner(
             config_manager=config_manager,
             universe=universe,
@@ -189,9 +195,10 @@ class SignalMonitorRunner:
         self._last_partial_save_ts = 0.0
         self._paper_tracker = PaperTradeTracker()
         self._paper_closed_date: Optional[str] = None
-        # Wall-clock tracking: first time we alert a symbol today → skip repeat caps.
-        # Keyed by symbol, value is "YYYY-MM-DD" of last alert day.
-        self._daily_alerted: Dict[str, str] = {}
+        # Wall-clock tracking: first time we alert a symbol today -> skip repeat caps.
+        # Persisted because the live monitor is often launched by schedulers where
+        # process memory resets between cycles.
+        self._daily_alerted: Dict[str, str] = self._load_daily_alerted_map()
         # Order book history per symbol: list of (timestamp, b/s ratio).
         # Rolling 5-minute window for shift detection.
         self._ob_history: Dict[str, List[Tuple[datetime, float]]] = {}
@@ -200,8 +207,8 @@ class SignalMonitorRunner:
         # Track which symbols have been shown in the "Current Buy Now board"
         # section today — each stock only gets surfaced once per day to prevent
         # the repeat-display fatigue (JKPAPER seen 25 times in one day).
-        self._board_shown_today: Set[str] = set()
-        self._board_shown_date: str = ""
+        self._board_shown_date: str = self._today_key()
+        self._board_shown_today: Set[str] = self._load_daily_symbol_set("buy_board")
         # Runner continuation alerts are intentionally separate from first-entry
         # Buy Now alerts. Each symbol gets one continuation alert per day.
         self._runner_alerted_today: Set[str] = set()
@@ -353,6 +360,12 @@ class SignalMonitorRunner:
         # or volume anomaly paths.
         ob_alerts_df = self._run_orderbook_imbalance()
         if not ob_alerts_df.empty:
+            alerts_df = self._annotate_ob_confirmations(alerts_df, ob_alerts_df)
+            if not self.enable_standalone_ob_alerts:
+                OutputControls().printOutput(
+                    f"  [+] OB confirmation only: {len(ob_alerts_df)} symbol(s), standalone OB alerts disabled"
+                )
+                ob_alerts_df = pd.DataFrame(columns=self.ALERT_COLUMNS)
             already = set(alerts_df["Symbol"].astype(str).str.upper()) if not alerts_df.empty else set()
             if already:
                 ob_alerts_df = ob_alerts_df[
@@ -360,6 +373,7 @@ class SignalMonitorRunner:
                 ]
             if not ob_alerts_df.empty:
                 alerts_df = pd.concat([alerts_df, ob_alerts_df], ignore_index=True)
+        alerts_df = self._apply_intraday_goal_mode(alerts_df)
         # V2: Follow-through check + exit monitoring
         self._check_followthrough_and_exits()
         # V2: End-of-day missed opportunity analysis
@@ -1396,7 +1410,7 @@ class SignalMonitorRunner:
                 }
             )
             if now_action in allowed_buy_actions:
-                self._daily_alerted[symbol] = today_str
+                self._mark_daily_alerted(symbol, today_str)
                 if not already_alerted_today:
                     first_alerts_this_cycle += 1
 
@@ -1416,6 +1430,59 @@ class SignalMonitorRunner:
                 inplace=True,
             )
         return alerts_df[self.ALERT_COLUMNS].copy()
+
+    def _today_key(self) -> str:
+        try:
+            run_at = getattr(self, "run_at", None)
+            if run_at is not None:
+                return run_at.strftime("%Y-%m-%d")
+            return PKDateUtilities.currentDateTime().strftime("%Y-%m-%d")
+        except Exception:
+            return datetime.now().strftime("%Y-%m-%d")
+
+    def _daily_symbol_path(self, kind: str, today: Optional[str] = None) -> str:
+        output_dir = getattr(self, "output_dir", "") or Archiver.get_user_data_dir()
+        safe_kind = str(kind or "symbols").strip().lower().replace(" ", "_")
+        day = today or self._today_key()
+        return os.path.join(output_dir, f"signalmonitor_{safe_kind}_{day}.txt")
+
+    def _load_daily_symbol_set(self, kind: str, today: Optional[str] = None) -> Set[str]:
+        path = self._daily_symbol_path(kind, today=today)
+        if not os.path.isfile(path):
+            return set()
+        try:
+            with open(path, "r", encoding="utf-8") as handle:
+                return {line.strip().upper() for line in handle if line.strip()}
+        except Exception:
+            return set()
+
+    def _append_daily_symbol(self, kind: str, symbol: str, today: Optional[str] = None) -> None:
+        sym = str(symbol or "").strip().upper()
+        if not sym:
+            return
+        try:
+            path = self._daily_symbol_path(kind, today=today)
+            os.makedirs(os.path.dirname(path), exist_ok=True)
+            with open(path, "a", encoding="utf-8") as handle:
+                handle.write(sym + "\n")
+        except Exception:
+            default_logger().debug(
+                "Failed to persist SignalMonitor %s symbol %s", kind, sym, exc_info=True
+            )
+
+    def _load_daily_alerted_map(self) -> Dict[str, str]:
+        today = self._today_key()
+        return {symbol: today for symbol in self._load_daily_symbol_set("alerted_buys", today=today)}
+
+    def _mark_daily_alerted(self, symbol: str, today: Optional[str] = None) -> None:
+        sym = str(symbol or "").strip().upper()
+        day = today or self._today_key()
+        if not sym:
+            return
+        if self._daily_alerted.get(sym) == day:
+            return
+        self._daily_alerted[sym] = day
+        self._append_daily_symbol("alerted_buys", sym, today=day)
 
     def _parse_state_timestamp(self, value) -> Optional[datetime]:
         """Parse saved monitor timestamps safely for cooldown checks."""
@@ -1796,6 +1863,9 @@ class SignalMonitorRunner:
                 continue
             if volume < 50000:
                 continue
+            traded_value = volume * price
+            if traded_value < 30_000_000:
+                continue  # standing depth must be backed by at least ₹3Cr traded value
             if bq < 50000:
                 continue  # not enough buy depth to be meaningful
             # Value-based depth floor: 50k shares of a ₹58 stock is only ₹29
@@ -1835,9 +1905,17 @@ class SignalMonitorRunner:
                 if pullback_pct > 2.0:
                     continue
 
-            # Day gain cap — skip exhausted runners
+            # Price confirmation. OB depth alone is not enough: passive buy
+            # orders can be pulled, spoofed, or sit below market while price
+            # keeps falling. Require the stock to be green vs both prev close
+            # and open so the imbalance is showing up in actual prints.
             day_change_pct = (price - prev_close) / prev_close * 100.0 if prev_close > 0 else 0.0
-            if day_change_pct > 8.0 or day_change_pct < -2.0:
+            open_change_pct = (price - day_open) / day_open * 100.0 if day_open > 0 else 0.0
+            if day_change_pct < 0.5 or open_change_pct < 0.2:
+                continue
+
+            # Day gain cap — skip exhausted runners
+            if day_change_pct > 8.0:
                 continue
 
             # Detection criteria:
@@ -1847,6 +1925,12 @@ class SignalMonitorRunner:
             # imbalance is blind-buyable.
             sustained = ratio >= 8.0 and not zero_sellers
             if not sustained:
+                continue
+
+            # Make "sustained" real: at least part of the 5-minute history must
+            # also show heavy imbalance. A single late spike in visible depth is
+            # too easy to misread.
+            if old_avg < 5.0:
                 continue
 
             # Build alert row in the standard ALERT_COLUMNS shape so the message
@@ -1864,7 +1948,10 @@ class SignalMonitorRunner:
             if day_change_pct >= 1.0:
                 why_parts.append(f"Day +{day_change_pct:.1f}% (still actionable)")
             why_parts.append("⚡ INTRADAY ONLY — exit before market close, do not hold overnight")
-            checks = f"OB B/S {ratio:.1f}x | depth {int(bq/1000)}k buy | day {day_change_pct:+.1f}%"
+            checks = (
+                f"OB B/S {ratio:.1f}x | depth {int(bq/1000)}k buy | "
+                f"turnover ₹{traded_value/10_000_000:.1f}Cr | day {day_change_pct:+.1f}%"
+            )
 
             alert_rows.append({
                 "When": self.run_at_str,
@@ -1893,6 +1980,216 @@ class SignalMonitorRunner:
             )
 
         return pd.DataFrame(alert_rows, columns=self.ALERT_COLUMNS)
+
+    def _annotate_ob_confirmations(self, alerts_df: pd.DataFrame, ob_alerts_df: pd.DataFrame) -> pd.DataFrame:
+        """Use OB as confirmation on stronger lanes instead of a standalone trigger."""
+        if alerts_df is None or alerts_df.empty or ob_alerts_df is None or ob_alerts_df.empty:
+            return alerts_df
+        out = alerts_df.copy()
+        ob_map = {
+            str(row.get("Symbol", "")).strip().upper(): row
+            for row in ob_alerts_df.to_dict(orient="records")
+        }
+        for idx, row in out.iterrows():
+            symbol = str(row.get("Symbol", "")).strip().upper()
+            ob_row = ob_map.get(symbol)
+            if not ob_row:
+                continue
+            action = str(row.get("NowAction", "")).strip()
+            if action == "Sell / Exit":
+                continue
+            checks = str(row.get("Checks", "") or "")
+            why = str(row.get("Why", "") or "")
+            ob_checks = str(ob_row.get("Checks", "") or "")
+            ob_reason = "OB confirms visible buyer depth"
+            out.at[idx, "Checks"] = (checks + " | " if checks else "") + ob_checks
+            out.at[idx, "Why"] = (why + " | " if why else "") + ob_reason
+        return out
+
+    def _apply_intraday_goal_mode(self, alerts_df: pd.DataFrame) -> pd.DataFrame:
+        """Keep only alerts that fit the strict 3%-burst intraday playbook.
+
+        This is not a promise of 3% daily returns. It is a capital-allocation
+        gate: one high-conviction buy-style candidate per day by default, with
+        tight intraday exits. Sell/exit alerts are always preserved.
+        """
+        if not getattr(self, "enable_intraday_goal_mode", True):
+            return alerts_df
+        if alerts_df is None or alerts_df.empty:
+            return alerts_df
+
+        today = self._today_key()
+        max_per_day = max(1, int(getattr(self, "goal_max_trades_per_day", 1) or 1))
+        already_goal_symbols = self._load_daily_symbol_set("goal_burst", today=today)
+        remaining_slots = max(0, max_per_day - len(already_goal_symbols))
+
+        sell_rows: List[Dict] = []
+        candidates: List[Tuple[float, Dict]] = []
+        suppressed: List[str] = []
+
+        for row in alerts_df.to_dict(orient="records"):
+            action = str(row.get("NowAction", "") or "").strip()
+            symbol = str(row.get("Symbol", "") or "").strip().upper()
+            if action == "Sell / Exit":
+                sell_rows.append(row)
+                continue
+            if not self._is_goal_mode_buy_action(action):
+                suppressed.append(f"{symbol} ({action or 'unknown'})")
+                continue
+            qualifies, score, reason = self._intraday_goal_decision(row)
+            if not qualifies:
+                suppressed.append(f"{symbol} ({reason})")
+                continue
+            if symbol in already_goal_symbols:
+                suppressed.append(f"{symbol} (goal-mode already surfaced today)")
+                continue
+            tuned = self._tune_goal_mode_alert_row(row, reason)
+            candidates.append((score, tuned))
+
+        candidates.sort(key=lambda item: (-item[0], str(item[1].get("Symbol", ""))))
+        selected_rows = []
+        for _, row in candidates[:remaining_slots]:
+            selected_rows.append(row)
+            symbol = str(row.get("Symbol", "") or "").strip().upper()
+            if symbol:
+                already_goal_symbols.add(symbol)
+                self._append_daily_symbol("goal_burst", symbol, today=today)
+        suppressed.extend(
+            f"{str(row.get('Symbol', '')).strip().upper()} (daily goal slots full)"
+            for _, row in candidates[remaining_slots:]
+        )
+
+        if suppressed:
+            OutputControls().printOutput(
+                f"  [!] Intraday goal mode suppressed {len(suppressed)} buy alert(s): "
+                + ", ".join(suppressed[:10])
+                + (" ..." if len(suppressed) > 10 else "")
+            )
+        if selected_rows:
+            OutputControls().printOutput(
+                "  [+] Intraday goal mode: "
+                f"{len(selected_rows)}/{max_per_day} tradeable burst candidate(s) selected — "
+                + ", ".join(str(r.get("Symbol", "")).strip().upper() for r in selected_rows)
+            )
+
+        return pd.DataFrame(sell_rows + selected_rows, columns=self.ALERT_COLUMNS)
+
+    @staticmethod
+    def _is_goal_mode_buy_action(action: str) -> bool:
+        text = str(action or "").strip()
+        lower = text.lower()
+        return (
+            text in {"Strong Buy Now", "Buy Now", "Momentum Buy"}
+            or "anomaly" in lower
+            or "runner" in lower
+            or "pre-move" in lower
+            or "ob" in lower
+            or text.startswith("🔥")
+            or text.startswith("⚡")
+            or text.startswith("👀")
+        )
+
+    def _intraday_goal_decision(self, row: Dict) -> Tuple[bool, float, str]:
+        action = str(row.get("NowAction", "") or "").strip()
+        action_lower = action.lower()
+        checks = str(row.get("Checks", "") or "")
+        checks_lower = checks.lower()
+        strength = self._to_float(row.get("SignalStrengthPct"))
+        change_pct = self._to_float(row.get("ChangePct"))
+        entry_gap_pct = self._to_float(row.get("EntryGapPct"))
+        rsi = self._to_float(row.get("RSI"))
+        volume_ratio = self._extract_volume_ratio(checks)
+        bs_ratio = self._extract_buy_sell_ratio(checks)
+        has_ob_confirmation = "ob b/s" in checks_lower or "ob confirms" in checks_lower
+        has_sector_confirmation = "sector" in checks_lower
+        has_compression = "compressed" in checks_lower
+
+        strength = strength if strength is not None else 0.0
+        change_pct = change_pct if change_pct is not None else 0.0
+        entry_gap_pct = entry_gap_pct if entry_gap_pct is not None else 0.0
+        rsi = rsi if rsi is not None else 0.0
+
+        if "ob" in action_lower and not has_ob_confirmation:
+            return False, 0.0, "OB standalone blocked"
+        if change_pct > 7.0:
+            return False, 0.0, f"day move {change_pct:+.1f}% too stretched"
+        if rsi >= 74.0:
+            return False, 0.0, f"RSI {rsi:.0f} too hot"
+
+        # Highest priority: anomaly-style setups. The alert backtest only showed
+        # a 3% burst profile here; direct/OB-only signals were not robust.
+        if "grade-a" in action_lower or "runner" in action_lower:
+            if strength >= 60.0 and change_pct <= 7.0:
+                return True, 1000.0 + strength + min(volume_ratio, 10.0) * 5.0, "Grade-A/runner burst setup"
+            return False, 0.0, "runner quality below goal mode"
+
+        if "pre-move" in action_lower or action.startswith("👀"):
+            if strength >= 55.0 and change_pct <= 4.0 and (volume_ratio >= 3.0 or bs_ratio >= 1.2 or has_sector_confirmation or has_compression):
+                return True, 930.0 + strength + min(volume_ratio, 10.0) * 4.0 + bs_ratio * 3.0, "Pre-move burst setup"
+            return False, 0.0, "pre-move lacks volume/buy pressure"
+
+        if "anomaly" in action_lower or action.startswith("⚡") or action.startswith("🔥"):
+            directional_confirmation = bs_ratio >= 1.5 or has_sector_confirmation or has_compression or has_ob_confirmation
+            if strength >= 60.0 and volume_ratio >= 5.0 and change_pct <= 6.0 and directional_confirmation:
+                return True, 900.0 + strength + min(volume_ratio, 15.0) * 4.0 + bs_ratio * 5.0, "Grade-B anomaly burst setup"
+            return False, 0.0, "anomaly below 3% burst bar"
+
+        # Direct Buy Now only becomes goal-mode tradeable when another lane confirms.
+        if action in {"Strong Buy Now", "Buy Now"}:
+            if (
+                has_ob_confirmation
+                and strength >= 60.0
+                and change_pct <= 3.5
+                and entry_gap_pct <= 1.5
+                and (rsi == 0.0 or rsi < 68.0)
+            ):
+                return True, 820.0 + strength + bs_ratio * 5.0, "Direct buy with OB confirmation"
+            return False, 0.0, "direct buy lacks goal confirmation"
+
+        if action == "Momentum Buy":
+            if has_ob_confirmation and strength >= 80.0 and 2.0 <= change_pct <= 7.0:
+                return True, 780.0 + strength, "Momentum with OB confirmation"
+            return False, 0.0, "momentum not confirmed for goal mode"
+
+        return False, 0.0, "not a goal-mode setup"
+
+    def _tune_goal_mode_alert_row(self, row: Dict, reason: str) -> Dict:
+        tuned = dict(row)
+        entry = self._to_float(tuned.get("BuyAbove")) or self._to_float(tuned.get("PriceNow")) or 0.0
+        if entry > 0:
+            stop_pct = float(getattr(self, "goal_stop_pct", 1.0) or 1.0)
+            target1_pct = float(getattr(self, "goal_target1_pct", 3.0) or 3.0)
+            target2_pct = float(getattr(self, "goal_target2_pct", 5.0) or 5.0)
+            tuned["BuyAbove"] = round(entry, 2)
+            tuned["SellIfBelow"] = round(entry * (1.0 - stop_pct / 100.0), 2)
+            tuned["TakeProfit1"] = round(entry * (1.0 + target1_pct / 100.0), 2)
+            tuned["TakeProfit2"] = round(entry * (1.0 + target2_pct / 100.0), 2)
+
+        checks = str(tuned.get("Checks", "") or "").strip()
+        goal_check = (
+            f"GoalMode✓ 3% burst | SL {float(getattr(self, 'goal_stop_pct', 1.0) or 1.0):.1f}% | "
+            f"T1 {float(getattr(self, 'goal_target1_pct', 3.0) or 3.0):.1f}% | "
+            f"T2 {float(getattr(self, 'goal_target2_pct', 5.0) or 5.0):.1f}%"
+        )
+        tuned["Checks"] = f"{goal_check} | {checks}" if checks else goal_check
+        why = str(tuned.get("Why", "") or "").strip()
+        goal_why = f"Goal mode: {reason}; max one high-conviction intraday attempt by default"
+        tuned["Why"] = f"{goal_why} | {why}" if why else goal_why
+        return tuned
+
+    @staticmethod
+    def _extract_buy_sell_ratio(checks) -> float:
+        import re
+
+        text = str(checks or "")
+        for pattern in (r"B/S\s+([0-9]+(?:\.[0-9]+)?)x", r"Buy/Sell\s+([0-9]+(?:\.[0-9]+)?)x"):
+            match = re.search(pattern, text, flags=re.IGNORECASE)
+            if match:
+                try:
+                    return float(match.group(1))
+                except Exception:
+                    return 0.0
+        return 0.0
 
     def _check_followthrough_and_exits(self) -> None:
         """Check follow-through on recent alerts and exit signals on active positions."""
@@ -2515,7 +2812,7 @@ class SignalMonitorRunner:
                 score=score,
                 grade=grade,
                 volume_ratio=volume_ratio,
-                change_at_entry=0.0,
+                change_at_entry=self._to_float(row.get("ChangePct")),
                 stop_loss=self._to_float(row.get("SellIfBelow")),
                 target1=self._to_float(row.get("TakeProfit1")),
                 target2=self._to_float(row.get("TakeProfit2")),
@@ -2907,8 +3204,8 @@ class SignalMonitorRunner:
         except Exception:
             _today = datetime.now().strftime("%Y-%m-%d")
         if self._board_shown_date != _today:
-            self._board_shown_today.clear()
             self._board_shown_date = _today
+            self._board_shown_today = self._load_daily_symbol_set("buy_board", today=_today)
         if "Stock" in board.columns and self._board_shown_today:
             board = board[~board["Stock"].astype(str).str.upper().isin(self._board_shown_today)]
         if board.empty:
@@ -2924,6 +3221,7 @@ class SignalMonitorRunner:
         for rec in board.head(limit).to_dict(orient="records"):
             _sym = str(rec.get("Stock", "")).strip().upper()
             self._board_shown_today.add(_sym)
+            self._append_daily_symbol("buy_board", _sym, today=_today)
             rows.append(
                 {
                     "When": self.run_at_str,
@@ -3043,13 +3341,15 @@ class SignalMonitorRunner:
             except (TypeError, ValueError):
                 _buy_above_val = 0.0
             _buy_ceiling_val = _buy_above_val * 1.015 if _buy_above_val > 0 else 0.0
+            trade_lane_line = self._trade_lane_line(action, checks=checks)
+            zone_label = "BUY ZONE" if self._is_direct_buy_action(action) else "ENTRY ZONE"
             if _buy_above_val > 0:
                 buy_zone_line = (
-                    f"🎯 **BUY ZONE**: ₹{self._fmt_price(_buy_above_val)} – ₹{self._fmt_price(_buy_ceiling_val)}  "
+                    f"🎯 **{zone_label}**: ₹{self._fmt_price(_buy_above_val)} – ₹{self._fmt_price(_buy_ceiling_val)}  "
                     f"(skip if price > ₹{self._fmt_price(_buy_ceiling_val)})"
                 )
             else:
-                buy_zone_line = f"🎯 **BUY ZONE**: ₹{self._fmt_price(row['BuyAbove'])}"
+                buy_zone_line = f"🎯 **{zone_label}**: ₹{self._fmt_price(row['BuyAbove'])}"
             # Compute SL/T1/T2 percentages off the trigger price (BuyAbove),
             # which is what Kite GTT uses. Groww users can read the ₹ amount;
             # Kite users can read the % offset.
@@ -3074,13 +3374,18 @@ class SignalMonitorRunner:
                     f"Target 1 `{self._fmt_price(row['TakeProfit1'])}` | "
                     f"Target 2 `{self._fmt_price(row['TakeProfit2'])}`{rr_text}"
                 )
+            qty_label = self._qty_label(action)
             block_lines = [
                 f"{action_emoji} **{action}** `{row['Symbol']}` — Strength `{strength}`",
+            ]
+            if trade_lane_line:
+                block_lines.append(trade_lane_line)
+            block_lines.extend([
                 buy_zone_line,
                 f"At alert: ₹{self._fmt_price(row['PriceNow'])}{day_pct_text}",
                 sl_t_line,
-                f"Qty `{qty}`",
-            ]
+                f"{qty_label} `{qty}`",
+            ])
             if "OB" in action:
                 block_lines.append("**⚡ INTRADAY SCALP ONLY** — exit before 3:15 PM, not a swing trade")
             if checks:
@@ -3096,6 +3401,29 @@ class SignalMonitorRunner:
         # A partial alert (missing Qty, Target, Why) is worse than a missing alert.
         cut = msg[:1900].rfind("\n\n")
         return msg[:cut] if cut > 0 else msg[:1900]
+
+    def _trade_lane_line(self, action: str, checks: str = "") -> str:
+        """Make risk lane explicit so alerts are not all read as swing buys."""
+        text = str(action or "").strip()
+        if "goalmode" in str(checks or "").lower():
+            return "**🎯 3% BURST CANDIDATE** — intraday only; one high-conviction attempt, respect stop"
+        if text in {"Strong Buy Now", "Buy Now"}:
+            return "**✅ SWING BUY CANDIDATE** — enter only inside the zone with stop in place"
+        if "OB" in text:
+            return "**⚡ INTRADAY SCALP** — order-book imbalance only, not a swing buy"
+        if text == "Momentum Buy" or "Runner" in text:
+            return "**⚠️ RUNNER / CONTINUATION** — reduced size; avoid if momentum fades"
+        if text.startswith("⚡") or text.startswith("👀") or "Anomaly" in text:
+            return "**⚠️ ANOMALY WATCH** — alert-only until price confirms; use smaller size"
+        return ""
+
+    def _qty_label(self, action: str) -> str:
+        text = str(action or "").strip()
+        if text in {"Strong Buy Now", "Buy Now"}:
+            return "Qty"
+        if "OB" in text:
+            return "Scalp qty"
+        return "Max qty"
 
     def _fmt_price(self, value) -> str:
         """Format numeric prices consistently for alerts."""

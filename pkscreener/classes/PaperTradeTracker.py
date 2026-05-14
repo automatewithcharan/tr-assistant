@@ -25,6 +25,7 @@ from datetime import datetime, date
 from typing import Dict, List, Optional
 
 from PKDevTools.classes import Archiver
+from PKDevTools.classes.PKDateUtilities import PKDateUtilities
 from PKDevTools.classes.log import default_logger
 
 
@@ -80,11 +81,19 @@ class PaperTradeTracker:
 
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._today: Optional[str] = None
+        self._today: Optional[str] = self._now().strftime("%Y-%m-%d")
         self._trades: Dict[str, PaperTrade] = {}  # symbol -> trade (one per symbol per day)
         self._output_dir = os.path.join(Archiver.get_user_data_dir(), "paper_trades")
         os.makedirs(self._output_dir, exist_ok=True)
         self.logger = default_logger()
+        self._load_day_into_memory(self._today)
+
+    @staticmethod
+    def _now() -> datetime:
+        try:
+            return PKDateUtilities.currentDateTime()
+        except Exception:
+            return datetime.now()
 
     # ------------------------------------------------------------------
     # Entry logging
@@ -105,7 +114,7 @@ class PaperTradeTracker:
         source: str = "ohlcv",
     ) -> None:
         """Log a paper trade entry at the time of alert."""
-        now = datetime.now()
+        now = self._now()
         today_str = now.strftime("%Y-%m-%d")
         time_str = now.strftime("%H:%M:%S")
 
@@ -116,6 +125,11 @@ class PaperTradeTracker:
                     self._persist_day(self._today)
                 self._trades.clear()
                 self._today = today_str
+                self._load_day_into_memory(today_str)
+            elif not self._trades:
+                # Monitor processes can restart during the day. Reload persisted
+                # entries so duplicate alerts are avoided and EOD can close them.
+                self._load_day_into_memory(today_str)
 
             if symbol in self._trades:
                 return  # Already tracking this symbol today
@@ -170,9 +184,20 @@ class PaperTradeTracker:
         Returns a summary string for the EOD alert.
         """
         with self._lock:
+            today_str = self._now().strftime("%Y-%m-%d")
+            if self._today != today_str:
+                self._today = today_str
+                self._trades.clear()
+            if not self._trades:
+                self._load_day_into_memory(self._today)
             if not self._trades:
                 return ""
 
+            tick_map = {
+                str(sym).strip().upper(): payload
+                for sym, payload in (ticks_snapshot or {}).items()
+                if isinstance(payload, dict)
+            }
             closed_count = 0
             winners = 0
             total_pnl = 0.0
@@ -181,16 +206,17 @@ class PaperTradeTracker:
                 if trade.closed:
                     continue
 
-                tick = ticks_snapshot.get(sym, {})
+                tick = tick_map.get(str(sym).strip().upper(), {})
                 current_price = float(tick.get("last_price") or 0)
-                day_high = float(tick.get("ohlc", {}).get("high") or 0)
-                day_low = float(tick.get("ohlc", {}).get("low") or 0)
+                ohlc = tick.get("ohlc", {}) if isinstance(tick.get("ohlc", {}), dict) else {}
+                day_high = float(tick.get("high") or ohlc.get("high") or 0)
+                day_low = float(tick.get("low") or ohlc.get("low") or 0)
 
                 if current_price <= 0:
                     continue
 
                 trade.exit_price = current_price
-                trade.exit_time = datetime.now().strftime("%H:%M:%S")
+                trade.exit_time = self._now().strftime("%H:%M:%S")
                 trade.high_after = max(day_high, current_price) if day_high > 0 else current_price
                 trade.low_after = min(day_low, current_price) if day_low > 0 else current_price
 
@@ -240,12 +266,15 @@ class PaperTradeTracker:
             return "No paper trades found."
 
         total = len(all_trades)
-        closed = [t for t in all_trades if t.get("pnl_pct") is not None]
+        closed = [
+            t for t in all_trades
+            if self._bool(t.get("closed")) and self._optional_float(t.get("pnl_pct")) is not None
+        ]
         if not closed:
             return f"{total} paper trades logged but none closed yet."
 
         n = len(closed)
-        pnls = [float(t["pnl_pct"]) for t in closed]
+        pnls = [float(self._optional_float(t["pnl_pct"]) or 0.0) for t in closed]
         winners = [p for p in pnls if p > 0]
         losers = [p for p in pnls if p <= 0]
 
@@ -259,7 +288,7 @@ class PaperTradeTracker:
         daily_pnl = {}
         for t in closed:
             d = t["date"]
-            daily_pnl.setdefault(d, []).append(float(t["pnl_pct"]))
+            daily_pnl.setdefault(d, []).append(self._float(t["pnl_pct"]))
         daily_returns = [sum(v) / len(v) for v in daily_pnl.values()]
         if len(daily_returns) >= 2:
             mean_r = sum(daily_returns) / len(daily_returns)
@@ -284,7 +313,7 @@ class PaperTradeTracker:
             max_dd = max(max_dd, dd)
 
         # Fade detector accuracy
-        faded = [t for t in closed if float(t["pnl_pct"]) < 0]
+        faded = [t for t in closed if self._float(t["pnl_pct"]) < 0]
         fade_warned = [t for t in faded if t.get("fade_alert_sent") == "True" or t.get("fade_exit_sent") == "True"]
         fade_accuracy = len(fade_warned) / len(faded) * 100 if faded else 0
 
@@ -295,11 +324,11 @@ class PaperTradeTracker:
         # Score buckets
         score_lines = []
         for lo, hi, label in [(70, 101, "A+ (70+)"), (60, 70, "A (60-69)"), (52, 60, "B (52-59)"), (0, 52, "C (<52)")]:
-            bucket = [t for t in closed if lo <= float(t.get("score", 0)) < hi]
+            bucket = [t for t in closed if lo <= self._float(t.get("score", 0)) < hi]
             if not bucket:
                 continue
-            bwr = sum(1 for t in bucket if float(t["pnl_pct"]) > 0) / len(bucket) * 100
-            bavg = sum(float(t["pnl_pct"]) for t in bucket) / len(bucket)
+            bwr = sum(1 for t in bucket if self._float(t["pnl_pct"]) > 0) / len(bucket) * 100
+            bavg = sum(self._float(t["pnl_pct"]) for t in bucket) / len(bucket)
             score_lines.append(f"  {label:12s}: {len(bucket):3d} trades | WR {bwr:5.1f}% | Avg {bavg:+.2f}%")
 
         # Per-day
@@ -367,8 +396,12 @@ class PaperTradeTracker:
         Returns a summary string suitable for Discord/console.
         """
         all_trades = self._load_recent_trades(days)
-        closed = [t for t in all_trades
-                   if t.get("pnl_pct") is not None and t.get("score") is not None]
+        closed = [
+            t for t in all_trades
+            if self._bool(t.get("closed"))
+            and self._optional_float(t.get("pnl_pct")) is not None
+            and self._optional_float(t.get("score")) is not None
+        ]
 
         if len(closed) < 10:
             return (
@@ -376,8 +409,8 @@ class PaperTradeTracker:
                 f"(have {len(closed)}). Keep collecting."
             )
 
-        scores = [float(t["score"]) for t in closed]
-        pnls = [float(t["pnl_pct"]) for t in closed]
+        scores = [self._float(t["score"]) for t in closed]
+        pnls = [self._float(t["pnl_pct"]) for t in closed]
 
         # Compute Spearman rank correlation
         try:
@@ -421,7 +454,7 @@ class PaperTradeTracker:
         # Per-factor Spearman (volume_ratio, change_at_entry)
         factor_lines = []
         for factor_name in ["volume_ratio", "change_at_entry"]:
-            vals = [float(t.get(factor_name, 0) or 0) for t in closed]
+            vals = [self._float(t.get(factor_name, 0)) for t in closed]
             if any(v != 0 for v in vals):
                 try:
                     from scipy.stats import spearmanr as _sp
@@ -501,6 +534,74 @@ class PaperTradeTracker:
             self.logger.debug(f"[PaperTracker] Persisted {len(self._trades)} trades to {filepath}")
         except Exception as exc:
             self.logger.warning(f"[PaperTracker] Failed to persist: {exc}")
+
+    def _load_day_into_memory(self, date_str: Optional[str]) -> None:
+        """Load one day's persisted paper trades into memory if present."""
+        if not date_str:
+            return
+        filepath = os.path.join(self._output_dir, f"paper_trades_{date_str}.csv")
+        if not os.path.isfile(filepath):
+            return
+        try:
+            with open(filepath, newline="") as f:
+                reader = csv.DictReader(f)
+                loaded: Dict[str, PaperTrade] = {}
+                for row in reader:
+                    symbol = str(row.get("symbol", "") or "").strip().upper()
+                    if not symbol:
+                        continue
+                    loaded[symbol] = PaperTrade(
+                        symbol=symbol,
+                        date=str(row.get("date", date_str) or date_str),
+                        alert_time=str(row.get("alert_time", "") or ""),
+                        entry_price=self._float(row.get("entry_price")),
+                        score=self._float(row.get("score")),
+                        grade=str(row.get("grade", "") or ""),
+                        volume_ratio=self._float(row.get("volume_ratio")),
+                        change_at_entry=self._float(row.get("change_at_entry")),
+                        stop_loss=self._float(row.get("stop_loss")),
+                        target1=self._float(row.get("target1")),
+                        target2=self._float(row.get("target2")),
+                        suggested_qty=int(self._float(row.get("suggested_qty"))),
+                        source=str(row.get("source", "") or ""),
+                        exit_price=self._optional_float(row.get("exit_price")),
+                        exit_time=str(row.get("exit_time", "") or "") or None,
+                        high_after=self._optional_float(row.get("high_after")),
+                        low_after=self._optional_float(row.get("low_after")),
+                        pnl_pct=self._optional_float(row.get("pnl_pct")),
+                        max_profit_pct=self._optional_float(row.get("max_profit_pct")),
+                        max_drawdown_pct=self._optional_float(row.get("max_drawdown_pct")),
+                        fade_alert_sent=self._bool(row.get("fade_alert_sent")),
+                        fade_exit_sent=self._bool(row.get("fade_exit_sent")),
+                        stop_hit=self._bool(row.get("stop_hit")),
+                        closed=self._bool(row.get("closed")),
+                    )
+                if loaded:
+                    self._trades.update(loaded)
+                    self.logger.debug(f"[PaperTracker] Loaded {len(loaded)} trades from {filepath}")
+        except Exception as exc:
+            self.logger.warning(f"[PaperTracker] Failed to load {filepath}: {exc}")
+
+    @staticmethod
+    def _float(value) -> float:
+        try:
+            if value in (None, "", "None"):
+                return 0.0
+            return float(value)
+        except Exception:
+            return 0.0
+
+    @classmethod
+    def _optional_float(cls, value) -> Optional[float]:
+        if value in (None, "", "None"):
+            return None
+        return cls._float(value)
+
+    @staticmethod
+    def _bool(value) -> bool:
+        if isinstance(value, bool):
+            return value
+        return str(value or "").strip().lower() in {"1", "true", "yes", "y"}
 
     def _load_recent_trades(self, days: int = 5) -> List[dict]:
         """Load trades from the last N days of CSV files."""

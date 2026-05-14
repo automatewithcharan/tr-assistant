@@ -76,22 +76,86 @@ run_cleanup() {
 }
 
 sync_archive_bucket() {
+    [ -z "$ARCHIVE_BUCKET" ] && return 0
+    local gsutil_bin
+    gsutil_bin="$(command -v gsutil 2>/dev/null || true)"
+    [ -z "$gsutil_bin" ] && log "sync_archive_bucket: gsutil not found — skipping" && return 0
+
+    local cache_dir="$REPO/results/Data/kite_history_backfill"
+    if [ -d "$cache_dir" ]; then
+        log "sync_archive_bucket: rsync kite cache -> $ARCHIVE_BUCKET/kite_history_backfill/"
+        "$gsutil_bin" -q -m rsync -r "$cache_dir" "$ARCHIVE_BUCKET/kite_history_backfill/" \
+            >> "$LOG" 2>&1 || { log "sync_archive_bucket: kite cache rsync FAILED"; return 1; }
+    fi
+
+    local paper_dir="$REPO/results/Data/paper_reports"
+    if [ -d "$paper_dir" ]; then
+        log "sync_archive_bucket: rsync paper_reports -> $ARCHIVE_BUCKET/paper_reports/"
+        "$gsutil_bin" -q -m rsync -r "$paper_dir" "$ARCHIVE_BUCKET/paper_reports/" \
+            >> "$LOG" 2>&1 || { log "sync_archive_bucket: paper_reports rsync FAILED"; return 1; }
+    fi
+
     return 0
 }
 
 sync_compressed_logs() {
+    [ -z "$ARCHIVE_BUCKET" ] && return 0
+    local gsutil_bin
+    gsutil_bin="$(command -v gsutil 2>/dev/null || true)"
+    [ -z "$gsutil_bin" ] && return 0
+    [ ! -d "$LOGS_DIR" ] && return 0
+    # Only upload .gz files; raw logs stay local until compressed
+    find "$LOGS_DIR" -name "*.gz" -type f | while read -r f; do
+        local fname; fname="$(basename "$f")"
+        "$gsutil_bin" -q cp "$f" "$ARCHIVE_BUCKET/assistant_logs/$fname" >> "$LOG" 2>&1 || true
+    done
     return 0
 }
 
 sync_critical_state() {
+    [ -z "$ARCHIVE_BUCKET" ] && return 0
+    local gsutil_bin
+    gsutil_bin="$(command -v gsutil 2>/dev/null || true)"
+    [ -z "$gsutil_bin" ] && return 0
+
+    # Strategy registry — always keep a current copy in bucket
+    local registry="$REPO/results/Data/strategy_registry.json"
+    if [ -f "$registry" ]; then
+        "$gsutil_bin" -q cp "$registry" "$ARCHIVE_BUCKET/state/strategy_registry.json" \
+            >> "$LOG" 2>&1 || true
+    fi
+
+    # Latest research ranking (if it exists and is not the invalid-lookahead version)
+    for f in "$REPO/results/Data/kite_intraday_research_strategy_ranking.csv" \
+              "$REPO/results/Data/kite_intraday_research_accepted_strategies.csv"; do
+        if [ -f "$f" ]; then
+            local fname; fname="$(basename "$f")"
+            "$gsutil_bin" -q cp "$f" "$ARCHIVE_BUCKET/state/$fname" >> "$LOG" 2>&1 || true
+        fi
+    done
+
     return 0
 }
 
 compress_old_logs() {
+    [ ! -d "$LOGS_DIR" ] && return 0
+    # Gzip log files older than LOG_COMPRESS_MINUTES minutes that aren't already compressed
+    find "$LOGS_DIR" -name "*.log" -not -name "*.gz" \
+        -mmin "+${LOG_COMPRESS_MINUTES}" -type f | while read -r f; do
+        gzip -q "$f" 2>/dev/null || true
+    done
+    # Also compress /tmp logs this script writes directly
+    find /tmp -maxdepth 1 -name "*.log" -mmin "+${LOG_COMPRESS_MINUTES}" -type f 2>/dev/null \
+        | while read -r f; do gzip -q "$f" 2>/dev/null || true; done
     return 0
 }
 
 prune_synced_archive() {
+    [ -z "$ARCHIVE_BUCKET" ] && return 0
+    [ ! -d "$ARCHIVE_DIR" ] && return 0
+    # Remove local archive files older than ARCHIVE_PRUNE_DAYS days; bucket is the source of truth
+    find "$ARCHIVE_DIR" -type f -mtime "+${ARCHIVE_PRUNE_DAYS}" -delete 2>/dev/null || true
+    log "prune_synced_archive: removed local archives older than ${ARCHIVE_PRUNE_DAYS} days"
     return 0
 }
 
