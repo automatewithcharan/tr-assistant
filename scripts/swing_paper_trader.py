@@ -61,7 +61,15 @@ from scripts.research_kite_swing import (
     generate_signals,
     indian_delivery_fee_pct,
     load_all_daily,
+    load_daily_symbol,
 )
+
+# Daily-refreshed live cache (populated by daily_prewarm.sh at 8 AM IST).
+# Paper trader pulls fresh OHLCV from here, filtered to the 201-symbol
+# swing research universe defined by the static backfill cache.
+LIVE_CACHE_DIR      = REPO_ROOT / "results" / "Data" / "kite_history_cache" / "day"
+UNIVERSE_REF_DIR    = DAY_CACHE_DIR   # backfill folder serves as the universe-of-symbols reference
+NIFTY_FILE          = "NIFTY 50"
 
 PAPER_DIR = REPO_ROOT / "results" / "Data" / "swing_paper_trades"
 JOURNAL_PATH = PAPER_DIR / "paper_journal.json"
@@ -204,8 +212,29 @@ def _send_discord(msg: str) -> None:
         pass
 
 
+def _load_universe_symbols() -> list[str]:
+    """The 201-symbol swing research universe (filenames in the backfill cache)."""
+    return sorted(f.stem for f in UNIVERSE_REF_DIR.glob("*.csv") if f.stem != NIFTY_FILE)
+
+
 def load_features() -> tuple[pd.DataFrame, list[pd.Timestamp]]:
-    universe, nifty = load_all_daily(DAY_CACHE_DIR)
+    """Load features from the daily-refreshed live cache, filtered to the
+    swing research universe. Falls back to the static backfill cache if the
+    live cache is missing.
+    """
+    if LIVE_CACHE_DIR.exists() and any(LIVE_CACHE_DIR.glob("*.csv")):
+        symbols = _load_universe_symbols()
+        parts: list[pd.DataFrame] = []
+        for sym in symbols:
+            df = load_daily_symbol(sym, LIVE_CACHE_DIR)
+            if not df.empty:
+                parts.append(df)
+        universe = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame()
+        nifty = load_daily_symbol(NIFTY_FILE, LIVE_CACHE_DIR)
+    else:
+        # Fallback: static backfill cache
+        universe, nifty = load_all_daily(DAY_CACHE_DIR)
+
     features = add_daily_features(universe, nifty)
     features = features.dropna(subset=["high_20d", "vol_avg20"]).copy()
     trading_dates = sorted(pd.to_datetime(features["date"]).dropna().unique().tolist())
