@@ -40,7 +40,29 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 RESULTS_DIR = REPO_ROOT / "results" / "Data"
-DAY_CACHE_DIR = RESULTS_DIR / "kite_history_backfill" / "day" / "2024-05-13_2026-05-12"
+_DAY_BASE    = RESULTS_DIR / "kite_history_backfill" / "day"
+
+
+def _latest_day_cache() -> Path:
+    """Return the most recently-dated daily cache directory.
+
+    The backfill script names folders '{start}_{end}', e.g.
+    '2024-05-13_2026-05-15'. We pick the folder whose end-date
+    (the second part) is latest. Falls back to any folder if
+    parsing fails.
+    """
+    candidates = [d for d in _DAY_BASE.iterdir() if d.is_dir()] if _DAY_BASE.exists() else []
+    if not candidates:
+        return _DAY_BASE / "2024-05-13_2026-05-12"  # sentinel — will error gracefully
+
+    def _end_date(d: Path) -> str:
+        parts = d.name.split("_")
+        return parts[-1] if len(parts) >= 2 else d.name
+
+    return max(candidates, key=_end_date)
+
+
+DAY_CACHE_DIR = _latest_day_cache()
 REGISTRY_PATH = RESULTS_DIR / "strategy_registry.json"
 OUT_PREFIX = RESULTS_DIR / "kite_swing_research"
 
