@@ -211,21 +211,35 @@ def add_daily_features(df: pd.DataFrame, nifty: pd.DataFrame) -> pd.DataFrame:
         return g
 
     import warnings
+    _sym_col = work["symbol"].copy()  # pandas 3.0+ drops groupby key columns from apply
     with warnings.catch_warnings():
         warnings.simplefilter("ignore", DeprecationWarning)
         work = work.groupby("symbol", sort=False, group_keys=False).apply(per_sym)
+    if "symbol" not in work.columns:
+        work.insert(0, "symbol", _sym_col.reindex(work.index))
 
-    # Nifty relative strength (same-day close is observable)
+    # Nifty features — all observable at close of day T
     if not nifty.empty:
         n = nifty[["date", "close"]].rename(columns={"close": "nifty_close"}).copy()
         n = n.sort_values("date")
-        n["nifty_ret_10d"] = n["nifty_close"].pct_change(10) * 100.0
-        work = work.merge(n[["date", "nifty_close", "nifty_ret_10d"]], on="date", how="left")
+        n["nifty_ret_10d"]   = n["nifty_close"].pct_change(10) * 100.0
+        # Regime: nifty_close > nifty_ema_50 — both observable at T's close, no lookahead
+        n["nifty_ema_50"]    = n["nifty_close"].ewm(span=50, adjust=False).mean()
+        n["nifty_ema_200"]   = n["nifty_close"].ewm(span=200, adjust=False).mean()
+        n["nifty_regime_bull"] = (n["nifty_close"] > n["nifty_ema_50"]).astype(int)
+        n["nifty_strong_bull"] = (n["nifty_close"] > n["nifty_ema_200"]).astype(int)
+        work = work.merge(
+            n[["date", "nifty_close", "nifty_ret_10d",
+               "nifty_regime_bull", "nifty_strong_bull"]],
+            on="date", how="left",
+        )
         work["rs_vs_nifty_10d"] = work["ret_10d"] - work["nifty_ret_10d"].fillna(0.0)
     else:
         work["nifty_close"] = np.nan
-        work["nifty_ret_10d"] = np.nan
-        work["rs_vs_nifty_10d"] = np.nan
+        work["nifty_ret_10d"]    = np.nan
+        work["rs_vs_nifty_10d"]  = np.nan
+        work["nifty_regime_bull"] = 1   # no data → don't filter
+        work["nifty_strong_bull"] = 1
 
     return work.replace([np.inf, -np.inf], np.nan).reset_index(drop=True)
 
@@ -238,19 +252,36 @@ def add_daily_features(df: pd.DataFrame, nifty: pd.DataFrame) -> pd.DataFrame:
 def generate_signals(features: pd.DataFrame, cfg: SwingConfig) -> pd.Series:
     """Compute signal mask for all rows.
 
-    Every condition here uses only data observable at close of day T.
-    All rolling window features already enforce shift(1) in add_daily_features.
+    Every condition uses only data observable at close of day T.
+    All rolling window features enforce shift(1) in add_daily_features.
+
+    Regime filter (param: nifty_regime):
+      "bull"        → nifty_close > nifty_ema_50   (50-day EMA uptrend)
+      "strong_bull" → nifty_close > nifty_ema_200  (200-day EMA uptrend, stricter)
+      absent/other  → no regime filter
+
+    Lookahead invariant:
+      nifty_close[T] and nifty_ema_50[T] are both observed at close of day T.
+      The regime filter uses no future data.
     """
     p = cfg.params
     liq_ok = (
         features["avg_value20_cr"].fillna(0) >= float(p.get("min_value_cr", 25.0))
     ) & (features["close"] >= float(p.get("min_price", 40.0)))
 
+    # Optional Nifty regime gate — applied to every family
+    regime = p.get("nifty_regime", None)
+    if regime == "bull":
+        regime_ok = features["nifty_regime_bull"].fillna(1).astype(bool)
+    elif regime == "strong_bull":
+        regime_ok = features["nifty_strong_bull"].fillna(1).astype(bool)
+    else:
+        regime_ok = pd.Series(True, index=features.index)
+
     if cfg.family == "breakout_volume":
-        # Close broke above prior 20-day high AND volume surged
         vol_mult = float(p.get("vol_mult", 1.5))
         sig = (
-            liq_ok
+            liq_ok & regime_ok
             & features["close"].gt(features["high_20d"])
             & features["volume"].gt(vol_mult * features["vol_avg20"])
             & features["high_20d"].notna()
@@ -258,10 +289,9 @@ def generate_signals(features: pd.DataFrame, cfg: SwingConfig) -> pd.Series:
         )
 
     elif cfg.family == "momentum_10d":
-        # Strong 10-day momentum AND price above short EMA (trend confirmation)
         min_ret = float(p.get("min_ret_pct", 8.0))
         sig = (
-            liq_ok
+            liq_ok & regime_ok
             & features["ret_10d"].ge(min_ret)
             & features["close"].gt(features["ema_10"])
             & features["ret_10d"].notna()
@@ -519,12 +549,20 @@ def verify_lookahead_clean_daily(cfg: SwingConfig) -> dict:
     # For momentum_10d: ret_10d = close[T]/close[T-10] — clean
     # ema_10 = EMA including close[T] — clean (observable at close)
 
+    # Regime filter: nifty_close[T] > nifty_ema_50[T] — both observable at T's close ✓
+    regime = cfg.params.get("nifty_regime", None)
+    regime_note = (
+        f"Regime filter '{regime}': nifty_close and nifty_ema_50 both observable at close of T ✓"
+        if regime else "No regime filter."
+    )
+
     return {
         "family": family,
         "lookahead_clean": is_safe,
         "bar_selection_lookahead": False,   # no argmax across bars in daily strategy
-        "level_shift_applied": True,        # high_20d / vol_avg20 use shift(1)
+        "level_shift_applied": True,
         "entry_at_next_open": True,
+        "regime_filter_note": regime_note,
         "note": "Daily EOD strategy — argmax-style lookahead trap structurally absent.",
     }
 
