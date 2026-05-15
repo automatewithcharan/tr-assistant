@@ -85,6 +85,8 @@ STRATEGY_CFG = SwingConfig(
 
 MAX_POSITIONS = 2
 MIN_PAPER_DAYS_FOR_STAGE1 = 20
+MIN_CLOSED_TRADES_GATE    = 10    # hard minimum before evaluating
+PREFERRED_CLOSED_TRADES   = 30   # preferred before making any viability claim
 
 DISCORD_WEBHOOK = os.environ.get("DISCORD_WEBHOOK_URL", "")
 
@@ -445,6 +447,112 @@ def print_slippage_report(journal: Journal) -> None:
     print("══════════════════════════════════════════════════════════")
 
 
+def stage1_validate(journal: Journal) -> None:
+    """Formal Stage 1 validation report. Run after thresholds are met."""
+    closed  = journal.closed_trades()
+    filled  = [PaperTrade.from_dict(t) for t in journal.trades
+               if t.get("overnight_gap_pct") is not None]
+    n_days  = len(journal.daily_log)
+    n_closed = len(closed)
+
+    print()
+    print("╔══════════════════════════════════════════════════════════════╗")
+    print("║         STAGE 1 VALIDATION — momentum_10d bull regime       ║")
+    print("╚══════════════════════════════════════════════════════════════╝")
+
+    # --- Threshold gates ---
+    gate_days   = n_days  >= MIN_PAPER_DAYS_FOR_STAGE1
+    gate_trades = n_closed >= MIN_CLOSED_TRADES_GATE
+    gate_pref   = n_closed >= PREFERRED_CLOSED_TRADES
+
+    print(f"  Paper days:     {n_days:>4d}  ({'✓' if gate_days else '✗'} need {MIN_PAPER_DAYS_FOR_STAGE1})")
+    print(f"  Closed trades:  {n_closed:>4d}  ({'✓' if gate_pref else ('gate ✓' if gate_trades else '✗')} "
+          f"min={MIN_CLOSED_TRADES_GATE}, preferred={PREFERRED_CLOSED_TRADES})")
+    print()
+
+    if not (gate_days and gate_trades):
+        print("  NOT READY: minimum thresholds not met. Continue EOD tracking.")
+        print("══════════════════════════════════════════════════════════════")
+        return
+
+    # --- Overnight friction ---
+    gaps     = [t.overnight_gap_pct for t in filled if t.overnight_gap_pct is not None]
+    abs_gaps = [abs(g) for g in gaps]
+    mean_abs = sum(abs_gaps) / len(abs_gaps)
+    model_friction = 0.200
+    friction_verdict = (
+        "LOWER than model → revise cost model down"
+        if mean_abs < 0.150 else
+        "CLOSE to model (0.200%) → model is realistic"
+        if mean_abs < 0.250 else
+        "HIGHER than model → cost model is optimistic"
+    )
+
+    print(f"  ── OVERNIGHT FRICTION ──────────────────────────────────────")
+    print(f"  Fills measured:           {len(gaps)}")
+    print(f"  Mean overnight gap (abs): {mean_abs:.3f}%")
+    print(f"  Model assumption:         {model_friction:.3f}%")
+    print(f"  Verdict: {friction_verdict}")
+    print()
+
+    # --- Performance ---
+    nets  = [t.net_return_pct for t in closed if t.net_return_pct is not None]
+    wins  = [n for n in nets if n > 0]
+    wr    = len(wins) / len(nets) * 100 if nets else 0.0
+    avg   = sum(nets) / len(nets) if nets else 0.0
+    gross_sum = sum(n for n in nets if n > 0)
+    loss_sum  = abs(sum(n for n in nets if n < 0))
+    pf    = gross_sum / loss_sum if loss_sum > 0 else float("inf")
+
+    print(f"  ── PERFORMANCE ─────────────────────────────────────────────")
+    print(f"  Win rate:     {wr:.1f}%  (backtest expected: ~28–34%)")
+    print(f"  Avg net:      {avg:>+.3f}%")
+    print(f"  Profit factor:{pf:.2f}")
+    by_reason: dict = {}
+    for t in closed:
+        r = t.exit_reason or "?"
+        by_reason.setdefault(r, []).append(t.net_return_pct or 0.0)
+    for reason, rets in sorted(by_reason.items()):
+        print(f"    {reason:<10s}  n={len(rets)}  avg={sum(rets)/len(rets):>+.3f}%")
+    print()
+
+    # --- Revised edge ---
+    revised_friction = mean_abs
+    raw_edge = 0.001          # momentum_10d gross from backtest
+    modelled_cost = 0.086
+    infra_gap = 0.050
+    revised_net = raw_edge - modelled_cost - revised_friction - infra_gap
+    model_net   = raw_edge - modelled_cost - model_friction  - infra_gap
+
+    print(f"  ── REVISED GAP VS EDGE ─────────────────────────────────────")
+    print(f"  Raw edge (backtest gross):  {raw_edge:>+.3f}%")
+    print(f"  Modelled cost (fees+slip):  {modelled_cost:.3f}%")
+    print(f"  Overnight friction:         {revised_friction:.3f}%  (was {model_friction:.3f}% assumed)")
+    print(f"  Infrastructure gap:         {infra_gap:.3f}%")
+    print(f"  Net viable edge (model):    {model_net:>+.3f}%")
+    print(f"  Net viable edge (revised):  {revised_net:>+.3f}%  ← key number")
+    print()
+
+    # --- Decision ---
+    print(f"  ── DECISION OPTIONS ────────────────────────────────────────")
+    if revised_net > 0.05:
+        print("  → CONTINUE: revised edge is positive. Proceed to Stage 1 live trial.")
+    elif revised_net > -0.05:
+        print("  → MARGINAL: edge is near zero. Consider adding RS filter before Stage 1.")
+    elif mean_abs < 0.150:
+        print("  → ADJUST COST MODEL: friction lower than assumed. Re-run survivability.")
+    else:
+        print("  → RETIRE: friction too high to overcome. Strategy class unviable.")
+
+    print()
+    print("  Options on the table:")
+    print("    1. continue            — edge confirmed, proceed to live trial")
+    print("    2. adjust cost model   — if friction < 0.15%, re-run research_kite_swing.py")
+    print("    3. add RS filter        — add relative strength vs Nifty to strengthen signal")
+    print("    4. retire              — friction >= 0.30% consistently, class unviable")
+    print("══════════════════════════════════════════════════════════════")
+
+
 def print_status(journal: Journal) -> None:
     active  = journal.active_trades()
     pending = journal.pending_trades()
@@ -526,6 +634,8 @@ def main() -> int:
                         help="Run EOD step for --date (default: most recent cached date)")
     parser.add_argument("--date", default=None)
     parser.add_argument("--status", action="store_true")
+    parser.add_argument("--validate", action="store_true",
+                        help="Run Stage 1 validation report (use after 20 days + 10 closed trades)")
     parser.add_argument("--reset", action="store_true",
                         help="Delete journal and start fresh")
     args = parser.parse_args()
@@ -553,6 +663,10 @@ def main() -> int:
 
     if args.status:
         print_status(journal)
+        return 0
+
+    if args.validate:
+        stage1_validate(journal)
         return 0
 
     print("Loading features...", flush=True)
