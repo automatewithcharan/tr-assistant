@@ -1342,14 +1342,14 @@ class SignalMonitorRunner:
                         continue
 
             # Minimum signal strength: skip weak signals.
-            # Calibrated 2026-05-19 against actual strength distribution in
-            # production logs: 29/31 buy candidates per cycle were being
-            # silenced because real screener strengths cluster in 21-35%
-            # range (PIRAMALFIN 25%, RATEGAIN 22%, AEQUS 21%, BMW 31%).
-            # The previous 40% floor was unreachable for normal market
-            # conditions. New floors: 20% morning, 25% rest of day —
-            # surfaces ~10-15 alerts/cycle (down from 30+ unfiltered, up
-            # from 1-2 over-filtered).
+            # Reverted to 40% floor on 2026-05-19 after audit of historical
+            # alert quality: April scored median 70%, p75 75%; recent week
+            # dropped to median 42%, only 3% above 50%. The strength score
+            # has drifted DOWNWARD — emitting alerts the system would not
+            # have flagged earlier. Lowering the floor surfaces that noise.
+            # Better: keep the 40% bar (the historical "good signal" line)
+            # and accept fewer alerts during periods of weak setups.
+            # The underlying scoring drift is a separate research thread.
             if now_action in allowed_buy_actions:
                 strength = self._to_float(row.get("SignalStrengthPct"))
                 try:
@@ -1358,7 +1358,7 @@ class SignalMonitorRunner:
                     _now_ist_for_strength = datetime.now()
                 _ist_min_strength = _now_ist_for_strength.hour * 60 + _now_ist_for_strength.minute
                 _morning_window = (9 * 60 + 15) <= _ist_min_strength <= (10 * 60 + 0)
-                _strength_floor = 20.0 if _morning_window else 25.0
+                _strength_floor = 35.0 if _morning_window else 40.0
                 if strength is not None and strength < _strength_floor:
                     skipped_already_ran.append(
                         f"{symbol} (strength {strength:.0f}% < {_strength_floor:.0f}% min)"
