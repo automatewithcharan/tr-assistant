@@ -1342,9 +1342,14 @@ class SignalMonitorRunner:
                         continue
 
             # Minimum signal strength: skip weak signals.
-            # 9:15-10:00 IST: 35% floor (morning runners often score 30-38% before
-            #                  full structure forms — relaxed floor catches them earlier).
-            # 10:00-15:30 IST: 40% floor (full quality bar after morning settles).
+            # Calibrated 2026-05-19 against actual strength distribution in
+            # production logs: 29/31 buy candidates per cycle were being
+            # silenced because real screener strengths cluster in 21-35%
+            # range (PIRAMALFIN 25%, RATEGAIN 22%, AEQUS 21%, BMW 31%).
+            # The previous 40% floor was unreachable for normal market
+            # conditions. New floors: 20% morning, 25% rest of day —
+            # surfaces ~10-15 alerts/cycle (down from 30+ unfiltered, up
+            # from 1-2 over-filtered).
             if now_action in allowed_buy_actions:
                 strength = self._to_float(row.get("SignalStrengthPct"))
                 try:
@@ -1353,7 +1358,7 @@ class SignalMonitorRunner:
                     _now_ist_for_strength = datetime.now()
                 _ist_min_strength = _now_ist_for_strength.hour * 60 + _now_ist_for_strength.minute
                 _morning_window = (9 * 60 + 15) <= _ist_min_strength <= (10 * 60 + 0)
-                _strength_floor = 35.0 if _morning_window else 40.0
+                _strength_floor = 20.0 if _morning_window else 25.0
                 if strength is not None and strength < _strength_floor:
                     skipped_already_ran.append(
                         f"{symbol} (strength {strength:.0f}% < {_strength_floor:.0f}% min)"
@@ -1570,10 +1575,16 @@ class SignalMonitorRunner:
         except Exception:
             _now_ist = datetime.now()
         _ist_minute = int(_now_ist.hour) * 60 + int(_now_ist.minute)
-        _late_day_cutoff_min = 14 * 60 + 45  # 14:45 IST
+        # 15:15 IST cutoff (was 14:45). Anomaly alerts during the last 45
+        # minutes were being suppressed entirely, including high-quality
+        # Tier C signals. The "no time to act" rationale is overly strict
+        # — many anomaly setups play out in 15-20 minutes. Tightened to the
+        # final 15 minutes only (15:15-15:30 IST), where exit liquidity
+        # genuinely deteriorates.
+        _late_day_cutoff_min = 15 * 60 + 15  # 15:15 IST
         if _ist_minute > _late_day_cutoff_min:
             OutputControls().printOutput(
-                f"  [!] Anomaly batch skipped — too late ({_now_ist.strftime('%H:%M')} IST > 14:45)"
+                f"  [!] Anomaly batch skipped — too late ({_now_ist.strftime('%H:%M')} IST > 15:15)"
             )
             return pd.DataFrame(columns=self.ALERT_COLUMNS)
         # Look up live ticks once for day-high comparisons.
@@ -3248,7 +3259,7 @@ class SignalMonitorRunner:
         self,
         alerts_df: pd.DataFrame,
         summary: Dict,
-        max_alerts: int = 6,
+        max_alerts: int = 12,
         current_simple_df: Optional[pd.DataFrame] = None,
     ) -> str:
         """Build a phone-friendly Discord webhook message."""
