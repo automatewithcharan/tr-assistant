@@ -264,8 +264,13 @@ def _load_buynow_rows(universe: str, limit: int = 5) -> pd.DataFrame:
     min_volume_ratio = float(getattr(_cfg, "min_volume_ratio", 5.0) or 5.0)
     max_entry_gap_pct = float(getattr(_cfg, "max_entry_gap_pct", 5.0) or 5.0)
     max_blind_score = float(getattr(_cfg, "blind_buy_max_score", 40.0) or 40.0)
-    strong_buy_min_conf = max(min_confidence + 10.0, 25.0)
-    strong_buy_max_gap = 0.25
+    # Strong Buy Now thresholds — calibrated 2026-05-19 against actual alert
+    # distributions. Previous (conf>=25, gap<=0.25) qualified zero of 5 alerts
+    # firing in production, because real entry gaps are typically 0.3-0.7%
+    # and even top-confidence stocks rarely hit 25%+ with gap under 0.25%.
+    # New thresholds: conf >= 30 AND gap <= 0.5% — selective but actually firing.
+    strong_buy_min_conf = max(min_confidence + 15.0, 30.0)
+    strong_buy_max_gap = 0.5
 
     results = []
     for _, row in candidates.iterrows():

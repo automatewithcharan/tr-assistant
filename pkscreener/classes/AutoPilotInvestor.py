@@ -2692,8 +2692,13 @@ class AutoPilotInvestor:
                     live_position = self._order_manager.get_position(sym)
                 except Exception:
                     live_position = None
-            if live_position is None or getattr(live_position, "status", "") != "open":
-                continue
+            # OBS / fade alerts fire for any momentum-tracked stock — paper or live.
+            # Previously required an OPEN live_position which silenced OBS entirely
+            # whenever no live orders existed (most of the time in paper-trading
+            # mode). User wants visibility into "sellers dominating" / "fading
+            # from high" on tracked alerts regardless of whether a real order
+            # was placed. Cooldown below still prevents spam.
+            position_status = getattr(live_position, "status", "") if live_position else ""
 
             # Cooldown: don't spam EXIT alerts
             last_fade_alert = self._fade_alerted.get(sym)
@@ -2742,7 +2747,13 @@ class AutoPilotInvestor:
 
             # If the position is already protected with a stop, don't spam softer
             # "weakening" warnings. Let STOP_HIT / EXIT_NOW remain actionable.
-            if alert_level == "WARNING" and float(getattr(live_position, "stop_loss", 0.0) or 0.0) > 0:
+            # (Skip this filter when there's no live position — user wants to
+            # see WARNING level for paper-tracked stocks.)
+            if (
+                alert_level == "WARNING"
+                and live_position is not None
+                and float(getattr(live_position, "stop_loss", 0.0) or 0.0) > 0
+            ):
                 continue
 
             if not alert_level:

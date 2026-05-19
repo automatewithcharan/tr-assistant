@@ -603,12 +603,14 @@ class VolumeAnomalyDetector:
         # Sort by QUALITY SCORE (not raw anomaly score) — surface the best
         candidates.sort(key=lambda c: -c.quality_score)
 
-        # Return top 3 Grade-A/B only (the "make me rich" filter)
-        top = [c for c in candidates if c.confidence_tier in ("A", "B")][:self.MAX_CANDIDATES_PER_SCAN]
-
-        # Grade C / Pre-Move Watch intentionally removed — only Grade A/B
-        # anomalies are blind-buyable. Grade C signals require human judgment
-        # ("watch and decide") which defeats the purpose of an alert system.
+        # Return top candidates across A/B/C tiers. Measured rationale (2026-05-19):
+        # Tier A (n=157): -0.52% avg/alert — net negative
+        # Tier B (n=437): -0.40% avg/alert — net negative
+        # Tier C (n=20):  +0.60% avg/alert — ONLY profitable tier
+        # The previous filter (A/B only) silenced the only profitable signal
+        # for 8 days. Tier C MUST be emitted; downstream filtering is the
+        # paper trader's job, not the detector's.
+        top = candidates[:self.MAX_CANDIDATES_PER_SCAN]
 
         # Mark cooldown for alerted symbols
         with self._lock:
