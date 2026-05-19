@@ -27,3 +27,7 @@ Backtest-Reports/
 *.db
 *.session
 docs/quantopian_lectures/
+
+# Backfill audit artifacts written to repo root by kite_*_backfill.py --out-prefix
+/kite_history_*
+/kite_intraday_*
