@@ -15,6 +15,10 @@ echo "[$(ts)] start" >> "$LOG"
 OUT=$("$PY" scripts/swing_alert_paper_trader.py 2>&1)
 echo "$OUT" >> "$LOG"
 
+# Refresh per-stock tracker (learns from today's closed trades)
+echo "[$(ts)] refreshing per-stock tracker" >> "$LOG"
+"$PY" scripts/per_stock_tracker.py >> "$LOG" 2>&1 || true
+
 # Discord summary
 SUMMARY=$("$PY" -c "
 import json, pandas as pd

@@ -241,6 +241,12 @@ def ingest_new_alerts(j: dict, today: str, lookback_days: int = 7) -> list[dict]
     # Check what's already in the journal
     seen_keys = {f"{t['alert_date']}::{t['symbol']}" for t in j["trades"]}
 
+    # Lazy-import the tracker so it's an optional dep
+    try:
+        from scripts.per_stock_tracker import is_blacklisted
+    except Exception:
+        is_blacklisted = lambda s: (False, "")
+
     new_alerts = []
     for _, r in df.iterrows():
         key = f"{r['Date']}::{r['Symbol'].upper()}"
@@ -251,6 +257,22 @@ def ingest_new_alerts(j: dict, today: str, lookback_days: int = 7) -> list[dict]
         except (ValueError, TypeError):
             continue
         if alert_px <= 0:
+            continue
+
+        # Per-stock blacklist check: skip symbols with proven loss patterns in
+        # forward paper-trading data (NOT the historical backtest)
+        sym = r["Symbol"].upper()
+        is_bad, bl_reason = is_blacklisted(sym)
+        if is_bad:
+            j["trades"].append({
+                "trade_id": f"SA{len(j['trades'])+1:05d}",
+                "alert_date": r["Date"], "alert_time": r["When"],
+                "symbol": sym, "tier": r["Tier"],
+                "alert_price": alert_px,
+                "status": "skipped",
+                "skip_reason": f"blacklisted: {bl_reason}",
+            })
+            seen_keys.add(key)
             continue
 
         # Check concurrent cap — count active positions
