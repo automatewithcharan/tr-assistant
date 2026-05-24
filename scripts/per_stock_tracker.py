@@ -39,6 +39,9 @@ JOURNALS = [
 ]
 TRACKER_PATH = RESULTS / "per_stock_tracker" / "tracker.json"
 TRACKER_CSV = RESULTS / "per_stock_tracker" / "tracker.csv"
+# Historical seed — built once by seed_tracker_from_history.py, never overwritten.
+# Live tracker MERGES seed with forward paper-trading data on each refresh.
+HISTORICAL_SEED_PATH = RESULTS / "per_stock_tracker" / "tracker_seeded_historical.json"
 
 # Blacklist rules — conservative
 BLACKLIST_MIN_TRADES_TIGHT = 3      # Smaller sample if very bad
@@ -66,14 +69,37 @@ def _ret_field(trade: dict) -> float | None:
 
 
 def aggregate_trades() -> dict[str, list[dict]]:
-    """Walk all paper journals and collect closed trades grouped by symbol."""
+    """Collect ALL trades: historical seed + forward paper-trading journals.
+
+    Historical seed is loaded first (immutable baseline from Apr-May 2026
+    alert data). Then forward paper-trading trades are appended on top.
+    De-duplicated by (symbol, source, entry_date, exit_date) so re-runs
+    don't double-count.
+    """
     by_sym: dict[str, list[dict]] = defaultdict(list)
+    seen_keys: dict[str, set] = defaultdict(set)
+
+    # 1. Load historical seed if present
+    if HISTORICAL_SEED_PATH.exists():
+        try:
+            seed = json.loads(HISTORICAL_SEED_PATH.read_text())
+            for sym, rec in seed.items():
+                for t in rec.get("trades", []):
+                    k = (t.get("source","seed"), t.get("entry_date","?"), t.get("exit_date","?"))
+                    if k in seen_keys[sym]: continue
+                    by_sym[sym].append(t)
+                    seen_keys[sym].add(k)
+        except Exception:
+            pass
+
+    # 2. Append forward paper-trading trades
     for jp in JOURNALS:
         if not jp.exists(): continue
         try:
             j = json.loads(jp.read_text())
         except Exception:
             continue
+        src = jp.parent.name
         for t in j.get("trades", []):
             if t.get("status") != "closed":
                 continue
@@ -85,8 +111,10 @@ def aggregate_trades() -> dict[str, list[dict]]:
                 continue
             entry_date = t.get("entry_date") or t.get("signal_date") or "?"
             exit_date = t.get("exit_date", "?")
+            k = (src, entry_date, exit_date)
+            if k in seen_keys[sym]: continue
             by_sym[sym].append({
-                "source": jp.parent.name,
+                "source": src,
                 "tier": t.get("tier", "?"),
                 "entry_date": entry_date,
                 "exit_date": exit_date,
@@ -95,6 +123,7 @@ def aggregate_trades() -> dict[str, list[dict]]:
                 "net_return_pct": round(ret, 3),
                 "exit_reason": t.get("exit_reason", "?"),
             })
+            seen_keys[sym].add(k)
     return dict(by_sym)
 
 

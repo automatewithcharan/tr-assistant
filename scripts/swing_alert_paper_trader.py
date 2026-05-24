@@ -241,10 +241,17 @@ def ingest_new_alerts(j: dict, today: str, lookback_days: int = 7) -> list[dict]
     # Check what's already in the journal
     seen_keys = {f"{t['alert_date']}::{t['symbol']}" for t in j["trades"]}
 
-    # Lazy-import the tracker so it's an optional dep
+    # Lazy-import the tracker. When trader runs as a script, sys.path[0] is
+    # scripts/ — so 'from scripts.per_stock_tracker import X' fails silently
+    # and the lambda fallback meant blacklist was effectively disabled.
+    import sys as _sys, os as _os
+    _repo_root = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    if _repo_root not in _sys.path:
+        _sys.path.insert(0, _repo_root)
     try:
         from scripts.per_stock_tracker import is_blacklisted
-    except Exception:
+    except Exception as _exc:
+        print(f"[!] tracker import failed: {_exc} — blacklist disabled", file=_sys.stderr)
         is_blacklisted = lambda s: (False, "")
 
     new_alerts = []
