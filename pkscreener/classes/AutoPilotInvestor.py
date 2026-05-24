@@ -7040,9 +7040,14 @@ class AutoPilotInvestor:
             _now_ist = datetime.now(timezone(timedelta(hours=5, minutes=30)))
         now_min = _now_ist.hour * 60 + _now_ist.minute
         _swing_start_min = 9 * 60 + 15
-        _swing_end_min = 13 * 60 + 30
-        _late_swing_start_min = 13 * 60 + 30
-        _late_swing_end_min = 14 * 60 + 15
+        # Extended swing window 13:30 → 14:30 on 2026-05-24. Many actionable
+        # alerts fire between 13:30 and 14:30 (MARATHON, FAZE3Q, MOTHERSON,
+        # HARDWYN, SHADOWFAX, GOCLCORP, IMPAL, VALIANT, MARKOLINES, SPAL,
+        # HCG were all silenced as LATE_DISCOVERY because cutoff was too early).
+        # 14:30 still leaves 1 hour before close for the move to play out.
+        _swing_end_min = 14 * 60 + 30
+        _late_swing_start_min = 14 * 60 + 30
+        _late_swing_end_min = 14 * 60 + 45
         _late_swing_window = _late_swing_start_min < now_min <= _late_swing_end_min
         _late_comer_start_min = _env_time_min("ASSISTANT_LATE_COMER_START", 10 * 60 + 30)
         _late_comer_end_min = _env_time_min("ASSISTANT_LATE_COMER_END", 13 * 60 + 15)
@@ -7201,8 +7206,12 @@ class AutoPilotInvestor:
                 return False, f"day move {c.change_pct:.1f}% is above the 2-day swing zone (needs 1.8%-6.8%)"
             if c.blind_score < 40:
                 return False, f"score {c.blind_score:.0f} is below 40"
-            if c.confidence < 28:
-                return False, f"confidence {c.confidence:.0f}% is below 28%"
+            # Lowered confidence floor 28 → 22 on 2026-05-24. Real alert
+            # confidence distribution clusters 22-32% (STALLION 26, HEMIPROP 27,
+            # JSWCEMENT 26, LICI 27 were all rejected — fell just below 28%).
+            # The score=40 + volume=1.8x gates still filter low-quality setups.
+            if c.confidence < 22:
+                return False, f"confidence {c.confidence:.0f}% is below 22%"
             if c.volume_ratio < 1.8:
                 return False, f"volume {c.volume_ratio:.1f}x is below 1.8x"
             if _avoid_horizon:
