@@ -19,7 +19,7 @@ Run every 5 minutes during market hours via cron:
 
 from __future__ import annotations
 import argparse, json, os, sys
-from datetime import datetime, time as dtime, date as ddate
+from datetime import datetime, time as dtime, date as ddate, timedelta
 from pathlib import Path
 import pandas as pd
 
@@ -146,10 +146,14 @@ def process(dry_run: bool = False, send_all_today: bool = False) -> int:
         print("[i] No Tier C / Strong Buy / Pre-Move alerts in anomaly_history")
         return 0
 
-    # Only today's alerts by default (or all if --send-all-today is set with empty seen)
-    today = ddate.today().isoformat()
+    # Process today + last 2 trading days. The "today only" filter missed
+    # alerts that fired on weekends or after the last cron run on Friday —
+    # those would never be sent because by Monday "today" wouldn't match.
+    # Seen-set dedup still prevents repeats. send_all_today overrides scope.
+    today = ddate.today()
     if not send_all_today:
-        df_today = df[df["Date"].astype(str) == today].copy()
+        cutoff = (today - timedelta(days=4)).isoformat()  # 4 calendar days = 2-3 trading days
+        df_today = df[df["Date"].astype(str) >= cutoff].copy()
     else:
         df_today = df.copy()
 
