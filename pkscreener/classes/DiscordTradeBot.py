@@ -1078,6 +1078,18 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
                     )
             else:
                 parts.append("No blind-buy opportunities right now.")
+                diag = getattr(result, "blind_buy_diagnostics", {}) or {}
+                if diag:
+                    top_diag = sorted(
+                        ((str(k), int(v)) for k, v in diag.items() if int(v) > 0),
+                        key=lambda item: item[1],
+                        reverse=True,
+                    )[:8]
+                    if top_diag:
+                        parts.append(
+                            "Diagnostics: "
+                            + ", ".join(f"{k.replace('_', ' ')}={v}" for k, v in top_diag)
+                        )
 
             if result.sell_alerts:
                 parts.append(f"\n**SELL ALERTS ({len(result.sell_alerts)}):**")

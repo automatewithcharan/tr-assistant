@@ -228,6 +228,7 @@ class CycleResult:
     open_positions: int = 0
     buy_paused: bool = False
     pause_reasons: List[str] = field(default_factory=list)
+    blind_buy_diagnostics: Dict[str, int] = field(default_factory=dict)
     error: Optional[str] = None
 
 
@@ -680,6 +681,7 @@ class AutoPilotInvestor:
             max_consecutive_losses=self.config.max_consecutive_losses,
         )
         self._cycle_count = 0
+        self._last_blind_buy_diagnostics: Counter = Counter()
         self._already_alerted_buys: Set[str] = self._load_daily_alerted_set()  # persist across restarts
         self._definitely_buy_alerted: Set[str] = set()  # track DEFINITELY BUY to allow upgrade re-alerts
         self._last_buynow_rescan: float = 0.0  # timestamp of last /buynow rescan
@@ -1599,6 +1601,8 @@ class AutoPilotInvestor:
             if guardrail_status.buy_paused:
                 result.buy_paused = True
                 result.pause_reasons = guardrail_status.reasons
+                self._last_blind_buy_diagnostics = Counter({"buy_paused": 1})
+                result.blind_buy_diagnostics = dict(self._last_blind_buy_diagnostics)
 
             # 2b. Nifty crash guard — check if index is down >2% within first 60 min
             # Only re-evaluate once per cycle during market hours
@@ -1612,12 +1616,14 @@ class AutoPilotInvestor:
             # 3. Find blind-buy candidates
             if not result.buy_paused:
                 result.buy_candidates = self._find_blind_buys(signal_state)
+                result.blind_buy_diagnostics = dict(self._last_blind_buy_diagnostics)
 
             # 4. Check portfolio for sell signals
             result.sell_alerts, result.open_positions = self._check_portfolio_sells(signal_state)
 
             # 5. Push alerts
             self._push_buy_alerts(result.buy_candidates)
+            result.blind_buy_diagnostics = dict(self._last_blind_buy_diagnostics)
             self._push_sell_alerts(result.sell_alerts)
 
             # 5b. Check Kite positions for sell signals (auto-sell)
@@ -5847,9 +5853,13 @@ class AutoPilotInvestor:
     def _find_blind_buys(self, signal_df: pd.DataFrame) -> List[BlindBuyCandidate]:
         """Score all stocks and find blind-buy opportunities."""
         candidates = []
+        diag: Counter = Counter()
+        diag["rows"] = int(len(signal_df) if signal_df is not None else 0)
+        self._last_blind_buy_diagnostics = diag
 
         # Load tick snapshot for liquidity filtering
         _ticks_for_liq = self._load_ticks_snapshot() or {}
+        diag["tick_snapshot_symbols"] = len(_ticks_for_liq)
 
         # ── MARKET BREADTH GATE ──
         # If more than 60% of liquid stocks are red today, the market is broadly
@@ -5861,6 +5871,8 @@ class AutoPilotInvestor:
                 _all_changes = pd.to_numeric(signal_df[_chg_col], errors="coerce").dropna()
                 _pct_red = (_all_changes < 0).sum() / len(_all_changes)
                 if _pct_red > 0.60:
+                    diag["breadth_gate"] = int(round(_pct_red * 100))
+                    self._last_blind_buy_diagnostics = diag
                     self._log(
                         f"Breadth gate: {_pct_red*100:.0f}% of stocks red — "
                         f"skipping batch blind-buys (weak market tape)"
@@ -5889,6 +5901,8 @@ class AutoPilotInvestor:
                 and self.config.afternoon_start_min <= _min_of_day <= self.config.afternoon_end_min
             )
             if not (_in_morning_window or _in_afternoon_window):
+                diag["trading_window_gate"] = 1
+                self._last_blind_buy_diagnostics = diag
                 self._log(
                     f"Trading window gate: {_now_tw.strftime('%H:%M')} IST outside "
                     f"prime windows — skipping batch"
@@ -5900,10 +5914,12 @@ class AutoPilotInvestor:
         for _, row in signal_df.iterrows():
             symbol = str(row.get("Symbol", "")).strip().upper()
             if not symbol:
+                diag["missing_symbol"] += 1
                 continue
 
             # Exclude ETFs, liquid funds, and bond instruments
             if self._is_excluded_symbol(symbol):
+                diag["excluded_symbol"] += 1
                 continue
 
             # Get the original action
@@ -5911,6 +5927,7 @@ class AutoPilotInvestor:
 
             # Skip stocks already saying Sell or Hold
             if any(x in now_action.lower() for x in ["sell", "exit", "hold", "do nothing"]):
+                diag["sell_hold_action"] += 1
                 continue
 
             # ── LIQUIDITY GATE (from Quantopian Volume/Slippage lecture) ──
@@ -5931,6 +5948,7 @@ class AutoPilotInvestor:
                 _min_open_liq = 120
             _min_turnover = 0.5 if _min_open_liq <= 30 else 2.0
             if _liq_turnover_cr > 0 and _liq_turnover_cr < _min_turnover:
+                diag["liquidity"] += 1
                 self._log(
                     f"Batch liquidity skip {symbol}: turnover ₹{_liq_turnover_cr:.1f}Cr < ₹{_min_turnover:.0f}Cr"
                 )
@@ -5946,10 +5964,13 @@ class AutoPilotInvestor:
             _buy_above = float(row.get("BuyAbove", row.get("Buy Above", row.get("Entry", 0))) or 0)
             _price_below_trigger = _price_now > 0 and _buy_above > 0 and _price_now < _buy_above
             if _price_below_trigger:
+                diag["below_trigger"] += 1
                 continue  # Skip stocks not yet at entry trigger
             if blind_score < self.config.blind_buy_min_score:
+                diag["score_low"] += 1
                 continue
             if self.config.blind_buy_max_score > 0 and blind_score >= self.config.blind_buy_max_score:
+                diag["score_cap"] += 1
                 self._log(
                     f"Score cap skip {symbol}: score {blind_score:.1f} >= {self.config.blind_buy_max_score:.0f} "
                     f"— likely dead-cat bounce / distribution"
@@ -5959,6 +5980,7 @@ class AutoPilotInvestor:
             # Check entry gap
             entry_gap = float(row.get("EntryGapPct", row.get("Entry Gap %", 0)) or 0)
             if entry_gap > self.config.max_entry_gap_pct:
+                diag["entry_gap"] += 1
                 continue
 
             # Check confidence
@@ -5967,6 +5989,7 @@ class AutoPilotInvestor:
                     row.get("SignalStrengthPct", 0))) or 0
             )
             if confidence < self.config.min_confidence:
+                diag["confidence"] += 1
                 continue
 
             price = float(row.get("LTP", row.get("PriceNow", row.get("Price Now", 0))) or 0)
@@ -5978,6 +6001,7 @@ class AutoPilotInvestor:
             # T2 winners avg 20.6x vol vs SL losers avg 7.9x. vol >= 5x flips to profitable.
             _vol_floor = self.config.min_volume_ratio
             if vol_ratio <= 0 or vol_ratio < _vol_floor:
+                diag["volume"] += 1
                 self._log(f"Volume skip {symbol}: vol {vol_ratio:.1f}x < {_vol_floor:.1f}x floor")
                 continue
 
@@ -5986,6 +6010,7 @@ class AutoPilotInvestor:
                 risk = price - stop_loss
                 rr2 = (target2 - price) / risk if risk > 0 else 0
                 if rr2 < 2.0:
+                    diag["risk_reward"] += 1
                     continue
 
             # Distribution anti-pattern REMOVED — backtest proved it filters
@@ -5998,6 +6023,7 @@ class AutoPilotInvestor:
             if _day_high > 0 and price > 0:
                 _off_high_pct = (_day_high - price) / _day_high * 100
                 if _off_high_pct > 3.0:
+                    diag["off_high"] += 1
                     self._log(
                         f"Near-high skip {symbol}: price ₹{price:.2f} is {_off_high_pct:.1f}% "
                         f"below day high ₹{_day_high:.2f} — momentum faded"
@@ -6011,6 +6037,7 @@ class AutoPilotInvestor:
             # Kite tick data includes 'average_traded_price' which IS the VWAP.
             _vwap = float(_tick_liq.get("average_traded_price") or 0)
             if _vwap > 0 and price > 0 and price < _vwap * 0.995:
+                diag["below_vwap"] += 1
                 self._log(
                     f"VWAP skip {symbol}: price ₹{price:.2f} below VWAP ₹{_vwap:.2f}"
                 )
@@ -6098,6 +6125,7 @@ class AutoPilotInvestor:
                 holding_horizon=_candidate.holding_horizon,
             )
             candidates.append(_candidate)
+            diag["candidate"] += 1
 
         # Sort by volume_ratio descending (primary) then blind_score (tiebreaker).
         # Backtest shows top-10 by volume yield +5.43% avg vs +1.09% all-trades.
@@ -6108,8 +6136,10 @@ class AutoPilotInvestor:
         fresh_candidates = []
         for c in candidates:
             if c.symbol in self._already_alerted_buys:
+                diag["already_alerted"] += 1
                 continue
             if c.suggested_qty <= 0:
+                diag["qty_cap"] += 1
                 self._log(
                     f"Batch skip {c.symbol}: starter position exceeds ₹5000 cap at ₹{c.price:.2f}"
                 )
@@ -6118,6 +6148,8 @@ class AutoPilotInvestor:
             if len(fresh_candidates) >= self.config.max_buy_alerts_per_cycle:
                 break
 
+        diag["fresh_candidates"] = len(fresh_candidates)
+        self._last_blind_buy_diagnostics = diag
         return fresh_candidates
 
     # ------------------------------------------------------------------
@@ -7502,8 +7534,10 @@ class AutoPilotInvestor:
         actionable_candidates: List[BlindBuyCandidate] = []
         late_candidates: List[BlindBuyCandidate] = []
         avoid_candidates: List[BlindBuyCandidate] = []
+        stage_counts: Counter = Counter()
         for c in candidates:
             self._enrich_candidate_alert_stage(c)
+            stage_counts[c.alert_stage or "UNKNOWN"] += 1
             if c.alert_stage == "BUY":
                 actionable_candidates.append(c)
             elif c.alert_stage == "MISSED":
@@ -7514,6 +7548,13 @@ class AutoPilotInvestor:
                 avoid_candidates.append(c)
 
         candidates = actionable_candidates
+        if stage_counts:
+            if not hasattr(self, "_last_blind_buy_diagnostics"):
+                self._last_blind_buy_diagnostics = Counter()
+            self._last_blind_buy_diagnostics.update({
+                f"stage_{str(stage).lower().replace(' ', '_')}": int(count)
+                for stage, count in stage_counts.items()
+            })
         if not candidates and (late_candidates or avoid_candidates):
             return
 
@@ -7568,7 +7609,7 @@ class AutoPilotInvestor:
             if n_aplus > 0:
                 grade_summary = f" — **{n_aplus} strong conviction** (A+)"
             sections = [
-                "**🟢 BUY ALERT**",
+                "**🟢 BLIND BUY ALERT**",
                 f"Top **{len(main_picks)}** of {len(candidates)} picks ranked by conviction{grade_summary}:",
             ]
 
