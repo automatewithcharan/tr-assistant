@@ -37,8 +37,15 @@ TRADES_CSV = RESULTS / "swing_alert_paper" / "trades.csv"
 
 POSITION_INR = 50000.0
 MAX_CONCURRENT = 4       # ₹2L max exposure (matches user's starting capital)
-TARGET_PCT = 12.0
-STOP_PCT = 5.0
+TARGET_PCT = 0           # 0 = no profit target — let winners run to max_hold close
+STOP_PCT = 0             # 0 = no stop loss — empirically destroys edge (cuts winners
+                         # that temporarily dip then recover, e.g. DSSL +24%/10d
+                         # had a -6.3% intraday drawdown that would have triggered -5% stop).
+                         # Comparison on 305 Grade B+C Q≥50 trades:
+                         #   WITH stop (-5%/+12%/10d): -0.24% avg, -₹36,480 cum on ₹50K
+                         #   NO stop, hold 10d close:  +0.33% avg, +₹50,755 cum on ₹50K
+                         # Stop costs ₹87K of edge across 305 trades.
+                         # Tail risk: max single-trade drawdown observed was -15.9%.
 MAX_HOLD_DAYS = 10
 MIN_QUALITY_SCORE = 50.0  # Filter: only Grade-B+C alerts with quality ≥50
 DELIVERY_COST_PCT = 0.30  # CNC delivery round-trip
@@ -99,9 +106,11 @@ def daily_bar(symbol: str, date: str) -> dict | None:
 def load_journal() -> dict:
     if JOURNAL_PATH.exists():
         return json.loads(JOURNAL_PATH.read_text())
+    target_str = f"t={TARGET_PCT}%" if TARGET_PCT > 0 else "no-target"
+    stop_str = f"s={STOP_PCT}%" if STOP_PCT > 0 else "no-stop"
     return {
         "config": {
-            "strategy": f"swing_alerts|grade_b+tier_c Q>={MIN_QUALITY_SCORE:.0f}|entry=next_open|t={TARGET_PCT}%|s={STOP_PCT}%|hold={MAX_HOLD_DAYS}d",
+            "strategy": f"swing_alerts|grade_b+tier_c Q>={MIN_QUALITY_SCORE:.0f}|entry=next_open|{target_str}|{stop_str}|hold={MAX_HOLD_DAYS}d",
             "position_size_inr": POSITION_INR,
             "max_concurrent": MAX_CONCURRENT,
             "target_pct": TARGET_PCT, "stop_pct": STOP_PCT,
@@ -148,8 +157,9 @@ def fill_pending_entries(j: dict, today: str) -> list[dict]:
         t["entry_date"] = entry_date
         t["entry_price"] = round(entry_px, 4)
         t["qty"] = qty
-        t["target_price"] = round(entry_px * (1 + TARGET_PCT / 100), 4)
-        t["stop_price"] = round(entry_px * (1 - STOP_PCT / 100), 4)
+        # No stop, no target — exit only on max_hold (empirically optimal)
+        t["target_price"] = round(entry_px * (1 + TARGET_PCT / 100), 4) if TARGET_PCT > 0 else None
+        t["stop_price"] = round(entry_px * (1 - STOP_PCT / 100), 4) if STOP_PCT > 0 else None
         filled.append(t)
     return filled
 
@@ -175,14 +185,14 @@ def check_exits(j: dict, today: str) -> list[dict]:
             continue
 
         exit_px = None; reason = None; exit_date = None
+        # Only honor stop/target if they were set (STOP_PCT/TARGET_PCT > 0)
         for _, b in bars_after.iterrows():
             lo, hi = float(b["low"]), float(b["high"])
-            # Stop checked before target (conservative)
-            if lo <= stop:
+            if stop is not None and lo <= stop:
                 exit_px = stop; reason = "stop"; exit_date = b["date"]; break
-            if hi >= target:
+            if target is not None and hi >= target:
                 exit_px = target; reason = "target"; exit_date = b["date"]; break
-        # Max hold check
+        # Max hold check — primary exit when no stop/target
         if exit_px is None:
             held_bars = len(bars_after)
             if held_bars >= MAX_HOLD_DAYS:
