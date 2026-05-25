@@ -1929,6 +1929,9 @@ class AutoPilotInvestor:
                 risk = price - stop_loss
                 rr2 = round((target2 - price) / risk, 1) if risk > 0 else 0
 
+            # Suggested qty at blind-buy slot size (₹50K = ₹2L / 4 slots)
+            qty = int(50000 // buy_above) if buy_above > 0 else 0
+
             picks.append({
                 "symbol":    symbol,
                 "action":    action,
@@ -1942,6 +1945,7 @@ class AutoPilotInvestor:
                 "price":     price,
                 "vol_ratio": vol_ratio,
                 "rr2":       rr2,
+                "qty":       qty,
             })
 
         if not picks:
@@ -1962,10 +1966,11 @@ class AutoPilotInvestor:
             gap_str  = f"already at trigger" if p["entry_gap"] <= 0 else f"{p['entry_gap']:.1f}% away"
             rr_str   = f" | R:R 1:{p['rr2']}" if p["rr2"] > 0 else ""
             vol_str  = f" | Vol {p['vol_ratio']:.1f}x" if p["vol_ratio"] > 0 else ""
+            qty_str  = f" | Qty `{p['qty']}` (~₹50K)" if p["qty"] > 0 else ""
             lines.append(
                 f"{tag} `{p['symbol']}` — RSI {p['rsi']:.0f} | Conf {p['strength']:.0f}%{vol_str}{rr_str}\n"
                 f"   Buy above `₹{p['buy_above']:.2f}` ({gap_str}) | Stop `₹{p['stop_loss']:.2f}` | "
-                f"T1 `₹{p['target1']:.2f}` | T2 `₹{p['target2']:.2f}`"
+                f"T1 `₹{p['target1']:.2f}` | T2 `₹{p['target2']:.2f}`{qty_str}"
             )
 
         lines.append(
@@ -5726,8 +5731,8 @@ class AutoPilotInvestor:
                     "Entry": "Buy Above",
                     "EntryGapPct": "Entry Gap %",
                     "StopLoss": "Sell If Below",
-                    "TakeProfit1": "Take Profit 1",
-                    "TakeProfit2": "Take Profit 2",
+                    "Target1": "Take Profit 1",
+                    "Target2": "Take Profit 2",
                     "VolumeRatio": "Volume vs Avg",
                     "Reason": "Why",
                     "SuggestedQty": "Suggested Qty",
