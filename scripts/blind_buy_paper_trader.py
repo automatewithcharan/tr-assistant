@@ -45,13 +45,49 @@ JOURNAL_PATH = JOURNAL_DIR / "journal.json"
 TRADES_CSV = JOURNAL_DIR / "trades.csv"
 
 # --- Strategy config --------------------------------------------------------
-POSITION_INR   = 50_000.0   # ₹ per alert
-MAX_CONCURRENT = 4          # skip new alerts when 4 positions open (₹2L exposure)
-MAX_HOLD_DAYS  = 10         # hold remaining qty until 10th trading-day close
-PARTIAL_PCT    = 0          # % of qty to exit at +8% (0 = disabled; backtest used 0)
-PARTIAL_AT_PCT = 8.0        # trigger for partial exit
-DELIVERY_COST  = 0.30       # round-trip CNC delivery cost %
-_NO_STOP       = False      # runtime override: skip stop logic when True
+TOTAL_CAPITAL_INR    = 10_00_000.0  # ₹10L deployable capital
+RISK_PER_TRADE_PCT   = 1.0          # 1% of capital at stop = ₹10K loss budget
+MAX_POSITION_PCT     = 10.0         # cap any single position at 10% of capital = ₹1L
+MIN_POSITION_INR     = 5_000.0      # below this, skip (cost/rounding noise)
+DEFAULT_STOP_PCT     = 6.0          # assumed stop distance if alert had no explicit stop
+MAX_HOLD_DAYS        = 10           # hold remaining qty until 10th trading-day close
+PARTIAL_PCT          = 0            # % of qty to exit at +8% (0 = disabled)
+PARTIAL_AT_PCT       = 8.0          # trigger for partial exit
+DELIVERY_COST        = 0.30         # round-trip CNC delivery cost %
+_NO_STOP             = False        # runtime override: skip stop logic when True
+
+# Legacy aliases — referenced by older logs / journal; safe to remove once
+# every active journal has migrated.
+POSITION_INR   = 50_000.0
+MAX_CONCURRENT = 999  # effectively unbounded; real cap is total-exposure check
+
+
+def compute_position_size(entry: float, stop: float | None,
+                          capital: float = TOTAL_CAPITAL_INR,
+                          risk_pct: float = RISK_PER_TRADE_PCT,
+                          max_pos_pct: float = MAX_POSITION_PCT,
+                          min_pos: float = MIN_POSITION_INR) -> tuple[int, float]:
+    """Risk-parity sizing.
+
+    Returns (qty, position_inr). qty=0 means skip — either invalid stop or
+    position would be below MIN_POSITION_INR after caps.
+    """
+    if entry is None or entry <= 0:
+        return 0, 0.0
+    if stop is None or stop <= 0 or stop >= entry:
+        stop = entry * (1 - DEFAULT_STOP_PCT / 100.0)
+    per_share_risk = entry - stop
+    if per_share_risk <= 0:
+        return 0, 0.0
+    risk_budget = capital * risk_pct / 100.0
+    max_position = capital * max_pos_pct / 100.0
+    qty_by_risk = int(risk_budget // per_share_risk)
+    qty_by_max_pos = int(max_position // entry)
+    qty = min(qty_by_risk, qty_by_max_pos)
+    position = qty * entry
+    if position < min_pos:
+        return 0, 0.0
+    return qty, position
 
 
 # --- Price data helpers ------------------------------------------------------
@@ -155,10 +191,14 @@ def load_journal() -> dict:
         "config": {
             "strategy": (
                 f"blind_buy|entry=next_open|stop=alert_stop|"
-                f"partial={PARTIAL_PCT}%@{PARTIAL_AT_PCT}%|hold={MAX_HOLD_DAYS}d"
+                f"sizing=risk_parity|risk={RISK_PER_TRADE_PCT}%|"
+                f"max_pos={MAX_POSITION_PCT}%|hold={MAX_HOLD_DAYS}d"
             ),
-            "position_size_inr": POSITION_INR,
-            "max_concurrent": MAX_CONCURRENT,
+            "total_capital_inr": TOTAL_CAPITAL_INR,
+            "risk_per_trade_pct": RISK_PER_TRADE_PCT,
+            "max_position_pct": MAX_POSITION_PCT,
+            "min_position_inr": MIN_POSITION_INR,
+            "default_stop_pct": DEFAULT_STOP_PCT,
             "partial_pct": PARTIAL_PCT,
             "partial_at_pct": PARTIAL_AT_PCT,
             "max_hold_days": MAX_HOLD_DAYS,
@@ -189,6 +229,20 @@ def ingest_new_alerts(j: dict, today: str, lookback_days: int = 7) -> list[dict]
     seen = {f"{t['alert_date']}::{t['symbol']}" for t in j["trades"]}
     new = []
 
+    def _open_exposure() -> float:
+        """Sum of ₹ committed to active + pending positions (planned for pending)."""
+        total = 0.0
+        for t in j["trades"]:
+            if t.get("status") == "active":
+                # Use actual position_inr if present, else fall back to entry × full_qty
+                pos = t.get("position_inr")
+                if pos is None:
+                    pos = float(t.get("entry_price", 0)) * float(t.get("full_qty", 0))
+                total += float(pos)
+            elif t.get("status") == "pending":
+                total += float(t.get("planned_position_inr", 0))
+        return total
+
     for _, r in recent.iterrows():
         key = f"{r['date']}::{r['symbol'].upper()}"
         if key in seen:
@@ -198,10 +252,8 @@ def ingest_new_alerts(j: dict, today: str, lookback_days: int = 7) -> list[dict]
         stop_px = float(r["stop"]) if not pd.isna(r["stop"]) else None
         sym = r["symbol"].upper()
 
-        # Capacity check
-        active = sum(1 for t in j["trades"] if t.get("status") == "active")
-        pending = sum(1 for t in j["trades"] if t.get("status") == "pending")
-        if active + pending >= MAX_CONCURRENT:
+        planned_qty, planned_position = compute_position_size(alert_px, stop_px)
+        if planned_qty == 0:
             j["trades"].append({
                 "trade_id": f"BB{len(j['trades'])+1:05d}",
                 "alert_date": r["date"], "alert_time": str(r.get("time", "")),
@@ -209,7 +261,22 @@ def ingest_new_alerts(j: dict, today: str, lookback_days: int = 7) -> list[dict]
                 "alert_price": alert_px, "stop_price": stop_px,
                 "target1": float(r["target1"]) if not pd.isna(r.get("target1")) else None,
                 "target2": float(r["target2"]) if not pd.isna(r.get("target2")) else None,
-                "status": "skipped", "skip_reason": "max_concurrent_cap",
+                "status": "skipped", "skip_reason": "position_too_small",
+            })
+            seen.add(key)
+            continue
+
+        if _open_exposure() + planned_position > TOTAL_CAPITAL_INR:
+            j["trades"].append({
+                "trade_id": f"BB{len(j['trades'])+1:05d}",
+                "alert_date": r["date"], "alert_time": str(r.get("time", "")),
+                "symbol": sym, "score": float(r["score"]),
+                "alert_price": alert_px, "stop_price": stop_px,
+                "target1": float(r["target1"]) if not pd.isna(r.get("target1")) else None,
+                "target2": float(r["target2"]) if not pd.isna(r.get("target2")) else None,
+                "planned_qty": planned_qty,
+                "planned_position_inr": round(planned_position, 2),
+                "status": "skipped", "skip_reason": "capital_exhausted",
             })
             seen.add(key)
             continue
@@ -221,6 +288,8 @@ def ingest_new_alerts(j: dict, today: str, lookback_days: int = 7) -> list[dict]
             "alert_price": alert_px, "stop_price": stop_px,
             "target1": float(r["target1"]) if not pd.isna(r.get("target1")) else None,
             "target2": float(r["target2"]) if not pd.isna(r.get("target2")) else None,
+            "planned_qty": planned_qty,
+            "planned_position_inr": round(planned_position, 2),
             "status": "pending",
         })
         seen.add(key)
@@ -244,10 +313,13 @@ def fill_pending_entries(j: dict, today: str) -> list[dict]:
             t["status"] = "skipped"
             t["skip_reason"] = "no_entry_price"
             continue
-        full_qty = int(POSITION_INR / entry_px)
+        # Re-size at the actual entry price using the alert's stop. This keeps
+        # the risk-budget honest even if the open gaps significantly from the
+        # alert price (which is what the planned_position was computed against).
+        full_qty, position_inr = compute_position_size(entry_px, t.get("stop_price"))
         if full_qty == 0:
             t["status"] = "skipped"
-            t["skip_reason"] = "price_too_high_for_position"
+            t["skip_reason"] = "position_too_small_at_entry"
             continue
 
         partial_qty = int(full_qty * PARTIAL_PCT / 100) if PARTIAL_PCT > 0 else 0
@@ -257,6 +329,7 @@ def fill_pending_entries(j: dict, today: str) -> list[dict]:
         t["entry_date"] = entry_date
         t["entry_price"] = round(entry_px, 4)
         t["full_qty"] = full_qty
+        t["position_inr"] = round(position_inr, 2)
         t["partial_qty"] = partial_qty   # qty to sell at +8% (0 if disabled)
         t["hold_qty"] = hold_qty         # qty held to 10-day close
         t["partial_exited"] = False
@@ -417,8 +490,10 @@ def print_stats():
     active  = [t for t in trades if t.get("status") == "active"]
     pending = [t for t in trades if t.get("status") == "pending"]
     skipped = [t for t in trades if t.get("status") == "skipped"]
-    skip_cap = sum(1 for t in skipped if t.get("skip_reason") == "max_concurrent_cap")
-    skip_nodata = sum(1 for t in skipped if "price" in t.get("skip_reason", ""))
+    skip_capital = sum(1 for t in skipped if t.get("skip_reason") == "capital_exhausted")
+    skip_small = sum(1 for t in skipped if "too_small" in t.get("skip_reason", ""))
+    skip_nodata = sum(1 for t in skipped if "no_entry_price" in t.get("skip_reason", ""))
+    skip_legacy_cap = sum(1 for t in skipped if t.get("skip_reason") == "max_concurrent_cap")
 
     print(f"\n{'='*65}")
     print(f"  BLIND-BUY PAPER TRADER — STATS")
@@ -429,7 +504,9 @@ def print_stats():
     print(f"    Closed:  {len(closed)}")
     print(f"    Active:  {len(active)}")
     print(f"    Pending: {len(pending)}")
-    print(f"    Skipped: {len(skipped)}  ({skip_cap} max-cap, {skip_nodata} no-data)")
+    print(f"    Skipped: {len(skipped)}  "
+          f"({skip_capital} capital-full, {skip_small} too-small, "
+          f"{skip_nodata} no-data, {skip_legacy_cap} legacy-cap)")
 
     if closed:
         df = pd.DataFrame(closed)
@@ -437,8 +514,14 @@ def print_stats():
         ret_col = "blended_net_pct" if "blended_net_pct" in df.columns else "net_return_pct"
         df[ret_col] = pd.to_numeric(df[ret_col], errors="coerce")
         wins = df[df[ret_col] > 0]
+
+        # Real ₹ P&L: per-trade position × pct, summed across trades.
+        # Falls back to POSITION_INR (legacy ₹50K) for trades that pre-date sizing.
+        df["_pos"] = pd.to_numeric(df.get("position_inr"), errors="coerce").fillna(POSITION_INR)
+        df["_pnl_inr"] = df["_pos"] * df[ret_col] / 100.0
+        cum_inr = df["_pnl_inr"].sum()
+        avg_pos = df["_pos"].mean()
         cum_pct = df[ret_col].sum()
-        cum_inr = cum_pct / 100 * POSITION_INR
 
         print(f"\n  CLOSED TRADES ({n}):")
         print(f"    Win rate:       {len(wins)/n*100:.1f}%")
@@ -446,8 +529,10 @@ def print_stats():
         print(f"    Median:         {df[ret_col].median():+.3f}%")
         print(f"    Best trade:     {df[ret_col].max():+.2f}%  ({df.loc[df[ret_col].idxmax(), 'symbol']})")
         print(f"    Worst trade:    {df[ret_col].min():+.2f}%  ({df.loc[df[ret_col].idxmin(), 'symbol']})")
-        print(f"    Cumulative net: {cum_pct:+.2f}%")
-        print(f"    Cumulative ₹:   ₹{cum_inr:+,.0f}  (single ₹50K rotated)")
+        print(f"    Avg position:   ₹{avg_pos:,.0f}")
+        print(f"    Cumulative net: {cum_pct:+.2f}% (sum of trade %s)")
+        print(f"    Cumulative ₹:   ₹{cum_inr:+,.0f}  (actual qty × price diff)")
+        print(f"    Return on ₹{TOTAL_CAPITAL_INR/100000:.0f}L capital: {cum_inr/TOTAL_CAPITAL_INR*100:+.2f}%")
 
         print(f"\n  By exit reason:")
         print(df.groupby("exit_reason")[ret_col].agg(["count", "mean"]).round(3).to_string())

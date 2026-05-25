@@ -41,16 +41,22 @@ else:
     n = len(df)
     wins = df[df[ret_col] > 0]
     avg = df[ret_col].mean()
-    total = df[ret_col].sum()
     wr = len(wins)/n*100
-    cum_inr = total/100*50000
+    # Real ₹ from per-trade position size; falls back to legacy ₹50K if missing.
+    df['_pos'] = pd.to_numeric(df.get('position_inr'), errors='coerce').fillna(50000)
+    cum_inr = (df['_pos'] * df[ret_col] / 100.0).sum()
+    capital = j.get('config', {}).get('total_capital_inr') or 200000
+    ret_on_cap = cum_inr / capital * 100
     closed_today_n = today.get('closed_today', 0)
-    today_pl = sum(float(t.get(ret_col, 0)) for t in trades
-                   if t.get('status')=='closed' and t.get('exit_date')==date)
+    today_pl_inr = sum(
+        float(t.get('position_inr', 50000)) * float(t.get(ret_col, 0)) / 100.0
+        for t in trades
+        if t.get('status')=='closed' and t.get('exit_date')==date
+    )
     print(f'📈 **Blind-Buy Paper — {date}**')
-    print(f'Today: filled={today.get(\"filled_today\",0)}, closed={closed_today_n}, P&L {today_pl:+.2f}%')
+    print(f'Today: filled={today.get(\"filled_today\",0)}, closed={closed_today_n}, P&L ₹{today_pl_inr:+,.0f}')
     print(f'Pipeline: {len(pending)} pending | {len(active)} active')
-    print(f'All-time: {n} closed, WR {wr:.0f}%, avg {avg:+.2f}%/trade, cum ₹{cum_inr:+,.0f}')
+    print(f'All-time: {n} closed, WR {wr:.0f}%, avg {avg:+.2f}%/trade, cum ₹{cum_inr:+,.0f} ({ret_on_cap:+.2f}% on ₹{capital/100000:.0f}L)')
 " 2>&1) || true
 
 if [ -n "${DISCORD_WEBHOOK_URL:-}" ]; then

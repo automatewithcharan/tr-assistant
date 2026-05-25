@@ -7621,6 +7621,9 @@ class AutoPilotInvestor:
         for rank, (c, grade, momentum, risk_flag) in enumerate(main_picks, 1):
             self._format_candidate_block(sections, c, grade, momentum, rank, len(main_picks), risk_flag=risk_flag)
 
+        if not is_post_market:
+            self._record_blind_buy_to_paper_trader(main_picks)
+
         # Auto-buy A+/A grade candidates while broker funds and risk controls allow.
         # Log every main pick, not just bought names, so the post-market truth
         # report can explain exactly why a good-looking alert was not bought.
@@ -7918,6 +7921,49 @@ class AutoPilotInvestor:
         message = "\n\n".join(sections)
         self._log(f"Sending sell alerts for {len(alerts)} position(s) to Discord.")
         self._send_to_channels(message)
+
+    def _record_blind_buy_to_paper_trader(self, main_picks) -> None:
+        """Append BLIND BUY ALERT picks to the paper trader's live alerts CSV.
+
+        Hook for [blind_buy_paper_trader.py]. Failures here must never break
+        the alert path — the paper trader is observational, the alert is real.
+        """
+        try:
+            import sys as _sys
+            from pathlib import Path as _Path
+            _scripts_dir = _Path(__file__).resolve().parents[2] / "scripts"
+            if str(_scripts_dir) not in _sys.path:
+                _sys.path.insert(0, str(_scripts_dir))
+            from blind_buy_paper_trader import add_live_alert  # type: ignore
+            try:
+                import pytz as _pytz
+                _now = __import__('datetime').datetime.now(_pytz.timezone("Asia/Kolkata"))
+            except Exception:
+                _now = __import__('datetime').datetime.utcnow()
+            date_str = _now.strftime("%Y-%m-%d")
+            time_str = _now.strftime("%H:%M")
+        except Exception as exc:
+            self._log(f"[paper-trader] ingest hook unavailable: {exc}")
+            return
+
+        for pick in main_picks:
+            try:
+                c = pick[0] if isinstance(pick, tuple) else pick
+                row = {
+                    "date": date_str,
+                    "time": time_str,
+                    "symbol": str(c.symbol).upper(),
+                    "alert_price": float(c.price or 0),
+                    "stop": float(c.stop_loss or 0),
+                    "target1": float(c.target1 or 0),
+                    "target2": float(c.target2 or 0),
+                    "score": float(c.blind_score or 0),
+                }
+                if row["alert_price"] <= 0:
+                    continue
+                add_live_alert(row)
+            except Exception as exc:
+                self._log(f"[paper-trader] failed to record {getattr(c,'symbol','?')}: {exc}")
 
     def _send_to_channels(self, message: str) -> None:
         """Send message to all configured alert channels."""
