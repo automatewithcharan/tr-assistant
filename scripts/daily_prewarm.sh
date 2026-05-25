@@ -21,6 +21,12 @@ send_discord() {
 echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Prewarm: starting cache refresh for NSE+BSE" >> $LOG
 send_discord "🔄 **Daily prewarm started** — refreshing cache for NSE+BSE stocks (8 AM IST)"
 
+# Stamp a reference marker at run start so we can count files refreshed *during* this run.
+# (Can't use $LOG as the reference because it gets appended to throughout the run, so its
+#  mtime always ends up newer than the cache files → find -newer $LOG returns 0.)
+REF_MARKER=/tmp/daily_prewarm.start_marker
+touch $REF_MARKER
+
 # Check Kite session is valid before starting; re-login if token is expired
 SESSION_FILE=$REPO/results/Data/kite_connect_session.json
 if [ -f "$SESSION_FILE" ]; then
@@ -92,7 +98,7 @@ print(f'Combined universe: {len(combined)} symbols (NSE={len(nse_take)}, BSE={le
 EXIT_CODE=$?
 
 if [ $EXIT_CODE -eq 0 ]; then
-    REFRESHED=$(find $REPO/results/Data/kite_history_cache/day -name '*.csv' -newer $LOG 2>/dev/null | wc -l)
+    REFRESHED=$(find $REPO/results/Data/kite_history_cache/day -name '*.csv' -newer $REF_MARKER 2>/dev/null | wc -l)
     echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Prewarm: done (exit=0, ~${REFRESHED} files updated)" >> $LOG
     send_discord "✅ **Prewarm complete** — cache refreshed for ~${REFRESHED} stocks. Session will start at 8:30 AM IST."
 else
