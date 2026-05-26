@@ -1981,6 +1981,49 @@ class AutoPilotInvestor:
         message = "\n\n".join(lines)
         self._send_to_channels(message)
         self._log(f"Pre-market watchlist sent: {len(top)} picks.")
+        self._record_premarket_watchlist_to_paper_trader(top, now_ist)
+
+    def _record_premarket_watchlist_to_paper_trader(self, top, now_ist) -> None:
+        """Persist Buy Now picks from pre-market watchlist to live alerts CSV.
+
+        Date is set to previous calendar day so the trader's next_open() maps
+        to today's market open — entry happens at the 9:15 IST open as the
+        user-facing message instructs.
+        """
+        buy_now_picks = [p for p in top if "Buy Now" in p.get("action", "")]
+        if not buy_now_picks:
+            return
+        try:
+            import sys as _sys
+            from pathlib import Path as _Path
+            from datetime import timedelta as _td
+            _scripts_dir = _Path(__file__).resolve().parents[2] / "scripts"
+            if str(_scripts_dir) not in _sys.path:
+                _sys.path.insert(0, str(_scripts_dir))
+            from blind_buy_paper_trader import add_live_alert  # type: ignore
+        except Exception as exc:
+            self._log(f"[paper-trader] premarket ingest unavailable: {exc}")
+            return
+
+        alert_date = (now_ist.date() - _td(days=1)).isoformat()
+        time_str = now_ist.strftime("%H:%M")
+        for p in buy_now_picks:
+            try:
+                row = {
+                    "date": alert_date,
+                    "time": time_str,
+                    "symbol": str(p["symbol"]).upper(),
+                    "alert_price": float(p["buy_above"] or 0),
+                    "stop": float(p["stop_loss"] or 0),
+                    "target1": float(p["target1"] or 0),
+                    "target2": float(p["target2"] or 0),
+                    "score": float(p.get("strength", 0) or 0),
+                }
+                if row["alert_price"] <= 0:
+                    continue
+                add_live_alert(row)
+            except Exception as exc:
+                self._log(f"[paper-trader] premarket failed for {p.get('symbol','?')}: {exc}")
 
     # ------------------------------------------------------------------
     # Mid-day consolidation scanner (11:00 AM IST, once per day)
