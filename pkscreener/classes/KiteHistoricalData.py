@@ -301,7 +301,12 @@ class KiteHistoricalDataProvider:
                             symbols = df["tradingsymbol"].astype(str).str.strip().str.upper()
                             tokens = df["instrument_token"].astype(int)
                             exchange_map = dict(zip(symbols, tokens))
-                            combined_map.update(exchange_map)
+                            # NSE is loaded first and must win: a dual-listed BSE
+                            # entry must not clobber the NSE token, because BSE
+                            # daily history often returns empty and the symbol
+                            # then gets wrongly marked "missing".
+                            for sym, tok in exchange_map.items():
+                                combined_map.setdefault(sym, tok)
                             loaded_from_cache = True
                 except Exception as exc:
                     default_logger().debug(f"Could not read cached {exchange} instruments: {exc}")
@@ -328,7 +333,9 @@ class KiteHistoricalDataProvider:
                     # Vectorized map build instead of iterrows
                     symbols = filtered["tradingsymbol"].astype(str).str.strip().str.upper()
                     tokens = filtered["instrument_token"].astype(int)
-                    combined_map.update(dict(zip(symbols, tokens)))
+                    # NSE fetched first wins; BSE only fills NSE-absent symbols.
+                    for sym, tok in zip(symbols, tokens):
+                        combined_map.setdefault(sym, tok)
                 except Exception as exc:
                     default_logger().debug(f"Failed to fetch {exchange} instruments: {exc}")
 
