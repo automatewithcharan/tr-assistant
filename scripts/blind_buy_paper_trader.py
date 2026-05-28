@@ -224,6 +224,59 @@ def save_journal(j: dict):
     JOURNAL_PATH.write_text(json.dumps(j, indent=2, default=str))
 
 
+# --- Immutable closed-trade ledger -------------------------------------------
+# A closed paper trade is a historical fact and must never silently re-price.
+# Re-running --backfill-from re-simulates trades against the *current* price
+# cache, which drifts over time (same trade showed +43.58% then +48.70% on
+# 2026-05-28). This append-only ledger snapshots each trade's outcome the first
+# time it closes; any later run replays that frozen outcome verbatim. Keyed by
+# the immutable alert identity so it survives a full journal rebuild.
+CLOSED_LEDGER_PATH = JOURNAL_DIR / "closed_ledger.json"
+_FROZEN_FIELDS = (
+    "exit_date", "exit_price", "exit_reason", "exit_qty",
+    "gross_return_pct", "cost_pct", "net_return_pct", "hold_days",
+    "blended_net_pct", "partial_exited", "partial_exit_date",
+    "partial_exit_price", "partial_gross_pct", "partial_net_pct",
+)
+
+
+def _freeze_key(t: dict) -> str:
+    return f"{t.get('symbol')}::{t.get('alert_date')}::{t.get('alert_time')}"
+
+
+def load_ledger() -> dict:
+    if CLOSED_LEDGER_PATH.exists():
+        try:
+            return json.loads(CLOSED_LEDGER_PATH.read_text())
+        except Exception:
+            return {}
+    return {}
+
+
+def save_ledger(led: dict):
+    JOURNAL_DIR.mkdir(parents=True, exist_ok=True)
+    CLOSED_LEDGER_PATH.write_text(json.dumps(led, indent=2, default=str))
+
+
+def freeze_existing_closed(j: dict) -> dict:
+    """Snapshot every already-closed trade into the ledger (idempotent).
+
+    Establishes the current closed trades as the frozen baseline so they can't
+    drift on a later rebuild. Returns the ledger.
+    """
+    ledger = load_ledger()
+    dirty = False
+    for t in j["trades"]:
+        if t.get("status") == "closed":
+            k = _freeze_key(t)
+            if k not in ledger:
+                ledger[k] = {f: t[f] for f in _FROZEN_FIELDS if f in t}
+                dirty = True
+    if dirty:
+        save_ledger(ledger)
+    return ledger
+
+
 # --- Core logic --------------------------------------------------------------
 
 def ingest_new_alerts(j: dict, today: str, lookback_days: int = 7) -> list[dict]:
@@ -357,8 +410,20 @@ def fill_pending_entries(j: dict, today: str) -> list[dict]:
 def check_exits(j: dict, today: str) -> list[dict]:
     """Check active positions for stop / partial profit / max-hold exits."""
     exits = []
+    ledger = load_ledger()
+    ledger_dirty = False
     for t in j["trades"]:
         if t.get("status") != "active":
+            continue
+
+        fk = _freeze_key(t)
+        # Immutability guard: if this trade closed on a prior run, replay the
+        # frozen outcome verbatim instead of re-pricing against a drifted cache.
+        frozen = ledger.get(fk)
+        if frozen:
+            t.update(frozen)
+            t["status"] = "closed"
+            exits.append(t)
             continue
 
         sym = t["symbol"]
@@ -433,6 +498,8 @@ def check_exits(j: dict, today: str) -> list[dict]:
             t["net_return_pct"] = round(net, 3)
             t["hold_days"] = len(bars[bars["date"] <= stop_date])
             _finalize_blended_return(t, entry_px, partial_qty, partial_exited)
+            ledger[fk] = {f: t[f] for f in _FROZEN_FIELDS if f in t}
+            ledger_dirty = True
             exits.append(t)
             continue
 
@@ -452,8 +519,12 @@ def check_exits(j: dict, today: str) -> list[dict]:
             t["net_return_pct"] = round(net, 3)
             t["hold_days"] = MAX_HOLD_DAYS
             _finalize_blended_return(t, entry_px, partial_qty, partial_exited)
+            ledger[fk] = {f: t[f] for f in _FROZEN_FIELDS if f in t}
+            ledger_dirty = True
             exits.append(t)
 
+    if ledger_dirty:
+        save_ledger(ledger)
     return exits
 
 
@@ -476,6 +547,7 @@ def _finalize_blended_return(t: dict, entry_px: float, partial_qty: int, partial
 def run_eod(target_date: str | None = None) -> dict:
     today = target_date or ddate.today().isoformat()
     j = load_journal()
+    freeze_existing_closed(j)  # baseline: lock in already-closed trades
 
     new_alerts = ingest_new_alerts(j, today)
     filled = fill_pending_entries(j, today)
@@ -621,6 +693,8 @@ def main():
     ap.add_argument("--date", help="Run EOD for YYYY-MM-DD (default: today)")
     ap.add_argument("--backfill-from", metavar="DATE",
                     help="Replay daily from DATE through today (YYYY-MM-DD)")
+    ap.add_argument("--force", action="store_true",
+                    help="Allow --backfill-from to run when the journal already has closed trades")
     ap.add_argument("--max-concurrent", type=int, default=None,
                     help="Override MAX_CONCURRENT for this run (e.g. 200 = no cap)")
     ap.add_argument("--no-stop", action="store_true",
@@ -665,6 +739,16 @@ def main():
         return 0
 
     if args.backfill_from:
+        existing = load_journal()
+        n_closed = sum(1 for t in existing.get("trades", []) if t.get("status") == "closed")
+        if n_closed and not args.force:
+            print(
+                f"Refusing to backfill: journal already has {n_closed} closed trades.\n"
+                f"Their values are frozen by the ledger and would be replayed, but a full\n"
+                f"re-backfill churns the forward record. Normal daily operation needs NO\n"
+                f"backfill. Re-run with --force only if you truly mean to rebuild."
+            )
+            return 1
         all_alerts = load_all_blind_buy_alerts()
         if all_alerts.empty:
             print("No blind-buy alerts found.")
