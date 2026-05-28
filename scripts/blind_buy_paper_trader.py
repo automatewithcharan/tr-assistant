@@ -110,10 +110,17 @@ def load_daily(symbol: str) -> pd.DataFrame:
         _day_cache[symbol] = pd.DataFrame()
         return _day_cache[symbol]
     df = pd.concat(parts, ignore_index=True)
-    df["datetime"] = pd.to_datetime(df["datetime"], utc=True, errors="coerce").dt.tz_convert(None)
+    # Sources mix three timestamp formats (tz-aware IST midnight "...+05:30",
+    # naive UTC midnight "...18:30:00", and date-only). format="mixed" parses
+    # them together instead of inferring one format and NaT-dropping the rest;
+    # converting to IST lands each bar on its true trading-day date (dropping to
+    # plain UTC shifts every midnight-IST bar back one calendar day).
+    df["datetime"] = pd.to_datetime(
+        df["datetime"], format="mixed", utc=True, errors="coerce"
+    ).dt.tz_convert("Asia/Kolkata")
+    df = df.dropna(subset=["datetime"])
     df["date"] = df["datetime"].dt.date.astype(str)
-    df = (df.dropna(subset=["datetime"])
-            .drop_duplicates(subset=["date"])
+    df = (df.drop_duplicates(subset=["date"])
             .sort_values("date")
             .reset_index(drop=True))
     _day_cache[symbol] = df
@@ -172,8 +179,10 @@ def load_all_blind_buy_alerts() -> pd.DataFrame:
     df["score"] = pd.to_numeric(df["score"], errors="coerce").fillna(0)
     df["alert_price"] = pd.to_numeric(df["alert_price"], errors="coerce")
     df["stop"] = pd.to_numeric(df["stop"], errors="coerce")
-    df = df.dropna(subset=["alert_price"])
+    df = df.dropna(subset=["alert_price", "symbol"])
     df = df[df["alert_price"] > 0]
+    df["symbol"] = df["symbol"].astype(str).str.strip().str.upper()
+    df = df[df["symbol"] != ""]
 
     # Dedup: same symbol on same day → keep highest score (fires multiple times)
     df = (df.sort_values(["date", "symbol", "score"], ascending=[True, True, False])
@@ -309,6 +318,14 @@ def fill_pending_entries(j: dict, today: str) -> list[dict]:
         entry_date, entry_px = result
         if entry_date > today:
             continue
+        # Stale signal: if the first available bar is far past the alert (data
+        # gap / trading halt), the "enter at next day's open" premise no longer
+        # holds — don't fill weeks late at an unrelated price.
+        gap_days = (ddate.fromisoformat(entry_date) - ddate.fromisoformat(t["alert_date"])).days
+        if gap_days > 10:
+            t["status"] = "skipped"
+            t["skip_reason"] = "stale_no_nextday"
+            continue
         if entry_px <= 0 or np.isnan(entry_px):
             t["status"] = "skipped"
             t["skip_reason"] = "no_entry_price"
@@ -347,15 +364,28 @@ def check_exits(j: dict, today: str) -> list[dict]:
         sym = t["symbol"]
         entry_date = t["entry_date"]
         entry_px = t["entry_price"]
-        stop_px = t.get("stop_price")
         hold_qty = t["hold_qty"]
         partial_qty = t["partial_qty"]
         partial_exited = t.get("partial_exited", False)
         partial_at = entry_px * (1 + PARTIAL_AT_PCT / 100)
 
+        # Effective stop must sit below entry. A missing/inverted alert stop
+        # (stop >= entry) is nonsensical and previously fabricated gains by
+        # "stopping out" above the entry price — fall back to the default stop,
+        # matching how compute_position_size sized the trade.
+        raw_stop = t.get("stop_price")
+        if raw_stop is None or raw_stop <= 0 or raw_stop >= entry_px:
+            stop_px = entry_px * (1 - DEFAULT_STOP_PCT / 100.0)
+        else:
+            stop_px = raw_stop
+
         bars = day_bars(sym, entry_date, today)
         if bars.empty:
             continue
+        # A position lives at most MAX_HOLD_DAYS trading days. Restrict the scan
+        # to that window so a stop on a later bar can't pre-empt the max-hold
+        # exit (look-ahead) when several days are processed in one run.
+        bars = bars.iloc[:MAX_HOLD_DAYS]
 
         # --- Check each bar in chronological order ---
         stop_hit = False
@@ -368,10 +398,12 @@ def check_exits(j: dict, today: str) -> list[dict]:
             bdate = b["date"]
 
             # Stop loss check (applies to full remaining position)
-            if not _NO_STOP and stop_px is not None and lo <= stop_px:
+            if not _NO_STOP and lo <= stop_px:
                 stop_hit = True
                 stop_date = bdate
-                stop_px_hit = stop_px
+                # Gap-through: if the bar opened below the stop, the realistic
+                # fill is the open, not the (better) stop price.
+                stop_px_hit = min(stop_px, float(b["open"]))
                 break  # stop ends everything
 
             # Partial profit check (only on hold leg, only once)
