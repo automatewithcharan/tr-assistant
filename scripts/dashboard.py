@@ -19,6 +19,8 @@ interface instead (understand the risk — this page shows your real positions):
 import json
 import os
 import statistics
+import sys
+import time
 from datetime import datetime
 from html import escape
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -35,6 +37,55 @@ PORT = int(os.environ.get("DASH_PORT", "8501"))
 # Lanes intentionally paused (cron disabled). Their journal is frozen history,
 # not live measurement — shown greyed so a stale number isn't mistaken for a live one.
 PAUSED_LANES = {"Intraday (Tier C)"}
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+try:
+    import live_alert_watch
+except Exception:
+    live_alert_watch = None
+
+_WATCH_CACHE = {"ts": 0.0, "data": None}
+
+
+def get_watch():
+    """Live-alert watch, recomputed at most every 10 min (reads many files)."""
+    if live_alert_watch is None:
+        return None
+    if _WATCH_CACHE["data"] is None or time.time() - _WATCH_CACHE["ts"] > 600:
+        try:
+            _WATCH_CACHE["data"] = live_alert_watch.compute_watch()
+            _WATCH_CACHE["ts"] = time.time()
+        except Exception:
+            pass
+    return _WATCH_CACHE["data"]
+
+
+# Stage-1 gate for blind-buy: 30 closed trades accumulated FORWARD (i.e. closed
+# on/after the freeze baseline). The 23 backfill-seed trades all exited by
+# 2026-05-14, so this date cleanly separates seed from real forward evidence.
+BLIND_BUY_JOURNAL = DATA / "blind_buy_alert_paper" / "journal.json"
+FORWARD_START = "2026-05-28"
+STAGE1_GATE = 30
+
+
+def blind_buy_gate():
+    j = load_json(BLIND_BUY_JOURNAL, {})
+    trades = j.get("trades", [])
+    closed = [t for t in trades if t.get("status") == "closed"]
+    fwd = [t for t in closed if str(t.get("exit_date") or "") >= FORWARD_START]
+    seed = [t for t in closed if str(t.get("exit_date") or "") < FORWARD_START]
+    active = [t for t in trades if t.get("status") == "active"]
+    fwd_rets = [t["net_return_pct"] for t in fwd if "net_return_pct" in t]
+    seed_rets = [t["net_return_pct"] for t in seed if "net_return_pct" in t]
+    return {
+        "fwd": len(fwd),
+        "gate": STAGE1_GATE,
+        "active": len(active),
+        "fwd_avg": (statistics.mean(fwd_rets) if fwd_rets else None),
+        "fwd_wr": (sum(1 for r in fwd_rets if r > 0) / len(fwd_rets) * 100 if fwd_rets else None),
+        "seed": len(seed),
+        "seed_avg": (statistics.mean(seed_rets) if seed_rets else None),
+    }
 
 
 def load_json(path, default):
@@ -215,6 +266,61 @@ def render():
                 <td class="muted" colspan="3">no closed trades yet</td>
             </tr>"""
 
+    # Blind-buy Stage-1 gate progress
+    g = blind_buy_gate()
+    pct = min(100, g["fwd"] / g["gate"] * 100) if g["gate"] else 0
+    if g["fwd"]:
+        fwd_line = (f'<span class="big {"gain" if (g["fwd_avg"] or 0) >= 0 else "loss"}">'
+                    f'{g["fwd_avg"]:+.2f}% avg</span> · {g["fwd_wr"]:.0f}% win so far')
+    else:
+        fwd_line = ('<span class="muted">no forward trades closed yet — first batch of '
+                    f'{g["active"]} open positions closes ~mid-June</span>')
+    seed_avg = f'{g["seed_avg"]:+.2f}%' if g["seed_avg"] is not None else "n/a"
+    gate_html = f"""
+  <h2>Blind-Buy &rarr; Stage-1 gate progress</h2>
+  <div class="summary">
+    Forward trades: <span class="big">{g['fwd']} / {g['gate']}</span>
+    &nbsp;<span class="bar"><span class="bar-fill" style="width:{pct:.0f}%"></span></span><br>
+    <div style="margin-top:8px">{fwd_line}</div>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    Gate = {g['gate']} forward closed trades (closed on/after {FORWARD_START}) sustained &ge;0.3%/day net &rarr; then consider real capital.
+    {g['active']} positions in flight. Seed: {g['seed']} backfill trades (avg {seed_avg}) shown as prior context only &mdash; NOT counted toward the gate.
+  </div>"""
+
+    # Live-alert watch section (observational; the bot's chase-the-move feed)
+    watch_html = ""
+    w = get_watch()
+    if w and w["agg"]["total_alerts"]:
+        a = w["agg"]
+        if a["closed"]:
+            avg_cls = "gain" if (a["avg_net"] or 0) >= 0 else "loss"
+            verdict = (f'<span class="big {avg_cls}">{a["avg_net"]:+.2f}% avg</span> · '
+                       f'{a["win_rate"]:.0f}% win · {a["targets"]} hit target / {a["stops"]} stopped '
+                       f'· {a["closed"]} scored')
+        else:
+            verdict = '<span class="muted">no alerts scored yet — all too recent</span>'
+        wrows = ""
+        for r in w["rows"][:10]:
+            if r["status"] == "closed":
+                rc = "gain" if r["net_pct"] >= 0 else "loss"
+                out = f'<span class="{rc}">{r["net_pct"]:+.2f}%</span> <span class="muted">({escape(str(r["exit_reason"]))})</span>'
+            else:
+                out = f'<span class="muted">{escape(r["status"])}</span>'
+            wrows += (f'<tr><td>{escape(r["date"])}</td>'
+                      f'<td class="sym">{escape(r["symbol"])}</td>'
+                      f'<td class="num">{out}</td></tr>')
+        watch_html = f"""
+  <h2>Live BUY alerts — watch only (NOT traded)</h2>
+  <div class="summary">{verdict}</div>
+  <div class="updated" style="margin-top:6px">
+    &#9888; Best-case read: scored from the point-in-time actionable board, so alerts that fired and faded intraday (like ATGL today) are NOT captured &mdash; the real edge is likely worse. {a['pending']} too recent to score. Entry at alert price, {a['hold_days']}-day forward outcome on daily bars, net ~0.25% cost. Shown to judge whether acting on these would pay &mdash; they are not traded.
+  </div>
+  <table>
+    <tr><th>Alert date</th><th>Symbol</th><th class="num">If you'd bought it</th></tr>
+    {wrows}
+  </table>"""
+
     tot_cls = "gain" if tot_pnl >= 0 else "loss"
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
@@ -238,6 +344,8 @@ def render():
   .badge.orange {{ background:#7c2d12; color:#fed7aa; }}
   .badge.grey {{ background:#374151; color:#cbd5e1; }}
   tr.paused td {{ color:#6b7280; }}
+  .bar {{ background:#20242c; border-radius:6px; height:18px; width:320px; display:inline-block; vertical-align:middle; overflow:hidden; }}
+  .bar-fill {{ background:#4ade80; height:100%; }}
   .summary {{ background:#171a21; border-radius:8px; padding:14px 18px; display:inline-block; margin-top:6px; }}
   .summary span {{ margin-right:24px; }}
   .big {{ font-size:18px; font-weight:700; }}
@@ -265,6 +373,8 @@ def render():
         <th class="num">Win rate</th><th class="num">Avg/trade</th><th class="num">On &#8377;capital</th></tr>
     {lane_rows}
   </table>
+{gate_html}
+{watch_html}
   <div class="updated" style="margin-top:18px">
     Numbers read live from results/Data journals + kite_tracked_positions.json. "On &#8377;capital" = booked P&amp;L &#247; deployable capital (the real account number, not a sum of per-trade %s). "since" = journal start date — if it jumps, the lane was reset/re-backfilled. Prices from last Kite tick (may be stale outside market hours).
   </div>
