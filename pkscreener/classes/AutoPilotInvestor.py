@@ -7989,6 +7989,7 @@ class AutoPilotInvestor:
             self._log(f"[paper-trader] ingest hook unavailable: {exc}")
             return
 
+        recorded = []
         for pick in main_picks:
             try:
                 c = pick[0] if isinstance(pick, tuple) else pick
@@ -8005,8 +8006,24 @@ class AutoPilotInvestor:
                 if row["alert_price"] <= 0:
                     continue
                 add_live_alert(row)
+                recorded.append(row)
             except Exception as exc:
                 self._log(f"[paper-trader] failed to record {getattr(c,'symbol','?')}: {exc}")
+
+        # Real-time Discord push for the blind-buy picks just recorded. Wrapped
+        # so a notification failure can never break the alert/ingest path.
+        if recorded:
+            try:
+                lines = ["\U0001f9ed **BLIND-BUY ALERT** (paper — buys next open, holds ~10d)"]
+                for r in recorded:
+                    lines.append(
+                        f"\U0001f7e2 `{r['symbol']}` @ ₹{r['alert_price']:.2f} | "
+                        f"SL ₹{r['stop']:.2f} | T1 ₹{r['target1']:.2f} | "
+                        f"score {r['score']:.0f}"
+                    )
+                self._send_to_channels("\n".join(lines))
+            except Exception as exc:
+                self._log(f"[paper-trader] blind-buy discord push failed: {exc}")
 
     def _send_to_channels(self, message: str) -> None:
         """Send message to all configured alert channels."""
