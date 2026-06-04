@@ -14,6 +14,7 @@ def _make_runner() -> SignalMonitorRunner:
     runner.run_at = datetime(2026, 5, 8, 10, 15, 0)
     runner.output_dir = tempfile.mkdtemp()
     runner.last_guardrail_status = None
+    runner.alert_channels = {"discord"}
     runner._board_shown_today = set()
     runner._board_shown_date = ""
     runner.enable_intraday_goal_mode = True
@@ -21,6 +22,9 @@ def _make_runner() -> SignalMonitorRunner:
     runner.goal_stop_pct = 1.0
     runner.goal_target1_pct = 1.5
     runner.goal_target2_pct = 3.0
+    runner.monitor_heartbeat_minutes = 10
+    runner._last_discord_heartbeat_ts = 0.0
+    runner._last_goal_suppressed_reasons = []
     return runner
 
 
@@ -365,6 +369,37 @@ def test_discord_send_chunks_goal_alerts_that_do_not_fit_one_message():
     assert "`VOLTAS`" not in sent_messages[0]
     assert "`VOLTAS`" in sent_messages[1]
     assert journaled_symbols == ["RHIM", "VOLTAS"]
+
+
+def test_monitor_heartbeat_reports_active_scanner_without_fresh_buy(monkeypatch):
+    runner = _make_runner()
+    sent_messages = []
+    runner._send_discord_alert = sent_messages.append
+    runner._is_regular_market_hours = lambda: True
+    runner._last_goal_suppressed_reasons = [
+        "VOLTAS (goal-mode already surfaced today)",
+        "VENUSREM (RSI 86 too hot)",
+    ]
+    monkeypatch.setattr(runner, "_load_daily_symbol_set", lambda *_args, **_kwargs: {"RHIM", "VOLTAS"})
+    summary_df = pd.DataFrame(
+        [
+            {
+                "ScannedSymbols": 2990,
+                "FreshAlertsThisRun": 0,
+                "BuyNowCount": 6,
+                "MomentumBuyCount": 6,
+                "SellNowCount": 350,
+            }
+        ]
+    )
+
+    runner._send_monitor_heartbeat(summary_df, pd.DataFrame(columns=runner.ALERT_COLUMNS))
+
+    assert len(sent_messages) == 1
+    assert "Monitor Heartbeat" in sent_messages[0]
+    assert "Scanner `active`" in sent_messages[0]
+    assert "Goal alerts today `2/10`" in sent_messages[0]
+    assert "VOLTAS" in sent_messages[0]
 
 
 def test_intraday_goal_mode_blocks_direct_buy_without_confirmation():

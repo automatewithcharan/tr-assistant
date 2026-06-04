@@ -171,6 +171,9 @@ class SignalMonitorRunner:
         self.goal_stop_pct = max(0.25, float(os.environ.get("SIGNALMONITOR_GOAL_STOP_PCT", "1.0") or "1.0"))
         self.goal_target1_pct = max(0.5, float(os.environ.get("SIGNALMONITOR_GOAL_TARGET1_PCT", "1.5") or "1.5"))
         self.goal_target2_pct = max(self.goal_target1_pct, float(os.environ.get("SIGNALMONITOR_GOAL_TARGET2_PCT", "3.0") or "3.0"))
+        self.monitor_heartbeat_minutes = max(0.0, float(os.environ.get("SIGNALMONITOR_HEARTBEAT_MINUTES", "10") or "10"))
+        self._last_discord_heartbeat_ts = 0.0
+        self._last_goal_suppressed_reasons: List[str] = []
         self.actionable_runner = ActionableReportRunner(
             config_manager=config_manager,
             universe=universe,
@@ -391,6 +394,7 @@ class SignalMonitorRunner:
         self._save_outputs(report_df, actionable_df, merged_simple_df, merged_state_df, alerts_df, summary_df)
         self._print_summary(summary_df, merged_simple_df, alerts_df, scorecard_df)
         self._send_alerts(alerts_df, summary_df)
+        self._send_monitor_heartbeat(summary_df, alerts_df)
         self._cycle_number += 1
         return report_df, merged_simple_df, alerts_df, summary_df
 
@@ -2039,6 +2043,7 @@ class SignalMonitorRunner:
         sell_rows: List[Dict] = []
         candidates: List[Tuple[float, Dict]] = []
         suppressed: List[str] = []
+        self._last_goal_suppressed_reasons = []
 
         for row in alerts_df.to_dict(orient="records"):
             action = str(row.get("NowAction", "") or "").strip()
@@ -2071,6 +2076,7 @@ class SignalMonitorRunner:
             f"{str(row.get('Symbol', '')).strip().upper()} (daily goal slots full)"
             for _, row in candidates[remaining_slots:]
         )
+        self._last_goal_suppressed_reasons = suppressed[:25]
 
         if suppressed:
             OutputControls().printOutput(
@@ -2944,6 +2950,62 @@ class SignalMonitorRunner:
                 summary,
                 current_simple_df=getattr(self, "_last_simple_df", None),
             )
+
+    def _send_monitor_heartbeat(self, summary_df: pd.DataFrame, alerts_df: pd.DataFrame) -> None:
+        """Send periodic Discord status so quiet periods do not look like downtime."""
+        if "discord" not in self.alert_channels:
+            return
+        if not self._is_regular_market_hours():
+            return
+        interval_minutes = float(getattr(self, "monitor_heartbeat_minutes", 10.0) or 0.0)
+        if interval_minutes <= 0:
+            return
+        now_ts = time.time()
+        if now_ts - float(getattr(self, "_last_discord_heartbeat_ts", 0.0) or 0.0) < interval_minutes * 60:
+            return
+
+        summary = summary_df.iloc[0].to_dict() if summary_df is not None and not summary_df.empty else {}
+        goal_symbols = self._load_daily_symbol_set("goal_burst", today=self._today_key())
+        max_goal = max(1, int(getattr(self, "goal_max_trades_per_day", 1) or 1))
+        fresh_alerts = int(summary.get("FreshAlertsThisRun", 0) or 0)
+        buy_alerts = 0
+        if alerts_df is not None and not alerts_df.empty and "NowAction" in alerts_df.columns:
+            buy_alerts = int(alerts_df["NowAction"].astype(str).apply(self._is_goal_mode_buy_action).sum())
+
+        try:
+            sent_at = PKDateUtilities.currentDateTime().strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            sent_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        status_line = "No fresh goal buy sent this cycle"
+        if buy_alerts > 0:
+            status_line = f"Fresh goal buy alert(s) sent this cycle: `{buy_alerts}`"
+        elif fresh_alerts > 0:
+            status_line = f"Fresh non-buy alert(s) this cycle: `{fresh_alerts}`"
+
+        suppressed = list(getattr(self, "_last_goal_suppressed_reasons", []) or [])
+        suppressed_line = "Goal suppressions: `none this cycle`"
+        if suppressed:
+            suppressed_line = "Goal suppressions: " + ", ".join(f"`{item}`" for item in suppressed[:6])
+            if len(suppressed) > 6:
+                suppressed_line += f" ... +{len(suppressed) - 6}"
+
+        lines = [
+            "**PKScreener Monitor Heartbeat**",
+            f"Source `{self._alert_source_label()}` | Sent `{sent_at}`",
+            f"Universe `{self.universe}` | Scanner `active` | Scanned `{int(summary.get('ScannedSymbols', 0) or 0)}`",
+            (
+                f"Buy Now `{int(summary.get('BuyNowCount', 0) or 0)}` | "
+                f"Momentum `{int(summary.get('MomentumBuyCount', 0) or 0)}` | "
+                f"Sell `{int(summary.get('SellNowCount', 0) or 0)}` | "
+                f"Fresh `{fresh_alerts}`"
+            ),
+            f"Goal alerts today `{len(goal_symbols)}/{max_goal}`",
+            status_line,
+            suppressed_line,
+        ]
+        self._send_discord_alert("\n".join(lines))
+        self._last_discord_heartbeat_ts = now_ts
 
     def _is_regular_market_hours(self) -> bool:
         """Only send live monitor alerts during NSE regular market hours."""
