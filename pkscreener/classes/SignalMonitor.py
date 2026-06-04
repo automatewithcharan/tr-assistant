@@ -2991,13 +2991,12 @@ class SignalMonitorRunner:
                 suppressed_line += f" ... +{len(suppressed) - 6}"
 
         lines = [
-            "**PKScreener Monitor Heartbeat**",
+            "**Intraday Goal Scanner Heartbeat**",
             f"Source `{self._alert_source_label()}` | Sent `{sent_at}`",
             f"Universe `{self.universe}` | Scanner `active` | Scanned `{int(summary.get('ScannedSymbols', 0) or 0)}`",
             (
                 f"Buy Now `{int(summary.get('BuyNowCount', 0) or 0)}` | "
                 f"Momentum `{int(summary.get('MomentumBuyCount', 0) or 0)}` | "
-                f"Sell `{int(summary.get('SellNowCount', 0) or 0)}` | "
                 f"Fresh `{fresh_alerts}`"
             ),
             f"Goal alerts today `{len(goal_symbols)}/{max_goal}`",
@@ -3451,7 +3450,7 @@ class SignalMonitorRunner:
         except Exception:
             sent_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         sections = [
-            f"**PKScreener Live Alert**",
+            f"**Intraday Goal Scanner Alert**",
             f"Source `{source_label}`",
             (
                 f"Universe `{self.universe}` | Generated `{self.run_at_str}` | Sent `{sent_at}` | "
@@ -3461,7 +3460,7 @@ class SignalMonitorRunner:
                 f"Scanned `{int(summary.get('ScannedSymbols', 0) or 0)}` | "
                 f"Strong Buy Now `{int(summary.get('StrongBuyNowCount', 0) or 0)}` | "
                 f"Buy Now `{int(summary.get('BuyNowCount', 0) or 0)}` | "
-                f"Sell Now `{int(summary.get('SellNowCount', 0) or 0)}`"
+                f"Exit States `{int(summary.get('SellNowCount', 0) or 0)}`"
             ),
         ]
 

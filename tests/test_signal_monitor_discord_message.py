@@ -396,7 +396,7 @@ def test_monitor_heartbeat_reports_active_scanner_without_fresh_buy(monkeypatch)
     runner._send_monitor_heartbeat(summary_df, pd.DataFrame(columns=runner.ALERT_COLUMNS))
 
     assert len(sent_messages) == 1
-    assert "Monitor Heartbeat" in sent_messages[0]
+    assert "Intraday Goal Scanner Heartbeat" in sent_messages[0]
     assert "Scanner `active`" in sent_messages[0]
     assert "Goal alerts today `2/20`" in sent_messages[0]
     assert "VOLTAS" in sent_messages[0]
