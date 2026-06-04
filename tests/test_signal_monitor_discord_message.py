@@ -338,6 +338,35 @@ def test_intraday_goal_mode_keeps_strong_anomaly_and_tightens_targets():
     assert "book `70-80%` at Target 1" in message
 
 
+def test_discord_send_chunks_goal_alerts_that_do_not_fit_one_message():
+    runner = _make_runner()
+    sent_messages = []
+    journaled_symbols = []
+    runner._send_discord_alert = sent_messages.append
+    runner._journal_discord_alerts = lambda df, _summary, _message: journaled_symbols.extend(
+        df["Symbol"].astype(str).tolist()
+    )
+
+    first = _alert("RHIM", "🔥 Grade-A Runner", 82.5)
+    first["Checks"] = "GoalMode✓ 3% burst | SL 1.0% | T1 1.5% | T2 3.0% | Q:82/100 [A] | Vol 8.7x | +5.6% | Sector✓ (CAPGOODS) | B/S 1.7x"
+    first["Why"] = " | ".join(["Goal mode: Grade-A/runner burst setup"] * 8)
+    second = _alert("VOLTAS", "🔥 Grade-A Runner", 79.0)
+    second["Checks"] = "GoalMode✓ 3% burst | SL 1.0% | T1 1.5% | T2 3.0% | Q:79/100 [A] | Vol 4.9x | +5.7% | Sector✓ (CONSUMER) | B/S 2.4x"
+    second["Why"] = " | ".join(["Goal mode: Grade-A/runner burst setup"] * 8)
+    alerts_df = pd.DataFrame([first, second], columns=runner.ALERT_COLUMNS)
+
+    runner._send_discord_monitor_alerts(
+        alerts_df,
+        {"ScannedSymbols": 2990, "FreshAlertsThisRun": 2, "StrongBuyNowCount": 0, "BuyNowCount": 6, "SellNowCount": 384},
+    )
+
+    assert len(sent_messages) == 2
+    assert "`RHIM`" in sent_messages[0]
+    assert "`VOLTAS`" not in sent_messages[0]
+    assert "`VOLTAS`" in sent_messages[1]
+    assert journaled_symbols == ["RHIM", "VOLTAS"]
+
+
 def test_intraday_goal_mode_blocks_direct_buy_without_confirmation():
     runner = _make_runner()
     alerts_df = pd.DataFrame(

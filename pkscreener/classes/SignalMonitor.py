@@ -2939,13 +2939,11 @@ class SignalMonitorRunner:
         if "telegram" in self.alert_channels:
             self._send_telegram_alert(message)
         if "discord" in self.alert_channels:
-            discord_message = self._build_discord_monitor_message(
+            self._send_discord_monitor_alerts(
                 alerts_df,
                 summary,
                 current_simple_df=getattr(self, "_last_simple_df", None),
             )
-            self._journal_discord_alerts(alerts_df, summary, discord_message)
-            self._send_discord_alert(discord_message)
 
     def _is_regular_market_hours(self) -> bool:
         """Only send live monitor alerts during NSE regular market hours."""
@@ -2962,6 +2960,64 @@ class SignalMonitorRunner:
             or os.environ.get("SIGNALMONITOR_ALERT_SOURCE_LABEL", "")
             or "unknown launcher"
         ).strip()
+
+    def _send_discord_monitor_alerts(
+        self,
+        alerts_df: pd.DataFrame,
+        summary: Dict,
+        current_simple_df: Optional[pd.DataFrame] = None,
+    ) -> None:
+        """Send all ranked Discord alerts without silently dropping symbols on length limits."""
+        remaining_df = alerts_df.copy() if alerts_df is not None else pd.DataFrame()
+        if remaining_df.empty:
+            return
+
+        sent_any = False
+        for _ in range(12):
+            if remaining_df.empty:
+                break
+            discord_message = self._build_discord_monitor_message(
+                remaining_df,
+                summary,
+                current_simple_df=current_simple_df,
+            )
+            sent_symbols = self._symbols_present_in_discord_message(remaining_df, discord_message)
+            if not sent_symbols:
+                default_logger().warning("Discord alert payload omitted every remaining symbol; sending first row fallback")
+                remaining_df = remaining_df.head(1).copy()
+                discord_message = self._build_discord_monitor_message(
+                    remaining_df,
+                    summary,
+                    current_simple_df=None,
+                )
+                sent_symbols = self._symbols_present_in_discord_message(remaining_df, discord_message)
+                if not sent_symbols:
+                    break
+
+            sent_df = remaining_df[
+                remaining_df["Symbol"].astype(str).str.upper().isin(sent_symbols)
+            ].copy()
+            self._journal_discord_alerts(sent_df, summary, discord_message)
+            self._send_discord_alert(discord_message)
+            sent_any = True
+            remaining_df = remaining_df[
+                ~remaining_df["Symbol"].astype(str).str.upper().isin(sent_symbols)
+            ].copy()
+
+        if sent_any and not remaining_df.empty:
+            missing = ", ".join(remaining_df["Symbol"].astype(str).str.upper().tolist())
+            default_logger().warning(f"Discord alert send loop ended with unsent symbol(s): {missing}")
+
+    @staticmethod
+    def _symbols_present_in_discord_message(alerts_df: pd.DataFrame, message: str) -> Set[str]:
+        if alerts_df is None or alerts_df.empty or "Symbol" not in alerts_df.columns:
+            return set()
+        text = str(message or "")
+        sent_symbols: Set[str] = set()
+        for symbol in alerts_df["Symbol"].astype(str).str.upper():
+            if f"`{symbol}`" in text:
+                sent_symbols.add(symbol)
+        return sent_symbols
 
     def _journal_discord_alerts(self, alerts_df: pd.DataFrame, summary: Dict, message: str) -> None:
         """Persist every Discord alert attempt for live/paper audit."""
