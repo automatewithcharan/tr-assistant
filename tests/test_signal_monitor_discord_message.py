@@ -17,10 +17,10 @@ def _make_runner() -> SignalMonitorRunner:
     runner._board_shown_today = set()
     runner._board_shown_date = ""
     runner.enable_intraday_goal_mode = True
-    runner.goal_max_trades_per_day = 1
+    runner.goal_max_trades_per_day = 3
     runner.goal_stop_pct = 1.0
-    runner.goal_target1_pct = 3.0
-    runner.goal_target2_pct = 5.0
+    runner.goal_target1_pct = 1.5
+    runner.goal_target2_pct = 3.0
     return runner
 
 
@@ -326,15 +326,16 @@ def test_intraday_goal_mode_keeps_strong_anomaly_and_tightens_targets():
 
     assert list(out["Symbol"]) == ["AEROFLEX"]
     assert out.iloc[0]["SellIfBelow"] == 99.0
-    assert out.iloc[0]["TakeProfit1"] == 103.0
-    assert out.iloc[0]["TakeProfit2"] == 105.0
+    assert out.iloc[0]["TakeProfit1"] == 101.5
+    assert out.iloc[0]["TakeProfit2"] == 103.0
     assert "GoalMode" in out.iloc[0]["Checks"]
 
     message = runner._build_discord_monitor_message(
         out,
         {"ScannedSymbols": 2990, "FreshAlertsThisRun": 1, "StrongBuyNowCount": 0, "BuyNowCount": 0, "SellNowCount": 0},
     )
-    assert "3% BURST CANDIDATE" in message
+    assert "DAY-GOAL SCALP + RUNNER" in message
+    assert "book `70-80%` at Target 1" in message
 
 
 def test_intraday_goal_mode_blocks_direct_buy_without_confirmation():

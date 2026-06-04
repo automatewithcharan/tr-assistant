@@ -12,7 +12,9 @@ import json
 import os
 import subprocess
 import time
+import uuid
 from datetime import datetime, timedelta
+from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 import pandas as pd
@@ -165,10 +167,10 @@ class SignalMonitorRunner:
         self.save_full_outputs = not self.fast_mode and str(os.environ.get("SIGNALMONITOR_SAVE_FULL_OUTPUTS", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
         self.enable_standalone_ob_alerts = str(os.environ.get("SIGNALMONITOR_ENABLE_STANDALONE_OB", "0") or "0").strip().lower() in {"1", "true", "yes", "y", "on"}
         self.enable_intraday_goal_mode = str(os.environ.get("SIGNALMONITOR_INTRADAY_GOAL_MODE", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
-        self.goal_max_trades_per_day = max(1, int(float(os.environ.get("SIGNALMONITOR_GOAL_MAX_TRADES_PER_DAY", "1") or "1")))
+        self.goal_max_trades_per_day = max(1, int(float(os.environ.get("SIGNALMONITOR_GOAL_MAX_TRADES_PER_DAY", "3") or "3")))
         self.goal_stop_pct = max(0.25, float(os.environ.get("SIGNALMONITOR_GOAL_STOP_PCT", "1.0") or "1.0"))
-        self.goal_target1_pct = max(0.5, float(os.environ.get("SIGNALMONITOR_GOAL_TARGET1_PCT", "3.0") or "3.0"))
-        self.goal_target2_pct = max(self.goal_target1_pct, float(os.environ.get("SIGNALMONITOR_GOAL_TARGET2_PCT", "5.0") or "5.0"))
+        self.goal_target1_pct = max(0.5, float(os.environ.get("SIGNALMONITOR_GOAL_TARGET1_PCT", "1.5") or "1.5"))
+        self.goal_target2_pct = max(self.goal_target1_pct, float(os.environ.get("SIGNALMONITOR_GOAL_TARGET2_PCT", "3.0") or "3.0"))
         self.actionable_runner = ActionableReportRunner(
             config_manager=config_manager,
             universe=universe,
@@ -2937,13 +2939,13 @@ class SignalMonitorRunner:
         if "telegram" in self.alert_channels:
             self._send_telegram_alert(message)
         if "discord" in self.alert_channels:
-            self._send_discord_alert(
-                self._build_discord_monitor_message(
-                    alerts_df,
-                    summary,
-                    current_simple_df=getattr(self, "_last_simple_df", None),
-                )
+            discord_message = self._build_discord_monitor_message(
+                alerts_df,
+                summary,
+                current_simple_df=getattr(self, "_last_simple_df", None),
             )
+            self._journal_discord_alerts(alerts_df, summary, discord_message)
+            self._send_discord_alert(discord_message)
 
     def _is_regular_market_hours(self) -> bool:
         """Only send live monitor alerts during NSE regular market hours."""
@@ -2953,6 +2955,68 @@ class SignalMonitorRunner:
             now_ist = datetime.now()
         minute_of_day = int(now_ist.hour) * 60 + int(now_ist.minute)
         return self.MARKET_OPEN_MINUTES_IST <= minute_of_day <= self.MARKET_CLOSE_MINUTES_IST
+
+    def _alert_source_label(self) -> str:
+        return str(
+            os.environ.get("SIGNALMONITOR_ALERT_SOURCE", "")
+            or os.environ.get("SIGNALMONITOR_ALERT_SOURCE_LABEL", "")
+            or "unknown launcher"
+        ).strip()
+
+    def _journal_discord_alerts(self, alerts_df: pd.DataFrame, summary: Dict, message: str) -> None:
+        """Persist every Discord alert attempt for live/paper audit."""
+        if alerts_df is None or alerts_df.empty:
+            return
+        try:
+            sent_at = PKDateUtilities.currentDateTime().strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            sent_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        source_label = self._alert_source_label()
+        alert_batch_id = uuid.uuid4().hex[:12]
+        journal_dir = Path(self.output_dir) / "intraday_goal_alerts"
+        journal_dir.mkdir(parents=True, exist_ok=True)
+        today = sent_at[:10]
+        journal_path = journal_dir / f"intraday_goal_alerts_{today}.csv"
+        latest_path = journal_dir / "intraday_goal_alerts_latest.csv"
+        rows = []
+        for _, row in alerts_df.iterrows():
+            checks = str(row.get("Checks", "") or "")
+            buy_above = self._to_float(row.get("BuyAbove"))
+            rows.append(
+                {
+                    "AlertBatchId": alert_batch_id,
+                    "Source": source_label,
+                    "Universe": self.universe,
+                    "GeneratedAt": self.run_at_str,
+                    "SentAt": sent_at,
+                    "Symbol": str(row.get("Symbol", "") or "").strip().upper(),
+                    "Action": str(row.get("NowAction", "") or "").strip(),
+                    "PriceNow": self._to_float(row.get("PriceNow")),
+                    "BuyAbove": buy_above,
+                    "BuyZoneHigh": round(buy_above * 1.015, 2) if buy_above > 0 else 0.0,
+                    "StopLoss": self._to_float(row.get("SellIfBelow")),
+                    "Target1": self._to_float(row.get("TakeProfit1")),
+                    "Target2": self._to_float(row.get("TakeProfit2")),
+                    "SuggestedQty": self._safe_int(row.get("SuggestedQty")),
+                    "SignalStrengthPct": self._to_float(row.get("SignalStrengthPct")),
+                    "ChangePct": self._to_float(row.get("ChangePct")),
+                    "EntryGapPct": self._to_float(row.get("EntryGapPct")),
+                    "RSI": self._to_float(row.get("RSI")),
+                    "IsGoalMode": "goalmode" in checks.lower(),
+                    "FreshAlertsThisRun": int(summary.get("FreshAlertsThisRun", 0) or 0),
+                    "ScannedSymbols": int(summary.get("ScannedSymbols", 0) or 0),
+                    "Checks": checks,
+                    "Why": str(row.get("Why", "") or "").strip(),
+                    "DiscordMessage": str(message or "")[:1900],
+                }
+            )
+        if not rows:
+            return
+        df = pd.DataFrame(rows)
+        header = not journal_path.exists()
+        df.to_csv(journal_path, mode="a", header=header, index=False)
+        df.to_csv(latest_path, index=False)
+        OutputControls().printOutput(f"  [+] Saved Discord alert journal: {journal_path}")
 
     def _load_tracked_portfolio_symbols(self) -> Set[str]:
         """Load open tracked Kite symbols so generic market monitor sells stay portfolio-aware."""
@@ -3263,10 +3327,16 @@ class SignalMonitorRunner:
         current_simple_df: Optional[pd.DataFrame] = None,
     ) -> str:
         """Build a phone-friendly Discord webhook message."""
+        source_label = self._alert_source_label()
+        try:
+            sent_at = PKDateUtilities.currentDateTime().strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            sent_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         sections = [
             f"**PKScreener Live Alert**",
+            f"Source `{source_label}`",
             (
-                f"Universe `{self.universe}` | Time `{self.run_at_str}` | "
+                f"Universe `{self.universe}` | Generated `{self.run_at_str}` | Sent `{sent_at}` | "
                 f"Fresh `{int(summary.get('FreshAlertsThisRun', 0) or 0)}`"
             ),
             (
@@ -3397,6 +3467,8 @@ class SignalMonitorRunner:
                 sl_t_line,
                 f"{qty_label} `{qty}`",
             ])
+            if "goalmode" in checks.lower():
+                block_lines.append("Plan: book `70-80%` at Target 1, keep only runner for Target 2, move runner stop near entry")
             if "OB" in action:
                 block_lines.append("**⚡ INTRADAY SCALP ONLY** — exit before 3:15 PM, not a swing trade")
             if checks:
@@ -3417,7 +3489,7 @@ class SignalMonitorRunner:
         """Make risk lane explicit so alerts are not all read as swing buys."""
         text = str(action or "").strip()
         if "goalmode" in str(checks or "").lower():
-            return "**🎯 3% BURST CANDIDATE** — intraday only; one high-conviction attempt, respect stop"
+            return "**🎯 DAY-GOAL SCALP + RUNNER** — intraday only; lock the first spike, runner is optional"
         if text in {"Strong Buy Now", "Buy Now"}:
             return "**✅ SWING BUY CANDIDATE** — enter only inside the zone with stop in place"
         if "OB" in text:
