@@ -17,7 +17,7 @@ def _make_runner() -> SignalMonitorRunner:
     runner._board_shown_today = set()
     runner._board_shown_date = ""
     runner.enable_intraday_goal_mode = True
-    runner.goal_max_trades_per_day = 3
+    runner.goal_max_trades_per_day = 10
     runner.goal_stop_pct = 1.0
     runner.goal_target1_pct = 1.5
     runner.goal_target2_pct = 3.0
