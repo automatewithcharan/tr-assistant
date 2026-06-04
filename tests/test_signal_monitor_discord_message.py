@@ -18,7 +18,7 @@ def _make_runner() -> SignalMonitorRunner:
     runner._board_shown_today = set()
     runner._board_shown_date = ""
     runner.enable_intraday_goal_mode = True
-    runner.goal_max_trades_per_day = 10
+    runner.goal_max_trades_per_day = 20
     runner.goal_stop_pct = 1.0
     runner.goal_target1_pct = 1.5
     runner.goal_target2_pct = 3.0
@@ -398,7 +398,7 @@ def test_monitor_heartbeat_reports_active_scanner_without_fresh_buy(monkeypatch)
     assert len(sent_messages) == 1
     assert "Monitor Heartbeat" in sent_messages[0]
     assert "Scanner `active`" in sent_messages[0]
-    assert "Goal alerts today `2/10`" in sent_messages[0]
+    assert "Goal alerts today `2/20`" in sent_messages[0]
     assert "VOLTAS" in sent_messages[0]
 
 

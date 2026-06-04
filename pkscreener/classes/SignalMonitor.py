@@ -167,7 +167,7 @@ class SignalMonitorRunner:
         self.save_full_outputs = not self.fast_mode and str(os.environ.get("SIGNALMONITOR_SAVE_FULL_OUTPUTS", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
         self.enable_standalone_ob_alerts = str(os.environ.get("SIGNALMONITOR_ENABLE_STANDALONE_OB", "0") or "0").strip().lower() in {"1", "true", "yes", "y", "on"}
         self.enable_intraday_goal_mode = str(os.environ.get("SIGNALMONITOR_INTRADAY_GOAL_MODE", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
-        self.goal_max_trades_per_day = max(1, int(float(os.environ.get("SIGNALMONITOR_GOAL_MAX_TRADES_PER_DAY", "10") or "10")))
+        self.goal_max_trades_per_day = max(1, int(float(os.environ.get("SIGNALMONITOR_GOAL_MAX_TRADES_PER_DAY", "20") or "20")))
         self.goal_stop_pct = max(0.25, float(os.environ.get("SIGNALMONITOR_GOAL_STOP_PCT", "1.0") or "1.0"))
         self.goal_target1_pct = max(0.5, float(os.environ.get("SIGNALMONITOR_GOAL_TARGET1_PCT", "1.5") or "1.5"))
         self.goal_target2_pct = max(self.goal_target1_pct, float(os.environ.get("SIGNALMONITOR_GOAL_TARGET2_PCT", "3.0") or "3.0"))
