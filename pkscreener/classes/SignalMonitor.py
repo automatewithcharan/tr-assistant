@@ -48,6 +48,10 @@ class SignalMonitorRunner:
     RUNNER_CONTINUATION_MIN_PCT = 5.0
     RUNNER_CONTINUATION_MAX_PCT = 12.5
     RUNNER_CONTINUATION_MAX_PULLBACK_PCT = 1.5
+    EARLY_BREAKOUT_MIN_PCT = float(os.environ.get("SIGNALMONITOR_EARLY_BREAKOUT_MIN_PCT", "1.0") or 1.0)
+    EARLY_BREAKOUT_MAX_PCT = float(os.environ.get("SIGNALMONITOR_EARLY_BREAKOUT_MAX_PCT", "3.5") or 3.5)
+    EARLY_BREAKOUT_MIN_VOLUME_RATIO = float(os.environ.get("SIGNALMONITOR_EARLY_BREAKOUT_MIN_VOLUME_RATIO", "1.3") or 1.3)
+    EARLY_BREAKOUT_MAX_PER_CYCLE = int(os.environ.get("SIGNALMONITOR_EARLY_BREAKOUT_MAX_PER_CYCLE", "4") or 4)
     REPEAT_BUY_ALERT_SECONDS = int(os.environ.get("SIGNALMONITOR_REPEAT_BUY_ALERT_SECONDS", "60") or 60)
     FAST_MODE = str(os.environ.get("SIGNALMONITOR_FAST_MODE", "0") or "0").strip().lower() in {"1", "true", "yes", "y", "on"}
     MARKET_OPEN_MINUTES_IST = 9 * 60 + 15
@@ -166,6 +170,7 @@ class SignalMonitorRunner:
         self.enable_paper_tracking = not self.fast_mode and str(os.environ.get("SIGNALMONITOR_ENABLE_PAPER_TRACKING", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
         self.save_full_outputs = not self.fast_mode and str(os.environ.get("SIGNALMONITOR_SAVE_FULL_OUTPUTS", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
         self.enable_standalone_ob_alerts = str(os.environ.get("SIGNALMONITOR_ENABLE_STANDALONE_OB", "0") or "0").strip().lower() in {"1", "true", "yes", "y", "on"}
+        self.enable_early_breakout_alerts = str(os.environ.get("SIGNALMONITOR_ENABLE_EARLY_BREAKOUT", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
         self.enable_intraday_goal_mode = str(os.environ.get("SIGNALMONITOR_INTRADAY_GOAL_MODE", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
         self.goal_max_trades_per_day = max(1, int(float(os.environ.get("SIGNALMONITOR_GOAL_MAX_TRADES_PER_DAY", "20") or "20")))
         self.goal_stop_pct = max(0.25, float(os.environ.get("SIGNALMONITOR_GOAL_STOP_PCT", "1.0") or "1.0"))
@@ -218,6 +223,8 @@ class SignalMonitorRunner:
         # Buy Now alerts. Each symbol gets one continuation alert per day.
         self._runner_alerted_today: Set[str] = set()
         self._runner_alerted_date: str = ""
+        self._early_breakout_alerted_date: str = ""
+        self._early_breakout_alerted_today: Set[str] = set()
         # Tick-velocity tracking: rolling 5-min history of (timestamp, vol_per_sec)
         # per symbol. Used to detect when a quiet stock suddenly gets active
         # and boost its scan priority before price has time to confirm.
@@ -329,6 +336,15 @@ class SignalMonitorRunner:
         )
         self._last_simple_df = merged_simple_df
         alerts_df = self._build_alerts(previous_state_df, merged_state_df)
+        early_breakout_alerts_df = self._build_early_breakout_alerts(merged_simple_df)
+        if not early_breakout_alerts_df.empty:
+            already_alerted = set(alerts_df["Symbol"].astype(str).str.upper()) if not alerts_df.empty else set()
+            if already_alerted:
+                early_breakout_alerts_df = early_breakout_alerts_df[
+                    ~early_breakout_alerts_df["Symbol"].astype(str).str.upper().isin(already_alerted)
+                ]
+            if not early_breakout_alerts_df.empty:
+                alerts_df = pd.concat([alerts_df, early_breakout_alerts_df], ignore_index=True)
         momentum_alerts_df = self._build_momentum_alerts(previous_simple_df, merged_simple_df)
         if not momentum_alerts_df.empty:
             # Drop Momentum Buy rows for symbols already emitted as Buy Now this cycle
@@ -2100,6 +2116,7 @@ class SignalMonitorRunner:
         return (
             text in {"Strong Buy Now", "Buy Now", "Momentum Buy"}
             or "anomaly" in lower
+            or "breakout" in lower
             or "runner" in lower
             or "pre-move" in lower
             or "ob" in lower
@@ -2152,6 +2169,17 @@ class SignalMonitorRunner:
             if strength >= 60.0 and volume_ratio >= 5.0 and change_pct <= 6.0 and directional_confirmation:
                 return True, 900.0 + strength + min(volume_ratio, 15.0) * 4.0 + bs_ratio * 5.0, "Grade-B anomaly burst setup"
             return False, 0.0, "anomaly below 3% burst bar"
+
+        if "breakout" in action_lower:
+            if (
+                strength >= 32.0
+                and self.EARLY_BREAKOUT_MIN_PCT <= change_pct <= self.EARLY_BREAKOUT_MAX_PCT
+                and (volume_ratio >= self.EARLY_BREAKOUT_MIN_VOLUME_RATIO or bs_ratio >= 1.5 or has_ob_confirmation)
+                and entry_gap_pct <= 1.5
+                and (rsi == 0.0 or rsi < 70.0)
+            ):
+                return True, 860.0 + strength + min(volume_ratio, 8.0) * 5.0 + bs_ratio * 3.0, "Early breakout before top-gainer stretch"
+            return False, 0.0, "early breakout below goal bar"
 
         # Direct Buy Now only becomes goal-mode tradeable when another lane confirms.
         if action in {"Strong Buy Now", "Buy Now"}:
@@ -2446,6 +2474,137 @@ class SignalMonitorRunner:
                 )
             )
         return mom_df[self.ALERT_COLUMNS].copy()
+
+    def _build_early_breakout_alerts(self, current_simple_df: pd.DataFrame) -> pd.DataFrame:
+        """Catch fresh +1% to +3.5% movers before they become top-gainer chases."""
+        if not getattr(self, "enable_early_breakout_alerts", True):
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+        if current_simple_df is None or current_simple_df.empty:
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+
+        try:
+            today = PKDateUtilities.currentDateTime().strftime("%Y-%m-%d")
+        except Exception:
+            today = datetime.now().strftime("%Y-%m-%d")
+        if getattr(self, "_early_breakout_alerted_date", "") != today:
+            self._early_breakout_alerted_date = today
+            self._early_breakout_alerted_today = self._load_daily_symbol_set("early_breakout", today=today)
+
+        rows = []
+        live_ticks = self.actionable_runner.live_ticks or {}
+        for rec in current_simple_df.to_dict(orient="records"):
+            sym = str(rec.get("Stock", "") or "").strip().upper()
+            if not sym or sym in self._early_breakout_alerted_today:
+                continue
+
+            change_pct = self._to_float(rec.get("Change %"))
+            if not (self.EARLY_BREAKOUT_MIN_PCT <= change_pct <= self.EARLY_BREAKOUT_MAX_PCT):
+                continue
+
+            action = str(rec.get("What To Do", "") or "").strip()
+            setup = str(rec.get("Momentum Setup", "") or "").strip()
+            if action not in {"Strong Buy Now", "Buy Now"} and setup != "Momentum Buy":
+                continue
+
+            price_now = self._to_float(rec.get("Price Now"))
+            if price_now <= 0:
+                continue
+
+            strength = self._to_float(rec.get("Signal Strength %"))
+            rsi_val = self._to_float(rec.get("RSI"))
+            volume_ratio = self._to_float(rec.get("Volume vs Avg"))
+            tick = live_ticks.get(sym, {})
+            total_buy = self._to_float(tick.get("total_buy_quantity", 0))
+            total_sell = self._to_float(tick.get("total_sell_quantity", 0))
+            bs_ratio = total_buy / total_sell if total_sell > 0 else (9.99 if total_buy > 0 else 0.0)
+
+            try:
+                now_ist = PKDateUtilities.currentDateTime()
+            except Exception:
+                now_ist = datetime.now()
+            minute_of_day = int(now_ist.hour) * 60 + int(now_ist.minute)
+            opening_window = (9 * 60 + 15) <= minute_of_day <= (10 * 60 + 15)
+            strength_floor = 32.0 if opening_window else 38.0
+            if strength < strength_floor:
+                continue
+            if rsi_val and rsi_val >= 70.0:
+                continue
+            if volume_ratio < self.EARLY_BREAKOUT_MIN_VOLUME_RATIO and bs_ratio < 1.5:
+                continue
+
+            week52 = self._to_float(rec.get("Week52High"))
+            if week52 and week52 > 0 and price_now < week52:
+                room_to_high = (week52 - price_now) / price_now * 100.0
+                if room_to_high < 2.0:
+                    continue
+
+            day_high = self._to_float(tick.get("high", 0))
+            pullback = 0.0
+            if day_high > 0 and price_now > 0:
+                pullback = (day_high - price_now) / price_now * 100.0
+                if pullback > 1.2:
+                    continue
+
+            suggested_qty = self._to_float(rec.get("Suggested Qty"))
+            if suggested_qty < 1:
+                continue
+
+            entry = price_now
+            stop = round(entry * (1.0 - float(getattr(self, "goal_stop_pct", 1.0) or 1.0) / 100.0), 2)
+            target1 = round(entry * (1.0 + float(getattr(self, "goal_target1_pct", 1.5) or 1.5) / 100.0), 2)
+            target2 = round(entry * (1.0 + float(getattr(self, "goal_target2_pct", 3.0) or 3.0) / 100.0), 2)
+            checks = str(rec.get("Checks", "") or "").strip()
+            breakout_checks = [
+                checks,
+                f"early breakout +{change_pct:.1f}%",
+                f"vol {volume_ratio:.1f}x",
+            ]
+            if bs_ratio > 0:
+                breakout_checks.append(f"B/S {bs_ratio:.1f}x")
+            if day_high > 0:
+                breakout_checks.append(f"near high pullback {pullback:.1f}%")
+
+            rows.append(
+                {
+                    "When": self.run_at_str,
+                    "Symbol": sym,
+                    "PreviousAction": action or setup or "None",
+                    "NowAction": "🌱 Early Breakout",
+                    "PriceNow": entry,
+                    "ChangePct": round(change_pct, 2),
+                    "EntryGapPct": rec.get("Entry Gap %", ""),
+                    "RSI": rec.get("RSI", ""),
+                    "BuyAbove": entry,
+                    "SellIfBelow": stop,
+                    "TakeProfit1": target1,
+                    "TakeProfit2": target2,
+                    "SuggestedQty": int(suggested_qty),
+                    "SignalStrengthPct": strength,
+                    "Checks": " | ".join(p for p in breakout_checks if p),
+                    "Why": str(rec.get("Why", "") or "").strip()
+                    + " | Early breakout lane: +1% to +3.5% move before top-gainer stretch",
+                }
+            )
+
+        if not rows:
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+
+        out = pd.DataFrame(rows, columns=self.ALERT_COLUMNS)
+        out.sort_values(
+            by=["SignalStrengthPct", "ChangePct", "Symbol"],
+            ascending=[False, False, True],
+            inplace=True,
+        )
+        max_per_cycle = max(1, int(getattr(self, "EARLY_BREAKOUT_MAX_PER_CYCLE", 4) or 4))
+        out = out.head(max_per_cycle)
+        for sym in out["Symbol"].astype(str).str.upper().tolist():
+            self._early_breakout_alerted_today.add(sym)
+            self._append_daily_symbol("early_breakout", sym, today=today)
+        OutputControls().printOutput(
+            "  [+] Early breakout alert(s): "
+            + ", ".join(f"{r['Symbol']} (+{float(r['ChangePct']):.1f}%)" for _, r in out.iterrows())
+        )
+        return out[self.ALERT_COLUMNS].copy()
 
     def _build_runner_continuation_alerts(self, current_simple_df: pd.DataFrame) -> pd.DataFrame:
         """Surface controlled continuation entries for stocks already up 5-12%.
@@ -2809,6 +2968,7 @@ class SignalMonitorRunner:
             is_buy_style = (
                 action in {"Strong Buy Now", "Buy Now", "Momentum Buy"}
                 or "anomaly" in action_lower
+                or "breakout" in action_lower
                 or "runner" in action_lower
                 or "pre-move" in action_lower
             )
@@ -2876,6 +3036,8 @@ class SignalMonitorRunner:
     @staticmethod
     def _paper_source_for_action(action: str) -> str:
         action_lower = str(action or "").lower()
+        if "breakout" in action_lower:
+            return "signal_monitor_early_breakout"
         if "anomaly" in action_lower or "runner" in action_lower or "pre-move" in action_lower:
             return "signal_monitor_anomaly"
         if "momentum" in action_lower:
@@ -2885,6 +3047,8 @@ class SignalMonitorRunner:
     @staticmethod
     def _paper_grade_for_action(action: str) -> str:
         action_lower = str(action or "").lower()
+        if "breakout" in action_lower:
+            return "EARLY"
         if "grade-a" in action_lower or "strong" in action_lower:
             return "A"
         if "grade-b" in action_lower or "buy now" in action_lower:
@@ -3339,10 +3503,11 @@ class SignalMonitorRunner:
             lambda action: (
                 0 if action == "Strong Buy Now"
                 else 1 if action == "Buy Now"
-                else 2 if action == "Momentum Buy"
-                else 3 if self._is_anomaly_action(action)
-                else 4 if action == "Sell / Exit"
-                else 5
+                else 2 if "Early Breakout" in action
+                else 3 if action == "Momentum Buy"
+                else 4 if self._is_anomaly_action(action)
+                else 5 if action == "Sell / Exit"
+                else 6
             )
         )
         work["_discord_strength"] = pd.to_numeric(work.get("SignalStrengthPct", 0), errors="coerce").fillna(0.0)
@@ -3515,6 +3680,8 @@ class SignalMonitorRunner:
                 action_emoji = "🟢"
             elif action == "Momentum Buy":
                 action_emoji = "🚀"
+            elif "Early Breakout" in action:
+                action_emoji = "🌱"
             elif action == "Volume Anomaly":
                 action_emoji = "🔥"
             elif action.startswith("🔥") or action.startswith("⚡") or action.startswith("👀"):
@@ -3607,6 +3774,8 @@ class SignalMonitorRunner:
         text = str(action or "").strip()
         if "goalmode" in str(checks or "").lower():
             return "**🎯 DAY-GOAL SCALP + RUNNER** — intraday only; lock the first spike, runner is optional"
+        if "Early Breakout" in text:
+            return "**🌱 EARLY BREAKOUT SCALP** — early +1% to +3.5% move; take the first target seriously"
         if text in {"Strong Buy Now", "Buy Now"}:
             return "**✅ SWING BUY CANDIDATE** — enter only inside the zone with stop in place"
         if "OB" in text:

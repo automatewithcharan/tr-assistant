@@ -147,6 +147,92 @@ def test_runner_continuation_surfaces_five_to_twelve_percent_runner():
     assert alerts.iloc[0]["NowAction"] == "🚀 Runner Continuation"
 
 
+def test_early_breakout_surfaces_one_to_three_percent_mover(monkeypatch):
+    monkeypatch.setattr(
+        signal_monitor_module.PKDateUtilities,
+        "currentDateTime",
+        staticmethod(lambda: datetime(2026, 5, 8, 9, 32, 0)),
+    )
+    runner = _make_runner()
+    runner.actionable_runner = SimpleNamespace(
+        live_ticks={
+            "RICOAUTO": {
+                "high": 102.4,
+                "total_buy_quantity": 200000,
+                "total_sell_quantity": 100000,
+            }
+        }
+    )
+
+    current_simple_df = pd.DataFrame(
+        [
+            {
+                "Stock": "RICOAUTO",
+                "What To Do": "Buy Now",
+                "Momentum Setup": "",
+                "Price Now": 102.0,
+                "Change %": 2.2,
+                "Volume vs Avg": 1.8,
+                "Signal Strength %": 36.0,
+                "RSI": 62.0,
+                "Entry Gap %": 0.2,
+                "Buy Above": 102.5,
+                "Sell If Below": 99.0,
+                "Take Profit 1": 105.0,
+                "Take Profit 2": 108.0,
+                "Suggested Qty": 10,
+                "Checks": "confidence ok, liquidity ok",
+                "Why": "Price above ATR trailing stop",
+                "Week52High": 140.0,
+            }
+        ]
+    )
+
+    alerts = runner._build_early_breakout_alerts(current_simple_df)
+
+    assert list(alerts["Symbol"]) == ["RICOAUTO"]
+    assert alerts.iloc[0]["NowAction"] == "🌱 Early Breakout"
+    assert alerts.iloc[0]["TakeProfit1"] == 103.53
+
+
+def test_early_breakout_blocks_already_ran_mover(monkeypatch):
+    monkeypatch.setattr(
+        signal_monitor_module.PKDateUtilities,
+        "currentDateTime",
+        staticmethod(lambda: datetime(2026, 5, 8, 9, 45, 0)),
+    )
+    runner = _make_runner()
+    runner.actionable_runner = SimpleNamespace(live_ticks={"MSTCLTD": {"high": 106.0}})
+
+    current_simple_df = pd.DataFrame(
+        [
+            {
+                "Stock": "MSTCLTD",
+                "What To Do": "Buy Now",
+                "Momentum Setup": "",
+                "Price Now": 106.0,
+                "Change %": 5.1,
+                "Volume vs Avg": 3.0,
+                "Signal Strength %": 50.0,
+                "RSI": 65.0,
+                "Entry Gap %": 0.1,
+                "Buy Above": 106.0,
+                "Sell If Below": 100.0,
+                "Take Profit 1": 110.0,
+                "Take Profit 2": 114.0,
+                "Suggested Qty": 10,
+                "Checks": "confidence ok, liquidity ok",
+                "Why": "Price above ATR trailing stop",
+                "Week52High": 150.0,
+            }
+        ]
+    )
+
+    alerts = runner._build_early_breakout_alerts(current_simple_df)
+
+    assert alerts.empty
+
+
 def test_discord_message_labels_direct_buy_as_swing_candidate():
     runner = _make_runner()
     alerts_df = pd.DataFrame(
@@ -427,6 +513,21 @@ def test_intraday_goal_mode_allows_direct_buy_with_ob_confirmation():
 
     assert list(out["Symbol"]) == ["WELCORP"]
     assert "Direct buy with OB confirmation" in out.iloc[0]["Why"]
+
+
+def test_intraday_goal_mode_allows_early_breakout():
+    runner = _make_runner()
+    alert = _alert("RICOAUTO", "🌱 Early Breakout", 42.0)
+    alert["Checks"] = "early breakout +2.2% | vol 1.8x"
+    alert["ChangePct"] = 2.2
+    alert["EntryGapPct"] = 0.2
+    alert["RSI"] = 62.0
+    alerts_df = pd.DataFrame([alert], columns=runner.ALERT_COLUMNS)
+
+    out = runner._apply_intraday_goal_mode(alerts_df)
+
+    assert list(out["Symbol"]) == ["RICOAUTO"]
+    assert "Early breakout before top-gainer stretch" in out.iloc[0]["Why"]
 
 
 def test_intraday_goal_mode_blocks_standalone_ob():
