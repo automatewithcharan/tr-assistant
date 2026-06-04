@@ -2166,6 +2166,8 @@ class SignalMonitorRunner:
 
         if "anomaly" in action_lower or action.startswith("⚡") or action.startswith("🔥"):
             directional_confirmation = bs_ratio >= 1.5 or has_sector_confirmation or has_compression or has_ob_confirmation
+            if change_pct < 0.8:
+                return False, 0.0, f"day move {change_pct:+.1f}% too flat for anomaly scalp"
             if strength >= 60.0 and volume_ratio >= 5.0 and change_pct <= 6.0 and directional_confirmation:
                 return True, 900.0 + strength + min(volume_ratio, 15.0) * 4.0 + bs_ratio * 5.0, "Grade-B anomaly burst setup"
             return False, 0.0, "anomaly below 3% burst bar"

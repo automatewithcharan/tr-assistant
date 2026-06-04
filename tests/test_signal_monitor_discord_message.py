@@ -428,6 +428,19 @@ def test_intraday_goal_mode_keeps_strong_anomaly_and_tightens_targets():
     assert "book `70-80%` at Target 1" in message
 
 
+def test_intraday_goal_mode_blocks_flat_anomaly_scalp():
+    runner = _make_runner()
+    alert = _alert("YUKEN", "⚡ Grade-B Anomaly", 62.0)
+    alert["Checks"] = "Q:62/100 [B] | Vol 5.2x | +1.1% | B/S 3.7x"
+    alert["ChangePct"] = 0.01
+    alerts_df = pd.DataFrame([alert], columns=runner.ALERT_COLUMNS)
+
+    out = runner._apply_intraday_goal_mode(alerts_df)
+
+    assert out.empty
+    assert any("too flat for anomaly scalp" in reason for reason in runner._last_goal_suppressed_reasons)
+
+
 def test_discord_send_chunks_goal_alerts_that_do_not_fit_one_message():
     runner = _make_runner()
     sent_messages = []
