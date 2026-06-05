@@ -54,7 +54,7 @@ class SignalMonitorRunner:
     EARLY_BREAKOUT_MAX_PER_CYCLE = int(os.environ.get("SIGNALMONITOR_EARLY_BREAKOUT_MAX_PER_CYCLE", "4") or 4)
     TOP_GAINER_RADAR_MIN_PCT = float(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_MIN_PCT", "1.5") or 1.5)
     TOP_GAINER_RADAR_MAX_PCT = float(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_MAX_PCT", "3.5") or 3.5)
-    TOP_GAINER_RADAR_MAX_PER_CYCLE = int(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_MAX_PER_CYCLE", "4") or 4)
+    TOP_GAINER_RADAR_MAX_PER_CYCLE = int(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_MAX_PER_CYCLE", "1") or 1)
     REPEAT_BUY_ALERT_SECONDS = int(os.environ.get("SIGNALMONITOR_REPEAT_BUY_ALERT_SECONDS", "60") or 60)
     FAST_MODE = str(os.environ.get("SIGNALMONITOR_FAST_MODE", "0") or "0").strip().lower() in {"1", "true", "yes", "y", "on"}
     MARKET_OPEN_MINUTES_IST = 9 * 60 + 15
@@ -2216,7 +2216,7 @@ class SignalMonitorRunner:
             if (
                 strength >= 18.0
                 and self.TOP_GAINER_RADAR_MIN_PCT <= change_pct <= self.TOP_GAINER_RADAR_MAX_PCT
-                and (volume_ratio >= 0.2 or bs_ratio >= 1.2)
+                and (volume_ratio >= 0.5 or bs_ratio >= 2.0)
                 and (rsi == 0.0 or rsi < 70.0)
             ):
                 return True, 845.0 + strength + min(volume_ratio, 5.0) * 5.0 + bs_ratio * 4.0, "Top-gainer radar before full scanner confirmation"
@@ -2696,9 +2696,9 @@ class SignalMonitorRunner:
             total_buy = self._to_float(tick.get("total_buy_quantity", 0))
             total_sell = self._to_float(tick.get("total_sell_quantity", 0))
             bs_ratio = total_buy / total_sell if total_sell > 0 else (9.99 if total_buy > 0 else 0.0)
-            if volume_ratio < 0.2 and bs_ratio < 1.2:
+            if volume_ratio < 0.5 and bs_ratio < 2.0:
                 continue
-            if strength < 18.0 and bs_ratio < 2.0:
+            if strength < 30.0:
                 continue
 
             week52 = self._to_float(rec.get("Week52High"))

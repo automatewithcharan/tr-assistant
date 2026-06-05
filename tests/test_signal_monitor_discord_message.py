@@ -329,6 +329,49 @@ def test_top_gainer_radar_blocks_chased_mover(monkeypatch):
     assert alerts.empty
 
 
+def test_top_gainer_radar_blocks_weak_confirmation(monkeypatch):
+    monkeypatch.setattr(
+        signal_monitor_module.PKDateUtilities,
+        "currentDateTime",
+        staticmethod(lambda: datetime(2026, 5, 8, 9, 48, 0)),
+    )
+    runner = _make_runner()
+    runner.actionable_runner = SimpleNamespace(
+        live_ticks={
+            "AETHER": {
+                "last_price": 1161.50,
+                "change": 1.6,
+                "high": 1174.0,
+                "total_buy_quantity": 80000,
+                "total_sell_quantity": 100000,
+            }
+        }
+    )
+    current_simple_df = pd.DataFrame(
+        [
+            {
+                "Stock": "AETHER",
+                "What To Do": "Watch for Buy",
+                "Momentum Setup": "Momentum Watch",
+                "Price Now": 1161.50,
+                "Change %": 1.6,
+                "Volume vs Avg": 0.2,
+                "Signal Strength %": 35.1,
+                "RSI": 57.7,
+                "Entry Gap %": 1.1,
+                "Suggested Qty": 10,
+                "Avg Daily Value": "20.00 Cr",
+                "Why": "Price above ATR trailing stop",
+                "Week52High": 1500.0,
+            }
+        ]
+    )
+
+    alerts = runner._build_top_gainer_radar_alerts(current_simple_df)
+
+    assert alerts.empty
+
+
 def test_discord_message_labels_direct_buy_as_swing_candidate():
     runner = _make_runner()
     alerts_df = pd.DataFrame(
