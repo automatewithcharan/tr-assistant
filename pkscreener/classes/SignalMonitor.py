@@ -179,6 +179,7 @@ class SignalMonitorRunner:
         self.goal_stop_pct = max(0.25, float(os.environ.get("SIGNALMONITOR_GOAL_STOP_PCT", "1.0") or "1.0"))
         self.goal_target1_pct = max(0.5, float(os.environ.get("SIGNALMONITOR_GOAL_TARGET1_PCT", "1.5") or "1.5"))
         self.goal_target2_pct = max(self.goal_target1_pct, float(os.environ.get("SIGNALMONITOR_GOAL_TARGET2_PCT", "3.0") or "3.0"))
+        self.radar_max_alerts_per_day = max(0, int(float(os.environ.get("SIGNALMONITOR_RADAR_MAX_ALERTS_PER_DAY", "3") or "3")))
         self.monitor_heartbeat_minutes = max(0.0, float(os.environ.get("SIGNALMONITOR_HEARTBEAT_MINUTES", "10") or "10"))
         self._last_discord_heartbeat_ts = 0.0
         self._last_goal_suppressed_reasons: List[str] = []
@@ -2083,9 +2084,13 @@ class SignalMonitorRunner:
         max_per_day = max(1, int(getattr(self, "goal_max_trades_per_day", 1) or 1))
         already_goal_symbols = self._load_daily_symbol_set("goal_burst", today=today)
         remaining_slots = max(0, max_per_day - len(already_goal_symbols))
+        max_radar_per_day = max(0, int(getattr(self, "radar_max_alerts_per_day", 3) or 0))
+        already_radar_symbols = self._load_daily_symbol_set("top_gainer_radar_goal", today=today)
+        remaining_radar_slots = max(0, max_radar_per_day - len(already_radar_symbols))
 
         sell_rows: List[Dict] = []
         candidates: List[Tuple[float, Dict]] = []
+        radar_candidates: List[Tuple[float, Dict]] = []
         suppressed: List[str] = []
         self._last_goal_suppressed_reasons = []
 
@@ -2101,6 +2106,13 @@ class SignalMonitorRunner:
             qualifies, score, reason = self._intraday_goal_decision(row)
             if not qualifies:
                 suppressed.append(f"{symbol} ({reason})")
+                continue
+            if self._is_radar_action(action):
+                if symbol in already_radar_symbols:
+                    suppressed.append(f"{symbol} (radar already surfaced today)")
+                    continue
+                tuned = self._tune_radar_alert_row(row, reason)
+                radar_candidates.append((score, tuned))
                 continue
             if symbol in already_goal_symbols:
                 suppressed.append(f"{symbol} (goal-mode already surfaced today)")
@@ -2120,6 +2132,18 @@ class SignalMonitorRunner:
             f"{str(row.get('Symbol', '')).strip().upper()} (daily goal slots full)"
             for _, row in candidates[remaining_slots:]
         )
+        radar_candidates.sort(key=lambda item: (-item[0], str(item[1].get("Symbol", ""))))
+        selected_radar_rows = []
+        for _, row in radar_candidates[:remaining_radar_slots]:
+            selected_radar_rows.append(row)
+            symbol = str(row.get("Symbol", "") or "").strip().upper()
+            if symbol:
+                already_radar_symbols.add(symbol)
+                self._append_daily_symbol("top_gainer_radar_goal", symbol, today=today)
+        suppressed.extend(
+            f"{str(row.get('Symbol', '')).strip().upper()} (daily radar slots full)"
+            for _, row in radar_candidates[remaining_radar_slots:]
+        )
         self._last_goal_suppressed_reasons = suppressed[:25]
 
         if suppressed:
@@ -2134,8 +2158,18 @@ class SignalMonitorRunner:
                 f"{len(selected_rows)}/{max_per_day} tradeable burst candidate(s) selected — "
                 + ", ".join(str(r.get("Symbol", "")).strip().upper() for r in selected_rows)
             )
+        if selected_radar_rows:
+            OutputControls().printOutput(
+                "  [+] Top-gainer radar mode: "
+                f"{len(selected_radar_rows)}/{max_radar_per_day} separate radar candidate(s) selected — "
+                + ", ".join(str(r.get("Symbol", "")).strip().upper() for r in selected_radar_rows)
+            )
 
-        return pd.DataFrame(sell_rows + selected_rows, columns=self.ALERT_COLUMNS)
+        return pd.DataFrame(sell_rows + selected_rows + selected_radar_rows, columns=self.ALERT_COLUMNS)
+
+    @staticmethod
+    def _is_radar_action(action: str) -> bool:
+        return "radar" in str(action or "").strip().lower()
 
     @staticmethod
     def _is_goal_mode_buy_action(action: str) -> bool:
@@ -2263,6 +2297,30 @@ class SignalMonitorRunner:
         why = str(tuned.get("Why", "") or "").strip()
         goal_why = f"Goal mode: {reason}; max one high-conviction intraday attempt by default"
         tuned["Why"] = f"{goal_why} | {why}" if why else goal_why
+        return tuned
+
+    def _tune_radar_alert_row(self, row: Dict, reason: str) -> Dict:
+        tuned = dict(row)
+        entry = self._to_float(tuned.get("BuyAbove")) or self._to_float(tuned.get("PriceNow")) or 0.0
+        if entry > 0:
+            stop_pct = float(getattr(self, "goal_stop_pct", 1.0) or 1.0)
+            target1_pct = float(getattr(self, "goal_target1_pct", 1.5) or 1.5)
+            target2_pct = float(getattr(self, "goal_target2_pct", 3.0) or 3.0)
+            tuned["BuyAbove"] = round(entry, 2)
+            tuned["SellIfBelow"] = round(entry * (1.0 - stop_pct / 100.0), 2)
+            tuned["TakeProfit1"] = round(entry * (1.0 + target1_pct / 100.0), 2)
+            tuned["TakeProfit2"] = round(entry * (1.0 + target2_pct / 100.0), 2)
+
+        checks = str(tuned.get("Checks", "") or "").strip()
+        radar_check = (
+            f"RadarMode separate watch | SL {float(getattr(self, 'goal_stop_pct', 1.0) or 1.0):.1f}% | "
+            f"T1 {float(getattr(self, 'goal_target1_pct', 1.5) or 1.5):.1f}% | "
+            f"T2 {float(getattr(self, 'goal_target2_pct', 3.0) or 3.0):.1f}%"
+        )
+        tuned["Checks"] = f"{radar_check} | {checks}" if checks else radar_check
+        why = str(tuned.get("Why", "") or "").strip()
+        radar_why = f"Radar mode: {reason}; separate from the 20 day-goal basket, optional only"
+        tuned["Why"] = f"{radar_why} | {why}" if why else radar_why
         return tuned
 
     @staticmethod

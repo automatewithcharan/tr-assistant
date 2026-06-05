@@ -22,6 +22,7 @@ def _make_runner() -> SignalMonitorRunner:
     runner.goal_stop_pct = 1.0
     runner.goal_target1_pct = 1.5
     runner.goal_target2_pct = 3.0
+    runner.radar_max_alerts_per_day = 3
     runner.monitor_heartbeat_minutes = 10
     runner._last_discord_heartbeat_ts = 0.0
     runner._last_goal_suppressed_reasons = []
@@ -578,6 +579,50 @@ def test_intraday_goal_mode_blocks_flat_anomaly_scalp():
 
     assert out.empty
     assert any("too flat for anomaly scalp" in reason for reason in runner._last_goal_suppressed_reasons)
+
+
+def test_intraday_goal_mode_keeps_radar_separate_from_goal_cap(monkeypatch):
+    runner = _make_runner()
+    runner.goal_max_trades_per_day = 1
+    monkeypatch.setattr(runner, "_load_daily_symbol_set", lambda name, **_kwargs: {"AEROFLEX"} if name == "goal_burst" else set())
+    appended = []
+    runner._append_daily_symbol = lambda name, symbol, **_kwargs: appended.append((name, symbol))
+    radar = _alert("CUPID", "📡 Top Gainer Radar", 33.0)
+    radar["Checks"] = "top-gainer radar +2.7% | Q:33/100 | vol 0.6x | B/S 2.1x | pullback 0.2%"
+    radar["ChangePct"] = 2.7
+    radar["RSI"] = 63.0
+    alerts_df = pd.DataFrame([radar], columns=runner.ALERT_COLUMNS)
+
+    out = runner._apply_intraday_goal_mode(alerts_df)
+
+    assert list(out["Symbol"]) == ["CUPID"]
+    assert "RadarMode" in out.iloc[0]["Checks"]
+    assert "GoalMode" not in out.iloc[0]["Checks"]
+    assert appended == [("top_gainer_radar_goal", "CUPID")]
+
+
+def test_intraday_goal_mode_applies_separate_radar_cap(monkeypatch):
+    runner = _make_runner()
+    runner.radar_max_alerts_per_day = 1
+    monkeypatch.setattr(runner, "_load_daily_symbol_set", lambda *_args, **_kwargs: set())
+    appended = []
+    runner._append_daily_symbol = lambda name, symbol, **_kwargs: appended.append((name, symbol))
+    first = _alert("CUPID", "📡 Top Gainer Radar", 35.0)
+    first["Checks"] = "top-gainer radar +2.7% | vol 0.6x | B/S 2.1x"
+    first["ChangePct"] = 2.7
+    first["RSI"] = 63.0
+    second = _alert("PINELABS", "📡 Top Gainer Radar", 34.0)
+    second["Checks"] = "top-gainer radar +3.0% | vol 0.7x | B/S 2.0x"
+    second["ChangePct"] = 3.0
+    second["RSI"] = 61.0
+    alerts_df = pd.DataFrame([first, second], columns=runner.ALERT_COLUMNS)
+
+    out = runner._apply_intraday_goal_mode(alerts_df)
+
+    assert len(out) == 1
+    assert list(out["Symbol"]) == ["CUPID"]
+    assert appended == [("top_gainer_radar_goal", "CUPID")]
+    assert any("daily radar slots full" in reason for reason in runner._last_goal_suppressed_reasons)
 
 
 def test_discord_send_chunks_goal_alerts_that_do_not_fit_one_message():
