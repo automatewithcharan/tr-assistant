@@ -52,6 +52,9 @@ class SignalMonitorRunner:
     EARLY_BREAKOUT_MAX_PCT = float(os.environ.get("SIGNALMONITOR_EARLY_BREAKOUT_MAX_PCT", "3.5") or 3.5)
     EARLY_BREAKOUT_MIN_VOLUME_RATIO = float(os.environ.get("SIGNALMONITOR_EARLY_BREAKOUT_MIN_VOLUME_RATIO", "1.3") or 1.3)
     EARLY_BREAKOUT_MAX_PER_CYCLE = int(os.environ.get("SIGNALMONITOR_EARLY_BREAKOUT_MAX_PER_CYCLE", "4") or 4)
+    TOP_GAINER_RADAR_MIN_PCT = float(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_MIN_PCT", "1.5") or 1.5)
+    TOP_GAINER_RADAR_MAX_PCT = float(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_MAX_PCT", "3.5") or 3.5)
+    TOP_GAINER_RADAR_MAX_PER_CYCLE = int(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_MAX_PER_CYCLE", "4") or 4)
     REPEAT_BUY_ALERT_SECONDS = int(os.environ.get("SIGNALMONITOR_REPEAT_BUY_ALERT_SECONDS", "60") or 60)
     FAST_MODE = str(os.environ.get("SIGNALMONITOR_FAST_MODE", "0") or "0").strip().lower() in {"1", "true", "yes", "y", "on"}
     MARKET_OPEN_MINUTES_IST = 9 * 60 + 15
@@ -225,6 +228,8 @@ class SignalMonitorRunner:
         self._runner_alerted_date: str = ""
         self._early_breakout_alerted_date: str = ""
         self._early_breakout_alerted_today: Set[str] = set()
+        self._top_gainer_radar_date: str = ""
+        self._top_gainer_radar_today: Set[str] = set()
         # Tick-velocity tracking: rolling 5-min history of (timestamp, vol_per_sec)
         # per symbol. Used to detect when a quiet stock suddenly gets active
         # and boost its scan priority before price has time to confirm.
@@ -345,6 +350,15 @@ class SignalMonitorRunner:
                 ]
             if not early_breakout_alerts_df.empty:
                 alerts_df = pd.concat([alerts_df, early_breakout_alerts_df], ignore_index=True)
+        top_gainer_radar_df = self._build_top_gainer_radar_alerts(merged_simple_df)
+        if not top_gainer_radar_df.empty:
+            already_alerted = set(alerts_df["Symbol"].astype(str).str.upper()) if not alerts_df.empty else set()
+            if already_alerted:
+                top_gainer_radar_df = top_gainer_radar_df[
+                    ~top_gainer_radar_df["Symbol"].astype(str).str.upper().isin(already_alerted)
+                ]
+            if not top_gainer_radar_df.empty:
+                alerts_df = pd.concat([alerts_df, top_gainer_radar_df], ignore_index=True)
         momentum_alerts_df = self._build_momentum_alerts(previous_simple_df, merged_simple_df)
         if not momentum_alerts_df.empty:
             # Drop Momentum Buy rows for symbols already emitted as Buy Now this cycle
@@ -875,6 +889,20 @@ class SignalMonitorRunner:
             return float(value)
         except Exception:
             return 0.0
+
+    def _parse_value_rupees(self, value) -> float:
+        """Parse display values like '16.99 Cr' or '72.11 L' into rupees."""
+        text = str(value or "").strip().replace(",", "")
+        if not text:
+            return 0.0
+        parts = text.split()
+        number = self._to_float(parts[0] if parts else text)
+        suffix = parts[1].lower() if len(parts) > 1 else ""
+        if suffix.startswith("cr"):
+            return number * 10_000_000.0
+        if suffix.startswith("l"):
+            return number * 100_000.0
+        return number
 
     def _load_previous_simple(self) -> pd.DataFrame:
         """Load the last simple board so changed-only cycles can reuse unchanged rows."""
@@ -2117,6 +2145,7 @@ class SignalMonitorRunner:
             text in {"Strong Buy Now", "Buy Now", "Momentum Buy"}
             or "anomaly" in lower
             or "breakout" in lower
+            or "radar" in lower
             or "runner" in lower
             or "pre-move" in lower
             or "ob" in lower
@@ -2182,6 +2211,16 @@ class SignalMonitorRunner:
             ):
                 return True, 860.0 + strength + min(volume_ratio, 8.0) * 5.0 + bs_ratio * 3.0, "Early breakout before top-gainer stretch"
             return False, 0.0, "early breakout below goal bar"
+
+        if "radar" in action_lower:
+            if (
+                strength >= 18.0
+                and self.TOP_GAINER_RADAR_MIN_PCT <= change_pct <= self.TOP_GAINER_RADAR_MAX_PCT
+                and (volume_ratio >= 0.2 or bs_ratio >= 1.2)
+                and (rsi == 0.0 or rsi < 70.0)
+            ):
+                return True, 845.0 + strength + min(volume_ratio, 5.0) * 5.0 + bs_ratio * 4.0, "Top-gainer radar before full scanner confirmation"
+            return False, 0.0, "top-gainer radar below goal bar"
 
         # Direct Buy Now only becomes goal-mode tradeable when another lane confirms.
         if action in {"Strong Buy Now", "Buy Now"}:
@@ -2604,6 +2643,119 @@ class SignalMonitorRunner:
             self._append_daily_symbol("early_breakout", sym, today=today)
         OutputControls().printOutput(
             "  [+] Early breakout alert(s): "
+            + ", ".join(f"{r['Symbol']} (+{float(r['ChangePct']):.1f}%)" for _, r in out.iterrows())
+        )
+        return out[self.ALERT_COLUMNS].copy()
+
+    def _build_top_gainer_radar_alerts(self, current_simple_df: pd.DataFrame) -> pd.DataFrame:
+        """Fallback for live top-gainer moves the scanner labels Hold/Watch."""
+        if not getattr(self, "enable_early_breakout_alerts", True):
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+        if current_simple_df is None or current_simple_df.empty:
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+
+        try:
+            today = PKDateUtilities.currentDateTime().strftime("%Y-%m-%d")
+        except Exception:
+            today = datetime.now().strftime("%Y-%m-%d")
+        if getattr(self, "_top_gainer_radar_date", "") != today:
+            self._top_gainer_radar_date = today
+            self._top_gainer_radar_today = self._load_daily_symbol_set("top_gainer_radar", today=today)
+
+        live_ticks = self.actionable_runner.live_ticks or {}
+        rows = []
+        for rec in current_simple_df.to_dict(orient="records"):
+            sym = str(rec.get("Stock", "") or "").strip().upper()
+            if not sym or sym in getattr(self, "_top_gainer_radar_today", set()):
+                continue
+            tick = live_ticks.get(sym, {})
+            if not tick:
+                continue
+
+            price_now = self._to_float(tick.get("last_price")) or self._to_float(rec.get("Price Now"))
+            change_pct = self._to_float(tick.get("change")) or self._to_float(rec.get("Change %"))
+            if price_now < 50.0:
+                continue
+            if not (self.TOP_GAINER_RADAR_MIN_PCT <= change_pct <= self.TOP_GAINER_RADAR_MAX_PCT):
+                continue
+
+            strength = self._to_float(rec.get("Signal Strength %"))
+            rsi_val = self._to_float(rec.get("RSI"))
+            volume_ratio = self._to_float(rec.get("Volume vs Avg"))
+            avg_value = self._parse_value_rupees(rec.get("Avg Daily Value"))
+            if avg_value and avg_value < self.min_trade_value:
+                continue
+            if rsi_val and rsi_val >= 70.0:
+                continue
+
+            day_high = self._to_float(tick.get("high", 0))
+            pullback = (day_high - price_now) / price_now * 100.0 if day_high > 0 and price_now > 0 else 0.0
+            if pullback > 1.5:
+                continue
+
+            total_buy = self._to_float(tick.get("total_buy_quantity", 0))
+            total_sell = self._to_float(tick.get("total_sell_quantity", 0))
+            bs_ratio = total_buy / total_sell if total_sell > 0 else (9.99 if total_buy > 0 else 0.0)
+            if volume_ratio < 0.2 and bs_ratio < 1.2:
+                continue
+            if strength < 18.0 and bs_ratio < 2.0:
+                continue
+
+            week52 = self._to_float(rec.get("Week52High"))
+            if week52 and week52 > 0 and price_now < week52:
+                room_to_high = (week52 - price_now) / price_now * 100.0
+                if room_to_high < 2.0:
+                    continue
+
+            budget_amount = getattr(self, "budget_amount", None)
+            suggested_qty = int(budget_amount // price_now) if budget_amount and price_now > 0 else int(self._to_float(rec.get("Suggested Qty")))
+            if suggested_qty < 1:
+                continue
+
+            stop = round(price_now * (1.0 - float(getattr(self, "goal_stop_pct", 1.0) or 1.0) / 100.0), 2)
+            target1 = round(price_now * (1.0 + float(getattr(self, "goal_target1_pct", 1.5) or 1.5) / 100.0), 2)
+            target2 = round(price_now * (1.0 + float(getattr(self, "goal_target2_pct", 3.0) or 3.0) / 100.0), 2)
+            checks = [
+                f"top-gainer radar +{change_pct:.1f}%",
+                f"Q:{strength:.0f}/100",
+                f"vol {volume_ratio:.1f}x",
+                f"B/S {bs_ratio:.1f}x",
+                f"pullback {pullback:.1f}%",
+            ]
+            rows.append(
+                {
+                    "When": self.run_at_str,
+                    "Symbol": sym,
+                    "PreviousAction": str(rec.get("What To Do", "") or "None"),
+                    "NowAction": "📡 Top Gainer Radar",
+                    "PriceNow": round(price_now, 2),
+                    "ChangePct": round(change_pct, 2),
+                    "EntryGapPct": rec.get("Entry Gap %", ""),
+                    "RSI": rec.get("RSI", ""),
+                    "BuyAbove": round(price_now, 2),
+                    "SellIfBelow": stop,
+                    "TakeProfit1": target1,
+                    "TakeProfit2": target2,
+                    "SuggestedQty": suggested_qty,
+                    "SignalStrengthPct": strength,
+                    "Checks": " | ".join(checks),
+                    "Why": str(rec.get("Why", "") or "").strip()
+                    + " | Live top-gainer radar: controlled +1.5% to +3.5% move not surfaced by core scanner",
+                }
+            )
+
+        if not rows:
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+
+        out = pd.DataFrame(rows, columns=self.ALERT_COLUMNS)
+        out.sort_values(by=["SignalStrengthPct", "ChangePct", "Symbol"], ascending=[False, False, True], inplace=True)
+        max_per_cycle = max(1, int(getattr(self, "TOP_GAINER_RADAR_MAX_PER_CYCLE", 4) or 4))
+        out = out.head(max_per_cycle)
+        for sym in out["Symbol"].astype(str).str.upper().tolist():
+            self._top_gainer_radar_today.add(sym)
+            self._append_daily_symbol("top_gainer_radar", sym, today=today)
+        OutputControls().printOutput(
+            "  [+] Top-gainer radar alert(s): "
             + ", ".join(f"{r['Symbol']} (+{float(r['ChangePct']):.1f}%)" for _, r in out.iterrows())
         )
         return out[self.ALERT_COLUMNS].copy()
@@ -3684,6 +3836,8 @@ class SignalMonitorRunner:
                 action_emoji = "🚀"
             elif "Early Breakout" in action:
                 action_emoji = "🌱"
+            elif "Radar" in action:
+                action_emoji = "📡"
             elif action == "Volume Anomaly":
                 action_emoji = "🔥"
             elif action.startswith("🔥") or action.startswith("⚡") or action.startswith("👀"):
@@ -3778,6 +3932,8 @@ class SignalMonitorRunner:
             return "**🎯 DAY-GOAL SCALP + RUNNER** — intraday only; lock the first spike, runner is optional"
         if "Early Breakout" in text:
             return "**🌱 EARLY BREAKOUT SCALP** — early +1% to +3.5% move; take the first target seriously"
+        if "Radar" in text:
+            return "**📡 TOP-GAINER RADAR SCALP** — live +1.5% to +3.5% mover; use only inside entry zone"
         if text in {"Strong Buy Now", "Buy Now"}:
             return "**✅ SWING BUY CANDIDATE** — enter only inside the zone with stop in place"
         if "OB" in text:

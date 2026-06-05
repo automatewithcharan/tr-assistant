@@ -25,6 +25,9 @@ def _make_runner() -> SignalMonitorRunner:
     runner.monitor_heartbeat_minutes = 10
     runner._last_discord_heartbeat_ts = 0.0
     runner._last_goal_suppressed_reasons = []
+    runner.min_trade_value = 50000000.0
+    runner._top_gainer_radar_date = ""
+    runner._top_gainer_radar_today = set()
     return runner
 
 
@@ -229,6 +232,99 @@ def test_early_breakout_blocks_already_ran_mover(monkeypatch):
     )
 
     alerts = runner._build_early_breakout_alerts(current_simple_df)
+
+    assert alerts.empty
+
+
+def test_top_gainer_radar_surfaces_watch_mover_from_live_ticks(monkeypatch):
+    monkeypatch.setattr(
+        signal_monitor_module.PKDateUtilities,
+        "currentDateTime",
+        staticmethod(lambda: datetime(2026, 5, 8, 9, 42, 0)),
+    )
+    runner = _make_runner()
+    runner.actionable_runner = SimpleNamespace(
+        live_ticks={
+            "CUPID": {
+                "last_price": 136.85,
+                "change": 2.83,
+                "high": 136.95,
+                "total_buy_quantity": 333000,
+                "total_sell_quantity": 100000,
+            }
+        }
+    )
+
+    current_simple_df = pd.DataFrame(
+        [
+            {
+                "Stock": "CUPID",
+                "What To Do": "Watch for Buy",
+                "Momentum Setup": "Momentum Watch",
+                "Price Now": 136.85,
+                "Change %": 2.83,
+                "Volume vs Avg": 0.24,
+                "Signal Strength %": 33.1,
+                "RSI": 69.3,
+                "Entry Gap %": 0.25,
+                "Buy Above": 137.0,
+                "Sell If Below": 130.0,
+                "Take Profit 1": 145.0,
+                "Take Profit 2": 150.0,
+                "Suggested Qty": 10,
+                "Avg Daily Value": "172.00 Cr",
+                "Checks": "confidence ok, near trigger",
+                "Why": "Price above ATR trailing stop",
+                "Week52High": 200.0,
+            }
+        ]
+    )
+
+    alerts = runner._build_top_gainer_radar_alerts(current_simple_df)
+
+    assert list(alerts["Symbol"]) == ["CUPID"]
+    assert alerts.iloc[0]["NowAction"] == "📡 Top Gainer Radar"
+
+
+def test_top_gainer_radar_blocks_chased_mover(monkeypatch):
+    monkeypatch.setattr(
+        signal_monitor_module.PKDateUtilities,
+        "currentDateTime",
+        staticmethod(lambda: datetime(2026, 5, 8, 9, 45, 0)),
+    )
+    runner = _make_runner()
+    runner.actionable_runner = SimpleNamespace(
+        live_ticks={
+            "ITDC": {
+                "last_price": 668.10,
+                "change": 13.4,
+                "high": 671.0,
+                "total_buy_quantity": 570000,
+                "total_sell_quantity": 320000,
+            }
+        }
+    )
+    current_simple_df = pd.DataFrame(
+        [
+            {
+                "Stock": "ITDC",
+                "What To Do": "Buy Now",
+                "Momentum Setup": "Momentum Buy",
+                "Price Now": 668.10,
+                "Change %": 13.4,
+                "Volume vs Avg": 12.7,
+                "Signal Strength %": 32.5,
+                "RSI": 72.6,
+                "Entry Gap %": 0.8,
+                "Suggested Qty": 10,
+                "Avg Daily Value": "11.38 Cr",
+                "Why": "Price above ATR trailing stop",
+                "Week52High": 712.8,
+            }
+        ]
+    )
+
+    alerts = runner._build_top_gainer_radar_alerts(current_simple_df)
 
     assert alerts.empty
 
