@@ -264,8 +264,8 @@ def test_top_gainer_radar_surfaces_watch_mover_from_live_ticks(monkeypatch):
                 "Momentum Setup": "Momentum Watch",
                 "Price Now": 136.85,
                 "Change %": 2.83,
-                "Volume vs Avg": 0.24,
-                "Signal Strength %": 33.1,
+                "Volume vs Avg": 1.24,
+                "Signal Strength %": 42.1,
                 "RSI": 69.3,
                 "Entry Gap %": 0.25,
                 "Buy Above": 137.0,
@@ -587,8 +587,8 @@ def test_intraday_goal_mode_keeps_radar_separate_from_goal_cap(monkeypatch):
     monkeypatch.setattr(runner, "_load_daily_symbol_set", lambda name, **_kwargs: {"AEROFLEX"} if name == "goal_burst" else set())
     appended = []
     runner._append_daily_symbol = lambda name, symbol, **_kwargs: appended.append((name, symbol))
-    radar = _alert("CUPID", "📡 Top Gainer Radar", 33.0)
-    radar["Checks"] = "top-gainer radar +2.7% | Q:33/100 | vol 0.6x | B/S 2.1x | pullback 0.2%"
+    radar = _alert("CUPID", "📡 Top Gainer Radar", 42.0)
+    radar["Checks"] = "top-gainer radar +2.7% | Q:42/100 | vol 1.2x | B/S 2.1x | pullback 0.2%"
     radar["ChangePct"] = 2.7
     radar["RSI"] = 63.0
     alerts_df = pd.DataFrame([radar], columns=runner.ALERT_COLUMNS)
@@ -607,12 +607,12 @@ def test_intraday_goal_mode_applies_separate_radar_cap(monkeypatch):
     monkeypatch.setattr(runner, "_load_daily_symbol_set", lambda *_args, **_kwargs: set())
     appended = []
     runner._append_daily_symbol = lambda name, symbol, **_kwargs: appended.append((name, symbol))
-    first = _alert("CUPID", "📡 Top Gainer Radar", 35.0)
-    first["Checks"] = "top-gainer radar +2.7% | vol 0.6x | B/S 2.1x"
+    first = _alert("CUPID", "📡 Top Gainer Radar", 42.0)
+    first["Checks"] = "top-gainer radar +2.7% | vol 1.2x | B/S 2.1x"
     first["ChangePct"] = 2.7
     first["RSI"] = 63.0
-    second = _alert("PINELABS", "📡 Top Gainer Radar", 34.0)
-    second["Checks"] = "top-gainer radar +3.0% | vol 0.7x | B/S 2.0x"
+    second = _alert("PINELABS", "📡 Top Gainer Radar", 40.0)
+    second["Checks"] = "top-gainer radar +3.0% | vol 1.1x | B/S 2.0x"
     second["ChangePct"] = 3.0
     second["RSI"] = 61.0
     alerts_df = pd.DataFrame([first, second], columns=runner.ALERT_COLUMNS)

@@ -180,6 +180,9 @@ class SignalMonitorRunner:
         self.goal_target1_pct = max(0.5, float(os.environ.get("SIGNALMONITOR_GOAL_TARGET1_PCT", "1.5") or "1.5"))
         self.goal_target2_pct = max(self.goal_target1_pct, float(os.environ.get("SIGNALMONITOR_GOAL_TARGET2_PCT", "3.0") or "3.0"))
         self.radar_max_alerts_per_day = max(0, int(float(os.environ.get("SIGNALMONITOR_RADAR_MAX_ALERTS_PER_DAY", "3") or "3")))
+        self.radar_min_strength = max(0.0, float(os.environ.get("SIGNALMONITOR_RADAR_MIN_STRENGTH", "38") or "38"))
+        self.radar_min_volume_ratio = max(0.0, float(os.environ.get("SIGNALMONITOR_RADAR_MIN_VOLUME_RATIO", "1.0") or "1.0"))
+        self.radar_min_bs_ratio = max(0.0, float(os.environ.get("SIGNALMONITOR_RADAR_MIN_BS_RATIO", "1.2") or "1.2"))
         self.monitor_heartbeat_minutes = max(0.0, float(os.environ.get("SIGNALMONITOR_HEARTBEAT_MINUTES", "10") or "10"))
         self._last_discord_heartbeat_ts = 0.0
         self._last_goal_suppressed_reasons: List[str] = []
@@ -2248,9 +2251,10 @@ class SignalMonitorRunner:
 
         if "radar" in action_lower:
             if (
-                strength >= 18.0
+                strength >= float(getattr(self, "radar_min_strength", 38.0) or 38.0)
                 and self.TOP_GAINER_RADAR_MIN_PCT <= change_pct <= self.TOP_GAINER_RADAR_MAX_PCT
-                and (volume_ratio >= 0.5 or bs_ratio >= 2.0)
+                and volume_ratio >= float(getattr(self, "radar_min_volume_ratio", 1.0) or 1.0)
+                and bs_ratio >= float(getattr(self, "radar_min_bs_ratio", 1.2) or 1.2)
                 and (rsi == 0.0 or rsi < 70.0)
             ):
                 return True, 845.0 + strength + min(volume_ratio, 5.0) * 5.0 + bs_ratio * 4.0, "Top-gainer radar before full scanner confirmation"
@@ -2726,6 +2730,24 @@ class SignalMonitorRunner:
             sym = str(rec.get("Stock", "") or "").strip().upper()
             if not sym or sym in getattr(self, "_top_gainer_radar_today", set()):
                 continue
+            action_text = str(rec.get("What To Do", "") or "").strip().lower()
+            checks_text = str(rec.get("Checks", "") or "").strip().lower()
+            why_text = str(rec.get("Why", "") or "").strip().lower()
+            bearish_text = f"{action_text} | {checks_text} | {why_text}"
+            bearish_markers = (
+                "sell / exit",
+                "bearish trend",
+                "kalman downtrend",
+                "price below atr trailing stop",
+                "uptrend broken",
+                "strong downtrend",
+                "macd bearish",
+                "macd histogram decreasing",
+                "death cross",
+                "lower highs and lower lows",
+            )
+            if any(marker in bearish_text for marker in bearish_markers):
+                continue
             tick = live_ticks.get(sym, {})
             if not tick:
                 continue
@@ -2754,9 +2776,11 @@ class SignalMonitorRunner:
             total_buy = self._to_float(tick.get("total_buy_quantity", 0))
             total_sell = self._to_float(tick.get("total_sell_quantity", 0))
             bs_ratio = total_buy / total_sell if total_sell > 0 else (9.99 if total_buy > 0 else 0.0)
-            if volume_ratio < 0.5 and bs_ratio < 2.0:
+            if volume_ratio < float(getattr(self, "radar_min_volume_ratio", 1.0) or 1.0):
                 continue
-            if strength < 30.0:
+            if bs_ratio < float(getattr(self, "radar_min_bs_ratio", 1.2) or 1.2):
+                continue
+            if strength < float(getattr(self, "radar_min_strength", 38.0) or 38.0):
                 continue
 
             week52 = self._to_float(rec.get("Week52High"))
