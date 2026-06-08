@@ -235,11 +235,20 @@ class KiteConnectSessionManager:
         if not request_id:
             raise RuntimeError(f"Kite login step-1 failed: {resp.text[:300]}")
 
-        # Step 2 — submit TOTP (detect the 2FA type the account expects)
-        twofa_type = login_data.get("twofa_type", "totp")
-        if twofa_type not in ("totp", "app_code"):
-            available = login_data.get("twofa_types", [])
-            twofa_type = "app_code" if "app_code" in available else "totp"
+        # Step 2 — submit TOTP. Kite sometimes changes the requested 2FA
+        # method after account/security changes; do not burn attempts by
+        # sending a TOTP code when Kite is explicitly asking for app_code/SMS.
+        twofa_type = str(login_data.get("twofa_type", "totp") or "totp").strip()
+        available_twofa = login_data.get("twofa_types", []) or []
+        if twofa_type != "totp" and "totp" not in available_twofa:
+            raise RuntimeError(
+                "Kite login is not asking for TOTP right now "
+                f"(requested {twofa_type or 'unknown'}, available {available_twofa}). "
+                "Re-enable external authenticator/TOTP in Kite or use a manual "
+                "Kite Connect redirect URL for today's session."
+            )
+        if twofa_type != "totp":
+            twofa_type = "totp"
 
         totp_code = pyotp.TOTP(self.totp_secret).now()
         resp = sess.post(
@@ -252,7 +261,16 @@ class KiteConnectSessionManager:
             },
             timeout=30,
         )
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            message = ""
+            try:
+                payload = resp.json()
+                message = str(payload.get("message") or payload.get("error_type") or "")
+            except Exception:
+                message = resp.text[:200]
+            raise RuntimeError(
+                f"Kite TOTP step failed ({resp.status_code}): {message or 'no details'}"
+            )
 
         # Step 3 — extract request_token via the OAuth redirect chain.
         # Kite may redirect: login_url -> /connect/finish -> redirect_url?request_token=...
