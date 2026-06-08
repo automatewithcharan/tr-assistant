@@ -2726,14 +2726,54 @@ class SignalMonitorRunner:
 
         live_ticks = self.actionable_runner.live_ticks or {}
         rows = []
+        audit_rows = []
         for rec in current_simple_df.to_dict(orient="records"):
             sym = str(rec.get("Stock", "") or "").strip().upper()
             if not sym or sym in getattr(self, "_top_gainer_radar_today", set()):
                 continue
+            tick = live_ticks.get(sym, {})
+            if not tick:
+                continue
+
+            price_now = self._to_float(tick.get("last_price")) or self._to_float(rec.get("Price Now"))
+            change_pct = self._to_float(tick.get("change")) or self._to_float(rec.get("Change %"))
+            if not (self.TOP_GAINER_RADAR_MIN_PCT <= change_pct <= self.TOP_GAINER_RADAR_MAX_PCT):
+                continue
+
             action_text = str(rec.get("What To Do", "") or "").strip().lower()
             checks_text = str(rec.get("Checks", "") or "").strip().lower()
             why_text = str(rec.get("Why", "") or "").strip().lower()
             bearish_text = f"{action_text} | {checks_text} | {why_text}"
+            strength = self._to_float(rec.get("Signal Strength %"))
+            rsi_val = self._to_float(rec.get("RSI"))
+            volume_ratio = self._to_float(rec.get("Volume vs Avg"))
+            avg_value = self._parse_value_rupees(rec.get("Avg Daily Value"))
+            day_high = self._to_float(tick.get("high", 0))
+            pullback = (day_high - price_now) / price_now * 100.0 if day_high > 0 and price_now > 0 else 0.0
+            total_buy = self._to_float(tick.get("total_buy_quantity", 0))
+            total_sell = self._to_float(tick.get("total_sell_quantity", 0))
+            bs_ratio = total_buy / total_sell if total_sell > 0 else (9.99 if total_buy > 0 else 0.0)
+
+            def audit(decision: str, reason: str) -> None:
+                audit_rows.append(
+                    {
+                        "When": self.run_at_str,
+                        "Symbol": sym,
+                        "Decision": decision,
+                        "Reason": reason,
+                        "Action": str(rec.get("What To Do", "") or ""),
+                        "PriceNow": round(price_now, 2),
+                        "ChangePct": round(change_pct, 2),
+                        "SignalStrengthPct": round(strength, 2),
+                        "VolumeVsAvg": round(volume_ratio, 2),
+                        "BuyerSellerRatio": round(bs_ratio, 2),
+                        "RSI": round(rsi_val, 2),
+                        "PullbackPct": round(pullback, 2),
+                        "Checks": str(rec.get("Checks", "") or ""),
+                        "Why": str(rec.get("Why", "") or ""),
+                    }
+                )
+
             bearish_markers = (
                 "sell / exit",
                 "bearish trend",
@@ -2747,51 +2787,45 @@ class SignalMonitorRunner:
                 "lower highs and lower lows",
             )
             if any(marker in bearish_text for marker in bearish_markers):
-                continue
-            tick = live_ticks.get(sym, {})
-            if not tick:
+                audit("reject", "bearish scanner text")
                 continue
 
-            price_now = self._to_float(tick.get("last_price")) or self._to_float(rec.get("Price Now"))
-            change_pct = self._to_float(tick.get("change")) or self._to_float(rec.get("Change %"))
             if price_now < 50.0:
-                continue
-            if not (self.TOP_GAINER_RADAR_MIN_PCT <= change_pct <= self.TOP_GAINER_RADAR_MAX_PCT):
+                audit("reject", "price below floor")
                 continue
 
-            strength = self._to_float(rec.get("Signal Strength %"))
-            rsi_val = self._to_float(rec.get("RSI"))
-            volume_ratio = self._to_float(rec.get("Volume vs Avg"))
-            avg_value = self._parse_value_rupees(rec.get("Avg Daily Value"))
             if avg_value and avg_value < self.min_trade_value:
+                audit("reject", "liquidity below floor")
                 continue
             if rsi_val and rsi_val >= 70.0:
+                audit("reject", "RSI overbought")
                 continue
 
-            day_high = self._to_float(tick.get("high", 0))
-            pullback = (day_high - price_now) / price_now * 100.0 if day_high > 0 and price_now > 0 else 0.0
             if pullback > 1.5:
+                audit("reject", "pulled back from day high")
                 continue
 
-            total_buy = self._to_float(tick.get("total_buy_quantity", 0))
-            total_sell = self._to_float(tick.get("total_sell_quantity", 0))
-            bs_ratio = total_buy / total_sell if total_sell > 0 else (9.99 if total_buy > 0 else 0.0)
             if volume_ratio < float(getattr(self, "radar_min_volume_ratio", 1.0) or 1.0):
+                audit("reject", "volume below radar floor")
                 continue
             if bs_ratio < float(getattr(self, "radar_min_bs_ratio", 1.2) or 1.2):
+                audit("reject", "buyer/seller below radar floor")
                 continue
             if strength < float(getattr(self, "radar_min_strength", 38.0) or 38.0):
+                audit("reject", "strength below radar floor")
                 continue
 
             week52 = self._to_float(rec.get("Week52High"))
             if week52 and week52 > 0 and price_now < week52:
                 room_to_high = (week52 - price_now) / price_now * 100.0
                 if room_to_high < 2.0:
+                    audit("reject", "too close to 52-week high")
                     continue
 
             budget_amount = getattr(self, "budget_amount", None)
             suggested_qty = int(budget_amount // price_now) if budget_amount and price_now > 0 else int(self._to_float(rec.get("Suggested Qty")))
             if suggested_qty < 1:
+                audit("reject", "quantity below one")
                 continue
 
             stop = round(price_now * (1.0 - float(getattr(self, "goal_stop_pct", 1.0) or 1.0) / 100.0), 2)
@@ -2825,8 +2859,10 @@ class SignalMonitorRunner:
                     + " | Live top-gainer radar: controlled +1.5% to +3.5% move not surfaced by core scanner",
                 }
             )
+            audit("pass", "radar candidate passed")
 
         if not rows:
+            self._append_top_gainer_radar_audit(audit_rows, today=today)
             return pd.DataFrame(columns=self.ALERT_COLUMNS)
 
         out = pd.DataFrame(rows, columns=self.ALERT_COLUMNS)
@@ -2840,6 +2876,12 @@ class SignalMonitorRunner:
             "  [+] Top-gainer radar alert(s): "
             + ", ".join(f"{r['Symbol']} (+{float(r['ChangePct']):.1f}%)" for _, r in out.iterrows())
         )
+        selected_symbols = set(out["Symbol"].astype(str).str.upper().tolist())
+        for audit_row in audit_rows:
+            if audit_row.get("Decision") == "pass" and audit_row.get("Symbol") not in selected_symbols:
+                audit_row["Decision"] = "reject"
+                audit_row["Reason"] = "cycle radar slot not selected"
+        self._append_top_gainer_radar_audit(audit_rows, today=today)
         return out[self.ALERT_COLUMNS].copy()
 
     def _build_runner_continuation_alerts(self, current_simple_df: pd.DataFrame) -> pd.DataFrame:
@@ -4155,6 +4197,22 @@ class SignalMonitorRunner:
     def _daily_path(self, name: str, date_stamp: str) -> str:
         """Return the daily end-of-day snapshot path (one per trading day)."""
         return os.path.join(self.output_dir, f"signalmonitor_{self.universe}_{name}_{date_stamp}.csv")
+
+    def _append_top_gainer_radar_audit(self, rows: List[Dict], today: str = "") -> None:
+        """Append compact pass/reject evidence for radar-window movers."""
+        if not rows:
+            return
+        try:
+            day = str(today or PKDateUtilities.currentDateTime().strftime("%Y-%m-%d"))
+        except Exception:
+            day = datetime.now().strftime("%Y-%m-%d")
+        try:
+            path = os.path.join(self.output_dir, f"signalmonitor_top_gainer_radar_audit_{day}.csv")
+            df = pd.DataFrame(rows)
+            header = not os.path.exists(path)
+            df.to_csv(path, mode="a", header=header, index=False)
+        except Exception as exc:
+            default_logger().debug(f"Could not append top-gainer radar audit: {exc}")
 
     def _purge_old_daily_snapshots(self, keep_days: int = 30) -> None:
         """Delete daily snapshots older than keep_days from the output directory."""
