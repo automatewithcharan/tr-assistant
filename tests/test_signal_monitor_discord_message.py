@@ -22,6 +22,8 @@ def _make_runner() -> SignalMonitorRunner:
     runner.goal_stop_pct = 1.0
     runner.goal_target1_pct = 1.5
     runner.goal_target2_pct = 3.0
+    runner.goal_anomaly_only = False
+    runner.goal_allow_direct_buy = True
     runner.radar_max_alerts_per_day = 3
     runner.monitor_heartbeat_minutes = 10
     runner._last_discord_heartbeat_ts = 0.0
@@ -579,6 +581,36 @@ def test_intraday_goal_mode_blocks_flat_anomaly_scalp():
 
     assert out.empty
     assert any("too flat for anomaly scalp" in reason for reason in runner._last_goal_suppressed_reasons)
+
+
+def test_intraday_goal_mode_anomaly_only_blocks_direct_buy_and_premove():
+    runner = _make_runner()
+    runner.goal_anomaly_only = True
+    direct = _alert("KIMS", "Buy Now", 80.0)
+    direct["Checks"] = "confidence ok | volume ok | Vol 3.0x"
+    premove = _alert("QUESS", "👀 Pre-Move Watch", 80.0)
+    premove["Checks"] = "Q:80/100 [C] | Vol 8.0x | +2.0% | B/S 3.0x"
+    alerts_df = pd.DataFrame([direct, premove], columns=runner.ALERT_COLUMNS)
+
+    out = runner._apply_intraday_goal_mode(alerts_df)
+
+    assert out.empty
+    assert any("KIMS (anomaly-only goal mode)" in reason for reason in runner._last_goal_suppressed_reasons)
+    assert any("QUESS (anomaly-only goal mode)" in reason for reason in runner._last_goal_suppressed_reasons)
+
+
+def test_intraday_goal_mode_anomaly_only_keeps_grade_b():
+    runner = _make_runner()
+    runner.goal_anomaly_only = True
+    alert = _alert("PUNJABCHEM", "⚡ Grade-B Anomaly", 72.0)
+    alert["Checks"] = "Q:72/100 [B] | Vol 8.9x | +1.2% | B/S 2.1x"
+    alert["ChangePct"] = 1.2
+    alerts_df = pd.DataFrame([alert], columns=runner.ALERT_COLUMNS)
+
+    out = runner._apply_intraday_goal_mode(alerts_df)
+
+    assert list(out["Symbol"]) == ["PUNJABCHEM"]
+    assert "Grade-B anomaly burst setup" in out.iloc[0]["Why"]
 
 
 def test_intraday_goal_mode_keeps_radar_separate_from_goal_cap(monkeypatch):

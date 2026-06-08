@@ -179,6 +179,8 @@ class SignalMonitorRunner:
         self.goal_stop_pct = max(0.25, float(os.environ.get("SIGNALMONITOR_GOAL_STOP_PCT", "1.0") or "1.0"))
         self.goal_target1_pct = max(0.5, float(os.environ.get("SIGNALMONITOR_GOAL_TARGET1_PCT", "1.5") or "1.5"))
         self.goal_target2_pct = max(self.goal_target1_pct, float(os.environ.get("SIGNALMONITOR_GOAL_TARGET2_PCT", "3.0") or "3.0"))
+        self.goal_anomaly_only = str(os.environ.get("SIGNALMONITOR_GOAL_ANOMALY_ONLY", "0") or "0").strip().lower() in {"1", "true", "yes", "y", "on"}
+        self.goal_allow_direct_buy = str(os.environ.get("SIGNALMONITOR_GOAL_ALLOW_DIRECT_BUY", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
         self.radar_max_alerts_per_day = max(0, int(float(os.environ.get("SIGNALMONITOR_RADAR_MAX_ALERTS_PER_DAY", "3") or "3")))
         self.radar_min_strength = max(0.0, float(os.environ.get("SIGNALMONITOR_RADAR_MIN_STRENGTH", "38") or "38"))
         self.radar_min_volume_ratio = max(0.0, float(os.environ.get("SIGNALMONITOR_RADAR_MIN_VOLUME_RATIO", "1.0") or "1.0"))
@@ -2237,6 +2239,15 @@ class SignalMonitorRunner:
         if rsi >= 74.0:
             return False, 0.0, f"RSI {rsi:.0f} too hot"
 
+        is_grade_a_b_anomaly = (
+            "grade-a" in action_lower
+            or "grade-b" in action_lower
+            or action.startswith("🔥")
+            or action.startswith("⚡")
+        )
+        if getattr(self, "goal_anomaly_only", False) and not is_grade_a_b_anomaly:
+            return False, 0.0, "anomaly-only goal mode"
+
         # Highest priority: anomaly-style setups. The alert backtest only showed
         # a 3% burst profile here; direct/OB-only signals were not robust.
         if "grade-a" in action_lower or "runner" in action_lower:
@@ -2281,6 +2292,8 @@ class SignalMonitorRunner:
 
         # Direct Buy Now only becomes goal-mode tradeable when another lane confirms.
         if action in {"Strong Buy Now", "Buy Now"}:
+            if not getattr(self, "goal_allow_direct_buy", True):
+                return False, 0.0, "direct buy disabled for goal mode"
             bearish_text = f"{checks_lower} | {str(row.get('Why', '') or '').lower()}"
             bearish_markers = (
                 "sell / exit",
