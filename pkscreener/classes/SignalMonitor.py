@@ -1376,10 +1376,23 @@ class SignalMonitorRunner:
                 if week52_high and week52_high > 0 and price_now and price_now > 0 and price_now < week52_high:
                     gap_to_52wk = (week52_high - price_now) / price_now * 100.0
                     if gap_to_52wk < 3.0:
-                        skipped_already_ran.append(
-                            f"{symbol} (52wk-high ₹{week52_high:.2f} only {gap_to_52wk:.1f}% away)"
+                        strength = self._to_float(row.get("SignalStrengthPct"))
+                        volume_ratio = self._to_float(row.get("VolumeRatio"))
+                        rsi_val = self._to_float(row.get("RSI"))
+                        change_pct = self._to_float(row.get("ChangePct"))
+                        why_text = str(row.get("Why", "") or "").lower()
+                        near_high_breakout = (
+                            strength >= 40.0
+                            and volume_ratio >= 1.3
+                            and (rsi_val is None or rsi_val < 70.0)
+                            and change_pct <= 5.0
+                            and "price above atr trailing stop" in why_text
                         )
-                        continue
+                        if not near_high_breakout:
+                            skipped_already_ran.append(
+                                f"{symbol} (52wk-high ₹{week52_high:.2f} only {gap_to_52wk:.1f}% away)"
+                            )
+                            continue
 
             # Suppress when live price has already moved above the buy zone ceiling.
             # EntryGapPct in state can be stale (computed at scan time, not updated
@@ -1448,6 +1461,12 @@ class SignalMonitorRunner:
                     )
                     continue
 
+            checks_text = str(row["Checks"] or "")
+            if now_action in allowed_buy_actions:
+                volume_ratio = self._to_float(row.get("VolumeRatio"))
+                if volume_ratio > 0 and "vol " not in checks_text.lower():
+                    checks_text = f"{checks_text} | Vol {volume_ratio:.1f}x" if checks_text else f"Vol {volume_ratio:.1f}x"
+
             alert_rows.append(
                 {
                     "When": self.run_at_str,
@@ -1464,7 +1483,7 @@ class SignalMonitorRunner:
                     "TakeProfit2": row["TakeProfit2"],
                     "SuggestedQty": row["SuggestedQty"],
                     "SignalStrengthPct": row["SignalStrengthPct"],
-                    "Checks": row["Checks"],
+                    "Checks": checks_text,
                     "Why": row["Why"],
                 }
             )
@@ -2262,6 +2281,34 @@ class SignalMonitorRunner:
 
         # Direct Buy Now only becomes goal-mode tradeable when another lane confirms.
         if action in {"Strong Buy Now", "Buy Now"}:
+            bearish_text = f"{checks_lower} | {str(row.get('Why', '') or '').lower()}"
+            bearish_markers = (
+                "sell / exit",
+                "bearish trend",
+                "kalman downtrend",
+                "price below atr trailing stop",
+                "uptrend broken",
+                "strong downtrend",
+                "macd bearish",
+                "death cross",
+                "lower highs and lower lows",
+            )
+            clean_direct_buy = (
+                strength >= 40.0
+                and 1.0 <= change_pct <= 5.0
+                and volume_ratio >= 1.3
+                and entry_gap_pct <= 1.5
+                and (rsi == 0.0 or rsi < 70.0)
+                and not any(marker in bearish_text for marker in bearish_markers)
+                and (
+                    "price above atr trailing stop" in bearish_text
+                    or "momentum promotion" in checks_lower
+                    or "volume ok" in checks_lower
+                    or "strong volume" in checks_lower
+                )
+            )
+            if clean_direct_buy:
+                return True, 835.0 + strength + min(volume_ratio, 6.0) * 6.0, "Quality direct Buy Now goal setup"
             if (
                 has_ob_confirmation
                 and strength >= 60.0

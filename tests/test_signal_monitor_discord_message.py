@@ -697,6 +697,43 @@ def test_intraday_goal_mode_blocks_direct_buy_without_confirmation():
     assert out.empty
 
 
+def test_intraday_goal_mode_accepts_quality_direct_buy_now(monkeypatch):
+    runner = _make_runner()
+    monkeypatch.setattr(runner, "_load_daily_symbol_set", lambda *_args, **_kwargs: set())
+    appended = []
+    runner._append_daily_symbol = lambda name, symbol, **_kwargs: appended.append((name, symbol))
+    alert = _alert("INOXINDIA", "Buy Now", 42.3)
+    alert["ChangePct"] = 2.63
+    alert["EntryGapPct"] = 0.8
+    alert["RSI"] = 68.4
+    alert["Checks"] = "confidence ok, near trigger, liquidity ok, volume ok, early momentum promotion | Vol 1.5x"
+    alert["Why"] = "RSI approaching overbought (68.4) | MACD histogram increasing | Price above ATR trailing stop"
+    alerts_df = pd.DataFrame([alert], columns=runner.ALERT_COLUMNS)
+
+    out = runner._apply_intraday_goal_mode(alerts_df)
+
+    assert list(out["Symbol"]) == ["INOXINDIA"]
+    assert "GoalMode" in out.iloc[0]["Checks"]
+    assert "Quality direct Buy Now goal setup" in out.iloc[0]["Why"]
+    assert appended == [("goal_burst", "INOXINDIA")]
+
+
+def test_intraday_goal_mode_blocks_overheated_direct_buy_now():
+    runner = _make_runner()
+    alert = _alert("NRBBEARING", "Buy Now", 43.9)
+    alert["ChangePct"] = 4.2
+    alert["EntryGapPct"] = 0.7
+    alert["RSI"] = 78.8
+    alert["Checks"] = "confidence ok, near trigger, liquidity ok, volume ok | Vol 2.5x"
+    alert["Why"] = "RSI overbought (78.8) | MACD bullish crossover | Price above ATR trailing stop"
+    alerts_df = pd.DataFrame([alert], columns=runner.ALERT_COLUMNS)
+
+    out = runner._apply_intraday_goal_mode(alerts_df)
+
+    assert out.empty
+    assert any("RSI 79 too hot" in reason for reason in runner._last_goal_suppressed_reasons)
+
+
 def test_intraday_goal_mode_allows_direct_buy_with_ob_confirmation():
     runner = _make_runner()
     alert = _alert("WELCORP", "Buy Now", 80.0)
