@@ -47,8 +47,10 @@ fi
 # 1. Refresh NSE allstocks
 TERM=xterm $PYTHON -m pkscreener.pkscreenercli     --kiteprewarm allstocks     --kiteprewarmforce     --kiteprewarmworkers 8     >> $LOG 2>&1
 
-# 2. Refresh BSE stocks (bonds already excluded in BSE_EQUITY_L.csv)
-TERM=xterm $PYTHON -m pkscreener.pkscreenercli     --kiteprewarm bse_allstocks     --kiteprewarmworkers 8     >> $LOG 2>&1
+# 2. Refresh BSE tradeable equities. Avoid bse_allstocks here because it
+# includes many bonds/debentures that Kite cannot return as equity history,
+# creating scary but harmless "missed" counts.
+TERM=xterm $PYTHON -m pkscreener.pkscreenercli     --kiteprewarm bse_tradeable     --kiteprewarmworkers 8     >> $LOG 2>&1
 
 # 3. Rebuild combined universe sorted by liquidity (for ticker subscription)
 TERM=xterm $PYTHON -c "
@@ -103,8 +105,51 @@ EXIT_CODE=$?
 
 if [ $EXIT_CODE -eq 0 ]; then
     REFRESHED=$(find $REPO/results/Data/kite_history_cache/day -name '*.csv' -newer $REF_MARKER 2>/dev/null | wc -l)
+    COVERAGE_ENV=$REPO/results/Data/daily_prewarm_coverage_latest.env
+    TERM=xterm $PYTHON - <<'PY' >> $LOG 2>&1
+import os
+import pandas as pd
+
+data_dir = "results/Data"
+cache_dir = os.path.join(data_dir, "kite_history_cache", "day")
+coverage_env = os.path.join(data_dir, "daily_prewarm_coverage_latest.env")
+
+def read_symbols(path, column):
+    try:
+        return set(pd.read_csv(path)[column].astype(str).str.strip().str.upper())
+    except Exception:
+        return set()
+
+cached = {f[:-4].strip().upper() for f in os.listdir(cache_dir) if f.endswith(".csv")} if os.path.isdir(cache_dir) else set()
+combined = read_symbols("results/Indices/NSE_BSE_COMBINED.csv", "Symbol")
+nse = read_symbols("results/Indices/EQUITY_L.csv", "SYMBOL")
+bse_tradeable = read_symbols("results/Indices/BSE_TRADEABLE.csv", "Symbol")
+
+combined_cached = len(combined & cached)
+nse_cached = len(nse & cached)
+bse_tradeable_cached = len(bse_tradeable & cached)
+
+with open(coverage_env, "w") as f:
+    f.write(f"PREWARM_CACHE_FILES={len(cached)}\n")
+    f.write(f"PREWARM_COMBINED_TOTAL={len(combined)}\n")
+    f.write(f"PREWARM_COMBINED_CACHED={combined_cached}\n")
+    f.write(f"PREWARM_NSE_TOTAL={len(nse)}\n")
+    f.write(f"PREWARM_NSE_CACHED={nse_cached}\n")
+    f.write(f"PREWARM_BSE_TRADEABLE_TOTAL={len(bse_tradeable)}\n")
+    f.write(f"PREWARM_BSE_TRADEABLE_CACHED={bse_tradeable_cached}\n")
+
+print(
+    "Prewarm coverage: "
+    f"cache_files={len(cached)} combined={combined_cached}/{len(combined)} "
+    f"nse={nse_cached}/{len(nse)} bse_tradeable={bse_tradeable_cached}/{len(bse_tradeable)}"
+)
+PY
+    if [ -f "$COVERAGE_ENV" ]; then
+        # shellcheck disable=SC1090
+        source "$COVERAGE_ENV"
+    fi
     echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Prewarm: done (exit=0, ~${REFRESHED} files updated)" >> $LOG
-    send_discord "✅ **Prewarm complete** — cache refreshed for ~${REFRESHED} stocks. Session will start at 8:30 AM IST."
+    send_discord "✅ **Prewarm complete** — refreshed ~${REFRESHED} files. Live universe cache ${PREWARM_COMBINED_CACHED:-?}/${PREWARM_COMBINED_TOTAL:-?}; NSE ${PREWARM_NSE_CACHED:-?}/${PREWARM_NSE_TOTAL:-?}; BSE tradeable ${PREWARM_BSE_TRADEABLE_CACHED:-?}/${PREWARM_BSE_TRADEABLE_TOTAL:-?}. Session will start at 8:30 AM IST."
 else
     echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Prewarm: FAILED (exit=$EXIT_CODE)" >> $LOG
     send_discord "🚨 **Prewarm FAILED** (exit=${EXIT_CODE}) — scanner may use stale data today. Check /tmp/daily_prewarm.log"
