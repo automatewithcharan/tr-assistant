@@ -3949,15 +3949,21 @@ class SignalMonitorRunner:
         """Build a phone-friendly Discord webhook message."""
         source_label = self._alert_source_label()
         try:
-            sent_at = PKDateUtilities.currentDateTime().strftime("%Y-%m-%d %H:%M:%S")
+            sent_dt = PKDateUtilities.currentDateTime()
+            sent_at = sent_dt.strftime("%Y-%m-%d %H:%M:%S")
         except Exception:
-            sent_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            sent_dt = datetime.now()
+            sent_at = sent_dt.strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            alert_age_seconds = max(0, int((sent_dt - self.run_at).total_seconds()))
+        except Exception:
+            alert_age_seconds = 0
         sections = [
             f"**Intraday Goal Scanner Alert**",
             f"Source `{source_label}`",
             (
                 f"Universe `{self.universe}` | Generated `{self.run_at_str}` | Sent `{sent_at}` | "
-                f"Fresh `{int(summary.get('FreshAlertsThisRun', 0) or 0)}`"
+                f"Age `{alert_age_seconds}s` | Fresh `{int(summary.get('FreshAlertsThisRun', 0) or 0)}`"
             ),
             (
                 f"Scanned `{int(summary.get('ScannedSymbols', 0) or 0)}` | "
@@ -4087,7 +4093,7 @@ class SignalMonitorRunner:
                 block_lines.append(trade_lane_line)
             block_lines.extend([
                 buy_zone_line,
-                f"At alert: ₹{self._fmt_price(row['PriceNow'])}{day_pct_text}",
+                f"At scan: ₹{self._fmt_price(row['PriceNow'])}{day_pct_text}",
                 sl_t_line,
                 f"{qty_label} `{qty}`",
             ])

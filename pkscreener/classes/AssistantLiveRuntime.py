@@ -90,7 +90,7 @@ class AssistantLiveSettings:
             min_trade_value=float(self.min_trade_value or 1000000.0),
             min_volume_ratio=float(self.min_volume_ratio or 1.0),
             max_workers=max(1, int(self.max_workers or 1)),
-            signal_interval=max(10, int(self.signal_interval or 30)),
+            signal_interval=max(1, int(self.signal_interval or 30)),
             signal_limit=max(0, int(self.signal_limit or 0)),
             alert_channels=str(self.alert_channels or "discord").strip().lower(),
             ticker_limit=max(0, int(self.ticker_limit or 0)),

@@ -41,13 +41,14 @@ export SIGNALMONITOR_GOAL_TARGET2_PCT="${SIGNALMONITOR_GOAL_TARGET2_PCT:-3.0}"
 export SIGNALMONITOR_GOAL_ANOMALY_ONLY="${SIGNALMONITOR_GOAL_ANOMALY_ONLY:-1}"
 export SIGNALMONITOR_GOAL_ALLOW_DIRECT_BUY="${SIGNALMONITOR_GOAL_ALLOW_DIRECT_BUY:-0}"
 export SIGNALMONITOR_ALERT_SOURCE="${SIGNALMONITOR_ALERT_SOURCE:-intraday-goal-live}"
+export KITE_ASSISTANT_INTERVAL="${KITE_ASSISTANT_INTERVAL:-3}"
 
 echo "Starting trade assistant..."
 echo "  Universe : all (NSE + BSE combined, ~2990 stocks)"
 echo "  Liquidity filter: min avg daily traded value ₹5 crore"
 echo "  Volume filter: min 2x average volume on signal day"
 echo "  Early quality mode: Buy Now + Strong Buy Now"
-echo "  Scan interval: 10s"
+echo "  Scan interval: ${KITE_ASSISTANT_INTERVAL}s"
 echo "  Fast mode: on (lean live monitor, changed symbols cap ${SIGNALMONITOR_MAX_CHANGED_PER_CYCLE})"
 echo "  Day-goal alerts: max ${SIGNALMONITOR_GOAL_MAX_TRADES_PER_DAY}; Target 1 ${SIGNALMONITOR_GOAL_TARGET1_PCT}%; Target 2 ${SIGNALMONITOR_GOAL_TARGET2_PCT}%"
 echo "  Day-goal lane: Grade-A/B anomaly only (direct Buy Now disabled)"
@@ -63,7 +64,7 @@ exec "$PYTHON" -m pkscreener.pkscreenercli \
     --assistantautopilot \
     --assistantbudget "${KITE_SWING_MAX_ORDER_VALUE:-10000}" \
     --assistantworkers "${KITE_ASSISTANT_WORKERS:-24}" \
-    --assistantinterval 10 \
+    --assistantinterval "${KITE_ASSISTANT_INTERVAL}" \
     --assistantalerts discord \
     --assistantminliquidity 50000000 \
     --assistantminvolratio 2.0
