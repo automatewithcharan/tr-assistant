@@ -104,6 +104,39 @@ print(f'Combined universe: {len(combined)} symbols (NSE={len(nse_take)}, BSE={le
 EXIT_CODE=$?
 
 if [ $EXIT_CODE -eq 0 ]; then
+    TERM=xterm $PYTHON - <<'PY' >> $LOG 2>&1
+import os
+import pandas as pd
+from pkscreener.classes.KiteHistoricalData import KiteHistoricalDataProvider
+
+cache_dir = "results/Data/kite_history_cache/day"
+combined_path = "results/Indices/NSE_BSE_COMBINED.csv"
+retry_path = "results/Data/kiteprewarm_live_missing_retry_day_latest.csv"
+
+try:
+    combined = pd.read_csv(combined_path)["Symbol"].astype(str).str.strip().str.upper().tolist()
+except Exception:
+    combined = []
+cached = {f[:-4].strip().upper() for f in os.listdir(cache_dir) if f.endswith(".csv")} if os.path.isdir(cache_dir) else set()
+missing = [symbol for symbol in combined if symbol and symbol not in cached]
+
+if missing:
+    print(f"Prewarm retry: refreshing {len(missing)} missing live-universe symbols...")
+    provider = KiteHistoricalDataProvider()
+    retry_df = provider.prewarm_symbols(
+        symbols=missing,
+        interval="day",
+        count=365,
+        max_workers=4,
+        force_refresh=False,
+    )
+    retry_df.to_csv(retry_path, index=False)
+    ok_count = int((retry_df["Status"] == "ok").sum()) if not retry_df.empty else 0
+    print(f"Prewarm retry: cached {ok_count}/{len(missing)} missing live-universe symbols")
+else:
+    pd.DataFrame(columns=["Symbol", "Status", "Rows", "Source", "CachePath", "CheckedAt"]).to_csv(retry_path, index=False)
+    print("Prewarm retry: no live-universe cache misses")
+PY
     REFRESHED=$(find $REPO/results/Data/kite_history_cache/day -name '*.csv' -newer $REF_MARKER 2>/dev/null | wc -l)
     COVERAGE_ENV=$REPO/results/Data/daily_prewarm_coverage_latest.env
     TERM=xterm $PYTHON - <<'PY' >> $LOG 2>&1
