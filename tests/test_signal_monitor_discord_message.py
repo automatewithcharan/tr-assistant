@@ -23,6 +23,7 @@ def _make_runner() -> SignalMonitorRunner:
     runner.goal_target1_pct = 1.5
     runner.goal_target2_pct = 3.0
     runner.goal_anomaly_only = False
+    runner.goal_allow_grade_c = False
     runner.goal_allow_direct_buy = True
     runner.radar_max_alerts_per_day = 3
     runner.monitor_heartbeat_minutes = 10
@@ -583,7 +584,7 @@ def test_intraday_goal_mode_blocks_flat_anomaly_scalp():
     assert any("too flat for anomaly scalp" in reason for reason in runner._last_goal_suppressed_reasons)
 
 
-def test_intraday_goal_mode_anomaly_only_blocks_direct_buy_and_premove():
+def test_intraday_goal_mode_anomaly_only_blocks_direct_buy_and_premove_by_default():
     runner = _make_runner()
     runner.goal_anomaly_only = True
     direct = _alert("KIMS", "Buy Now", 80.0)
@@ -597,6 +598,20 @@ def test_intraday_goal_mode_anomaly_only_blocks_direct_buy_and_premove():
     assert out.empty
     assert any("KIMS (anomaly-only goal mode)" in reason for reason in runner._last_goal_suppressed_reasons)
     assert any("QUESS (anomaly-only goal mode)" in reason for reason in runner._last_goal_suppressed_reasons)
+
+
+def test_intraday_goal_mode_can_allow_grade_c_premove_watch():
+    runner = _make_runner()
+    runner.goal_anomaly_only = True
+    runner.goal_allow_grade_c = True
+    premove = _alert("QUESS", "👀 Pre-Move Watch", 80.0)
+    premove["Checks"] = "Q:80/100 [C] | Vol 8.0x | +2.0% | B/S 3.0x"
+    alerts_df = pd.DataFrame([premove], columns=runner.ALERT_COLUMNS)
+
+    out = runner._apply_intraday_goal_mode(alerts_df)
+
+    assert list(out["Symbol"]) == ["QUESS"]
+    assert "Pre-move burst setup" in out.iloc[0]["Why"]
 
 
 def test_intraday_goal_mode_anomaly_only_keeps_grade_b():

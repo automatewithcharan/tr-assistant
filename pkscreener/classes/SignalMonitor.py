@@ -180,6 +180,7 @@ class SignalMonitorRunner:
         self.goal_target1_pct = max(0.5, float(os.environ.get("SIGNALMONITOR_GOAL_TARGET1_PCT", "1.5") or "1.5"))
         self.goal_target2_pct = max(self.goal_target1_pct, float(os.environ.get("SIGNALMONITOR_GOAL_TARGET2_PCT", "3.0") or "3.0"))
         self.goal_anomaly_only = str(os.environ.get("SIGNALMONITOR_GOAL_ANOMALY_ONLY", "0") or "0").strip().lower() in {"1", "true", "yes", "y", "on"}
+        self.goal_allow_grade_c = str(os.environ.get("SIGNALMONITOR_GOAL_ALLOW_GRADE_C", "0") or "0").strip().lower() in {"1", "true", "yes", "y", "on"}
         self.goal_allow_direct_buy = str(os.environ.get("SIGNALMONITOR_GOAL_ALLOW_DIRECT_BUY", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
         self.radar_max_alerts_per_day = max(0, int(float(os.environ.get("SIGNALMONITOR_RADAR_MAX_ALERTS_PER_DAY", "3") or "3")))
         self.radar_min_strength = max(0.0, float(os.environ.get("SIGNALMONITOR_RADAR_MIN_STRENGTH", "38") or "38"))
@@ -2245,7 +2246,11 @@ class SignalMonitorRunner:
             or action.startswith("🔥")
             or action.startswith("⚡")
         )
-        if getattr(self, "goal_anomaly_only", False) and not is_grade_a_b_anomaly:
+        is_grade_c_premove = "pre-move" in action_lower or action.startswith("👀")
+        is_allowed_goal_anomaly = is_grade_a_b_anomaly or (
+            bool(getattr(self, "goal_allow_grade_c", False)) and is_grade_c_premove
+        )
+        if getattr(self, "goal_anomaly_only", False) and not is_allowed_goal_anomaly:
             return False, 0.0, "anomaly-only goal mode"
 
         # Highest priority: anomaly-style setups. The alert backtest only showed
