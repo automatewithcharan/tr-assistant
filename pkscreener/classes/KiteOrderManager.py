@@ -1549,6 +1549,19 @@ class KiteOrderManager:
         if symbol not in self._positions or self._positions[symbol].status != "open":
             return OrderResult(False, symbol=symbol, message="No open position found")
 
+        if not self.auto_trade:
+            return self._return_logged_result(
+                OrderResult(
+                    False,
+                    symbol=symbol,
+                    side="SELL",
+                    qty=qty,
+                    price=price,
+                    status="DISABLED",
+                    message="Auto-trade is disabled (set KITE_AUTO_TRADE=1)",
+                )
+            )
+
         if not _is_market_open():
             return self._return_logged_result(
                 OrderResult(
