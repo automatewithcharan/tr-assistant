@@ -26,6 +26,10 @@ def _make_runner() -> SignalMonitorRunner:
     runner.goal_allow_grade_c = False
     runner.goal_allow_direct_buy = True
     runner.radar_max_alerts_per_day = 3
+    runner.engine_watch_enabled = False
+    runner.engine_watch_max_alerts_per_day = 8
+    runner.engine_watch_min_strength = 40.0
+    runner.engine_watch_min_volume_ratio = 1.3
     runner.monitor_heartbeat_minutes = 10
     runner._last_discord_heartbeat_ts = 0.0
     runner._last_goal_suppressed_reasons = []
@@ -288,6 +292,84 @@ def test_top_gainer_radar_surfaces_watch_mover_from_live_ticks(monkeypatch):
 
     assert list(alerts["Symbol"]) == ["CUPID"]
     assert alerts.iloc[0]["NowAction"] == "📡 Top Gainer Radar"
+
+
+def test_engine_confirmed_watch_is_separate_from_goal_alerts(monkeypatch):
+    monkeypatch.setattr(
+        signal_monitor_module.PKDateUtilities,
+        "currentDateTime",
+        staticmethod(lambda: datetime(2026, 5, 8, 10, 5, 0)),
+    )
+    runner = _make_runner()
+    runner.engine_watch_enabled = True
+    runner.actionable_runner = SimpleNamespace(
+        live_ticks={
+            "CLEANBUY": {
+                "last_price": 212.5,
+                "change": 2.1,
+            }
+        }
+    )
+    monkeypatch.setattr(runner, "_load_daily_symbol_set", lambda name, **_kwargs: set())
+    appended = []
+    monkeypatch.setattr(runner, "_append_daily_symbol", lambda name, symbol, **_kwargs: appended.append((name, symbol)))
+    current_simple_df = pd.DataFrame(
+        [
+            {
+                "Stock": "CLEANBUY",
+                "What To Do": "Buy Now",
+                "Price Now": 212.5,
+                "Change %": 2.1,
+                "Volume vs Avg": 2.4,
+                "Signal Strength %": 52.0,
+                "RSI": 61.0,
+                "Entry Gap %": 0.2,
+                "Buy Above": 212.5,
+                "Sell If Below": 207.0,
+                "Take Profit 1": 216.0,
+                "Take Profit 2": 220.0,
+                "Suggested Qty": 20,
+                "Avg Daily Value": "88.00 Cr",
+                "Checks": "confidence ok, liquidity ok, volume ok",
+                "Why": "Price above ATR trailing stop",
+            }
+        ]
+    )
+
+    out = runner._build_engine_confirmed_watch_alerts(current_simple_df, pd.DataFrame(columns=runner.ALERT_COLUMNS))
+
+    assert list(out["Symbol"]) == ["CLEANBUY"]
+    assert out.iloc[0]["NowAction"] == "🧪 Engine Confirmed Watch"
+    assert "EngineWatch" in out.iloc[0]["Checks"]
+    assert appended == [("engine_confirmed_watch", "CLEANBUY")]
+
+
+def test_engine_confirmed_watch_skips_existing_goal_symbol(monkeypatch):
+    runner = _make_runner()
+    runner.engine_watch_enabled = True
+    runner.actionable_runner = SimpleNamespace(live_ticks={"CLEANBUY": {"last_price": 212.5, "change": 2.1}})
+    monkeypatch.setattr(runner, "_load_daily_symbol_set", lambda name, **_kwargs: set())
+    current_simple_df = pd.DataFrame(
+        [
+            {
+                "Stock": "CLEANBUY",
+                "What To Do": "Buy Now",
+                "Price Now": 212.5,
+                "Change %": 2.1,
+                "Volume vs Avg": 2.4,
+                "Signal Strength %": 52.0,
+                "RSI": 61.0,
+                "Avg Daily Value": "88.00 Cr",
+                "Checks": "confidence ok, liquidity ok, volume ok",
+                "Why": "Price above ATR trailing stop",
+            }
+        ]
+    )
+    existing = pd.DataFrame([_alert("CLEANBUY", "⚡ Grade-B Anomaly", 72.0)], columns=runner.ALERT_COLUMNS)
+
+    out = runner._build_engine_confirmed_watch_alerts(current_simple_df, existing)
+
+    assert out.empty
 
 
 def test_top_gainer_radar_blocks_chased_mover(monkeypatch):

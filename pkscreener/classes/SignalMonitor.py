@@ -186,6 +186,10 @@ class SignalMonitorRunner:
         self.radar_min_strength = max(0.0, float(os.environ.get("SIGNALMONITOR_RADAR_MIN_STRENGTH", "38") or "38"))
         self.radar_min_volume_ratio = max(0.0, float(os.environ.get("SIGNALMONITOR_RADAR_MIN_VOLUME_RATIO", "1.0") or "1.0"))
         self.radar_min_bs_ratio = max(0.0, float(os.environ.get("SIGNALMONITOR_RADAR_MIN_BS_RATIO", "1.2") or "1.2"))
+        self.engine_watch_enabled = str(os.environ.get("SIGNALMONITOR_ENGINE_WATCH_ENABLED", "0") or "0").strip().lower() in {"1", "true", "yes", "y", "on"}
+        self.engine_watch_max_alerts_per_day = max(0, int(float(os.environ.get("SIGNALMONITOR_ENGINE_WATCH_MAX_PER_DAY", "8") or "8")))
+        self.engine_watch_min_strength = max(0.0, float(os.environ.get("SIGNALMONITOR_ENGINE_WATCH_MIN_STRENGTH", "40") or "40"))
+        self.engine_watch_min_volume_ratio = max(0.0, float(os.environ.get("SIGNALMONITOR_ENGINE_WATCH_MIN_VOLUME_RATIO", "1.3") or "1.3"))
         self.monitor_heartbeat_minutes = max(0.0, float(os.environ.get("SIGNALMONITOR_HEARTBEAT_MINUTES", "10") or "10"))
         self._last_discord_heartbeat_ts = 0.0
         self._last_goal_suppressed_reasons: List[str] = []
@@ -416,6 +420,9 @@ class SignalMonitorRunner:
             if not ob_alerts_df.empty:
                 alerts_df = pd.concat([alerts_df, ob_alerts_df], ignore_index=True)
         alerts_df = self._apply_intraday_goal_mode(alerts_df)
+        engine_watch_df = self._build_engine_confirmed_watch_alerts(merged_simple_df, alerts_df)
+        if not engine_watch_df.empty:
+            alerts_df = pd.concat([alerts_df, engine_watch_df], ignore_index=True)
         # V2: Follow-through check + exit monitoring
         self._check_followthrough_and_exits()
         # V2: End-of-day missed opportunity analysis
@@ -2949,6 +2956,123 @@ class SignalMonitorRunner:
         self._append_top_gainer_radar_audit(audit_rows, today=today)
         return out[self.ALERT_COLUMNS].copy()
 
+    def _build_engine_confirmed_watch_alerts(
+        self,
+        current_simple_df: pd.DataFrame,
+        existing_alerts_df: pd.DataFrame,
+    ) -> pd.DataFrame:
+        """Separate paper/watch lane for clean engine-confirmed buys."""
+        if not getattr(self, "engine_watch_enabled", False):
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+        if current_simple_df is None or current_simple_df.empty:
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+
+        today = self._today_key()
+        max_per_day = max(0, int(getattr(self, "engine_watch_max_alerts_per_day", 8) or 0))
+        if max_per_day <= 0:
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+        already_watch = self._load_daily_symbol_set("engine_confirmed_watch", today=today)
+        remaining = max(0, max_per_day - len(already_watch))
+        if remaining <= 0:
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+
+        existing = set()
+        if existing_alerts_df is not None and not existing_alerts_df.empty and "Symbol" in existing_alerts_df.columns:
+            existing = set(existing_alerts_df["Symbol"].astype(str).str.upper())
+
+        rows: List[Dict] = []
+        live_ticks = self.actionable_runner.live_ticks or {}
+        for rec in current_simple_df.to_dict(orient="records"):
+            sym = str(rec.get("Stock", "") or "").strip().upper()
+            if not sym or sym in already_watch or sym in existing:
+                continue
+            action = str(rec.get("What To Do", "") or "").strip()
+            if action not in {"Strong Buy Now", "Buy Now"}:
+                continue
+
+            tick = live_ticks.get(sym, {})
+            price_now = self._to_float(tick.get("last_price")) or self._to_float(rec.get("Price Now"))
+            change_pct = self._to_float(tick.get("change")) or self._to_float(rec.get("Change %"))
+            strength = self._to_float(rec.get("Signal Strength %"))
+            volume_ratio = self._to_float(rec.get("Volume vs Avg"))
+            rsi_val = self._to_float(rec.get("RSI"))
+            avg_value = self._parse_value_rupees(rec.get("Avg Daily Value"))
+            checks_text = str(rec.get("Checks", "") or "").lower()
+            why_text = str(rec.get("Why", "") or "").lower()
+
+            if price_now < 50.0:
+                continue
+            if avg_value and avg_value < self.min_trade_value:
+                continue
+            if strength < float(getattr(self, "engine_watch_min_strength", 40.0) or 40.0):
+                continue
+            if volume_ratio < float(getattr(self, "engine_watch_min_volume_ratio", 1.3) or 1.3):
+                continue
+            if not (0.5 <= change_pct <= 5.0):
+                continue
+            if rsi_val and rsi_val >= 70.0:
+                continue
+            bearish_text = f"{checks_text} | {why_text}"
+            if any(marker in bearish_text for marker in (
+                "sell / exit",
+                "bearish trend",
+                "kalman downtrend",
+                "price below atr trailing stop",
+                "uptrend broken",
+                "strong downtrend",
+                "macd bearish",
+                "death cross",
+                "lower highs and lower lows",
+            )):
+                continue
+
+            buy_above = self._to_float(rec.get("Buy Above")) or price_now
+            stop = self._to_float(rec.get("Sell If Below")) or round(price_now * 0.99, 2)
+            target1 = self._to_float(rec.get("Take Profit 1")) or round(price_now * 1.015, 2)
+            target2 = self._to_float(rec.get("Take Profit 2")) or round(price_now * 1.03, 2)
+            suggested_qty = int(self._to_float(rec.get("Suggested Qty")))
+            if suggested_qty < 1 and price_now > 0:
+                budget_amount = getattr(self, "budget_amount", None)
+                suggested_qty = int(budget_amount // price_now) if budget_amount else 1
+
+            rows.append({
+                "When": self.run_at_str,
+                "Symbol": sym,
+                "PreviousAction": action,
+                "NowAction": "🧪 Engine Confirmed Watch",
+                "PriceNow": round(price_now, 2),
+                "ChangePct": round(change_pct, 2),
+                "EntryGapPct": rec.get("Entry Gap %", ""),
+                "RSI": rec.get("RSI", ""),
+                "BuyAbove": round(buy_above, 2),
+                "SellIfBelow": round(stop, 2),
+                "TakeProfit1": round(target1, 2),
+                "TakeProfit2": round(target2, 2),
+                "SuggestedQty": suggested_qty,
+                "SignalStrengthPct": strength,
+                "Checks": (
+                    f"EngineWatch✓ paper/watch only | Q:{strength:.0f}/100 | "
+                    f"Vol {volume_ratio:.1f}x | day {change_pct:+.1f}%"
+                ),
+                "Why": str(rec.get("Why", "") or "").strip()
+                + " | Separate engine-confirmed watch lane; not part of Grade-A/B anomaly goal basket",
+            })
+
+        if not rows:
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+        out = pd.DataFrame(rows, columns=self.ALERT_COLUMNS)
+        out.sort_values(by=["SignalStrengthPct", "ChangePct", "Symbol"], ascending=[False, False, True], inplace=True)
+        out = out.head(remaining)
+        for sym in out["Symbol"].astype(str).str.upper().tolist():
+            already_watch.add(sym)
+            self._append_daily_symbol("engine_confirmed_watch", sym, today=today)
+        OutputControls().printOutput(
+            "  [+] Engine-confirmed watch lane: "
+            f"{len(out)}/{max_per_day} paper/watch candidate(s) selected — "
+            + ", ".join(out["Symbol"].astype(str).str.upper().tolist())
+        )
+        return out[self.ALERT_COLUMNS].copy()
+
     def _build_runner_continuation_alerts(self, current_simple_df: pd.DataFrame) -> pd.DataFrame:
         """Surface controlled continuation entries for stocks already up 5-12%.
 
@@ -4129,6 +4253,8 @@ class SignalMonitorRunner:
             return "**🌱 EARLY BREAKOUT SCALP** — early +1% to +3.5% move; take the first target seriously"
         if "Radar" in text:
             return "**📡 TOP-GAINER RADAR SCALP** — live +1.5% to +3.5% mover; use only inside entry zone"
+        if "Engine Confirmed Watch" in text:
+            return "**🧪 ENGINE-CONFIRMED WATCH** — paper/watch lane only; not part of the Grade-A/B goal basket"
         if text in {"Strong Buy Now", "Buy Now"}:
             return "**✅ SWING BUY CANDIDATE** — enter only inside the zone with stop in place"
         if "OB" in text:
