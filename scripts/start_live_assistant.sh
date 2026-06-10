@@ -19,7 +19,7 @@ fi
 # Pull latest code from GitHub so every morning's session uses the newest fixes.
 # --ff-only: only fast-forward (never merge); fails silently if network is down.
 echo "Pulling latest code from GitHub..."
-git -C "$REPO_ROOT" pull --ff-only origin main 2>&1 || echo "git pull skipped (network/conflict) — using existing code"
+timeout 20s git -C "$REPO_ROOT" -c core.sshCommand="ssh -o BatchMode=yes -o ConnectTimeout=10" pull --ff-only origin main 2>&1 || echo "git pull skipped (timeout/network/conflict) — using existing code"
 
 PYTHON="$REPO_ROOT/.venv/bin/python3"
 if [[ ! -x "$PYTHON" ]]; then
