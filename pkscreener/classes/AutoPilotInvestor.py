@@ -6308,7 +6308,7 @@ class AutoPilotInvestor:
                 continue
 
             signal_row = signal_map.get(symbol)
-            current_price = float(ticks.get(symbol, {}).get("last_price", 0) or 0)
+            current_price = self._order_manager._tick_price_if_fresh(symbol, ticks.get(symbol, {}))
             if current_price <= 0:
                 # Tick not available — fetch a fresh quote from the broker API.
                 # This covers positions in symbols outside the WebSocket universe.

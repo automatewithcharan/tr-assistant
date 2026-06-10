@@ -672,6 +672,39 @@ class KiteOrderManager:
             _log.debug("Funds lookup failed: %s", exc)
         return 0.0
 
+    def _tick_received_at(self, tick: Dict[str, Any]) -> Optional[datetime]:
+        """Parse a tick timestamp for freshness checks."""
+        for key in ("received_at", "exchange_timestamp", "last_trade_time"):
+            raw = str((tick or {}).get(key, "") or "").strip()
+            if not raw:
+                continue
+            try:
+                return datetime.fromisoformat(raw)
+            except Exception:
+                continue
+        return None
+
+    def _tick_price_if_fresh(self, symbol: str, tick: Dict[str, Any], max_stale_seconds: int = 300) -> float:
+        """Return tick LTP only when the snapshot is recent enough."""
+        symbol = str(symbol or "").strip().upper()
+        try:
+            price = float(tick.get("last_price") or 0.0)
+            if price <= 0:
+                return 0.0
+            received_dt = self._tick_received_at(tick)
+            if received_dt is not None and max_stale_seconds > 0:
+                now = datetime.now(received_dt.tzinfo) if received_dt.tzinfo else datetime.now()
+                age_seconds = (now - received_dt).total_seconds()
+                if age_seconds > max_stale_seconds:
+                    _log.debug(
+                        "%s tick is %.0fs stale (received_at=%s); ignoring",
+                        symbol, age_seconds, tick.get("received_at") or tick.get("exchange_timestamp") or "",
+                    )
+                    return 0.0
+            return price
+        except Exception:
+            return 0.0
+
     def _latest_tick_price(self, symbol: str, max_stale_seconds: int = 300) -> float:
         """Best-effort live price lookup from the saved tick snapshot.
 
@@ -684,25 +717,7 @@ class KiteOrderManager:
         try:
             ticks = self._load_ticks()
             tick = ticks.get(symbol, {}) if isinstance(ticks, dict) else {}
-            price = float(tick.get("last_price") or 0.0)
-            if price <= 0:
-                return 0.0
-            # Reject ticks that are too old — stale file from yesterday causes
-            # false "price faded" blocks (e.g. previous close ₹686 vs live ₹745).
-            received_at_str = tick.get("received_at") or ""
-            if received_at_str and max_stale_seconds > 0:
-                try:
-                    received_dt = datetime.fromisoformat(received_at_str)
-                    age_seconds = (datetime.now() - received_dt).total_seconds()
-                    if age_seconds > max_stale_seconds:
-                        _log.debug(
-                            "%s tick is %.0fs stale (received_at=%s); ignoring",
-                            symbol, age_seconds, received_at_str,
-                        )
-                        return 0.0
-                except Exception:
-                    pass
-            return price
+            return self._tick_price_if_fresh(symbol, tick, max_stale_seconds=max_stale_seconds)
         except Exception:
             return 0.0
 
@@ -1850,7 +1865,7 @@ class KiteOrderManager:
                 continue
 
             tick = ticks.get(sym, {})
-            live_price = float(tick.get("last_price", 0))
+            live_price = self._tick_price_if_fresh(sym, tick)
             if live_price <= 0:
                 live_price = self._broker_last_price(sym)
             if live_price <= 0:
@@ -2290,15 +2305,33 @@ class KiteOrderManager:
 
     def _load_ticks(self) -> Dict[str, Dict]:
         """Load latest tick snapshot from KiteTickerStream output."""
-        for universe in ("allstocks", "nifty500", "nifty100", "nifty50", "main"):
+        merged: Dict[str, Dict] = {}
+        # Prefer the active all-universe stream and merge by newest tick
+        # timestamp. Older allstocks snapshots may remain on disk after a
+        # launcher/universe change and must not override today's live ticks.
+        for universe in ("all", "allstocks", "nifty500", "nifty100", "nifty50", "main"):
             tick_file = os.path.join(self.output_dir, f"kiteticker_{universe}_ticks_latest.json")
             if os.path.exists(tick_file):
                 try:
                     with open(tick_file, "r") as f:
-                        return json.load(f)
+                        data = json.load(f)
+                    if not isinstance(data, dict):
+                        continue
+                    for sym, tick in data.items():
+                        symbol = str(sym or "").strip().upper()
+                        if not symbol or not isinstance(tick, dict):
+                            continue
+                        existing = merged.get(symbol)
+                        if existing is None:
+                            merged[symbol] = tick
+                            continue
+                        new_dt = self._tick_received_at(tick)
+                        old_dt = self._tick_received_at(existing)
+                        if old_dt is None or (new_dt is not None and new_dt > old_dt):
+                            merged[symbol] = tick
                 except Exception:
                     continue
-        return {}
+        return merged
 
     # ------------------------------------------------------------------
     # Reconcile with Kite positions (real broker state)
