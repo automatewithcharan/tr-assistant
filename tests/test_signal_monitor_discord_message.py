@@ -710,6 +710,25 @@ def test_intraday_goal_mode_anomaly_only_keeps_grade_b():
     assert "Grade-B anomaly burst setup" in out.iloc[0]["Why"]
 
 
+def test_intraday_goal_mode_blocks_weak_market_grade_b_minimum_bar():
+    runner = _make_runner()
+    runner.goal_anomaly_only = True
+    alert = _alert("GSLSU", "⚡ Grade-B Anomaly", 60.2)
+    alert["Checks"] = "Q:60/100 [B] | Vol 6.1x | +2.9% | B/S 28.4x"
+    alert["ChangePct"] = 5.7
+    alert["Why"] = (
+        "Volume 6.1x expected — heavy accumulation | "
+        "Breaking out +2.9% from open | "
+        "Broader market weak — tighter stops recommended"
+    )
+    alerts_df = pd.DataFrame([alert], columns=runner.ALERT_COLUMNS)
+
+    out = runner._apply_intraday_goal_mode(alerts_df)
+
+    assert out.empty
+    assert any("Grade-B too weak/stretched for red market" in reason for reason in runner._last_goal_suppressed_reasons)
+
+
 def test_intraday_goal_mode_keeps_radar_separate_from_goal_cap(monkeypatch):
     runner = _make_runner()
     runner.goal_max_trades_per_day = 1

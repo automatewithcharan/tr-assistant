@@ -2225,6 +2225,7 @@ class SignalMonitorRunner:
         action_lower = action.lower()
         checks = str(row.get("Checks", "") or "")
         checks_lower = checks.lower()
+        why_lower = str(row.get("Why", "") or "").lower()
         strength = self._to_float(row.get("SignalStrengthPct"))
         change_pct = self._to_float(row.get("ChangePct"))
         entry_gap_pct = self._to_float(row.get("EntryGapPct"))
@@ -2234,6 +2235,12 @@ class SignalMonitorRunner:
         has_ob_confirmation = "ob b/s" in checks_lower or "ob confirms" in checks_lower
         has_sector_confirmation = "sector" in checks_lower
         has_compression = "compressed" in checks_lower
+        weak_market_context = (
+            "⚠️crash" in checks_lower
+            or "market crashing" in why_lower
+            or "broader market weak" in why_lower
+            or "weak market tape" in why_lower
+        )
 
         strength = strength if strength is not None else 0.0
         change_pct = change_pct if change_pct is not None else 0.0
@@ -2276,6 +2283,15 @@ class SignalMonitorRunner:
             directional_confirmation = bs_ratio >= 1.5 or has_sector_confirmation or has_compression or has_ob_confirmation
             if change_pct < 0.8:
                 return False, 0.0, f"day move {change_pct:+.1f}% too flat for anomaly scalp"
+            if weak_market_context and "grade-b" in action_lower:
+                strong_red_tape_anomaly = (
+                    strength >= 70.0
+                    and volume_ratio >= 7.0
+                    and change_pct <= 4.5
+                    and (bs_ratio >= 2.0 or has_sector_confirmation or has_ob_confirmation)
+                )
+                if not strong_red_tape_anomaly:
+                    return False, 0.0, "Grade-B too weak/stretched for red market"
             if strength >= 60.0 and volume_ratio >= 5.0 and change_pct <= 6.0 and directional_confirmation:
                 return True, 900.0 + strength + min(volume_ratio, 15.0) * 4.0 + bs_ratio * 5.0, "Grade-B anomaly burst setup"
             return False, 0.0, "anomaly below 3% burst bar"
