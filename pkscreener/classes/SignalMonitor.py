@@ -2315,6 +2315,7 @@ class SignalMonitorRunner:
             early_max_pct = float(getattr(self, "TOP_GAINER_RADAR_EARLY_MAX_PCT", 3.5) or 3.5)
             max_rsi = float(getattr(self, "TOP_GAINER_RADAR_MAX_RSI", 78.0) or 78.0)
             is_hot_gainer = change_pct > early_max_pct
+            radar_strength_floor = min(float(getattr(self, "radar_min_strength", 38.0) or 38.0), 32.0)
             min_volume = max(
                 float(getattr(self, "radar_min_volume_ratio", 1.0) or 1.0),
                 1.5 if is_hot_gainer else 1.0,
@@ -2323,10 +2324,14 @@ class SignalMonitorRunner:
                 float(getattr(self, "radar_min_bs_ratio", 1.2) or 1.2),
                 1.3 if is_hot_gainer else 1.0,
             )
+            live_pressure_override = (
+                bs_ratio >= (2.5 if is_hot_gainer else 1.8)
+                and volume_ratio >= (0.20 if is_hot_gainer else 0.35)
+            )
             if (
-                strength >= float(getattr(self, "radar_min_strength", 38.0) or 38.0)
+                strength >= radar_strength_floor
                 and self.TOP_GAINER_RADAR_MIN_PCT <= change_pct <= self.TOP_GAINER_RADAR_MAX_PCT
-                and volume_ratio >= min_volume
+                and (volume_ratio >= min_volume or live_pressure_override)
                 and bs_ratio >= min_bs
                 and (rsi == 0.0 or rsi < max_rsi)
             ):
@@ -2868,6 +2873,7 @@ class SignalMonitorRunner:
                 or (0.8 if is_hot_gainer else 1.2)
             )
             max_rsi = float(getattr(self, "TOP_GAINER_RADAR_MAX_RSI", 78.0) or 78.0)
+            radar_strength_floor = min(float(getattr(self, "radar_min_strength", 38.0) or 38.0), 32.0)
             min_volume = max(
                 float(getattr(self, "radar_min_volume_ratio", 1.0) or 1.0),
                 1.5 if is_hot_gainer else 1.0,
@@ -2875,6 +2881,10 @@ class SignalMonitorRunner:
             min_bs = max(
                 float(getattr(self, "radar_min_bs_ratio", 1.2) or 1.2),
                 1.3 if is_hot_gainer else 1.0,
+            )
+            live_pressure_override = (
+                bs_ratio >= (2.5 if is_hot_gainer else 1.8)
+                and volume_ratio >= (0.20 if is_hot_gainer else 0.35)
             )
 
             def audit(decision: str, reason: str) -> None:
@@ -2926,13 +2936,13 @@ class SignalMonitorRunner:
                 audit("reject", "pulled back from day high")
                 continue
 
-            if volume_ratio < min_volume:
+            if volume_ratio < min_volume and not live_pressure_override:
                 audit("reject", "volume below radar floor")
                 continue
             if bs_ratio < min_bs:
                 audit("reject", "buyer/seller below radar floor")
                 continue
-            if strength < float(getattr(self, "radar_min_strength", 38.0) or 38.0):
+            if strength < radar_strength_floor:
                 audit("reject", "strength below radar floor")
                 continue
             if has_bearish_scanner_text and not (volume_ratio >= min_volume * 1.5 and bs_ratio >= min_bs * 1.2 and pullback <= max_pullback * 0.75):
@@ -2965,6 +2975,8 @@ class SignalMonitorRunner:
             ]
             if has_bearish_scanner_text:
                 checks.append("scanner bearish but live tape confirms")
+            if live_pressure_override and volume_ratio < min_volume:
+                checks.append("B/S pressure overrides low volume")
             rows.append(
                 {
                     "When": self.run_at_str,
