@@ -156,6 +156,9 @@ def load_alerts(files: Iterable[Path], first_per_symbol_per_day: bool) -> pd.Dat
 def _load_local_history(data_dir: Path, symbol: str, sent_at: datetime, interval: str) -> pd.DataFrame:
     candidates: list[Path] = []
     candidates.append(data_dir / "kite_history_cache" / interval / f"{symbol}.csv")
+    if interval == "minute":
+        candle_day = sent_at.date().isoformat()
+        candidates.extend(sorted((data_dir / "kiteticker_candles" / "1minute").glob(f"kiteticker_*_1minute_{candle_day}.csv")))
     backfill_root = data_dir / "kite_history_backfill" / interval
     if backfill_root.exists():
         candidates.extend(sorted(backfill_root.glob(f"*/{symbol}.csv")))
@@ -171,6 +174,10 @@ def _load_local_history(data_dir: Path, symbol: str, sent_at: datetime, interval
         candles = prepare_candles(df)
         if candles.empty:
             continue
+        if "symbol" in candles.columns:
+            candles = candles[candles["symbol"].astype(str).str.upper().eq(str(symbol).upper())]
+            if candles.empty:
+                continue
         same_day = candles[candles.index.date == target_date]
         if not same_day.empty:
             parts.append(same_day)

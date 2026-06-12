@@ -70,6 +70,10 @@ def _latest_status_path(universe: str) -> str:
     return os.path.join(_output_dir(), f"kiteticker_{universe}_status_latest.json")
 
 
+def _candle_archive_path(universe: str, day: str) -> str:
+    return os.path.join(_output_dir(), "kiteticker_candles", "1minute", f"kiteticker_{universe}_1minute_{day}.csv")
+
+
 def load_latest_live_ticks(universe: str) -> Dict[str, Dict]:
     """Load the latest live tick snapshot by symbol for a universe."""
     path = _latest_ticks_json_path(str(universe or "").strip().lower())
@@ -138,6 +142,7 @@ class KiteTickerStreamRunner:
         self._symbols: List[str] = []
         self._token_to_symbol: Dict[int, str] = {}
         self._ticks_by_symbol: Dict[str, Dict] = {}
+        self._minute_candles: Dict[Tuple[str, str], Dict] = {}
         self._status: Dict[str, object] = {}
         self._connected_event = threading.Event()
         self._stop_event = threading.Event()
@@ -145,6 +150,9 @@ class KiteTickerStreamRunner:
         self._save_thread: Optional[threading.Thread] = None
         self._ticker = None
         self._started_at = datetime.now()
+        self.candle_archive_enabled = str(
+            os.environ.get("KITETICKER_CANDLE_ARCHIVE_ENABLED", "1") or "1"
+        ).strip().lower() in {"1", "true", "yes", "y", "on"}
 
     def run(self) -> None:
         """Start the WebSocket stream until interrupted or timed out."""
@@ -323,7 +331,10 @@ class KiteTickerStreamRunner:
                 symbol = self._token_to_symbol.get(token)
                 if not symbol:
                     continue
-                self._ticks_by_symbol[symbol] = self._compact_tick(symbol, tick, received_at)
+                compact = self._compact_tick(symbol, tick, received_at)
+                self._ticks_by_symbol[symbol] = compact
+                if self.candle_archive_enabled:
+                    self._update_minute_candle(symbol, compact)
                 self._status["ticks_seen"] = int(self._status.get("ticks_seen", 0) or 0) + 1
                 self._status["last_tick_at"] = received_at
 
@@ -353,6 +364,53 @@ class KiteTickerStreamRunner:
             "best_ask": best_ask,
             "received_at": received_at,
         }
+
+    def _update_minute_candle(self, symbol: str, tick: Dict) -> None:
+        try:
+            price = float(tick.get("last_price") or 0.0)
+        except Exception:
+            price = 0.0
+        if price <= 0:
+            return
+        raw_ts = str(tick.get("exchange_timestamp") or tick.get("last_trade_time") or tick.get("received_at") or "")
+        ts = pd.to_datetime(raw_ts, errors="coerce")
+        if pd.isna(ts):
+            ts = pd.Timestamp.now()
+        if getattr(ts, "tzinfo", None) is not None:
+            ts = ts.tz_localize(None)
+        minute = ts.floor("min").strftime("%Y-%m-%d %H:%M:%S")
+        key = (str(symbol).strip().upper(), minute)
+        volume = tick.get("volume_traded")
+        try:
+            volume = int(float(volume)) if volume not in [None, ""] else 0
+        except Exception:
+            volume = 0
+        best_bid = tick.get("best_bid")
+        best_ask = tick.get("best_ask")
+        row = self._minute_candles.get(key)
+        if row is None:
+            self._minute_candles[key] = {
+                "datetime": minute,
+                "symbol": key[0],
+                "open": price,
+                "high": price,
+                "low": price,
+                "close": price,
+                "last_price": price,
+                "volume_traded": volume,
+                "best_bid": best_bid,
+                "best_ask": best_ask,
+                "last_tick_at": tick.get("received_at", ""),
+            }
+            return
+        row["high"] = max(float(row.get("high") or price), price)
+        row["low"] = min(float(row.get("low") or price), price)
+        row["close"] = price
+        row["last_price"] = price
+        row["volume_traded"] = max(int(row.get("volume_traded") or 0), volume)
+        row["best_bid"] = best_bid
+        row["best_ask"] = best_ask
+        row["last_tick_at"] = tick.get("received_at", "")
 
     def _on_close(self, ws, code, reason) -> None:
         self._status["connected"] = False
@@ -430,8 +488,36 @@ class KiteTickerStreamRunner:
                 _latest_ticks_csv_path(self.universe),
                 index=False,
             )
+        if self.candle_archive_enabled and self._csv_counter % 10 == 0:
+            self._persist_minute_candles()
         self._status["last_save_at"] = datetime.now().isoformat(timespec="seconds")
         self._status["snapshot_symbols"] = len(snapshot)
+
+    def _persist_minute_candles(self) -> None:
+        with self._lock:
+            rows = list(self._minute_candles.values())
+        if not rows:
+            return
+        df = pd.DataFrame(rows)
+        if df.empty or "datetime" not in df.columns:
+            return
+        df["day"] = pd.to_datetime(df["datetime"], errors="coerce").dt.date.astype(str)
+        for day, day_df in df.groupby("day"):
+            if not day or day == "NaT":
+                continue
+            dest = _candle_archive_path(self.universe, day)
+            os.makedirs(os.path.dirname(dest), exist_ok=True)
+            out = day_df.drop(columns=["day"], errors="ignore").sort_values(["datetime", "symbol"])
+            fd, tmp = tempfile.mkstemp(dir=os.path.dirname(dest), suffix=".tmp")
+            try:
+                with os.fdopen(fd, "w", encoding="utf-8") as handle:
+                    out.to_csv(handle, index=False)
+                os.replace(tmp, dest)
+            except Exception:
+                if os.path.exists(tmp):
+                    os.unlink(tmp)
+                raise
+        self._status["minute_candle_rows"] = len(rows)
 
     def _persist_status(self) -> None:
         os.makedirs(_output_dir(), exist_ok=True)
