@@ -291,7 +291,92 @@ def test_top_gainer_radar_surfaces_watch_mover_from_live_ticks(monkeypatch):
     alerts = runner._build_top_gainer_radar_alerts(current_simple_df)
 
     assert list(alerts["Symbol"]) == ["CUPID"]
-    assert alerts.iloc[0]["NowAction"] == "📡 Top Gainer Radar"
+    assert alerts.iloc[0]["NowAction"] == "📡 Top Gainer Radar Watch"
+    assert "early" in alerts.iloc[0]["Checks"]
+
+
+def test_top_gainer_radar_catches_early_mover_before_three_percent(monkeypatch):
+    monkeypatch.setattr(
+        signal_monitor_module.PKDateUtilities,
+        "currentDateTime",
+        staticmethod(lambda: datetime(2026, 5, 8, 9, 28, 0)),
+    )
+    runner = _make_runner()
+    runner.actionable_runner = SimpleNamespace(
+        live_ticks={
+            "EARLYWIN": {
+                "last_price": 312.40,
+                "change": 1.28,
+                "high": 313.10,
+                "total_buy_quantity": 220000,
+                "total_sell_quantity": 120000,
+            }
+        }
+    )
+    current_simple_df = pd.DataFrame(
+        [
+            {
+                "Stock": "EARLYWIN",
+                "What To Do": "Watch for Buy",
+                "Price Now": 312.40,
+                "Change %": 1.28,
+                "Volume vs Avg": 1.15,
+                "Signal Strength %": 39.5,
+                "RSI": 62.0,
+                "Suggested Qty": 10,
+                "Avg Daily Value": "91.00 Cr",
+                "Why": "Live price lifting near day high",
+                "Week52High": 500.0,
+            }
+        ]
+    )
+
+    alerts = runner._build_top_gainer_radar_alerts(current_simple_df)
+
+    assert list(alerts["Symbol"]) == ["EARLYWIN"]
+    assert "top-gainer watch +1.3%" in alerts.iloc[0]["Checks"]
+
+
+def test_top_gainer_radar_allows_hot_mover_with_strong_live_confirmation(monkeypatch):
+    monkeypatch.setattr(
+        signal_monitor_module.PKDateUtilities,
+        "currentDateTime",
+        staticmethod(lambda: datetime(2026, 5, 8, 10, 2, 0)),
+    )
+    runner = _make_runner()
+    runner.actionable_runner = SimpleNamespace(
+        live_ticks={
+            "HOTWIN": {
+                "last_price": 512.00,
+                "change": 8.4,
+                "high": 514.00,
+                "total_buy_quantity": 450000,
+                "total_sell_quantity": 140000,
+            }
+        }
+    )
+    current_simple_df = pd.DataFrame(
+        [
+            {
+                "Stock": "HOTWIN",
+                "What To Do": "Watch for Buy",
+                "Price Now": 512.00,
+                "Change %": 8.4,
+                "Volume vs Avg": 2.2,
+                "Signal Strength %": 44.0,
+                "RSI": 74.0,
+                "Suggested Qty": 10,
+                "Avg Daily Value": "125.00 Cr",
+                "Why": "Live top gainer holding near high",
+                "Week52High": 900.0,
+            }
+        ]
+    )
+
+    alerts = runner._build_top_gainer_radar_alerts(current_simple_df)
+
+    assert list(alerts["Symbol"]) == ["HOTWIN"]
+    assert "hot" in alerts.iloc[0]["Checks"]
 
 
 def test_engine_confirmed_watch_is_separate_from_goal_alerts(monkeypatch):

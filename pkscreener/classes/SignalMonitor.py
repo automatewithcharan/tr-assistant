@@ -52,9 +52,13 @@ class SignalMonitorRunner:
     EARLY_BREAKOUT_MAX_PCT = float(os.environ.get("SIGNALMONITOR_EARLY_BREAKOUT_MAX_PCT", "3.5") or 3.5)
     EARLY_BREAKOUT_MIN_VOLUME_RATIO = float(os.environ.get("SIGNALMONITOR_EARLY_BREAKOUT_MIN_VOLUME_RATIO", "1.3") or 1.3)
     EARLY_BREAKOUT_MAX_PER_CYCLE = int(os.environ.get("SIGNALMONITOR_EARLY_BREAKOUT_MAX_PER_CYCLE", "4") or 4)
-    TOP_GAINER_RADAR_MIN_PCT = float(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_MIN_PCT", "1.5") or 1.5)
-    TOP_GAINER_RADAR_MAX_PCT = float(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_MAX_PCT", "3.5") or 3.5)
-    TOP_GAINER_RADAR_MAX_PER_CYCLE = int(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_MAX_PER_CYCLE", "1") or 1)
+    TOP_GAINER_RADAR_MIN_PCT = float(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_MIN_PCT", "1.2") or 1.2)
+    TOP_GAINER_RADAR_MAX_PCT = float(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_MAX_PCT", "12.0") or 12.0)
+    TOP_GAINER_RADAR_EARLY_MAX_PCT = float(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_EARLY_MAX_PCT", "3.5") or 3.5)
+    TOP_GAINER_RADAR_MAX_PULLBACK_PCT = float(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_MAX_PULLBACK_PCT", "1.2") or 1.2)
+    TOP_GAINER_RADAR_HOT_MAX_PULLBACK_PCT = float(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_HOT_MAX_PULLBACK_PCT", "0.8") or 0.8)
+    TOP_GAINER_RADAR_MAX_RSI = float(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_MAX_RSI", "78") or 78)
+    TOP_GAINER_RADAR_MAX_PER_CYCLE = int(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_MAX_PER_CYCLE", "3") or 3)
     REPEAT_BUY_ALERT_SECONDS = int(os.environ.get("SIGNALMONITOR_REPEAT_BUY_ALERT_SECONDS", "60") or 60)
     FAST_MODE = str(os.environ.get("SIGNALMONITOR_FAST_MODE", "0") or "0").strip().lower() in {"1", "true", "yes", "y", "on"}
     MARKET_OPEN_MINUTES_IST = 9 * 60 + 15
@@ -2308,14 +2312,26 @@ class SignalMonitorRunner:
             return False, 0.0, "early breakout below goal bar"
 
         if "radar" in action_lower:
+            early_max_pct = float(getattr(self, "TOP_GAINER_RADAR_EARLY_MAX_PCT", 3.5) or 3.5)
+            max_rsi = float(getattr(self, "TOP_GAINER_RADAR_MAX_RSI", 78.0) or 78.0)
+            is_hot_gainer = change_pct > early_max_pct
+            min_volume = max(
+                float(getattr(self, "radar_min_volume_ratio", 1.0) or 1.0),
+                1.5 if is_hot_gainer else 1.0,
+            )
+            min_bs = max(
+                float(getattr(self, "radar_min_bs_ratio", 1.2) or 1.2),
+                1.3 if is_hot_gainer else 1.0,
+            )
             if (
                 strength >= float(getattr(self, "radar_min_strength", 38.0) or 38.0)
                 and self.TOP_GAINER_RADAR_MIN_PCT <= change_pct <= self.TOP_GAINER_RADAR_MAX_PCT
-                and volume_ratio >= float(getattr(self, "radar_min_volume_ratio", 1.0) or 1.0)
-                and bs_ratio >= float(getattr(self, "radar_min_bs_ratio", 1.2) or 1.2)
-                and (rsi == 0.0 or rsi < 70.0)
+                and volume_ratio >= min_volume
+                and bs_ratio >= min_bs
+                and (rsi == 0.0 or rsi < max_rsi)
             ):
-                return True, 845.0 + strength + min(volume_ratio, 5.0) * 5.0 + bs_ratio * 4.0, "Top-gainer radar before full scanner confirmation"
+                band_bonus = 12.0 if not is_hot_gainer else 0.0
+                return True, 845.0 + band_bonus + strength + min(volume_ratio, 8.0) * 5.0 + bs_ratio * 4.0, "Top-gainer watch before full scanner confirmation"
             return False, 0.0, "top-gainer radar below goal bar"
 
         # Direct Buy Now only becomes goal-mode tradeable when another lane confirms.
@@ -2411,7 +2427,7 @@ class SignalMonitorRunner:
         )
         tuned["Checks"] = f"{radar_check} | {checks}" if checks else radar_check
         why = str(tuned.get("Why", "") or "").strip()
-        radar_why = f"Radar mode: {reason}; separate from the 20 day-goal basket, optional only"
+        radar_why = f"Radar watch: {reason}; separate from the day-goal basket, optional scalp/watch only"
         tuned["Why"] = f"{radar_why} | {why}" if why else radar_why
         return tuned
 
@@ -2841,6 +2857,25 @@ class SignalMonitorRunner:
             total_buy = self._to_float(tick.get("total_buy_quantity", 0))
             total_sell = self._to_float(tick.get("total_sell_quantity", 0))
             bs_ratio = total_buy / total_sell if total_sell > 0 else (9.99 if total_buy > 0 else 0.0)
+            early_max_pct = float(getattr(self, "TOP_GAINER_RADAR_EARLY_MAX_PCT", 3.5) or 3.5)
+            is_hot_gainer = change_pct > early_max_pct
+            max_pullback = float(
+                getattr(
+                    self,
+                    "TOP_GAINER_RADAR_HOT_MAX_PULLBACK_PCT" if is_hot_gainer else "TOP_GAINER_RADAR_MAX_PULLBACK_PCT",
+                    0.8 if is_hot_gainer else 1.2,
+                )
+                or (0.8 if is_hot_gainer else 1.2)
+            )
+            max_rsi = float(getattr(self, "TOP_GAINER_RADAR_MAX_RSI", 78.0) or 78.0)
+            min_volume = max(
+                float(getattr(self, "radar_min_volume_ratio", 1.0) or 1.0),
+                1.5 if is_hot_gainer else 1.0,
+            )
+            min_bs = max(
+                float(getattr(self, "radar_min_bs_ratio", 1.2) or 1.2),
+                1.3 if is_hot_gainer else 1.0,
+            )
 
             def audit(decision: str, reason: str) -> None:
                 audit_rows.append(
@@ -2874,9 +2909,7 @@ class SignalMonitorRunner:
                 "death cross",
                 "lower highs and lower lows",
             )
-            if any(marker in bearish_text for marker in bearish_markers):
-                audit("reject", "bearish scanner text")
-                continue
+            has_bearish_scanner_text = any(marker in bearish_text for marker in bearish_markers)
 
             if price_now < 50.0:
                 audit("reject", "price below floor")
@@ -2885,22 +2918,25 @@ class SignalMonitorRunner:
             if avg_value and avg_value < self.min_trade_value:
                 audit("reject", "liquidity below floor")
                 continue
-            if rsi_val and rsi_val >= 70.0:
-                audit("reject", "RSI overbought")
+            if rsi_val and rsi_val >= max_rsi:
+                audit("reject", "RSI too hot for radar")
                 continue
 
-            if pullback > 1.5:
+            if pullback > max_pullback:
                 audit("reject", "pulled back from day high")
                 continue
 
-            if volume_ratio < float(getattr(self, "radar_min_volume_ratio", 1.0) or 1.0):
+            if volume_ratio < min_volume:
                 audit("reject", "volume below radar floor")
                 continue
-            if bs_ratio < float(getattr(self, "radar_min_bs_ratio", 1.2) or 1.2):
+            if bs_ratio < min_bs:
                 audit("reject", "buyer/seller below radar floor")
                 continue
             if strength < float(getattr(self, "radar_min_strength", 38.0) or 38.0):
                 audit("reject", "strength below radar floor")
+                continue
+            if has_bearish_scanner_text and not (volume_ratio >= min_volume * 1.5 and bs_ratio >= min_bs * 1.2 and pullback <= max_pullback * 0.75):
+                audit("reject", "bearish scanner text without strong live confirmation")
                 continue
 
             week52 = self._to_float(rec.get("Week52High"))
@@ -2920,18 +2956,21 @@ class SignalMonitorRunner:
             target1 = round(price_now * (1.0 + float(getattr(self, "goal_target1_pct", 1.5) or 1.5) / 100.0), 2)
             target2 = round(price_now * (1.0 + float(getattr(self, "goal_target2_pct", 3.0) or 3.0) / 100.0), 2)
             checks = [
-                f"top-gainer radar +{change_pct:.1f}%",
+                f"top-gainer watch +{change_pct:.1f}%",
+                "early" if not is_hot_gainer else "hot",
                 f"Q:{strength:.0f}/100",
                 f"vol {volume_ratio:.1f}x",
                 f"B/S {bs_ratio:.1f}x",
                 f"pullback {pullback:.1f}%",
             ]
+            if has_bearish_scanner_text:
+                checks.append("scanner bearish but live tape confirms")
             rows.append(
                 {
                     "When": self.run_at_str,
                     "Symbol": sym,
                     "PreviousAction": str(rec.get("What To Do", "") or "None"),
-                    "NowAction": "📡 Top Gainer Radar",
+                    "NowAction": "📡 Top Gainer Radar Watch",
                     "PriceNow": round(price_now, 2),
                     "ChangePct": round(change_pct, 2),
                     "EntryGapPct": rec.get("Entry Gap %", ""),
@@ -2944,7 +2983,11 @@ class SignalMonitorRunner:
                     "SignalStrengthPct": strength,
                     "Checks": " | ".join(checks),
                     "Why": str(rec.get("Why", "") or "").strip()
-                    + " | Live top-gainer radar: controlled +1.5% to +3.5% move not surfaced by core scanner",
+                    + (
+                        " | Live top-gainer watch: early move before it becomes a visible top gainer"
+                        if not is_hot_gainer
+                        else " | Live top-gainer watch: hot mover still near high, optional scalp/watch only"
+                    ),
                 }
             )
             audit("pass", "radar candidate passed")
@@ -4268,7 +4311,7 @@ class SignalMonitorRunner:
         if "Early Breakout" in text:
             return "**🌱 EARLY BREAKOUT SCALP** — early +1% to +3.5% move; take the first target seriously"
         if "Radar" in text:
-            return "**📡 TOP-GAINER RADAR SCALP** — live +1.5% to +3.5% mover; use only inside entry zone"
+            return "**📡 TOP-GAINER WATCH SCALP** — separate watch lane; early movers preferred, hot movers need tight exits"
         if "Engine Confirmed Watch" in text:
             return "**🧪 ENGINE-CONFIRMED WATCH** — paper/watch lane only; not part of the Grade-A/B goal basket"
         if text in {"Strong Buy Now", "Buy Now"}:
