@@ -717,7 +717,7 @@ def test_orderbook_confirmation_does_not_annotate_sell_alert():
 def test_intraday_goal_mode_keeps_strong_anomaly_and_tightens_targets():
     runner = _make_runner()
     alert = _alert("AEROFLEX", "⚡ Grade-B Anomaly", 72.0)
-    alert["Checks"] = "Q:72/100 [B] | Vol 8.9x | +1.2% | B/S 2.1x"
+    alert["Checks"] = "Q:72/100 [B] | Vol 8.9x | +1.2% | B/S 2.1x | Confirm✓ held 90s"
     alert["BuyAbove"] = 100.0
     alert["PriceNow"] = 100.0
     alerts_df = pd.DataFrame([alert], columns=runner.ALERT_COLUMNS)
@@ -741,7 +741,7 @@ def test_intraday_goal_mode_keeps_strong_anomaly_and_tightens_targets():
 def test_intraday_goal_mode_blocks_flat_anomaly_scalp():
     runner = _make_runner()
     alert = _alert("YUKEN", "⚡ Grade-B Anomaly", 62.0)
-    alert["Checks"] = "Q:62/100 [B] | Vol 5.2x | +1.1% | B/S 3.7x"
+    alert["Checks"] = "Q:62/100 [B] | Vol 5.2x | +1.1% | B/S 3.7x | Confirm✓ held 90s"
     alert["ChangePct"] = 0.01
     alerts_df = pd.DataFrame([alert], columns=runner.ALERT_COLUMNS)
 
@@ -751,13 +751,39 @@ def test_intraday_goal_mode_blocks_flat_anomaly_scalp():
     assert any("too flat for anomaly scalp" in reason for reason in runner._last_goal_suppressed_reasons)
 
 
+def test_intraday_goal_mode_blocks_unconfirmed_anomaly():
+    runner = _make_runner()
+    alert = _alert("MOTILALOFS", "⚡ Grade-B Anomaly", 72.0)
+    alert["Checks"] = "Q:72/100 [B] | Vol 33.8x | +1.1% | B/S 2.1x"
+    alert["ChangePct"] = 1.1
+    alerts_df = pd.DataFrame([alert], columns=runner.ALERT_COLUMNS)
+
+    out = runner._apply_intraday_goal_mode(alerts_df)
+
+    assert out.empty
+    assert any("anomaly not hold-confirmed" in reason for reason in runner._last_goal_suppressed_reasons)
+
+
+def test_intraday_goal_mode_blocks_sector_only_anomaly_confirmation():
+    runner = _make_runner()
+    alert = _alert("MOTILALOFS", "⚡ Grade-B Anomaly", 72.0)
+    alert["Checks"] = "Q:72/100 [B] | Vol 33.8x | +1.1% | Sector✓ (FINANCE) | Confirm✓ held 90s"
+    alert["ChangePct"] = 1.1
+    alerts_df = pd.DataFrame([alert], columns=runner.ALERT_COLUMNS)
+
+    out = runner._apply_intraday_goal_mode(alerts_df)
+
+    assert out.empty
+    assert any("anomaly below 3% burst bar" in reason for reason in runner._last_goal_suppressed_reasons)
+
+
 def test_intraday_goal_mode_anomaly_only_blocks_direct_buy_and_premove_by_default():
     runner = _make_runner()
     runner.goal_anomaly_only = True
     direct = _alert("KIMS", "Buy Now", 80.0)
     direct["Checks"] = "confidence ok | volume ok | Vol 3.0x"
     premove = _alert("QUESS", "👀 Pre-Move Watch", 80.0)
-    premove["Checks"] = "Q:80/100 [C] | Vol 8.0x | +2.0% | B/S 3.0x"
+    premove["Checks"] = "Q:80/100 [C] | Vol 8.0x | +2.0% | B/S 3.0x | Confirm✓ held 90s"
     alerts_df = pd.DataFrame([direct, premove], columns=runner.ALERT_COLUMNS)
 
     out = runner._apply_intraday_goal_mode(alerts_df)
@@ -772,7 +798,7 @@ def test_intraday_goal_mode_can_allow_grade_c_premove_watch():
     runner.goal_anomaly_only = True
     runner.goal_allow_grade_c = True
     premove = _alert("QUESS", "👀 Pre-Move Watch", 80.0)
-    premove["Checks"] = "Q:80/100 [C] | Vol 8.0x | +2.0% | B/S 3.0x"
+    premove["Checks"] = "Q:80/100 [C] | Vol 8.0x | +2.0% | B/S 3.0x | Confirm✓ held 90s"
     alerts_df = pd.DataFrame([premove], columns=runner.ALERT_COLUMNS)
 
     out = runner._apply_intraday_goal_mode(alerts_df)
@@ -785,7 +811,7 @@ def test_intraday_goal_mode_anomaly_only_keeps_grade_b():
     runner = _make_runner()
     runner.goal_anomaly_only = True
     alert = _alert("PUNJABCHEM", "⚡ Grade-B Anomaly", 72.0)
-    alert["Checks"] = "Q:72/100 [B] | Vol 8.9x | +1.2% | B/S 2.1x"
+    alert["Checks"] = "Q:72/100 [B] | Vol 8.9x | +1.2% | B/S 2.1x | Confirm✓ held 90s"
     alert["ChangePct"] = 1.2
     alerts_df = pd.DataFrame([alert], columns=runner.ALERT_COLUMNS)
 
@@ -799,7 +825,7 @@ def test_intraday_goal_mode_blocks_weak_market_grade_b_minimum_bar():
     runner = _make_runner()
     runner.goal_anomaly_only = True
     alert = _alert("GSLSU", "⚡ Grade-B Anomaly", 60.2)
-    alert["Checks"] = "Q:60/100 [B] | Vol 6.1x | +2.9% | B/S 28.4x"
+    alert["Checks"] = "Q:60/100 [B] | Vol 6.1x | +2.9% | B/S 28.4x | Confirm✓ held 90s"
     alert["ChangePct"] = 5.7
     alert["Why"] = (
         "Volume 6.1x expected — heavy accumulation | "

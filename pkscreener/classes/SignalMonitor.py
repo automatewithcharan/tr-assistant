@@ -197,6 +197,7 @@ class SignalMonitorRunner:
         self.monitor_heartbeat_minutes = max(0.0, float(os.environ.get("SIGNALMONITOR_HEARTBEAT_MINUTES", "10") or "10"))
         self._last_discord_heartbeat_ts = 0.0
         self._last_goal_suppressed_reasons: List[str] = []
+        self._pending_anomaly_confirmations: Dict[str, Dict] = {}
         self.actionable_runner = ActionableReportRunner(
             config_manager=config_manager,
             universe=universe,
@@ -1741,6 +1742,12 @@ class SignalMonitorRunner:
                     f"  [!] Anomaly {c.symbol} skipped — price ₹{c.last_price:.2f} below ₹50 floor"
                 )
                 continue
+            confirmed, confirm_reason = self._anomaly_confirmation_decision(c, _pullback_pct)
+            if not confirmed:
+                OutputControls().printOutput(
+                    f"  [!] Anomaly {c.symbol} watching — {confirm_reason}"
+                )
+                continue
 
             entry = c.last_price
             # V2: Tighter SL for high-quality, wider for lower
@@ -1771,6 +1778,8 @@ class SignalMonitorRunner:
                 checks_parts.append("Compressed📐")
             if not c.market_safe:
                 checks_parts.append("⚠️CRASH")
+            checks_parts.append(f"Confirm✓ {confirm_reason}")
+            checks_parts.append(f"Pullback {_pullback_pct:.1f}%")
 
             # Skip if 52-week high resistance is within 3% — very little upside room
             week52 = self._week52_high_map.get(str(c.symbol).strip().upper(), 0.0)
@@ -1830,6 +1839,48 @@ class SignalMonitorRunner:
             self._anomaly_detector.register_for_followthrough(candidates)
 
         return pd.DataFrame(alert_rows, columns=self.ALERT_COLUMNS)
+
+    def _anomaly_confirmation_decision(self, candidate, pullback_pct: float) -> Tuple[bool, str]:
+        """Require an anomaly to hold before it becomes tradeable."""
+        symbol = str(getattr(candidate, "symbol", "") or "").strip().upper()
+        if not symbol:
+            return False, "missing symbol"
+
+        now = getattr(self, "run_at", None) or PKDateUtilities.currentDateTime()
+        pending = getattr(self, "_pending_anomaly_confirmations", {})
+        first = pending.get(symbol)
+        price = float(getattr(candidate, "last_price", 0.0) or 0.0)
+        bs_ratio = float(getattr(candidate, "buy_sell_ratio", 0.0) or 0.0)
+        tier = str(getattr(candidate, "confidence_tier", "") or "")
+
+        if first is None:
+            pending[symbol] = {
+                "first_seen": now,
+                "price": price,
+                "tier": tier,
+            }
+            self._pending_anomaly_confirmations = pending
+            return False, "watching first anomaly tick; waiting for hold confirmation"
+
+        first_seen = first.get("first_seen", now)
+        try:
+            age_sec = max(0.0, (now - first_seen).total_seconds())
+        except Exception:
+            age_sec = 0.0
+        first_price = float(first.get("price", 0.0) or 0.0)
+        if age_sec < 60.0:
+            return False, f"confirmation wait {age_sec:.0f}s < 60s"
+        if first_price > 0 and price < first_price * 0.997:
+            pending.pop(symbol, None)
+            return False, f"failed hold: price fell below first anomaly tick ({price:.2f} < {first_price:.2f})"
+        if first_price > 0 and price < first_price * 1.001:
+            return False, "not lifting above first anomaly tick yet"
+        if pullback_pct > 1.0:
+            return False, f"confirm failed: pulled back {pullback_pct:.1f}% from high"
+        if tier in {"B", "C"} and bs_ratio < 1.5:
+            return False, f"confirm failed: B/S {bs_ratio:.1f}x below 1.5x"
+        pending.pop(symbol, None)
+        return True, f"held {age_sec:.0f}s above first anomaly tick with B/S {bs_ratio:.1f}x"
 
     def _persist_anomaly_history(self, alert_rows: List[Dict], regime: str) -> None:
         """Append-only log of first V2 Anomaly detection per (symbol, date).
@@ -2261,6 +2312,7 @@ class SignalMonitorRunner:
         has_ob_confirmation = "ob b/s" in checks_lower or "ob confirms" in checks_lower
         has_sector_confirmation = "sector" in checks_lower
         has_compression = "compressed" in checks_lower
+        has_anomaly_hold_confirmation = "confirm✓" in checks_lower or "confirm" in checks_lower
         weak_market_context = (
             "⚠️crash" in checks_lower
             or "market crashing" in why_lower
@@ -2279,6 +2331,8 @@ class SignalMonitorRunner:
             return False, 0.0, f"day move {change_pct:+.1f}% too stretched"
         if rsi >= 74.0:
             return False, 0.0, f"RSI {rsi:.0f} too hot"
+        if self._to_float(row.get("SuggestedQty")) < 1.0:
+            return False, 0.0, "quantity below one"
 
         is_grade_a_b_anomaly = (
             "grade-a" in action_lower
@@ -2296,17 +2350,23 @@ class SignalMonitorRunner:
         # Highest priority: anomaly-style setups. The alert backtest only showed
         # a 3% burst profile here; direct/OB-only signals were not robust.
         if "grade-a" in action_lower or "runner" in action_lower:
+            if not has_anomaly_hold_confirmation:
+                return False, 0.0, "anomaly not hold-confirmed"
             if strength >= 60.0 and change_pct <= 7.0:
                 return True, 1000.0 + strength + min(volume_ratio, 10.0) * 5.0, "Grade-A/runner burst setup"
             return False, 0.0, "runner quality below goal mode"
 
         if "pre-move" in action_lower or action.startswith("👀"):
-            if strength >= 55.0 and change_pct <= 4.0 and (volume_ratio >= 3.0 or bs_ratio >= 1.2 or has_sector_confirmation or has_compression):
+            if not has_anomaly_hold_confirmation:
+                return False, 0.0, "pre-move not hold-confirmed"
+            if strength >= 55.0 and change_pct <= 4.0 and (volume_ratio >= 3.0 or bs_ratio >= 1.5 or has_compression):
                 return True, 930.0 + strength + min(volume_ratio, 10.0) * 4.0 + bs_ratio * 3.0, "Pre-move burst setup"
             return False, 0.0, "pre-move lacks volume/buy pressure"
 
         if "anomaly" in action_lower or action.startswith("⚡") or action.startswith("🔥"):
-            directional_confirmation = bs_ratio >= 1.5 or has_sector_confirmation or has_compression or has_ob_confirmation
+            directional_confirmation = bs_ratio >= 1.5 or has_compression or has_ob_confirmation
+            if not has_anomaly_hold_confirmation:
+                return False, 0.0, "anomaly not hold-confirmed"
             if change_pct < 0.8:
                 return False, 0.0, f"day move {change_pct:+.1f}% too flat for anomaly scalp"
             if weak_market_context and "grade-b" in action_lower:
