@@ -26,6 +26,13 @@ def _make_runner() -> SignalMonitorRunner:
     runner.goal_allow_grade_c = False
     runner.goal_allow_direct_buy = True
     runner.radar_max_alerts_per_day = 3
+    runner.radar_min_strength = 32.0
+    runner.radar_min_volume_ratio = 1.0
+    runner.radar_min_bs_ratio = 1.2
+    runner.top_gainer_visibility_enabled = True
+    runner.top_gainer_visibility_minutes = 15
+    runner.top_gainer_visibility_min_pct = 1.0
+    runner.top_gainer_visibility_max_lines = 10
     runner.engine_watch_enabled = False
     runner.engine_watch_max_alerts_per_day = 8
     runner.engine_watch_min_strength = 40.0
@@ -377,6 +384,65 @@ def test_top_gainer_radar_allows_hot_mover_with_strong_live_confirmation(monkeyp
 
     assert list(alerts["Symbol"]) == ["HOTWIN"]
     assert "hot" in alerts.iloc[0]["Checks"]
+
+
+def test_top_gainer_visibility_shows_rejected_market_leaders(monkeypatch):
+    monkeypatch.setattr(
+        signal_monitor_module.PKDateUtilities,
+        "currentDateTime",
+        staticmethod(lambda: datetime(2026, 5, 8, 10, 30, 0)),
+    )
+    runner = _make_runner()
+    runner.actionable_runner = SimpleNamespace(
+        live_ticks={
+            "FASTUP": {
+                "last_price": 520.0,
+                "change": 11.2,
+                "high": 528.0,
+                "total_buy_quantity": 70000,
+                "total_sell_quantity": 200000,
+            },
+            "CLEANUP": {
+                "last_price": 240.0,
+                "change": 2.4,
+                "high": 241.0,
+                "total_buy_quantity": 240000,
+                "total_sell_quantity": 100000,
+            },
+        }
+    )
+    current_simple_df = pd.DataFrame(
+        [
+            {
+                "Stock": "FASTUP",
+                "What To Do": "Watch for Buy",
+                "Price Now": 520.0,
+                "Change %": 11.2,
+                "Volume vs Avg": 3.0,
+                "Signal Strength %": 51.0,
+                "RSI": 72.0,
+                "Avg Daily Value": "125.00 Cr",
+            },
+            {
+                "Stock": "CLEANUP",
+                "What To Do": "Watch for Buy",
+                "Price Now": 240.0,
+                "Change %": 2.4,
+                "Volume vs Avg": 1.4,
+                "Signal Strength %": 44.0,
+                "RSI": 65.0,
+                "Avg Daily Value": "80.00 Cr",
+            },
+        ]
+    )
+
+    message = runner._build_top_gainer_visibility_message(current_simple_df)
+
+    assert "NOT A BUY SIGNAL" in message
+    assert "`FASTUP` +11.2%" in message
+    assert "reject: weak B/S" in message
+    assert "`CLEANUP` +2.4%" in message
+    assert "clean watch; wait tradeable alert" in message
 
 
 def test_engine_confirmed_watch_is_separate_from_goal_alerts(monkeypatch):

@@ -190,12 +190,17 @@ class SignalMonitorRunner:
         self.radar_min_strength = max(0.0, float(os.environ.get("SIGNALMONITOR_RADAR_MIN_STRENGTH", "38") or "38"))
         self.radar_min_volume_ratio = max(0.0, float(os.environ.get("SIGNALMONITOR_RADAR_MIN_VOLUME_RATIO", "1.0") or "1.0"))
         self.radar_min_bs_ratio = max(0.0, float(os.environ.get("SIGNALMONITOR_RADAR_MIN_BS_RATIO", "1.2") or "1.2"))
+        self.top_gainer_visibility_enabled = str(os.environ.get("SIGNALMONITOR_TOP_GAINER_VISIBILITY_ENABLED", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
+        self.top_gainer_visibility_minutes = max(0.0, float(os.environ.get("SIGNALMONITOR_TOP_GAINER_VISIBILITY_MINUTES", "15") or "15"))
+        self.top_gainer_visibility_min_pct = max(0.0, float(os.environ.get("SIGNALMONITOR_TOP_GAINER_VISIBILITY_MIN_PCT", "1.0") or "1.0"))
+        self.top_gainer_visibility_max_lines = max(1, int(float(os.environ.get("SIGNALMONITOR_TOP_GAINER_VISIBILITY_MAX_LINES", "10") or "10")))
         self.engine_watch_enabled = str(os.environ.get("SIGNALMONITOR_ENGINE_WATCH_ENABLED", "0") or "0").strip().lower() in {"1", "true", "yes", "y", "on"}
         self.engine_watch_max_alerts_per_day = max(0, int(float(os.environ.get("SIGNALMONITOR_ENGINE_WATCH_MAX_PER_DAY", "8") or "8")))
         self.engine_watch_min_strength = max(0.0, float(os.environ.get("SIGNALMONITOR_ENGINE_WATCH_MIN_STRENGTH", "40") or "40"))
         self.engine_watch_min_volume_ratio = max(0.0, float(os.environ.get("SIGNALMONITOR_ENGINE_WATCH_MIN_VOLUME_RATIO", "1.3") or "1.3"))
         self.monitor_heartbeat_minutes = max(0.0, float(os.environ.get("SIGNALMONITOR_HEARTBEAT_MINUTES", "10") or "10"))
         self._last_discord_heartbeat_ts = 0.0
+        self._last_top_gainer_visibility_ts = 0.0
         self._last_goal_suppressed_reasons: List[str] = []
         self._pending_anomaly_confirmations: Dict[str, Dict] = {}
         self.actionable_runner = ActionableReportRunner(
@@ -443,6 +448,7 @@ class SignalMonitorRunner:
         self._save_outputs(report_df, actionable_df, merged_simple_df, merged_state_df, alerts_df, summary_df)
         self._print_summary(summary_df, merged_simple_df, alerts_df, scorecard_df)
         self._send_alerts(alerts_df, summary_df)
+        self._send_top_gainer_visibility(merged_simple_df)
         self._send_monitor_heartbeat(summary_df, alerts_df)
         self._cycle_number += 1
         return report_df, merged_simple_df, alerts_df, summary_df
@@ -3782,6 +3788,130 @@ class SignalMonitorRunner:
         ]
         self._send_discord_alert("\n".join(lines))
         self._last_discord_heartbeat_ts = now_ts
+
+    def _build_top_gainer_visibility_rows(self, current_simple_df: pd.DataFrame) -> List[Dict]:
+        """Return current market leaders for visibility only, not buy alerts."""
+        if current_simple_df is None or current_simple_df.empty:
+            return []
+        live_ticks = getattr(getattr(self, "actionable_runner", None), "live_ticks", {}) or {}
+        if not live_ticks:
+            return []
+
+        min_pct = float(getattr(self, "top_gainer_visibility_min_pct", 1.0) or 1.0)
+        max_lines = max(1, int(getattr(self, "top_gainer_visibility_max_lines", 10) or 10))
+        radar_strength_floor = min(float(getattr(self, "radar_min_strength", 38.0) or 38.0), 32.0)
+        min_volume = max(float(getattr(self, "radar_min_volume_ratio", 1.0) or 1.0), 1.0)
+        min_bs = max(float(getattr(self, "radar_min_bs_ratio", 1.2) or 1.2), 1.0)
+        max_rsi = float(getattr(self, "TOP_GAINER_RADAR_MAX_RSI", 78.0) or 78.0)
+
+        rows: List[Dict] = []
+        for rec in current_simple_df.to_dict(orient="records"):
+            sym = str(rec.get("Stock", "") or "").strip().upper()
+            if not sym:
+                continue
+            tick = live_ticks.get(sym, {})
+            price_now = self._to_float(tick.get("last_price")) or self._to_float(rec.get("Price Now"))
+            change_pct = self._to_float(tick.get("change")) or self._to_float(rec.get("Change %"))
+            if price_now <= 0 or change_pct < min_pct:
+                continue
+
+            day_high = self._to_float(tick.get("high", 0))
+            pullback = (day_high - price_now) / price_now * 100.0 if day_high > 0 and price_now > 0 else 0.0
+            volume_ratio = self._to_float(rec.get("Volume vs Avg"))
+            strength = self._to_float(rec.get("Signal Strength %"))
+            rsi_val = self._to_float(rec.get("RSI"))
+            total_buy = self._to_float(tick.get("total_buy_quantity", 0))
+            total_sell = self._to_float(tick.get("total_sell_quantity", 0))
+            bs_ratio = total_buy / total_sell if total_sell > 0 else (9.99 if total_buy > 0 else 0.0)
+            avg_value = self._parse_value_rupees(rec.get("Avg Daily Value"))
+            is_hot_gainer = change_pct > float(getattr(self, "TOP_GAINER_RADAR_EARLY_MAX_PCT", 3.5) or 3.5)
+            max_pullback = float(
+                getattr(
+                    self,
+                    "TOP_GAINER_RADAR_HOT_MAX_PULLBACK_PCT" if is_hot_gainer else "TOP_GAINER_RADAR_MAX_PULLBACK_PCT",
+                    1.8 if is_hot_gainer else 1.2,
+                )
+                or (1.8 if is_hot_gainer else 1.2)
+            )
+
+            status = "clean watch; wait tradeable alert"
+            if price_now < 50.0:
+                status = "reject: price below floor"
+            elif avg_value and avg_value < self.min_trade_value:
+                status = "reject: low liquidity"
+            elif rsi_val and rsi_val >= max_rsi:
+                status = "reject: RSI hot"
+            elif pullback > max_pullback:
+                status = "reject: pulled back"
+            elif bs_ratio < min_bs:
+                status = "reject: weak B/S"
+            elif volume_ratio < min_volume:
+                status = "reject: low volume"
+            elif strength < radar_strength_floor:
+                status = "reject: weak score"
+
+            rows.append(
+                {
+                    "Symbol": sym,
+                    "PriceNow": price_now,
+                    "ChangePct": change_pct,
+                    "VolumeVsAvg": volume_ratio,
+                    "BuyerSellerRatio": bs_ratio,
+                    "PullbackPct": pullback,
+                    "SignalStrengthPct": strength,
+                    "RSI": rsi_val,
+                    "Action": str(rec.get("What To Do", "") or "").strip(),
+                    "Status": status,
+                }
+            )
+
+        rows.sort(key=lambda item: (-float(item.get("ChangePct", 0.0) or 0.0), str(item.get("Symbol", ""))))
+        return rows[:max_lines]
+
+    def _build_top_gainer_visibility_message(self, current_simple_df: pd.DataFrame) -> str:
+        rows = self._build_top_gainer_visibility_rows(current_simple_df)
+        if not rows:
+            return ""
+        try:
+            sent_at = PKDateUtilities.currentDateTime().strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            sent_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        lines = [
+            "**Top Gainer Visibility - NOT A BUY SIGNAL**",
+            f"Source `{self._alert_source_label()}` | Sent `{sent_at}`",
+            "Shows current market leaders only. Buy only if a separate Grade-A/B goal alert or tradeable radar alert follows.",
+        ]
+        for row in rows:
+            lines.append(
+                (
+                    f"`{row['Symbol']}` {float(row['ChangePct']):+.1f}% @ ₹{self._fmt_price(row['PriceNow'])} | "
+                    f"vol `{float(row['VolumeVsAvg']):.1f}x` | B/S `{float(row['BuyerSellerRatio']):.1f}x` | "
+                    f"pb `{float(row['PullbackPct']):.1f}%` | Q `{float(row['SignalStrengthPct']):.0f}` | "
+                    f"{row['Status']}"
+                )
+            )
+        return "\n".join(lines)
+
+    def _send_top_gainer_visibility(self, current_simple_df: pd.DataFrame) -> None:
+        """Send periodic top-gainer visibility separately from buy alerts and radar caps."""
+        if "discord" not in self.alert_channels:
+            return
+        if not getattr(self, "top_gainer_visibility_enabled", True):
+            return
+        if not self._is_regular_market_hours():
+            return
+        interval_minutes = float(getattr(self, "top_gainer_visibility_minutes", 15.0) or 0.0)
+        if interval_minutes <= 0:
+            return
+        now_ts = time.time()
+        if now_ts - float(getattr(self, "_last_top_gainer_visibility_ts", 0.0) or 0.0) < interval_minutes * 60:
+            return
+        message = self._build_top_gainer_visibility_message(current_simple_df)
+        if not message:
+            return
+        self._send_discord_alert(message)
+        self._last_top_gainer_visibility_ts = now_ts
 
     def _is_regular_market_hours(self) -> bool:
         """Only send live monitor alerts during NSE regular market hours."""
