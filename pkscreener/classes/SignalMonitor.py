@@ -56,7 +56,7 @@ class SignalMonitorRunner:
     TOP_GAINER_RADAR_MAX_PCT = float(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_MAX_PCT", "12.0") or 12.0)
     TOP_GAINER_RADAR_EARLY_MAX_PCT = float(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_EARLY_MAX_PCT", "3.5") or 3.5)
     TOP_GAINER_RADAR_MAX_PULLBACK_PCT = float(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_MAX_PULLBACK_PCT", "1.2") or 1.2)
-    TOP_GAINER_RADAR_HOT_MAX_PULLBACK_PCT = float(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_HOT_MAX_PULLBACK_PCT", "0.8") or 0.8)
+    TOP_GAINER_RADAR_HOT_MAX_PULLBACK_PCT = float(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_HOT_MAX_PULLBACK_PCT", "1.8") or 1.8)
     TOP_GAINER_RADAR_MAX_RSI = float(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_MAX_RSI", "78") or 78)
     TOP_GAINER_RADAR_MAX_PER_CYCLE = int(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_MAX_PER_CYCLE", "3") or 3)
     REPEAT_BUY_ALERT_SECONDS = int(os.environ.get("SIGNALMONITOR_REPEAT_BUY_ALERT_SECONDS", "60") or 60)
@@ -2318,14 +2318,14 @@ class SignalMonitorRunner:
             radar_strength_floor = min(float(getattr(self, "radar_min_strength", 38.0) or 38.0), 32.0)
             min_volume = max(
                 float(getattr(self, "radar_min_volume_ratio", 1.0) or 1.0),
-                1.5 if is_hot_gainer else 1.0,
+                1.0 if is_hot_gainer else 1.0,
             )
             min_bs = max(
                 float(getattr(self, "radar_min_bs_ratio", 1.2) or 1.2),
-                1.3 if is_hot_gainer else 1.0,
+                1.2 if is_hot_gainer else 1.0,
             )
             live_pressure_override = (
-                bs_ratio >= (2.5 if is_hot_gainer else 1.8)
+                bs_ratio >= (1.5 if is_hot_gainer else 1.8)
                 and volume_ratio >= (0.20 if is_hot_gainer else 0.35)
             )
             if (
@@ -2868,22 +2868,22 @@ class SignalMonitorRunner:
                 getattr(
                     self,
                     "TOP_GAINER_RADAR_HOT_MAX_PULLBACK_PCT" if is_hot_gainer else "TOP_GAINER_RADAR_MAX_PULLBACK_PCT",
-                    0.8 if is_hot_gainer else 1.2,
+                    1.8 if is_hot_gainer else 1.2,
                 )
-                or (0.8 if is_hot_gainer else 1.2)
+                or (1.8 if is_hot_gainer else 1.2)
             )
             max_rsi = float(getattr(self, "TOP_GAINER_RADAR_MAX_RSI", 78.0) or 78.0)
             radar_strength_floor = min(float(getattr(self, "radar_min_strength", 38.0) or 38.0), 32.0)
             min_volume = max(
                 float(getattr(self, "radar_min_volume_ratio", 1.0) or 1.0),
-                1.5 if is_hot_gainer else 1.0,
+                1.0 if is_hot_gainer else 1.0,
             )
             min_bs = max(
                 float(getattr(self, "radar_min_bs_ratio", 1.2) or 1.2),
-                1.3 if is_hot_gainer else 1.0,
+                1.2 if is_hot_gainer else 1.0,
             )
             live_pressure_override = (
-                bs_ratio >= (2.5 if is_hot_gainer else 1.8)
+                bs_ratio >= (1.5 if is_hot_gainer else 1.8)
                 and volume_ratio >= (0.20 if is_hot_gainer else 0.35)
             )
 
@@ -2948,13 +2948,6 @@ class SignalMonitorRunner:
             if has_bearish_scanner_text and not (volume_ratio >= min_volume * 1.5 and bs_ratio >= min_bs * 1.2 and pullback <= max_pullback * 0.75):
                 audit("reject", "bearish scanner text without strong live confirmation")
                 continue
-
-            week52 = self._to_float(rec.get("Week52High"))
-            if week52 and week52 > 0 and price_now < week52:
-                room_to_high = (week52 - price_now) / price_now * 100.0
-                if room_to_high < 2.0:
-                    audit("reject", "too close to 52-week high")
-                    continue
 
             budget_amount = getattr(self, "budget_amount", None)
             suggested_qty = int(budget_amount // price_now) if budget_amount and price_now > 0 else int(self._to_float(rec.get("Suggested Qty")))
