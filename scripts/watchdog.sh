@@ -14,14 +14,72 @@ LOG_DIR="$REPO/results/Data"
 mkdir -p "$LOG_DIR"
 LOG="$LOG_DIR/trade_watchdog.log"
 WEBHOOK=$(grep DISCORD_WEBHOOK_URL $REPO/.env.dev 2>/dev/null | cut -d= -f2- || echo '')
+DISCORD_OUTBOX_DIR="$LOG_DIR/discord_outbox"
 DISK_STATE_STAMP="$LOG_DIR/trade_disk_guard_state"
 DISK_WARN_GB=$(grep '^TRADE_DISK_WARN_GB=' "$REPO/.env.dev" 2>/dev/null | tail -1 | cut -d= -f2- || echo '8')
 DISK_CRITICAL_GB=$(grep '^TRADE_DISK_CRITICAL_GB=' "$REPO/.env.dev" 2>/dev/null | tail -1 | cut -d= -f2- || echo '4')
 DISK_GUARD_STOPPED=0
 
 send_discord() {
-    [ -z "$WEBHOOK" ] && return
-    curl -s -X POST "$WEBHOOK"          -H 'Content-Type: application/json'          -d "{\"content\": \"$1\"}" > /dev/null 2>&1 || true
+    local message="$1"
+    mkdir -p "$DISCORD_OUTBOX_DIR"
+    if [ -z "$WEBHOOK" ]; then
+        MESSAGE="$message" STATUS="skipped_no_webhook" HTTP_STATUS="0" OUTBOX_DIR="$DISCORD_OUTBOX_DIR" "$PYTHON" - <<'PY' || true
+import json
+import os
+import uuid
+from datetime import datetime
+sent_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+row = {
+    "id": uuid.uuid4().hex[:12],
+    "sent_at": sent_at,
+    "source": "watchdog",
+    "universe": "all",
+    "status": os.environ.get("STATUS", ""),
+    "http_status": int(os.environ.get("HTTP_STATUS", "0") or 0),
+    "error": "",
+    "message_length": len(os.environ.get("MESSAGE", "")),
+    "message": os.environ.get("MESSAGE", ""),
+}
+with open(os.path.join(os.environ["OUTBOX_DIR"], f"discord_outbox_{sent_at[:10]}.jsonl"), "a", encoding="utf-8") as handle:
+    handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+PY
+        return
+    fi
+    local payload
+    payload=$(MESSAGE="$message" "$PYTHON" - <<'PY'
+import json
+import os
+print(json.dumps({"content": os.environ.get("MESSAGE", "")[:1900]}, ensure_ascii=False))
+PY
+    )
+    local http_status
+    http_status=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$WEBHOOK" -H 'Content-Type: application/json' -d "$payload" 2>/dev/null || echo "0")
+    local status="failed_http"
+    case "$http_status" in
+        2*) status="sent" ;;
+        0|000) status="failed_exception" ;;
+    esac
+    MESSAGE="$message" STATUS="$status" HTTP_STATUS="$http_status" OUTBOX_DIR="$DISCORD_OUTBOX_DIR" "$PYTHON" - <<'PY' || true
+import json
+import os
+import uuid
+from datetime import datetime
+sent_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+row = {
+    "id": uuid.uuid4().hex[:12],
+    "sent_at": sent_at,
+    "source": "watchdog",
+    "universe": "all",
+    "status": os.environ.get("STATUS", ""),
+    "http_status": int(os.environ.get("HTTP_STATUS", "0") or 0),
+    "error": "",
+    "message_length": len(os.environ.get("MESSAGE", "")),
+    "message": os.environ.get("MESSAGE", ""),
+}
+with open(os.path.join(os.environ["OUTBOX_DIR"], f"discord_outbox_{sent_at[:10]}.jsonl"), "a", encoding="utf-8") as handle:
+    handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+PY
 }
 
 has_systemd_service() {

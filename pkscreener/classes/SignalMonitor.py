@@ -4610,8 +4610,41 @@ class SignalMonitorRunner:
         except Exception as exc:
             default_logger().debug(f"Telegram alert failed: {exc}", exc_info=True)
 
+    def _journal_discord_outbox(
+        self,
+        message: str,
+        *,
+        status: str,
+        http_status: int = 0,
+        error: str = "",
+    ) -> None:
+        """Persist every Discord webhook attempt for full alert audit."""
+        try:
+            sent_at = PKDateUtilities.currentDateTime().strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            sent_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        try:
+            outbox_dir = Path(self.output_dir) / "discord_outbox"
+            outbox_dir.mkdir(parents=True, exist_ok=True)
+            path = outbox_dir / f"discord_outbox_{sent_at[:10]}.jsonl"
+            row = {
+                "id": uuid.uuid4().hex[:12],
+                "sent_at": sent_at,
+                "source": self._alert_source_label(),
+                "universe": str(getattr(self, "universe", "") or ""),
+                "status": status,
+                "http_status": int(http_status or 0),
+                "error": str(error or "")[:500],
+                "message_length": len(str(message or "")),
+                "message": str(message or ""),
+            }
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+        except Exception as exc:
+            default_logger().debug(f"Could not journal Discord outbox: {exc}", exc_info=True)
+
     def _send_discord_alert(self, message: str) -> None:
-        """Send a Discord webhook alert when configured."""
+        """Send a Discord webhook alert when configured and journal the attempt."""
         webhook_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
         if not webhook_url:
             try:
@@ -4626,15 +4659,31 @@ class SignalMonitorRunner:
             OutputControls().printOutput(
                 "  [+] Discord alerts skipped because DISCORD_WEBHOOK_URL is not configured."
             )
+            self._journal_discord_outbox(message, status="skipped_no_webhook")
             return
 
         try:
-            requests.post(
+            response = requests.post(
                 webhook_url,
                 json={"content": message[:1900]},
                 timeout=10,
             )
+            ok = 200 <= int(response.status_code) < 300
+            self._journal_discord_outbox(
+                message,
+                status="sent" if ok else "failed_http",
+                http_status=int(response.status_code),
+                error="" if ok else str(response.text or "")[:500],
+            )
+            if not ok:
+                OutputControls().printOutput(
+                    f"  [+] Discord alert failed with HTTP {response.status_code}."
+                )
+                default_logger().debug(
+                    f"Discord alert failed with HTTP {response.status_code}: {response.text[:300]}"
+                )
         except Exception as exc:
+            self._journal_discord_outbox(message, status="failed_exception", error=str(exc))
             default_logger().debug(f"Discord alert failed: {exc}", exc_info=True)
 
     def _normalize_alert_channels(self, value: str) -> Set[str]:

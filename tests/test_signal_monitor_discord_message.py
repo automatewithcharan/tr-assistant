@@ -1,6 +1,8 @@
 import pandas as pd
 import tempfile
+import json
 from datetime import datetime, timedelta
+from pathlib import Path
 from types import SimpleNamespace
 
 import pkscreener.classes.SignalMonitor as signal_monitor_module
@@ -83,6 +85,21 @@ def test_discord_message_prioritizes_fresh_buy_now_over_anomaly():
     )
 
     assert message.index("`WELCORP`") < message.index("`AEROFLEX`")
+
+
+def test_discord_outbox_journals_every_message(monkeypatch):
+    monkeypatch.setenv("SIGNALMONITOR_ALERT_SOURCE", "intraday-goal-live")
+    runner = _make_runner()
+
+    runner._journal_discord_outbox("hello **discord**", status="sent", http_status=204)
+
+    outbox = list(Path(runner.output_dir).glob("discord_outbox/discord_outbox_*.jsonl"))
+    assert len(outbox) == 1
+    row = json.loads(outbox[0].read_text().strip())
+    assert row["source"] == "intraday-goal-live"
+    assert row["status"] == "sent"
+    assert row["http_status"] == 204
+    assert row["message"] == "hello **discord**"
 
 
 def test_discord_message_shows_current_buy_board_when_fresh_alert_is_anomaly_only():

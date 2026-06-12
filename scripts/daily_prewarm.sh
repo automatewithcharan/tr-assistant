@@ -12,10 +12,58 @@ if [ ! -x "$PYTHON" ]; then
 fi
 LOG=/tmp/daily_prewarm.log
 WEBHOOK=$(grep DISCORD_WEBHOOK_URL $REPO/.env.dev 2>/dev/null | cut -d= -f2- || echo '')
+DISCORD_OUTBOX_DIR="$REPO/results/Data/discord_outbox"
+
+journal_discord() {
+    mkdir -p "$DISCORD_OUTBOX_DIR"
+    local message="$1"
+    local status="$2"
+    local http_status="${3:-0}"
+    MESSAGE="$message" STATUS="$status" HTTP_STATUS="$http_status" OUTBOX_DIR="$DISCORD_OUTBOX_DIR" "$PYTHON" - <<'PY' || true
+import json
+import os
+import uuid
+from datetime import datetime
+
+sent_at = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+row = {
+    "id": uuid.uuid4().hex[:12],
+    "sent_at": sent_at,
+    "source": "daily_prewarm",
+    "universe": "all",
+    "status": os.environ.get("STATUS", ""),
+    "http_status": int(os.environ.get("HTTP_STATUS", "0") or 0),
+    "error": "",
+    "message_length": len(os.environ.get("MESSAGE", "")),
+    "message": os.environ.get("MESSAGE", ""),
+}
+path = os.path.join(os.environ["OUTBOX_DIR"], f"discord_outbox_{sent_at[:10]}.jsonl")
+with open(path, "a", encoding="utf-8") as handle:
+    handle.write(json.dumps(row, ensure_ascii=False) + "\n")
+PY
+}
 
 send_discord() {
-    [ -z "$WEBHOOK" ] && return
-    curl -s -X POST "$WEBHOOK"          -H 'Content-Type: application/json'          -d "{\"content\": \"$1\"}" > /dev/null 2>&1 || true
+    local message="$1"
+    if [ -z "$WEBHOOK" ]; then
+        journal_discord "$message" "skipped_no_webhook" "0"
+        return
+    fi
+    local payload
+    payload=$(MESSAGE="$message" "$PYTHON" - <<'PY'
+import json
+import os
+print(json.dumps({"content": os.environ.get("MESSAGE", "")[:1900]}, ensure_ascii=False))
+PY
+)
+    local http_status
+    http_status=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$WEBHOOK" -H 'Content-Type: application/json' -d "$payload" 2>/dev/null || echo "0")
+    local status="failed_http"
+    case "$http_status" in
+        2*) status="sent" ;;
+        0|000) status="failed_exception" ;;
+    esac
+    journal_discord "$message" "$status" "$http_status"
 }
 
 echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Prewarm: starting cache refresh for NSE+BSE" >> $LOG
