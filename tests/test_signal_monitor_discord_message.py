@@ -24,6 +24,7 @@ def _make_runner() -> SignalMonitorRunner:
     runner.goal_stop_pct = 1.0
     runner.goal_target1_pct = 1.5
     runner.goal_target2_pct = 3.0
+    runner.goal_last_entry_time = "15:30"
     runner.goal_anomaly_only = False
     runner.goal_allow_grade_c = False
     runner.goal_allow_direct_buy = True
@@ -137,6 +138,45 @@ def test_discord_message_shows_current_buy_board_when_fresh_alert_is_anomaly_onl
 
     assert "Current Buy Now board" in message
     assert message.index("`WELCORP`") < message.index("`AEROFLEX`")
+
+
+def test_discord_message_hides_current_buy_board_when_direct_buys_disabled():
+    runner = _make_runner()
+    runner.goal_anomaly_only = True
+    runner.goal_allow_direct_buy = False
+    alerts_df = pd.DataFrame(
+        [_alert("AEROFLEX", "⚡ Grade-B Anomaly", 65.0)],
+        columns=runner.ALERT_COLUMNS,
+    )
+    current_simple_df = pd.DataFrame(
+        [
+            {
+                "Stock": "WELCORP",
+                "What To Do": "Buy Now",
+                "Price Now": 100.0,
+                "Change %": 2.0,
+                "Entry Gap %": 0.2,
+                "RSI": 65.0,
+                "Buy Above": 101.0,
+                "Sell If Below": 95.0,
+                "Take Profit 1": 110.0,
+                "Take Profit 2": 120.0,
+                "Suggested Qty": 10,
+                "Signal Strength %": 42.0,
+                "Checks": "confidence ok, near trigger, liquidity ok",
+                "Why": "Price above ATR trailing stop",
+            }
+        ]
+    )
+
+    message = runner._build_discord_monitor_message(
+        alerts_df,
+        {"ScannedSymbols": 2990, "FreshAlertsThisRun": 1, "StrongBuyNowCount": 0, "BuyNowCount": 1, "SellNowCount": 0},
+        current_simple_df=current_simple_df,
+    )
+
+    assert "Current Buy Now board" not in message
+    assert "`WELCORP`" not in message
 
 
 def test_runner_continuation_surfaces_five_to_twelve_percent_runner():
@@ -403,6 +443,48 @@ def test_top_gainer_radar_allows_hot_mover_with_strong_live_confirmation(monkeyp
     assert "hot" in alerts.iloc[0]["Checks"]
 
 
+def test_top_gainer_radar_allows_high_volume_leader_even_with_weak_score(monkeypatch):
+    monkeypatch.setattr(
+        signal_monitor_module.PKDateUtilities,
+        "currentDateTime",
+        staticmethod(lambda: datetime(2026, 6, 12, 11, 18, 0)),
+    )
+    runner = _make_runner()
+    runner.actionable_runner = SimpleNamespace(
+        live_ticks={
+            "AIIL": {
+                "last_price": 514.35,
+                "change": 11.8,
+                "high": 518.00,
+                "total_buy_quantity": 410000,
+                "total_sell_quantity": 100000,
+            }
+        }
+    )
+    current_simple_df = pd.DataFrame(
+        [
+            {
+                "Stock": "AIIL",
+                "What To Do": "Watch for Buy",
+                "Price Now": 514.35,
+                "Change %": 11.8,
+                "Volume vs Avg": 9.5,
+                "Signal Strength %": 20.0,
+                "RSI": 74.0,
+                "Suggested Qty": 10,
+                "Avg Daily Value": "95.00 Cr",
+                "Why": "Live top gainer holding near high",
+                "Week52High": 700.0,
+            }
+        ]
+    )
+
+    alerts = runner._build_top_gainer_radar_alerts(current_simple_df)
+
+    assert list(alerts["Symbol"]) == ["AIIL"]
+    assert "tape override: high-volume leader" in alerts.iloc[0]["Checks"]
+
+
 def test_top_gainer_visibility_shows_rejected_market_leaders(monkeypatch):
     monkeypatch.setattr(
         signal_monitor_module.PKDateUtilities,
@@ -460,6 +542,45 @@ def test_top_gainer_visibility_shows_rejected_market_leaders(monkeypatch):
     assert "reject: weak B/S" in message
     assert "`CLEANUP` +2.4%" in message
     assert "clean watch; wait tradeable alert" in message
+
+
+def test_top_gainer_visibility_marks_high_volume_leader_as_scalp_watch(monkeypatch):
+    monkeypatch.setattr(
+        signal_monitor_module.PKDateUtilities,
+        "currentDateTime",
+        staticmethod(lambda: datetime(2026, 6, 12, 11, 18, 0)),
+    )
+    runner = _make_runner()
+    runner.actionable_runner = SimpleNamespace(
+        live_ticks={
+            "AIIL": {
+                "last_price": 514.35,
+                "change": 11.8,
+                "high": 518.00,
+                "total_buy_quantity": 410000,
+                "total_sell_quantity": 100000,
+            }
+        }
+    )
+    current_simple_df = pd.DataFrame(
+        [
+            {
+                "Stock": "AIIL",
+                "What To Do": "Watch for Buy",
+                "Price Now": 514.35,
+                "Change %": 11.8,
+                "Volume vs Avg": 9.5,
+                "Signal Strength %": 20.0,
+                "RSI": 74.0,
+                "Avg Daily Value": "95.00 Cr",
+            }
+        ]
+    )
+
+    message = runner._build_top_gainer_visibility_message(current_simple_df)
+
+    assert "`AIIL` +11.8%" in message
+    assert "scalp watch: high-volume leader" in message
 
 
 def test_engine_confirmed_watch_is_separate_from_goal_alerts(monkeypatch):
@@ -941,6 +1062,46 @@ def test_intraday_goal_mode_keeps_radar_separate_from_goal_cap(monkeypatch):
     assert "RadarMode" in out.iloc[0]["Checks"]
     assert "GoalMode" not in out.iloc[0]["Checks"]
     assert appended == [("top_gainer_radar_goal", "CUPID")]
+
+
+def test_intraday_goal_mode_blocks_fresh_entries_after_cutoff(monkeypatch):
+    monkeypatch.setattr(
+        signal_monitor_module.PKDateUtilities,
+        "currentDateTime",
+        staticmethod(lambda: datetime(2026, 6, 12, 14, 45, 0)),
+    )
+    runner = _make_runner()
+    runner.run_at = datetime(2026, 6, 12, 14, 45, 0)
+    runner.run_at_str = "2026-06-12 14:45:00"
+    runner.goal_last_entry_time = "14:30"
+    alert = _alert("DJML", "🔥 Grade-A Runner", 72.0)
+    alert["Checks"] = "GoalMode✓ 3% burst | Q:72/100 [A] | Vol 13.4x | +5.9% | B/S 1.8x | Confirm✓ held 90s"
+    alert["ChangePct"] = 5.9
+    alerts_df = pd.DataFrame([alert], columns=runner.ALERT_COLUMNS)
+
+    out = runner._apply_intraday_goal_mode(alerts_df)
+
+    assert out.empty
+    assert any("after 14:30 entry cutoff" in reason for reason in runner._last_goal_suppressed_reasons)
+
+
+def test_intraday_goal_mode_accepts_high_volume_tape_override_radar(monkeypatch):
+    runner = _make_runner()
+    monkeypatch.setattr(runner, "_load_daily_symbol_set", lambda *_args, **_kwargs: set())
+    appended = []
+    runner._append_daily_symbol = lambda name, symbol, **_kwargs: appended.append((name, symbol))
+    radar = _alert("AIIL", "📡 Top Gainer Radar", 20.0)
+    radar["PriceNow"] = 514.35
+    radar["Checks"] = "top-gainer radar +11.8% | Q:20/100 | vol 9.5x | B/S 4.1x | pullback 0.7%"
+    radar["ChangePct"] = 11.8
+    radar["RSI"] = 74.0
+    alerts_df = pd.DataFrame([radar], columns=runner.ALERT_COLUMNS)
+
+    out = runner._apply_intraday_goal_mode(alerts_df)
+
+    assert list(out["Symbol"]) == ["AIIL"]
+    assert "Top-gainer high-volume tape scalp watch" in out.iloc[0]["Why"]
+    assert appended == [("top_gainer_radar_goal", "AIIL")]
 
 
 def test_intraday_goal_mode_applies_separate_radar_cap(monkeypatch):

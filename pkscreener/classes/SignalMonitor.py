@@ -59,6 +59,9 @@ class SignalMonitorRunner:
     TOP_GAINER_RADAR_HOT_MAX_PULLBACK_PCT = float(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_HOT_MAX_PULLBACK_PCT", "1.8") or 1.8)
     TOP_GAINER_RADAR_MAX_RSI = float(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_MAX_RSI", "78") or 78)
     TOP_GAINER_RADAR_MAX_PER_CYCLE = int(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_MAX_PER_CYCLE", "3") or 3)
+    TOP_GAINER_RADAR_TAPE_OVERRIDE_VOLUME = float(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_TAPE_OVERRIDE_VOLUME", "8.0") or 8.0)
+    TOP_GAINER_RADAR_TAPE_OVERRIDE_PULLBACK = float(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_TAPE_OVERRIDE_PULLBACK", "1.5") or 1.5)
+    TOP_GAINER_RADAR_TAPE_OVERRIDE_BS = float(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_TAPE_OVERRIDE_BS", "1.2") or 1.2)
     REPEAT_BUY_ALERT_SECONDS = int(os.environ.get("SIGNALMONITOR_REPEAT_BUY_ALERT_SECONDS", "60") or 60)
     FAST_MODE = str(os.environ.get("SIGNALMONITOR_FAST_MODE", "0") or "0").strip().lower() in {"1", "true", "yes", "y", "on"}
     MARKET_OPEN_MINUTES_IST = 9 * 60 + 15
@@ -183,6 +186,7 @@ class SignalMonitorRunner:
         self.goal_stop_pct = max(0.25, float(os.environ.get("SIGNALMONITOR_GOAL_STOP_PCT", "1.0") or "1.0"))
         self.goal_target1_pct = max(0.5, float(os.environ.get("SIGNALMONITOR_GOAL_TARGET1_PCT", "1.5") or "1.5"))
         self.goal_target2_pct = max(self.goal_target1_pct, float(os.environ.get("SIGNALMONITOR_GOAL_TARGET2_PCT", "3.0") or "3.0"))
+        self.goal_last_entry_time = str(os.environ.get("SIGNALMONITOR_GOAL_LAST_ENTRY_TIME", "14:30") or "14:30").strip()
         self.goal_anomaly_only = str(os.environ.get("SIGNALMONITOR_GOAL_ANOMALY_ONLY", "0") or "0").strip().lower() in {"1", "true", "yes", "y", "on"}
         self.goal_allow_grade_c = str(os.environ.get("SIGNALMONITOR_GOAL_ALLOW_GRADE_C", "0") or "0").strip().lower() in {"1", "true", "yes", "y", "on"}
         self.goal_allow_direct_buy = str(os.environ.get("SIGNALMONITOR_GOAL_ALLOW_DIRECT_BUY", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
@@ -2180,6 +2184,7 @@ class SignalMonitorRunner:
         max_radar_per_day = max(0, int(getattr(self, "radar_max_alerts_per_day", 3) or 0))
         already_radar_symbols = self._load_daily_symbol_set("top_gainer_radar_goal", today=today)
         remaining_radar_slots = max(0, max_radar_per_day - len(already_radar_symbols))
+        after_entry_cutoff = self._is_after_goal_last_entry_time()
 
         sell_rows: List[Dict] = []
         candidates: List[Tuple[float, Dict]] = []
@@ -2195,6 +2200,9 @@ class SignalMonitorRunner:
                 continue
             if not self._is_goal_mode_buy_action(action):
                 suppressed.append(f"{symbol} ({action or 'unknown'})")
+                continue
+            if after_entry_cutoff:
+                suppressed.append(f"{symbol} (after {self.goal_last_entry_time} entry cutoff)")
                 continue
             qualifies, score, reason = self._intraday_goal_decision(row)
             if not qualifies:
@@ -2260,6 +2268,22 @@ class SignalMonitorRunner:
 
         return pd.DataFrame(sell_rows + selected_rows + selected_radar_rows, columns=self.ALERT_COLUMNS)
 
+    def _is_after_goal_last_entry_time(self) -> bool:
+        """True after the last allowed fresh intraday entry time in IST."""
+        raw = str(getattr(self, "goal_last_entry_time", "14:30") or "14:30").strip()
+        try:
+            hh, mm = raw.split(":", 1)
+            cutoff_minutes = int(hh) * 60 + int(mm)
+        except Exception:
+            cutoff_minutes = 14 * 60 + 30
+        now_dt = getattr(self, "run_at", None)
+        if now_dt is None:
+            try:
+                now_dt = PKDateUtilities.currentDateTime()
+            except Exception:
+                now_dt = datetime.now()
+        return (now_dt.hour * 60 + now_dt.minute) > cutoff_minutes
+
     @staticmethod
     def _is_radar_action(action: str) -> bool:
         return "radar" in str(action or "").strip().lower()
@@ -2310,11 +2334,13 @@ class SignalMonitorRunner:
         checks_lower = checks.lower()
         why_lower = str(row.get("Why", "") or "").lower()
         strength = self._to_float(row.get("SignalStrengthPct"))
+        price_now = self._to_float(row.get("PriceNow"))
         change_pct = self._to_float(row.get("ChangePct"))
         entry_gap_pct = self._to_float(row.get("EntryGapPct"))
         rsi = self._to_float(row.get("RSI"))
         volume_ratio = self._extract_volume_ratio(checks)
         bs_ratio = self._extract_buy_sell_ratio(checks)
+        pullback = self._extract_pullback_pct(checks)
         has_ob_confirmation = "ob b/s" in checks_lower or "ob confirms" in checks_lower
         has_sector_confirmation = "sector" in checks_lower
         has_compression = "compressed" in checks_lower
@@ -2327,15 +2353,17 @@ class SignalMonitorRunner:
         )
 
         strength = strength if strength is not None else 0.0
+        price_now = price_now if price_now is not None else 0.0
         change_pct = change_pct if change_pct is not None else 0.0
         entry_gap_pct = entry_gap_pct if entry_gap_pct is not None else 0.0
         rsi = rsi if rsi is not None else 0.0
 
+        is_radar_action = self._is_radar_action(action)
         if "ob" in action_lower and not has_ob_confirmation:
             return False, 0.0, "OB standalone blocked"
-        if change_pct > 7.0:
+        if change_pct > 7.0 and not is_radar_action:
             return False, 0.0, f"day move {change_pct:+.1f}% too stretched"
-        if rsi >= 74.0:
+        if rsi >= 74.0 and not is_radar_action:
             return False, 0.0, f"RSI {rsi:.0f} too hot"
         if self._to_float(row.get("SuggestedQty")) < 1.0:
             return False, 0.0, "quantity below one"
@@ -2416,6 +2444,18 @@ class SignalMonitorRunner:
                 bs_ratio >= (1.5 if is_hot_gainer else 1.8)
                 and volume_ratio >= (0.20 if is_hot_gainer else 0.35)
             )
+            tape_momentum_override = (
+                is_hot_gainer
+                and price_now >= 50.0
+                and volume_ratio >= float(getattr(self, "TOP_GAINER_RADAR_TAPE_OVERRIDE_VOLUME", 8.0) or 8.0)
+                and pullback <= float(getattr(self, "TOP_GAINER_RADAR_TAPE_OVERRIDE_PULLBACK", 1.5) or 1.5)
+                and (
+                    bs_ratio >= float(getattr(self, "TOP_GAINER_RADAR_TAPE_OVERRIDE_BS", 1.2) or 1.2)
+                    or volume_ratio >= float(getattr(self, "TOP_GAINER_RADAR_TAPE_OVERRIDE_VOLUME", 8.0) or 8.0) * 1.5
+                )
+            )
+            if tape_momentum_override and self.TOP_GAINER_RADAR_MIN_PCT <= change_pct <= self.TOP_GAINER_RADAR_MAX_PCT and (rsi == 0.0 or rsi < max_rsi):
+                return True, 842.0 + min(volume_ratio, 12.0) * 5.0 + bs_ratio * 4.0, "Top-gainer high-volume tape scalp watch"
             if (
                 strength >= radar_strength_floor
                 and self.TOP_GAINER_RADAR_MIN_PCT <= change_pct <= self.TOP_GAINER_RADAR_MAX_PCT
@@ -2536,6 +2576,19 @@ class SignalMonitorRunner:
                     return float(match.group(1))
                 except Exception:
                     return 0.0
+        return 0.0
+
+    @staticmethod
+    def _extract_pullback_pct(checks) -> float:
+        import re
+
+        text = str(checks or "")
+        match = re.search(r"pullback\s+([0-9]+(?:\.[0-9]+)?)%", text, flags=re.IGNORECASE)
+        if match:
+            try:
+                return float(match.group(1))
+            except Exception:
+                return 0.0
         return 0.0
 
     def _check_followthrough_and_exits(self) -> None:
@@ -2974,6 +3027,16 @@ class SignalMonitorRunner:
                 bs_ratio >= (1.5 if is_hot_gainer else 1.8)
                 and volume_ratio >= (0.20 if is_hot_gainer else 0.35)
             )
+            tape_momentum_override = (
+                is_hot_gainer
+                and price_now >= 50.0
+                and volume_ratio >= float(getattr(self, "TOP_GAINER_RADAR_TAPE_OVERRIDE_VOLUME", 8.0) or 8.0)
+                and pullback <= float(getattr(self, "TOP_GAINER_RADAR_TAPE_OVERRIDE_PULLBACK", 1.5) or 1.5)
+                and (
+                    bs_ratio >= float(getattr(self, "TOP_GAINER_RADAR_TAPE_OVERRIDE_BS", 1.2) or 1.2)
+                    or volume_ratio >= float(getattr(self, "TOP_GAINER_RADAR_TAPE_OVERRIDE_VOLUME", 8.0) or 8.0) * 1.5
+                )
+            )
 
             def audit(decision: str, reason: str) -> None:
                 audit_rows.append(
@@ -3024,13 +3087,13 @@ class SignalMonitorRunner:
                 audit("reject", "pulled back from day high")
                 continue
 
-            if volume_ratio < min_volume and not live_pressure_override:
+            if volume_ratio < min_volume and not live_pressure_override and not tape_momentum_override:
                 audit("reject", "volume below radar floor")
                 continue
-            if bs_ratio < min_bs:
+            if bs_ratio < min_bs and not tape_momentum_override:
                 audit("reject", "buyer/seller below radar floor")
                 continue
-            if strength < radar_strength_floor:
+            if strength < radar_strength_floor and not tape_momentum_override:
                 audit("reject", "strength below radar floor")
                 continue
             if has_bearish_scanner_text and not (volume_ratio >= min_volume * 1.5 and bs_ratio >= min_bs * 1.2 and pullback <= max_pullback * 0.75):
@@ -3058,6 +3121,8 @@ class SignalMonitorRunner:
                 checks.append("scanner bearish but live tape confirms")
             if live_pressure_override and volume_ratio < min_volume:
                 checks.append("B/S pressure overrides low volume")
+            if tape_momentum_override:
+                checks.append("tape override: high-volume leader")
             rows.append(
                 {
                     "When": self.run_at_str,
@@ -3083,7 +3148,7 @@ class SignalMonitorRunner:
                     ),
                 }
             )
-            audit("pass", "radar candidate passed")
+            audit("pass", "radar candidate passed" + (" via tape override" if tape_momentum_override else ""))
 
         if not rows:
             self._append_top_gainer_radar_audit(audit_rows, today=today)
@@ -3833,6 +3898,16 @@ class SignalMonitorRunner:
                 )
                 or (1.8 if is_hot_gainer else 1.2)
             )
+            tape_momentum_override = (
+                is_hot_gainer
+                and price_now >= 50.0
+                and volume_ratio >= float(getattr(self, "TOP_GAINER_RADAR_TAPE_OVERRIDE_VOLUME", 8.0) or 8.0)
+                and pullback <= float(getattr(self, "TOP_GAINER_RADAR_TAPE_OVERRIDE_PULLBACK", 1.5) or 1.5)
+                and (
+                    bs_ratio >= float(getattr(self, "TOP_GAINER_RADAR_TAPE_OVERRIDE_BS", 1.2) or 1.2)
+                    or volume_ratio >= float(getattr(self, "TOP_GAINER_RADAR_TAPE_OVERRIDE_VOLUME", 8.0) or 8.0) * 1.5
+                )
+            )
 
             status = "clean watch; wait tradeable alert"
             if price_now < 50.0:
@@ -3843,6 +3918,8 @@ class SignalMonitorRunner:
                 status = "reject: RSI hot"
             elif pullback > max_pullback:
                 status = "reject: pulled back"
+            elif tape_momentum_override:
+                status = "scalp watch: high-volume leader"
             elif bs_ratio < min_bs:
                 status = "reject: weak B/S"
             elif volume_ratio < min_volume:
@@ -4388,7 +4465,11 @@ class SignalMonitorRunner:
             not ranked_alerts.empty
             and ranked_alerts["NowAction"].astype(str).apply(self._is_direct_buy_action).any()
         )
-        if not has_fresh_direct_buy:
+        show_current_board = not (
+            getattr(self, "goal_anomaly_only", False)
+            and not getattr(self, "goal_allow_direct_buy", True)
+        )
+        if show_current_board and not has_fresh_direct_buy:
             exclude_symbols = (
                 set(alerts_df["Symbol"].astype(str).str.upper())
                 if alerts_df is not None and not alerts_df.empty and "Symbol" in alerts_df.columns
