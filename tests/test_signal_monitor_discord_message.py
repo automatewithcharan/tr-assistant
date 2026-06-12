@@ -858,6 +858,24 @@ def test_intraday_goal_mode_applies_separate_radar_cap(monkeypatch):
     assert any("daily radar slots full" in reason for reason in runner._last_goal_suppressed_reasons)
 
 
+def test_direct_buy_does_not_hide_top_gainer_radar_when_direct_disabled():
+    runner = _make_runner()
+    runner.goal_anomaly_only = True
+    runner.goal_allow_direct_buy = False
+    alerts_df = pd.DataFrame(
+        [
+            _alert("GVPIL", "Buy Now", 36.0),
+            _alert("CUPID", "⚡ Grade-B Anomaly", 68.0),
+        ],
+        columns=runner.ALERT_COLUMNS,
+    )
+
+    blocking = runner._symbols_blocking_top_gainer_radar(alerts_df)
+
+    assert "GVPIL" not in blocking
+    assert "CUPID" in blocking
+
+
 def test_discord_send_chunks_goal_alerts_that_do_not_fit_one_message():
     runner = _make_runner()
     sent_messages = []

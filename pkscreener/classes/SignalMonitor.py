@@ -367,7 +367,7 @@ class SignalMonitorRunner:
                 alerts_df = pd.concat([alerts_df, early_breakout_alerts_df], ignore_index=True)
         top_gainer_radar_df = self._build_top_gainer_radar_alerts(merged_simple_df)
         if not top_gainer_radar_df.empty:
-            already_alerted = set(alerts_df["Symbol"].astype(str).str.upper()) if not alerts_df.empty else set()
+            already_alerted = self._symbols_blocking_top_gainer_radar(alerts_df)
             if already_alerted:
                 top_gainer_radar_df = top_gainer_radar_df[
                     ~top_gainer_radar_df["Symbol"].astype(str).str.upper().isin(already_alerted)
@@ -2206,6 +2206,28 @@ class SignalMonitorRunner:
     @staticmethod
     def _is_radar_action(action: str) -> bool:
         return "radar" in str(action or "").strip().lower()
+
+    def _symbols_blocking_top_gainer_radar(self, alerts_df: pd.DataFrame) -> Set[str]:
+        """Do not let direct Buy Now rows hide the separate radar-watch lane."""
+        if alerts_df is None or alerts_df.empty or "Symbol" not in alerts_df.columns:
+            return set()
+        if not (getattr(self, "goal_anomaly_only", False) and not getattr(self, "goal_allow_direct_buy", True)):
+            return set(alerts_df["Symbol"].astype(str).str.upper())
+
+        blocking = set()
+        for row in alerts_df.to_dict(orient="records"):
+            action = str(row.get("NowAction", "") or "").strip()
+            lower = action.lower()
+            symbol = str(row.get("Symbol", "") or "").strip().upper()
+            if not symbol:
+                continue
+            direct_only = action in {"Strong Buy Now", "Buy Now", "Momentum Buy"}
+            if direct_only:
+                continue
+            if "engine confirmed watch" in lower:
+                continue
+            blocking.add(symbol)
+        return blocking
 
     @staticmethod
     def _is_goal_mode_buy_action(action: str) -> bool:
