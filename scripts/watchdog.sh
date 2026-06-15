@@ -108,6 +108,16 @@ restart_assistant() {
     fi
 }
 
+assistant_is_running() {
+    local status supervisor_pid
+    status=$($PYTHON -m pkscreener.pkscreenercli --assistantstatus 2>/dev/null | head -20)
+    echo "$status" | grep -q 'Running now: yes' || return 1
+    supervisor_pid=$(echo "$status" | grep 'Supervisor PID' | grep -o '[0-9]*' | head -1)
+    [ -n "$supervisor_pid" ] || return 1
+    kill -0 "$supervisor_pid" 2>/dev/null || return 1
+    return 0
+}
+
 get_free_kb() {
     df -Pk "$REPO" 2>/dev/null | awk 'NR==2 {print $4}'
 }
@@ -192,12 +202,16 @@ sleep 3
 
 # Restart using the systemd service when available so the detached supervisor
 # is owned by the persistent unit rather than the short-lived watchdog timer.
-restart_assistant
+if restart_assistant; then
+    sleep 8
+else
+    echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Watchdog: restart command failed" >> $LOG
+fi
 
-if [ $? -eq 0 ]; then
+if assistant_is_running; then
     echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Watchdog: restart succeeded" >> $LOG
     send_discord "⚠️ **Trade Assistant restarted** at $(TZ='Asia/Kolkata' date +'%H:%M') IST — was down ($REASON)"
 else
-    echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Watchdog: restart FAILED" >> $LOG
-    send_discord "🚨 **Trade Assistant restart FAILED** at $(TZ='Asia/Kolkata' date +'%H:%M') IST — manual action needed"
+    echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Watchdog: restart FAILED verification" >> $LOG
+    send_discord "🚨 **Trade Assistant restart FAILED** at $(TZ='Asia/Kolkata' date +'%H:%M') IST — Kite/session or service issue needs manual action"
 fi

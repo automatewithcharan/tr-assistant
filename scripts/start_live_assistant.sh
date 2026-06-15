@@ -27,6 +27,27 @@ if [[ ! -x "$PYTHON" ]]; then
     exit 1
 fi
 
+echo "Checking Kite session before live start..."
+"$PYTHON" - <<'PY'
+import sys
+
+from pkscreener.classes.KiteConnectManager import KiteConnectSessionManager
+
+try:
+    report = KiteConnectSessionManager().ensure_fresh_session()
+except Exception as exc:
+    print(f"ERROR: Kite session preflight failed: {exc}")
+    print("ACTION: refresh Kite login manually with --kiteconnectloginurl and --kiteconnectsession, then restart trade-assistant.service.")
+    sys.exit(1)
+
+if report.get("error"):
+    print(f"ERROR: Kite session preflight failed: {report['error']}")
+    print("ACTION: refresh Kite login manually with --kiteconnectloginurl and --kiteconnectsession, then restart trade-assistant.service.")
+    sys.exit(1)
+
+print("Kite session preflight OK.")
+PY
+
 # Ensure indices exist
 bash "$REPO_ROOT/scripts/ensure_required_indices.sh" || true
 
