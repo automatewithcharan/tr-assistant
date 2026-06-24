@@ -85,8 +85,10 @@ if [ -f "$SESSION_FILE" ]; then
         echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Prewarm: Kite session is ${AGE_HOURS}h old — auto-login needed" >> $LOG
         send_discord "⚠️ **Kite session expired** (${AGE_HOURS}h old) — trying auto-login before prewarm."
         TERM=xterm $PYTHON -m pkscreener.pkscreenercli --kiteautologin >> $LOG 2>&1 || {
-            echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Prewarm: auto-login failed; continuing with existing session" >> $LOG
-            send_discord "🚨 **Kite auto-login failed before prewarm** — scanner may have weak anomaly coverage."
+            echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Prewarm: auto-login failed; aborting force-prewarm to protect existing cache" >> $LOG
+            send_discord "🚨 **Kite auto-login failed before prewarm** — skipping force-prewarm to protect existing cache from being deleted."
+            cp "$LOG" "$REPO/results/Data/daily_prewarm.log" 2>/dev/null || true
+            exit 1
         }
     fi
 fi
