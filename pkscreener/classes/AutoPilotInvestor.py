@@ -8010,9 +8010,18 @@ class AutoPilotInvestor:
             except Exception as exc:
                 self._log(f"[paper-trader] failed to record {getattr(c,'symbol','?')}: {exc}")
 
-        # Real-time Discord push for the blind-buy picks just recorded. Wrapped
-        # so a notification failure can never break the alert/ingest path.
-        if recorded:
+        # Keep blind-buy picks as paper-trader data by default. These candidates
+        # can be swing/next-open oriented and may use a price that is stale by
+        # the time Discord is read, so do not mix them into the live intraday
+        # feed unless explicitly enabled.
+        send_paper_alerts = str(os.environ.get("AUTOPILOT_BLIND_BUY_DISCORD", "0") or "0").strip().lower() in {
+            "1",
+            "true",
+            "yes",
+            "y",
+            "on",
+        }
+        if recorded and send_paper_alerts:
             try:
                 lines = ["\U0001f9ed **BLIND-BUY ALERT** (paper — buys next open, holds ~10d)"]
                 for r in recorded:

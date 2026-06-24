@@ -21,7 +21,11 @@ class HealthMonitor:
         self.workers = {
             "supervisor": {"name": "Supervisor", "port": None, "required": True},
             "ticker": {"name": "KiteTickerStream", "required": True},
-            "monitor": {"name": "SignalMonitor", "required": True},
+            "monitor": {
+                "name": "SignalMonitor",
+                "required": str(os.environ.get("ASSISTANT_DISABLE_SIGNALMONITOR", "0") or "0").strip().lower()
+                not in {"1", "true", "yes", "y", "on"},
+            },
             "discord": {"name": "DiscordTradeBot", "required": True},
             "autopilot": {"name": "AutoPilot", "required": True},
         }
@@ -81,16 +85,16 @@ class HealthMonitor:
             return [f"Could not read process list: {e}"], "❌ Process check failed"
 
         expected_patterns = {
-            "supervisor": "--assistantinternalsupervisor",
-            "ticker": "--kitetickerstream",
-            "monitor": "--signalmonitor",
-            "discord": "--discordtradebot",
-            "autopilot": "--autopilot",
+            "supervisor": ("--assistantinternalsupervisor", "--assistantstart"),
+            "ticker": ("--kitetickerstream",),
+            "monitor": ("--signalmonitor",),
+            "discord": ("--discordtradebot",),
+            "autopilot": ("--autopilot",),
         }
 
         found_workers = set()
-        for worker_key, pattern in expected_patterns.items():
-            if pattern in ps_output:
+        for worker_key, patterns in expected_patterns.items():
+            if any(pattern in ps_output for pattern in patterns):
                 found_workers.add(worker_key)
                 details_lines.append(f"✅ {self.workers[worker_key]['name']}")
             else:
@@ -106,28 +110,28 @@ class HealthMonitor:
         issues = []
         details_lines = []
         now = time.time()
-        max_age_sec = 120  # 2 minutes max without log update
+        max_age_sec = 300  # Logs may be quiet while data files stay fresh.
 
         expected_logs = {
-            "supervisor": f"session_{self.session_id}_supervisor.log",
             "ticker": f"session_{self.session_id}_ticker.log",
             "monitor": f"session_{self.session_id}_monitor.log",
             "discord": f"session_{self.session_id}_discord.log",
             "autopilot": f"session_{self.session_id}_autopilot.log",
         }
+        optional_quiet_logs = {"ticker", "discord"}
 
         for worker_key, log_name in expected_logs.items():
             log_path = os.path.join(self.logs_dir, log_name)
             if os.path.exists(log_path):
                 mod_time = os.path.getmtime(log_path)
                 age = now - mod_time
-                if age < max_age_sec:
+                if age < max_age_sec or worker_key in optional_quiet_logs:
                     details_lines.append(f"✅ {log_name} ({int(age)}s ago)")
                 else:
                     issues.append(f"{self.workers[worker_key]['name']} log stale ({int(age)}s)")
                     details_lines.append(f"⚠️ {log_name} ({int(age)}s ago)")
             else:
-                if self.workers[worker_key]["required"]:
+                if self.workers[worker_key]["required"] and worker_key not in optional_quiet_logs:
                     issues.append(f"{self.workers[worker_key]['name']} log missing")
                 details_lines.append(f"❌ {log_name} missing")
 
@@ -158,8 +162,20 @@ class HealthMonitor:
             checks.append("❌ Ticks missing")
 
         # Check signal monitor state
-        signal_path = os.path.join(
-            self.data_dir, "signalmonitor_allstocks_signals_simple_latest.csv"
+        if not self.workers.get("monitor", {}).get("required", True):
+            checks.append("ℹ️ Signals owned by intraday-goal.service")
+            status = " | ".join(checks)
+            return issues, status
+
+        signal_candidates = [
+            os.path.join(self.data_dir, "signalmonitor_all_signals_simple_latest.csv"),
+            os.path.join(self.data_dir, "signalmonitor_all_signals_latest.csv"),
+            os.path.join(self.data_dir, "signalmonitor_allstocks_signals_simple_latest.csv"),
+        ]
+        signal_path = max(
+            (path for path in signal_candidates if os.path.exists(path)),
+            key=os.path.getmtime,
+            default="",
         )
         if os.path.exists(signal_path):
             age = now - os.path.getmtime(signal_path)

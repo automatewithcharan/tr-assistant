@@ -229,7 +229,16 @@ class KiteConnectSessionManager:
             data={"user_id": self.user_id, "password": self.password},
             timeout=30,
         )
-        resp.raise_for_status()
+        if resp.status_code >= 400:
+            message = ""
+            try:
+                payload = resp.json()
+                message = str(payload.get("message") or payload.get("error_type") or "")
+            except Exception:
+                message = resp.text[:200]
+            raise RuntimeError(
+                f"Kite login step-1 failed ({resp.status_code}): {message or 'no details'}"
+            )
         login_data = resp.json().get("data", {})
         request_id = login_data.get("request_id", "")
         if not request_id:
