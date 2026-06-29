@@ -197,7 +197,10 @@ class TrackedPosition:
                  target1: float = 0.0, target2: float = 0.0,
                  blind_score: float = 0.0, reasons: str = "",
                  product_type: str = "MIS", holding_horizon: str = "intraday",
-                 max_hold_days_override: int = 0):
+                 max_hold_days_override: int = 0,
+                 bot_owned: bool = False,
+                 auto_exit_allowed: bool = False,
+                 strategy: str = ""):
         self.symbol = symbol
         self.qty = qty
         self.buy_price = buy_price
@@ -210,6 +213,9 @@ class TrackedPosition:
         self.product_type = str(product_type or "MIS").upper()
         self.holding_horizon = str(holding_horizon or ("intraday" if str(product_type or "MIS").upper() == "MIS" else "swing"))
         self.max_hold_days_override = int(max_hold_days_override or 0)
+        self.bot_owned = bool(bot_owned)
+        self.auto_exit_allowed = bool(auto_exit_allowed)
+        self.strategy = str(strategy or "")
         self.buy_time = _ist_now().isoformat(timespec="seconds")
         self.highest_price = buy_price
         self.trailing_stop = 0.0
@@ -267,6 +273,9 @@ class TrackedPosition:
         pos.swing_stage = str(d.get("swing_stage", "NEW") or "NEW")
         pos.initial_qty = int(d.get("initial_qty", pos.qty) or pos.qty)
         pos.gtt_needs_reissue = bool(d.get("gtt_needs_reissue", False))
+        pos.bot_owned = bool(d.get("bot_owned", False))
+        pos.auto_exit_allowed = bool(d.get("auto_exit_allowed", False))
+        pos.strategy = str(d.get("strategy", "") or "")
         return pos
 
     @property
@@ -893,6 +902,9 @@ class KiteOrderManager:
         product_type: str = "",
         holding_horizon: str = "",
         max_hold_days: int = 0,
+        bot_owned: bool = False,
+        auto_exit_allowed: bool = False,
+        strategy: str = "",
         error_message: str = "",
         retry_minutes: int = 20,
     ) -> None:
@@ -909,6 +921,9 @@ class KiteOrderManager:
             "product_type": str(product_type or ""),
             "holding_horizon": str(holding_horizon or ""),
             "max_hold_days": int(max_hold_days or 0),
+            "bot_owned": bool(bot_owned),
+            "auto_exit_allowed": bool(auto_exit_allowed),
+            "strategy": str(strategy or ""),
             "last_error": str(error_message or ""),
             "queued_at": now.isoformat(timespec="seconds"),
             "retry_after": now.isoformat(timespec="seconds"),
@@ -974,6 +989,9 @@ class KiteOrderManager:
                 product_type_override=str(item.get("product_type", "") or ""),
                 holding_horizon=str(item.get("holding_horizon", "") or ""),
                 max_hold_days_override=int(item.get("max_hold_days", 0) or 0),
+                bot_owned=bool(item.get("bot_owned", False)),
+                auto_exit_allowed=bool(item.get("auto_exit_allowed", False)),
+                strategy=str(item.get("strategy", "") or ""),
             )
             if result.success:
                 self._drop_pending_buy(symbol)
@@ -1087,6 +1105,9 @@ class KiteOrderManager:
         product_type_override: str = "",
         holding_horizon: str = "",
         max_hold_days_override: int = 0,
+        bot_owned: bool = False,
+        auto_exit_allowed: bool = False,
+        strategy: str = "",
     ) -> OrderResult:
         """Place a buy order on NSE via Kite Connect.
 
@@ -1412,6 +1433,9 @@ class KiteOrderManager:
                 product_type=product_type_override or self.product_type,
                 holding_horizon=holding_horizon,
                 max_hold_days_override=max_hold_days_override,
+                bot_owned=bot_owned,
+                auto_exit_allowed=auto_exit_allowed,
+                strategy=strategy,
             )
             return result
 
@@ -1477,6 +1501,9 @@ class KiteOrderManager:
                     product_type=order_product,
                     holding_horizon=holding_horizon,
                     max_hold_days_override=max_hold_days_override,
+                    bot_owned=bot_owned,
+                    auto_exit_allowed=auto_exit_allowed,
+                    strategy=strategy,
                 )
                 self._daily_order_count += 1
                 return result
@@ -1549,8 +1576,25 @@ class KiteOrderManager:
 
         pos = self._positions[symbol]
         sell_qty = qty if qty > 0 else pos.qty
+        manual_reason = str(reason or "").lower() in {SellReason.MANUAL, "manual_sell"}
+        if not manual_reason and not bool(getattr(pos, "auto_exit_allowed", False)):
+            return self._return_logged_result(
+                OrderResult(
+                    False,
+                    symbol=symbol,
+                    side="SELL",
+                    qty=sell_qty,
+                    price=price,
+                    status="SKIPPED",
+                    message=(
+                        "Auto-sell blocked: tracked position is not marked "
+                        "auto_exit_allowed/bot-owned. Use a manual sell command "
+                        "for non-bot holdings."
+                    ),
+                )
+            )
         if str(getattr(pos, "sell_block_reason", "") or "") == "CDSL_AUTH_REQUIRED":
-            if str(reason or "").lower() == SellReason.MANUAL or str(reason or "").lower() == "manual_sell":
+            if manual_reason:
                 self.clear_sell_block(symbol)
             else:
                 return self._return_logged_result(
@@ -1568,7 +1612,7 @@ class KiteOrderManager:
                     )
                 )
         if str(getattr(pos, "sell_block_reason", "") or "") == "TEMPORARY_MARKET_BLOCK":
-            if str(reason or "").lower() in {SellReason.MANUAL, "manual_sell"}:
+            if manual_reason:
                 self.clear_sell_block(symbol)
             else:
                 return self._return_logged_result(
@@ -1760,7 +1804,10 @@ class KiteOrderManager:
     def _record_buy(self, result: OrderResult, stop_loss: float,
                     target1: float, target2: float, blind_score: float, reasons: str,
                     product_type: str = "", holding_horizon: str = "",
-                    max_hold_days_override: int = 0):
+                    max_hold_days_override: int = 0,
+                    bot_owned: bool = False,
+                    auto_exit_allowed: bool = False,
+                    strategy: str = ""):
         with self._lock:
             pos = TrackedPosition(
                 symbol=result.symbol, qty=result.qty,
@@ -1770,6 +1817,9 @@ class KiteOrderManager:
                 product_type=product_type or self.product_type,
                 holding_horizon=holding_horizon or ("intraday" if (product_type or self.product_type) == "MIS" else "swing"),
                 max_hold_days_override=max_hold_days_override,
+                bot_owned=bot_owned,
+                auto_exit_allowed=auto_exit_allowed,
+                strategy=strategy,
             )
             self._positions[result.symbol] = pos
             self._save_positions()
@@ -1845,6 +1895,8 @@ class KiteOrderManager:
 
         for sym, pos in list(self._positions.items()):
             if pos.status != "open":
+                continue
+            if not bool(getattr(pos, "auto_exit_allowed", False)):
                 continue
             if str(getattr(pos, "sell_block_reason", "") or "") in {"CDSL_AUTH_REQUIRED", "TEMPORARY_MARKET_BLOCK"}:
                 continue
@@ -2090,6 +2142,9 @@ class KiteOrderManager:
         product_type: str = "",
         holding_horizon: str = "",
         max_hold_days: int = 0,
+        bot_owned: bool = False,
+        auto_exit_allowed: bool = False,
+        strategy: str = "",
     ) -> OrderResult:
         """Auto-buy a stock from a blind-buy candidate alert.
 
@@ -2171,6 +2226,9 @@ class KiteOrderManager:
             product_type_override=product_type,
             holding_horizon=holding_horizon,
             max_hold_days_override=max_hold_days,
+            bot_owned=bot_owned,
+            auto_exit_allowed=auto_exit_allowed,
+            strategy=strategy,
         )
         if (not result.success) and self._looks_like_funds_shortage(result.message):
             available = self._extract_available_funds()
@@ -2187,6 +2245,9 @@ class KiteOrderManager:
                 product_type=product_type,
                 holding_horizon=holding_horizon,
                 max_hold_days=max_hold_days,
+                bot_owned=bot_owned,
+                auto_exit_allowed=auto_exit_allowed,
+                strategy=strategy,
                 error_message=result.message,
             )
             result.status = "FUNDS_SHORT"

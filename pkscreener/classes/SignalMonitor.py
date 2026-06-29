@@ -15,7 +15,7 @@ import time
 import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import pandas as pd
 import requests
@@ -186,6 +186,19 @@ class SignalMonitorRunner:
         self.radar_min_volume_ratio = max(0.0, float(os.environ.get("SIGNALMONITOR_RADAR_MIN_VOLUME_RATIO", "1.0") or "1.0"))
         self.radar_min_bs_ratio = max(0.0, float(os.environ.get("SIGNALMONITOR_RADAR_MIN_BS_RATIO", "1.2") or "1.2"))
         self.monitor_heartbeat_minutes = max(0.0, float(os.environ.get("SIGNALMONITOR_HEARTBEAT_MINUTES", "10") or "10"))
+        self.autotrade_enabled = self._env_truthy("SIGNALMONITOR_AUTOTRADE_ENABLED", "0")
+        self.autotrade_real_orders = self._env_truthy("SIGNALMONITOR_AUTOTRADE_REAL_ORDERS", "0")
+        self.autotrade_buy_enabled = self._env_truthy("KITE_AUTO_BUY", "0")
+        self.autotrade_sell_enabled = self._env_truthy("KITE_AUTO_SELL", "0")
+        self.autotrade_confirm_pct = max(0.05, float(os.environ.get("SIGNALMONITOR_AUTOTRADE_CONFIRM_PCT", "0.25") or "0.25"))
+        self.autotrade_target_pct = max(0.1, float(os.environ.get("SIGNALMONITOR_AUTOTRADE_TARGET_PCT", "0.7") or "0.7"))
+        self.autotrade_stop_pct = max(0.25, float(os.environ.get("SIGNALMONITOR_AUTOTRADE_STOP_PCT", "2.0") or "2.0"))
+        self.autotrade_entry_window_minutes = max(1.0, float(os.environ.get("SIGNALMONITOR_AUTOTRADE_ENTRY_WINDOW_MINUTES", "15") or "15"))
+        self.autotrade_max_entry_slippage_pct = max(0.0, float(os.environ.get("SIGNALMONITOR_AUTOTRADE_MAX_ENTRY_SLIPPAGE_PCT", "0.4") or "0.4"))
+        self.autotrade_strategy = str(os.environ.get("SIGNALMONITOR_AUTOTRADE_STRATEGY", "grade_b_confirmation") or "grade_b_confirmation").strip()
+        self._autotrade_state_path = os.path.join(self.output_dir, "signalmonitor_autotrade_state.json")
+        self._autotrade_candidates: Dict[str, Dict[str, Any]] = self._load_autotrade_state()
+        self._autotrade_order_manager = None
         self._last_discord_heartbeat_ts = 0.0
         self._last_goal_suppressed_reasons: List[str] = []
         self.actionable_runner = ActionableReportRunner(
@@ -415,6 +428,7 @@ class SignalMonitorRunner:
             if not ob_alerts_df.empty:
                 alerts_df = pd.concat([alerts_df, ob_alerts_df], ignore_index=True)
         alerts_df = self._apply_intraday_goal_mode(alerts_df)
+        self._run_autotrade_lane(alerts_df)
         # V2: Follow-through check + exit monitoring
         self._check_followthrough_and_exits()
         # V2: End-of-day missed opportunity analysis
@@ -3289,6 +3303,206 @@ class SignalMonitorRunner:
             inplace=True,
         )
         return momentum_df.head(50).copy()
+
+    @staticmethod
+    def _env_truthy(name: str, default: str = "0") -> bool:
+        return str(os.environ.get(name, default) or default).strip().lower() in {"1", "true", "yes", "y", "on"}
+
+    def _load_autotrade_state(self) -> Dict[str, Dict[str, Any]]:
+        try:
+            path = Path(getattr(self, "_autotrade_state_path", "") or "")
+            if not path.exists():
+                return {}
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                return {}
+            today = self._today_key()
+            candidates = payload.get("candidates", payload)
+            if not isinstance(candidates, dict):
+                return {}
+            return {
+                str(key): value
+                for key, value in candidates.items()
+                if isinstance(value, dict) and str(value.get("today", today)) == today
+            }
+        except Exception as exc:
+            default_logger().debug(f"Could not load autotrade state: {exc}", exc_info=True)
+            return {}
+
+    def _save_autotrade_state(self) -> None:
+        try:
+            path = Path(getattr(self, "_autotrade_state_path", "") or "")
+            if not path:
+                return
+            path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "updated_at": PKDateUtilities.currentDateTime().isoformat(timespec="seconds"),
+                "strategy": getattr(self, "autotrade_strategy", "grade_b_confirmation"),
+                "candidates": getattr(self, "_autotrade_candidates", {}) or {},
+            }
+            path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        except Exception as exc:
+            default_logger().debug(f"Could not save autotrade state: {exc}", exc_info=True)
+
+    def _get_autotrade_order_manager(self):
+        if self._autotrade_order_manager is None:
+            from pkscreener.classes.KiteOrderManager import KiteOrderManager
+
+            self._autotrade_order_manager = KiteOrderManager(output_dir=self.output_dir)
+        return self._autotrade_order_manager
+
+    def _run_autotrade_lane(self, alerts_df: pd.DataFrame) -> None:
+        """Optional real-order lane for the historically strongest Grade-B setup."""
+        if not getattr(self, "autotrade_enabled", False):
+            return
+        if not self.use_live_kite or not self._is_regular_market_hours():
+            return
+        try:
+            self._register_autotrade_candidates(alerts_df)
+            self._process_autotrade_entries()
+            self._process_autotrade_exits()
+        finally:
+            self._save_autotrade_state()
+
+    def _register_autotrade_candidates(self, alerts_df: pd.DataFrame) -> None:
+        if alerts_df is None or alerts_df.empty:
+            return
+        today = self._today_key()
+        now = PKDateUtilities.currentDateTime()
+        expires_ts = now.timestamp() + float(self.autotrade_entry_window_minutes) * 60.0
+        for row in alerts_df.to_dict(orient="records"):
+            action = str(row.get("NowAction", "") or "")
+            if "grade-b" not in action.lower():
+                continue
+            symbol = str(row.get("Symbol", "") or "").strip().upper()
+            alert_price = self._to_float(row.get("PriceNow")) or self._to_float(row.get("BuyAbove"))
+            if not symbol or alert_price <= 0:
+                continue
+            key = f"{today}:{symbol}"
+            existing = self._autotrade_candidates.get(key, {})
+            if str(existing.get("status", "")).lower() in {"bought", "open", "closed", "expired", "missed_slippage", "buy_failed", "armed_no_real_order"}:
+                continue
+            trigger_price = round(alert_price * (1.0 + float(self.autotrade_confirm_pct) / 100.0), 2)
+            self._autotrade_candidates[key] = {
+                "today": today,
+                "symbol": symbol,
+                "status": "waiting_confirmation",
+                "strategy": self.autotrade_strategy,
+                "action": action,
+                "created_at": now.isoformat(timespec="seconds"),
+                "created_ts": now.timestamp(),
+                "expires_ts": expires_ts,
+                "alert_price": round(alert_price, 2),
+                "trigger_price": trigger_price,
+                "confirm_pct": float(self.autotrade_confirm_pct),
+                "target_pct": float(self.autotrade_target_pct),
+                "stop_pct": float(self.autotrade_stop_pct),
+                "strength": self._to_float(row.get("SignalStrengthPct")),
+                "checks": str(row.get("Checks", "") or ""),
+            }
+
+    def _process_autotrade_entries(self) -> None:
+        ticks = self.actionable_runner.live_ticks or {}
+        if not ticks:
+            return
+        now = PKDateUtilities.currentDateTime()
+        now_ts = now.timestamp()
+        for key, candidate in list((self._autotrade_candidates or {}).items()):
+            if str(candidate.get("status", "")).lower() != "waiting_confirmation":
+                continue
+            if float(candidate.get("expires_ts", 0.0) or 0.0) < now_ts:
+                candidate["status"] = "expired"
+                candidate["expired_at"] = now.isoformat(timespec="seconds")
+                continue
+            symbol = str(candidate.get("symbol", "") or "").strip().upper()
+            tick = ticks.get(symbol, {}) if isinstance(ticks, dict) else {}
+            live_price = self._to_float(tick.get("last_price"))
+            trigger_price = self._to_float(candidate.get("trigger_price"))
+            if live_price <= 0 or trigger_price <= 0 or live_price < trigger_price:
+                continue
+            max_entry = trigger_price * (1.0 + float(self.autotrade_max_entry_slippage_pct) / 100.0)
+            if max_entry > 0 and live_price > max_entry:
+                candidate["status"] = "missed_slippage"
+                candidate["triggered_at"] = now.isoformat(timespec="seconds")
+                candidate["triggered_price"] = round(live_price, 2)
+                candidate["message"] = f"Skipped chase: live ₹{live_price:.2f} > max entry ₹{max_entry:.2f}"
+                continue
+            if not (getattr(self, "autotrade_real_orders", False) and getattr(self, "autotrade_buy_enabled", False)):
+                candidate["status"] = "armed_no_real_order"
+                candidate["triggered_at"] = now.isoformat(timespec="seconds")
+                candidate["triggered_price"] = round(live_price, 2)
+                candidate["message"] = "Confirmation hit, but real auto-buy flags are disabled."
+                self._notify_autotrade(candidate, "armed")
+                continue
+
+            stop_pct = float(candidate.get("stop_pct", self.autotrade_stop_pct) or self.autotrade_stop_pct)
+            target_pct = float(candidate.get("target_pct", self.autotrade_target_pct) or self.autotrade_target_pct)
+            stop_loss = round(live_price * (1.0 - stop_pct / 100.0), 2)
+            target1 = round(live_price * (1.0 + target_pct / 100.0), 2)
+            result = self._get_autotrade_order_manager().auto_buy_from_candidate(
+                symbol=symbol,
+                live_price=live_price,
+                stop_loss=stop_loss,
+                target1=target1,
+                target2=target1,
+                blind_score=float(candidate.get("strength", 0.0) or 0.0),
+                reasons=(
+                    f"AutoTrade {self.autotrade_strategy}: Grade-B alert confirmed "
+                    f"+{self.autotrade_confirm_pct:.2f}% above alert price"
+                ),
+                product_type="MIS",
+                holding_horizon="intraday",
+                max_hold_days=0,
+                bot_owned=True,
+                auto_exit_allowed=True,
+                strategy=self.autotrade_strategy,
+            )
+            candidate["triggered_at"] = now.isoformat(timespec="seconds")
+            candidate["triggered_price"] = round(live_price, 2)
+            candidate["order_status"] = str(getattr(result, "status", "") or "")
+            candidate["order_message"] = str(getattr(result, "message", "") or "")
+            candidate["order_id"] = str(getattr(result, "order_id", "") or "")
+            candidate["status"] = "bought" if getattr(result, "success", False) else "buy_failed"
+            self._notify_autotrade(candidate, "buy" if getattr(result, "success", False) else "buy_failed")
+
+    def _process_autotrade_exits(self) -> None:
+        if not (
+            getattr(self, "autotrade_real_orders", False)
+            and getattr(self, "autotrade_sell_enabled", False)
+        ):
+            return
+        manager = self._get_autotrade_order_manager()
+        if not getattr(manager, "auto_trade", False):
+            return
+        try:
+            manager.execute_sell_signals(self.actionable_runner.live_ticks or {})
+        except Exception as exc:
+            default_logger().warning(f"Autotrade exit check failed: {exc}", exc_info=True)
+
+    def _notify_autotrade(self, candidate: Dict[str, Any], event: str) -> None:
+        if "discord" not in getattr(self, "alert_channels", set()):
+            return
+        symbol = str(candidate.get("symbol", "") or "").upper()
+        if not symbol:
+            return
+        if event == "armed":
+            line = (
+                f"🤖 AutoTrade armed only, no real order: {symbol} "
+                f"confirmed at ₹{self._to_float(candidate.get('triggered_price')):.2f}. "
+                "Real order flags are disabled."
+            )
+        elif event == "buy":
+            line = (
+                f"🤖 AutoTrade BUY placed: {symbol} @ ₹{self._to_float(candidate.get('triggered_price')):.2f} "
+                f"| target +{self._to_float(candidate.get('target_pct')):.2f}% "
+                f"| stop -{self._to_float(candidate.get('stop_pct')):.2f}%"
+            )
+        else:
+            line = (
+                f"🤖 AutoTrade BUY failed: {symbol} "
+                f"| {str(candidate.get('order_message', '') or candidate.get('message', ''))[:300]}"
+            )
+        self._send_discord_alert(line)
 
     def _paper_track_alerts(self, alerts_df: pd.DataFrame) -> None:
         """Paper-track every live buy-style alert so we can prove signal quality safely."""
