@@ -2290,10 +2290,15 @@ class KiteOrderManager:
 
     def _load_ticks(self) -> Dict[str, Dict]:
         """Load latest tick snapshot from KiteTickerStream output."""
-        for universe in ("allstocks", "nifty500", "nifty100", "nifty50", "main"):
+        # Prefer the active live universe names first.  Older deployments wrote
+        # allstocks/nifty500 files; those files can remain on disk for weeks and
+        # must not be allowed to drive sell alerts with stale prices.
+        for universe in ("all", "allstocks", "nifty500", "nifty100", "nifty50", "main"):
             tick_file = os.path.join(self.output_dir, f"kiteticker_{universe}_ticks_latest.json")
             if os.path.exists(tick_file):
                 try:
+                    if time.time() - os.path.getmtime(tick_file) > 300:
+                        continue
                     with open(tick_file, "r") as f:
                         return json.load(f)
                 except Exception:
