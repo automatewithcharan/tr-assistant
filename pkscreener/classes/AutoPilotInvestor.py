@@ -1345,6 +1345,9 @@ class AutoPilotInvestor:
         """Check tracked Kite positions for sell signals and execute."""
         if self._order_manager is None:
             return
+        if not getattr(self._order_manager, "auto_trade", False):
+            self._log("Auto-sell monitor skipped because KITE_AUTO_TRADE is OFF.")
+            return
         try:
             gtt_actions = self._order_manager.audit_open_position_gtts()
         except Exception as exc:
