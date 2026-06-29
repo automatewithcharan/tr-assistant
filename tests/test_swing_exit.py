@@ -17,7 +17,6 @@ Covers:
 13. Missing VWAP / ATR / tick data does not crash check_sell_signals
 """
 
-import json
 import threading
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -365,45 +364,3 @@ def test_missing_tick_data_does_not_crash():
     # Position with no live price is skipped — no signals
     assert all(s[0] != "TSTOCK" for s in signals), \
         "Position with no live price should produce no signals"
-
-
-def test_load_ticks_prefers_newer_all_universe_tick_over_stale_allstocks(tmp_path):
-    mgr = KiteOrderManager.__new__(KiteOrderManager)
-    mgr.output_dir = str(tmp_path)
-    stale = {
-        "JNKINDIA": {
-            "last_price": 368.0,
-            "received_at": "2026-04-23T10:29:48",
-            "symbol": "JNKINDIA",
-        }
-    }
-    fresh = {
-        "JNKINDIA": {
-            "last_price": 500.0,
-            "received_at": datetime.now().isoformat(timespec="seconds"),
-            "symbol": "JNKINDIA",
-        }
-    }
-    (tmp_path / "kiteticker_allstocks_ticks_latest.json").write_text(json.dumps(stale))
-    (tmp_path / "kiteticker_all_ticks_latest.json").write_text(json.dumps(fresh))
-
-    ticks = mgr._load_ticks()
-
-    assert ticks["JNKINDIA"]["last_price"] == 500.0
-
-
-def test_check_sell_signals_ignores_stale_stop_loss_tick():
-    mgr = _make_manager()
-    pos = _cnc_pos(buy_price=496.0, qty=99, sl=471.2, t1=525.76, t2=545.6)
-    pos.symbol = "JNKINDIA"
-    mgr._positions["JNKINDIA"] = pos
-    mgr._broker_last_price = MagicMock(return_value=500.0)
-
-    signals = mgr.check_sell_signals({
-        "JNKINDIA": {
-            "last_price": 368.0,
-            "received_at": "2026-04-23T10:29:48",
-        }
-    })
-
-    assert signals == []

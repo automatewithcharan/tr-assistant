@@ -57,16 +57,6 @@ def _runtime_env(repo_root: Path) -> Dict[str, str]:
     return env
 
 
-def _env_flag(name: str, default: str = "0") -> bool:
-    return str(os.environ.get(name, default) or default).strip().lower() in {
-        "1",
-        "true",
-        "yes",
-        "y",
-        "on",
-    }
-
-
 @dataclass
 class AssistantLiveSettings:
     universe: str = "nifty50"
@@ -481,15 +471,7 @@ class AssistantLiveSupervisor:
             )
         self._launch_process("ticker", self._ticker_command())
         self._wait_for_initial_tick_snapshot()
-        if _env_flag("ASSISTANT_DISABLE_SIGNALMONITOR", "0"):
-            self.store.add_event(
-                self.session_id,
-                "info",
-                "monitor",
-                "SignalMonitor disabled here; intraday-goal.service owns the intraday monitor.",
-            )
-        else:
-            self._launch_process("monitor", self._monitor_command())
+        self._launch_process("monitor", self._monitor_command())
         self._launch_process("discord", self._discord_command())
         if self.settings.autopilot_enabled:
             self._launch_process("autopilot", self._autopilot_command())

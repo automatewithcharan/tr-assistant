@@ -95,13 +95,6 @@ sync_archive_bucket() {
             >> "$LOG" 2>&1 || { log "sync_archive_bucket: paper_reports rsync FAILED"; return 1; }
     fi
 
-    local ml_dir="$REPO/results/Data/intraday_ml_dataset"
-    if [ -d "$ml_dir" ]; then
-        log "sync_archive_bucket: rsync intraday_ml_dataset -> $ARCHIVE_BUCKET/intraday_ml_dataset/"
-        "$gsutil_bin" -q -m rsync -r "$ml_dir" "$ARCHIVE_BUCKET/intraday_ml_dataset/" \
-            >> "$LOG" 2>&1 || { log "sync_archive_bucket: intraday_ml_dataset rsync FAILED"; return 1; }
-    fi
-
     return 0
 }
 

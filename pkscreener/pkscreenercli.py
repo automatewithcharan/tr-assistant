@@ -2459,20 +2459,6 @@ def pkscreenercli():
                 f"  [+] Prewarming official Kite history for {len(symbols)} symbols from {prewarm_universe}..."
             )
             provider = KiteHistoricalDataProvider()
-            try:
-                provider.session_manager.ensure_fresh_session()
-            except Exception as exc:
-                OutputControls().printOutput(
-                    colorText.FAIL
-                    + f"  [+] Kite session preflight failed before prewarm: {exc}"
-                    + colorText.END
-                )
-                OutputControls().printOutput(
-                    colorText.FAIL
-                    + "  [+] Prewarm aborted before touching cache files."
-                    + colorText.END
-                )
-                sys.exit(1)
             history_count = prewarm_runner._estimate_history_count()
             summary_df = provider.prewarm_symbols(
                 symbols=symbols,

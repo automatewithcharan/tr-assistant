@@ -6308,7 +6308,7 @@ class AutoPilotInvestor:
                 continue
 
             signal_row = signal_map.get(symbol)
-            current_price = self._order_manager._tick_price_if_fresh(symbol, ticks.get(symbol, {}))
+            current_price = float(ticks.get(symbol, {}).get("last_price", 0) or 0)
             if current_price <= 0:
                 # Tick not available — fetch a fresh quote from the broker API.
                 # This covers positions in symbols outside the WebSocket universe.
@@ -8010,18 +8010,9 @@ class AutoPilotInvestor:
             except Exception as exc:
                 self._log(f"[paper-trader] failed to record {getattr(c,'symbol','?')}: {exc}")
 
-        # Keep blind-buy picks as paper-trader data by default. These candidates
-        # can be swing/next-open oriented and may use a price that is stale by
-        # the time Discord is read, so do not mix them into the live intraday
-        # feed unless explicitly enabled.
-        send_paper_alerts = str(os.environ.get("AUTOPILOT_BLIND_BUY_DISCORD", "0") or "0").strip().lower() in {
-            "1",
-            "true",
-            "yes",
-            "y",
-            "on",
-        }
-        if recorded and send_paper_alerts:
+        # Real-time Discord push for the blind-buy picks just recorded. Wrapped
+        # so a notification failure can never break the alert/ingest path.
+        if recorded:
             try:
                 lines = ["\U0001f9ed **BLIND-BUY ALERT** (paper — buys next open, holds ~10d)"]
                 for r in recorded:
