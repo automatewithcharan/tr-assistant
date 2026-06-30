@@ -232,6 +232,12 @@ class TrackedPosition:
         self.gtt_last_error = ""
         self.sell_block_reason = ""
         self.sell_blocked_at = ""
+        self.protective_stop_order_id = ""
+        self.protective_stop_status = ""
+        self.protective_stop_trigger = 0.0
+        self.protective_stop_price = 0.0
+        self.protective_stop_updated_at = ""
+        self.protective_stop_last_error = ""
         # Swing position lifecycle tracking (CNC/NRML only)
         self.swing_stage: str = "NEW"  # NEW/PROTECTED/CONFIRMED/PARTIAL_BOOKED/BREAKEVEN_PROTECTED/RUNNER/WEAKENING/EXITED
         self.initial_qty: int = qty    # original entry qty — never mutated
@@ -270,6 +276,12 @@ class TrackedPosition:
         pos.gtt_last_error = str(d.get("gtt_last_error", "") or "")
         pos.sell_block_reason = str(d.get("sell_block_reason", "") or "")
         pos.sell_blocked_at = str(d.get("sell_blocked_at", "") or "")
+        pos.protective_stop_order_id = str(d.get("protective_stop_order_id", "") or "")
+        pos.protective_stop_status = str(d.get("protective_stop_status", "") or "")
+        pos.protective_stop_trigger = float(d.get("protective_stop_trigger", 0.0) or 0.0)
+        pos.protective_stop_price = float(d.get("protective_stop_price", 0.0) or 0.0)
+        pos.protective_stop_updated_at = str(d.get("protective_stop_updated_at", "") or "")
+        pos.protective_stop_last_error = str(d.get("protective_stop_last_error", "") or "")
         pos.swing_stage = str(d.get("swing_stage", "NEW") or "NEW")
         pos.initial_qty = int(d.get("initial_qty", pos.qty) or pos.qty)
         pos.gtt_needs_reissue = bool(d.get("gtt_needs_reissue", False))
@@ -365,6 +377,13 @@ class KiteOrderManager:
         self.time_sliced_capital = _secret_truthy("KITE_TIME_SLICED_CAPITAL", True)
         self.order_fill_wait_seconds = max(0.0, _secret_float("KITE_ORDER_FILL_WAIT_SEC", 4.0))
         self.cancel_unfilled_limit_orders = _secret_truthy("KITE_CANCEL_UNFILLED_LIMIT", True)
+        self.intraday_protective_stop_enabled = _secret_truthy("KITE_INTRADAY_PROTECTIVE_STOP", True)
+        self.intraday_protective_stop_order_type = str(
+            _get_secret("KITE_INTRADAY_PROTECTIVE_STOP_ORDER_TYPE", "SL-M") or "SL-M"
+        ).strip().upper()
+        self.intraday_protective_stop_limit_buffer_pct = max(
+            0.0, _secret_float("KITE_INTRADAY_PROTECTIVE_STOP_LIMIT_BUFFER_PCT", 0.20)
+        )
         self.max_buy_price_stale_drop_pct = max(0.0, _secret_float("KITE_MAX_BUY_PRICE_STALE_DROP_PCT", 1.0))
         self.confirm_stop_loss_with_broker = _secret_truthy("KITE_CONFIRM_STOP_LOSS_WITH_BROKER", True)
         self.trailing_stop_pct = float(_get_secret("KITE_TRAILING_STOP_PCT", "3.0"))
@@ -586,6 +605,176 @@ class KiteOrderManager:
             return True
         except Exception as exc:
             _log.warning("Could not cancel unfilled order %s: %s", order_id, exc)
+            return False
+
+    def _is_active_order_status(self, status: str) -> bool:
+        return str(status or "").strip().upper() not in {"", "COMPLETE", "REJECTED", "CANCELLED"}
+
+    def _is_bot_intraday_position(self, pos: "TrackedPosition") -> bool:
+        return (
+            bool(getattr(pos, "bot_owned", False))
+            and bool(getattr(pos, "auto_exit_allowed", False))
+            and str(getattr(pos, "product_type", "") or "").upper() == "MIS"
+            and str(getattr(pos, "status", "") or "") == "open"
+        )
+
+    def _place_protective_stop_order(self, pos: "TrackedPosition", client: Any = None) -> bool:
+        """Place a broker-side MIS stop for bot-owned intraday positions."""
+        if self.dry_run:
+            return False
+        if not self.intraday_protective_stop_enabled or not self._is_bot_intraday_position(pos):
+            return False
+        if int(getattr(pos, "qty", 0) or 0) <= 0 or float(getattr(pos, "stop_loss", 0) or 0) <= 0:
+            return False
+        if self._is_active_order_status(getattr(pos, "protective_stop_status", "")) and str(getattr(pos, "protective_stop_order_id", "") or ""):
+            return True
+
+        symbol = str(pos.symbol or "").strip().upper()
+        if not symbol:
+            return False
+        try:
+            client = client or self._get_client()
+            exchange, tick_size = self._resolve_exchange_and_tick_size(symbol)
+            trigger = _round_to_tick(float(pos.stop_loss), tick_size, direction="down")
+            order_type = self.intraday_protective_stop_order_type or "SL-M"
+            if order_type not in {"SL", "SL-M"}:
+                order_type = "SL-M"
+
+            def _params(kind: str) -> Dict[str, Any]:
+                params = {
+                    "tradingsymbol": symbol,
+                    "exchange": exchange,
+                    "transaction_type": "SELL",
+                    "quantity": int(pos.qty),
+                    "order_type": kind,
+                    "product": "MIS",
+                    "variety": "regular",
+                    "trigger_price": trigger,
+                }
+                if kind == "SL":
+                    limit_price = trigger * (1.0 - self.intraday_protective_stop_limit_buffer_pct / 100.0)
+                    params["price"] = _round_to_tick(max(limit_price, tick_size), tick_size, direction="down")
+                return params
+
+            try:
+                order_params = _params(order_type)
+                order_id = str(client.place_order(**order_params) or "")
+            except Exception as first_exc:
+                if order_type != "SL-M":
+                    raise
+                _log.warning("%s SL-M protective stop failed, retrying as SL: %s", symbol, first_exc)
+                order_type = "SL"
+                order_params = _params(order_type)
+                order_id = str(client.place_order(**order_params) or "")
+
+            status = "TRIGGER PENDING"
+            try:
+                status = str(self._order_status_from_history(order_id, client.order_history(order_id)).get("status") or status)
+            except Exception:
+                pass
+
+            with self._lock:
+                current = self._positions.get(symbol)
+                if current is not None:
+                    current.protective_stop_order_id = order_id
+                    current.protective_stop_status = status
+                    current.protective_stop_trigger = trigger
+                    current.protective_stop_price = float(order_params.get("price") or 0.0)
+                    current.protective_stop_updated_at = _ist_now().isoformat(timespec="seconds")
+                    current.protective_stop_last_error = ""
+                    self._save_positions()
+            _log.info(
+                "%s protective MIS stop placed: order_id=%s type=%s trigger=₹%.2f%s",
+                symbol,
+                order_id,
+                order_type,
+                trigger,
+                f" limit=₹{order_params.get('price'):.2f}" if order_params.get("price") else "",
+            )
+            return True
+        except Exception as exc:
+            msg = str(exc)
+            with self._lock:
+                current = self._positions.get(symbol)
+                if current is not None:
+                    current.protective_stop_status = "FAILED"
+                    current.protective_stop_last_error = msg
+                    current.protective_stop_updated_at = _ist_now().isoformat(timespec="seconds")
+                    self._save_positions()
+            _send_discord_alert(
+                f"🚨 **PROTECTIVE STOP FAILED — {symbol}**\n"
+                f"Bot position is open but broker-side stop could not be placed.\n"
+                f"Software stop remains active. Error: {msg[:250]}",
+                dedup_key=f"protective_stop_failed_{symbol}_{date.today().isoformat()}",
+            )
+            _log.error("%s protective stop placement failed: %s", symbol, exc)
+            return False
+
+    def _refresh_protective_stop_order(self, pos: "TrackedPosition", client: Any = None) -> str:
+        """Refresh a protective stop and close local position if broker filled it."""
+        order_id = str(getattr(pos, "protective_stop_order_id", "") or "")
+        if not order_id or not self._is_bot_intraday_position(pos):
+            return ""
+        symbol = str(pos.symbol or "").strip().upper()
+        try:
+            client = client or self._get_client()
+            status_info = self._order_status_from_history(order_id, client.order_history(order_id))
+            status = str(status_info.get("status", "") or "").upper()
+            filled_qty = int(status_info.get("filled_qty", 0) or 0)
+            avg_price = float(status_info.get("avg_price", 0) or 0)
+            with self._lock:
+                current = self._positions.get(symbol)
+                if current is not None and current.status == "open":
+                    current.protective_stop_status = status
+                    current.protective_stop_updated_at = _ist_now().isoformat(timespec="seconds")
+                    current.protective_stop_last_error = str(status_info.get("message", "") or "")
+                    self._save_positions()
+            if filled_qty > 0 and status == "COMPLETE":
+                result = OrderResult(
+                    True,
+                    order_id=order_id,
+                    symbol=symbol,
+                    side="SELL",
+                    qty=filled_qty,
+                    price=avg_price or float(getattr(pos, "stop_loss", 0) or 0),
+                    status=status,
+                    message=f"Protective stop filled (ID: {order_id}) x{filled_qty} @ ₹{(avg_price or 0):.2f}",
+                )
+                self._record_sell(result, SellReason.STOP_LOSS)
+            elif status in {"REJECTED", "CANCELLED"}:
+                with self._lock:
+                    current = self._positions.get(symbol)
+                    if current is not None and current.status == "open":
+                        current.protective_stop_order_id = ""
+                        current.protective_stop_status = status
+                        current.protective_stop_last_error = str(status_info.get("message", "") or "")
+                        current.protective_stop_updated_at = _ist_now().isoformat(timespec="seconds")
+                        self._save_positions()
+            return status
+        except Exception as exc:
+            _log.debug("Could not refresh protective stop %s for %s: %s", order_id, symbol, exc)
+            return ""
+
+    def _cancel_protective_stop_best_effort(self, pos: "TrackedPosition", reason: str = "") -> bool:
+        order_id = str(getattr(pos, "protective_stop_order_id", "") or "")
+        if not order_id:
+            return True
+        if not self._is_active_order_status(getattr(pos, "protective_stop_status", "")):
+            return True
+        try:
+            client = self._get_client()
+            cancelled = self._cancel_order_best_effort(client, order_id)
+            if cancelled:
+                with self._lock:
+                    current = self._positions.get(pos.symbol)
+                    if current is not None:
+                        current.protective_stop_status = "CANCELLED"
+                        current.protective_stop_updated_at = _ist_now().isoformat(timespec="seconds")
+                        current.protective_stop_last_error = f"Cancelled before software sell: {reason}"
+                        self._save_positions()
+            return cancelled
+        except Exception as exc:
+            _log.warning("Could not cancel protective stop %s for %s: %s", order_id, pos.symbol, exc)
             return False
 
     def _looks_like_funds_shortage(self, message: str) -> bool:
@@ -1688,6 +1877,8 @@ class KiteOrderManager:
                         message=block_message,
                     )
                 )
+            if str(reason or "").lower() != SellReason.STOP_LOSS:
+                self._cancel_protective_stop_best_effort(pos, reason=reason)
             reference_price = float(price or 0.0)
             exchange, tick_size = self._resolve_exchange_and_tick_size(symbol)
             if reference_price <= 0:
@@ -1787,6 +1978,8 @@ class KiteOrderManager:
                     f"Status: `{result.status}` | Message: {result.message[:200]}",
                     dedup_key=f"sellfail_{symbol}_{date.today().isoformat()}",
                 )
+            if str(reason or "").lower() != SellReason.STOP_LOSS and symbol in self._positions:
+                self._place_protective_stop_order(self._positions[symbol])
             return self._return_logged_result(result)
 
         except Exception as exc:
@@ -1819,6 +2012,8 @@ class KiteOrderManager:
                     f"Error: {str(exc)[:300]}",
                     dedup_key=f"sellfail_{symbol}_{date.today().isoformat()}",
                 )
+            if str(reason or "").lower() != SellReason.STOP_LOSS and symbol in self._positions:
+                self._place_protective_stop_order(self._positions[symbol])
             self._log_order(result)
             return result
 
@@ -1849,8 +2044,13 @@ class KiteOrderManager:
             self._positions[result.symbol] = pos
             self._save_positions()
         self._log_order(result)
+        try:
+            self._place_protective_stop_order(pos)
+        except Exception as exc:
+            _log.warning("Could not place protective stop after buy for %s: %s", result.symbol, exc)
 
     def _record_sell(self, result: OrderResult, reason: str):
+        protect_remaining = ""
         with self._lock:
             if result.symbol in self._positions:
                 pos = self._positions[result.symbol]
@@ -1860,6 +2060,7 @@ class KiteOrderManager:
                     _log.info("Partial sell %s: sold %d, remaining %d",
                               result.symbol, result.qty, pos.qty)
                     self._save_positions()
+                    protect_remaining = result.symbol
                 else:
                     # Full sell: close position
                     pos.sell_order_id = result.order_id
@@ -1869,6 +2070,10 @@ class KiteOrderManager:
                     pos.status = "closed"
                     self._save_positions()
         self._log_order(result)
+        if protect_remaining:
+            pos = self._positions.get(protect_remaining)
+            if pos is not None:
+                self._place_protective_stop_order(pos)
 
     def _mark_position_stale(self, symbol: str, reason: str = SellReason.STALE_TRACKED) -> None:
         """Close a tracked position that is no longer present at the broker."""
@@ -1933,6 +2138,10 @@ class KiteOrderManager:
             if live_price <= 0:
                 continue
 
+            protective_status = self._refresh_protective_stop_order(pos)
+            if str(protective_status or "").upper() == "COMPLETE":
+                continue
+
             # Update highest price for trailing stop
             if live_price > pos.highest_price:
                 pos.highest_price = live_price
@@ -1957,6 +2166,17 @@ class KiteOrderManager:
 
             # 1. Stop loss hit
             if pos.stop_loss > 0 and live_price <= pos.stop_loss:
+                if (
+                    str(getattr(pos, "protective_stop_order_id", "") or "")
+                    and self._is_active_order_status(getattr(pos, "protective_stop_status", ""))
+                ):
+                    _log.info(
+                        "%s software stop hit at ₹%.2f, waiting for broker protective stop %s",
+                        sym,
+                        live_price,
+                        getattr(pos, "protective_stop_order_id", ""),
+                    )
+                    continue
                 if self.confirm_stop_loss_with_broker:
                     broker_price = self._broker_last_price(sym)
                     if broker_price > 0 and broker_price > pos.stop_loss:
