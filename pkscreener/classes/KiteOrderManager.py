@@ -1415,7 +1415,13 @@ class KiteOrderManager:
                                 ),
                             )
                         )
-            if latest_price < price:
+            keep_buffered_intraday_limit = (
+                bool(bot_owned)
+                and order_product == "MIS"
+                and str(strategy or "").strip().lower() == "grade_b_confirmation"
+                and order_type == "MARKET"
+            )
+            if latest_price < price and not keep_buffered_intraday_limit:
                 _log.info(
                     "%s buy reference refreshed from signal ₹%.2f to live ₹%.2f",
                     symbol,
@@ -1423,6 +1429,13 @@ class KiteOrderManager:
                     latest_price,
                 )
                 price = latest_price
+            elif latest_price < price and keep_buffered_intraday_limit:
+                _log.info(
+                    "%s keeping buffered autotrade limit ₹%.2f over live ₹%.2f",
+                    symbol,
+                    price,
+                    latest_price,
+                )
             elif latest_price > price:
                 _log.info(
                     "%s buy reference lifted from stale signal ₹%.2f to live ₹%.2f",

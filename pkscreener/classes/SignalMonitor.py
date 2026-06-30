@@ -195,6 +195,7 @@ class SignalMonitorRunner:
         self.autotrade_stop_pct = max(0.25, float(os.environ.get("SIGNALMONITOR_AUTOTRADE_STOP_PCT", "2.0") or "2.0"))
         self.autotrade_entry_window_minutes = max(1.0, float(os.environ.get("SIGNALMONITOR_AUTOTRADE_ENTRY_WINDOW_MINUTES", "15") or "15"))
         self.autotrade_max_entry_slippage_pct = max(0.0, float(os.environ.get("SIGNALMONITOR_AUTOTRADE_MAX_ENTRY_SLIPPAGE_PCT", "0.4") or "0.4"))
+        self.autotrade_limit_buffer_pct = max(0.0, float(os.environ.get("SIGNALMONITOR_AUTOTRADE_LIMIT_BUFFER_PCT", "0.10") or "0.10"))
         self.autotrade_strategy = str(os.environ.get("SIGNALMONITOR_AUTOTRADE_STRATEGY", "grade_b_confirmation") or "grade_b_confirmation").strip()
         self._autotrade_state_path = os.path.join(self.output_dir, "signalmonitor_autotrade_state.json")
         self._autotrade_candidates: Dict[str, Dict[str, Any]] = self._load_autotrade_state()
@@ -3417,6 +3418,7 @@ class SignalMonitorRunner:
             symbol = str(candidate.get("symbol", "") or "").strip().upper()
             tick = ticks.get(symbol, {}) if isinstance(ticks, dict) else {}
             live_price = self._to_float(tick.get("last_price"))
+            best_ask = self._to_float(tick.get("best_ask"))
             trigger_price = self._to_float(candidate.get("trigger_price"))
             if live_price <= 0 or trigger_price <= 0 or live_price < trigger_price:
                 continue
@@ -3435,13 +3437,28 @@ class SignalMonitorRunner:
                 self._notify_autotrade(candidate, "armed")
                 continue
 
+            entry_price = live_price
+            if best_ask > 0:
+                entry_price = max(live_price, best_ask)
+            elif self.autotrade_limit_buffer_pct > 0:
+                entry_price = live_price * (1.0 + float(self.autotrade_limit_buffer_pct) / 100.0)
+            entry_price = round(entry_price, 2)
+            if max_entry > 0 and entry_price > max_entry:
+                candidate["status"] = "missed_slippage"
+                candidate["triggered_at"] = now.isoformat(timespec="seconds")
+                candidate["triggered_price"] = round(live_price, 2)
+                candidate["best_ask"] = round(best_ask, 2) if best_ask > 0 else 0.0
+                candidate["entry_order_price"] = entry_price
+                candidate["message"] = f"Skipped chase: buyable ₹{entry_price:.2f} > max entry ₹{max_entry:.2f}"
+                continue
+
             stop_pct = float(candidate.get("stop_pct", self.autotrade_stop_pct) or self.autotrade_stop_pct)
             target_pct = float(candidate.get("target_pct", self.autotrade_target_pct) or self.autotrade_target_pct)
-            stop_loss = round(live_price * (1.0 - stop_pct / 100.0), 2)
-            target1 = round(live_price * (1.0 + target_pct / 100.0), 2)
+            stop_loss = round(entry_price * (1.0 - stop_pct / 100.0), 2)
+            target1 = round(entry_price * (1.0 + target_pct / 100.0), 2)
             result = self._get_autotrade_order_manager().auto_buy_from_candidate(
                 symbol=symbol,
-                live_price=live_price,
+                live_price=entry_price,
                 stop_loss=stop_loss,
                 target1=target1,
                 target2=target1,
@@ -3459,6 +3476,10 @@ class SignalMonitorRunner:
             )
             candidate["triggered_at"] = now.isoformat(timespec="seconds")
             candidate["triggered_price"] = round(live_price, 2)
+            candidate["best_ask"] = round(best_ask, 2) if best_ask > 0 else 0.0
+            candidate["entry_order_price"] = entry_price
+            candidate["target1"] = target1
+            candidate["stop_loss"] = stop_loss
             candidate["order_status"] = str(getattr(result, "status", "") or "")
             candidate["order_message"] = str(getattr(result, "message", "") or "")
             candidate["order_id"] = str(getattr(result, "order_id", "") or "")
