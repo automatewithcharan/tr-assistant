@@ -329,12 +329,18 @@ class KiteOrderManager:
         self._orders_log_file = Path(self.output_dir) / "kite_orders_log.csv"
         self._pending_buys_file = Path(self.output_dir) / "kite_pending_buys.json"
         self._lock = threading.Lock()
+        autotrade_signalmonitor_lane = (
+            _secret_truthy("SIGNALMONITOR_AUTOTRADE_ENABLED", False)
+            and _secret_truthy("SIGNALMONITOR_AUTOTRADE_REAL_ORDERS", False)
+        )
 
         # Config from env
-        self.auto_trade = _get_secret("KITE_AUTO_TRADE", "0") == "1"
+        self.auto_trade = True if autotrade_signalmonitor_lane else _get_secret("KITE_AUTO_TRADE", "0") == "1"
         self.dry_run = _get_secret("KITE_DRY_RUN", "0") == "1"
         self.max_order_value = float(_get_secret("KITE_MAX_ORDER_VALUE", "5000"))
-        self.max_daily_orders = int(_get_secret("KITE_MAX_DAILY_ORDERS", "10"))
+        self.max_daily_orders = int(
+            "5" if autotrade_signalmonitor_lane else _get_secret("KITE_MAX_DAILY_ORDERS", "10")
+        )
         self.max_open_positions = int(_get_secret("KITE_MAX_OPEN_POSITIONS", "8"))
         self.swing_capital = float(_get_secret("KITE_SWING_CAPITAL", "0") or 0)
         self.swing_max_order_value = float(
@@ -343,12 +349,18 @@ class KiteOrderManager:
         self.swing_max_open_positions = int(
             _get_secret("KITE_SWING_MAX_OPEN_POSITIONS", str(self.max_open_positions)) or self.max_open_positions
         )
-        self.intraday_capital = float(_get_secret("KITE_INTRADAY_CAPITAL", "0") or 0)
+        self.intraday_capital = float(
+            "400000" if autotrade_signalmonitor_lane else (_get_secret("KITE_INTRADAY_CAPITAL", "0") or 0)
+        )
         self.intraday_max_order_value = float(
-            _get_secret("KITE_INTRADAY_MAX_ORDER_VALUE", str(self.max_order_value)) or self.max_order_value
+            "50000"
+            if autotrade_signalmonitor_lane
+            else (_get_secret("KITE_INTRADAY_MAX_ORDER_VALUE", str(self.max_order_value)) or self.max_order_value)
         )
         self.intraday_max_open_positions = int(
-            _get_secret("KITE_INTRADAY_MAX_OPEN_POSITIONS", str(self.max_open_positions)) or self.max_open_positions
+            "1"
+            if autotrade_signalmonitor_lane
+            else (_get_secret("KITE_INTRADAY_MAX_OPEN_POSITIONS", str(self.max_open_positions)) or self.max_open_positions)
         )
         self.time_sliced_capital = _secret_truthy("KITE_TIME_SLICED_CAPITAL", True)
         self.order_fill_wait_seconds = max(0.0, _secret_float("KITE_ORDER_FILL_WAIT_SEC", 4.0))
@@ -377,7 +389,7 @@ class KiteOrderManager:
         self.max_sector_concentration = int(_get_secret("KITE_MAX_SECTOR_POSITIONS", "3"))
         # MIS = intraday margin (5x leverage, auto-squared off at 3:20 PM by broker)
         # CNC = delivery (full capital, no auto-squareoff)
-        _product = _get_secret("KITE_PRODUCT_TYPE", "MIS").strip().upper()
+        _product = "MIS" if autotrade_signalmonitor_lane else _get_secret("KITE_PRODUCT_TYPE", "MIS").strip().upper()
         self.product_type = _product if _product in ("MIS", "CNC", "NRML") else "MIS"
 
         self._positions: Dict[str, TrackedPosition] = {}
