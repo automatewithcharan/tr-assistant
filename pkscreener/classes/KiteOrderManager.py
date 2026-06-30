@@ -2141,6 +2141,15 @@ class KiteOrderManager:
             protective_status = self._refresh_protective_stop_order(pos)
             if str(protective_status or "").upper() == "COMPLETE":
                 continue
+            if (
+                self._is_bot_intraday_position(pos)
+                and not str(getattr(pos, "protective_stop_order_id", "") or "")
+                and str(getattr(pos, "protective_stop_status", "") or "").upper() != "FAILED"
+                and float(getattr(pos, "stop_loss", 0) or 0) > 0
+                and live_price > float(getattr(pos, "stop_loss", 0) or 0)
+            ):
+                self._place_protective_stop_order(pos)
+                pos = self._positions.get(sym, pos)
 
             # Update highest price for trailing stop
             if live_price > pos.highest_price:
