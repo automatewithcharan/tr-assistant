@@ -339,6 +339,8 @@ class KiteOrderManager:
         self.output_dir = output_dir or Archiver.get_user_data_dir()
         self._positions_file = Path(self.output_dir) / "kite_tracked_positions.json"
         self._orders_log_file = Path(self.output_dir) / "kite_orders_log.csv"
+        self._autotrade_journal_file = Path(self.output_dir) / "autotrade_event_journal.csv"
+        self._autotrade_journal_jsonl_file = Path(self.output_dir) / "autotrade_event_journal.jsonl"
         self._pending_buys_file = Path(self.output_dir) / "kite_pending_buys.json"
         self._lock = threading.Lock()
         autotrade_signalmonitor_lane = (
@@ -554,8 +556,55 @@ class KiteOrderManager:
             df = pd.DataFrame([row])
             header = not self._orders_log_file.exists()
             df.to_csv(self._orders_log_file, mode="a", header=header, index=False)
+            self._journal_event(
+                event="order_result",
+                symbol=result.symbol,
+                side=result.side,
+                qty=result.qty,
+                price=result.price,
+                status=result.status,
+                order_id=result.order_id,
+                message=result.message,
+                success=result.success,
+            )
         except Exception as exc:
             _log.warning("Failed to log order: %s", exc)
+
+    def _journal_event(self, event: str, symbol: str = "", **details: Any) -> None:
+        """Append a durable autotrade event for audit/debug dashboards."""
+        try:
+            now = _ist_now().isoformat(timespec="seconds")
+            payload = {
+                "timestamp": now,
+                "event": str(event or ""),
+                "symbol": str(symbol or "").upper(),
+                **details,
+            }
+            csv_row = {
+                "timestamp": payload.get("timestamp", ""),
+                "event": payload.get("event", ""),
+                "symbol": payload.get("symbol", ""),
+                "side": payload.get("side", ""),
+                "qty": payload.get("qty", ""),
+                "price": payload.get("price", ""),
+                "status": payload.get("status", ""),
+                "order_id": payload.get("order_id", ""),
+                "strategy": payload.get("strategy", ""),
+                "reason": payload.get("reason", ""),
+                "message": str(payload.get("message", ""))[:500],
+                "details_json": json.dumps(payload, default=str, sort_keys=True),
+            }
+            self._autotrade_journal_file.parent.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame([csv_row]).to_csv(
+                self._autotrade_journal_file,
+                mode="a",
+                header=not self._autotrade_journal_file.exists(),
+                index=False,
+            )
+            with self._autotrade_journal_jsonl_file.open("a", encoding="utf-8") as fp:
+                fp.write(json.dumps(payload, default=str, sort_keys=True) + "\n")
+        except Exception as exc:
+            _log.debug("Failed to write autotrade journal event: %s", exc, exc_info=True)
 
     def _return_logged_result(self, result: OrderResult) -> OrderResult:
         """Log and return a non-position-mutating order result."""
@@ -691,6 +740,20 @@ class KiteOrderManager:
                 trigger,
                 f" limit=₹{order_params.get('price'):.2f}" if order_params.get("price") else "",
             )
+            self._journal_event(
+                event="protective_stop_placed",
+                symbol=symbol,
+                side="SELL",
+                qty=int(pos.qty),
+                price=float(order_params.get("price") or 0.0),
+                status=status,
+                order_id=order_id,
+                trigger_price=trigger,
+                order_type=order_type,
+                product="MIS",
+                strategy=getattr(pos, "strategy", ""),
+                reason="broker_side_stop_after_autotrade_buy",
+            )
             return True
         except Exception as exc:
             msg = str(exc)
@@ -706,6 +769,18 @@ class KiteOrderManager:
                 f"Bot position is open but broker-side stop could not be placed.\n"
                 f"Software stop remains active. Error: {msg[:250]}",
                 dedup_key=f"protective_stop_failed_{symbol}_{date.today().isoformat()}",
+            )
+            self._journal_event(
+                event="protective_stop_failed",
+                symbol=symbol,
+                side="SELL",
+                qty=int(getattr(pos, "qty", 0) or 0),
+                price=0.0,
+                status="FAILED",
+                trigger_price=float(getattr(pos, "stop_loss", 0) or 0),
+                strategy=getattr(pos, "strategy", ""),
+                reason="broker_side_stop_after_autotrade_buy",
+                message=msg,
             )
             _log.error("%s protective stop placement failed: %s", symbol, exc)
             return False
@@ -741,6 +816,17 @@ class KiteOrderManager:
                     message=f"Protective stop filled (ID: {order_id}) x{filled_qty} @ ₹{(avg_price or 0):.2f}",
                 )
                 self._record_sell(result, SellReason.STOP_LOSS)
+                self._journal_event(
+                    event="protective_stop_filled",
+                    symbol=symbol,
+                    side="SELL",
+                    qty=filled_qty,
+                    price=avg_price,
+                    status=status,
+                    order_id=order_id,
+                    reason=SellReason.STOP_LOSS,
+                    strategy=getattr(pos, "strategy", ""),
+                )
             elif status in {"REJECTED", "CANCELLED"}:
                 with self._lock:
                     current = self._positions.get(symbol)
@@ -750,6 +836,16 @@ class KiteOrderManager:
                         current.protective_stop_last_error = str(status_info.get("message", "") or "")
                         current.protective_stop_updated_at = _ist_now().isoformat(timespec="seconds")
                         self._save_positions()
+                self._journal_event(
+                    event="protective_stop_inactive",
+                    symbol=symbol,
+                    side="SELL",
+                    status=status,
+                    order_id=order_id,
+                    reason="broker_stop_rejected_or_cancelled",
+                    message=str(status_info.get("message", "") or ""),
+                    strategy=getattr(pos, "strategy", ""),
+                )
             return status
         except Exception as exc:
             _log.debug("Could not refresh protective stop %s for %s: %s", order_id, symbol, exc)
@@ -772,6 +868,16 @@ class KiteOrderManager:
                         current.protective_stop_updated_at = _ist_now().isoformat(timespec="seconds")
                         current.protective_stop_last_error = f"Cancelled before software sell: {reason}"
                         self._save_positions()
+                self._journal_event(
+                    event="protective_stop_cancelled",
+                    symbol=pos.symbol,
+                    side="SELL",
+                    qty=int(getattr(pos, "qty", 0) or 0),
+                    status="CANCELLED",
+                    order_id=order_id,
+                    reason=reason,
+                    strategy=getattr(pos, "strategy", ""),
+                )
             return cancelled
         except Exception as exc:
             _log.warning("Could not cancel protective stop %s for %s: %s", order_id, pos.symbol, exc)
@@ -2724,6 +2830,18 @@ class KiteOrderManager:
                         status="RECONCILED",
                         message=f"Reconciled: position not found in broker ({sell_reason}). Estimated sell @ {sell_price:.2f}",
                     ))
+                    self._journal_event(
+                        event="position_reconciled_closed",
+                        symbol=sym,
+                        side="SELL",
+                        qty=pos.qty,
+                        price=sell_price,
+                        status="RECONCILED",
+                        order_id=getattr(pos, "sell_order_id", ""),
+                        strategy=getattr(pos, "strategy", ""),
+                        reason=sell_reason,
+                        message="Tracked open position was absent from Kite broker exposure.",
+                    )
                 elif bp["qty"] != pos.qty:
                     report["mismatches"].append(
                         f"{sym}: tracked qty={pos.qty}, broker qty={bp['qty']}"
@@ -2771,6 +2889,16 @@ class KiteOrderManager:
                 report["adopted"].append(sym)
                 changed = True
                 _log.info("Reconcile: adopted untracked broker position %s qty=%s avg=%.2f", sym, qty, ref_price)
+                self._journal_event(
+                    event="position_reconciled_adopted",
+                    symbol=sym,
+                    side="BUY",
+                    qty=qty,
+                    price=ref_price,
+                    status="ADOPTED",
+                    product=str(bp.get("product") or "CNC"),
+                    reason="broker_position_missing_from_tracker",
+                )
 
             if changed:
                 self._save_positions()

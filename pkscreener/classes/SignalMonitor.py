@@ -198,6 +198,8 @@ class SignalMonitorRunner:
         self.autotrade_limit_buffer_pct = max(0.0, float(os.environ.get("SIGNALMONITOR_AUTOTRADE_LIMIT_BUFFER_PCT", "0.10") or "0.10"))
         self.autotrade_strategy = str(os.environ.get("SIGNALMONITOR_AUTOTRADE_STRATEGY", "grade_b_confirmation") or "grade_b_confirmation").strip()
         self._autotrade_state_path = os.path.join(self.output_dir, "signalmonitor_autotrade_state.json")
+        self._autotrade_journal_path = os.path.join(self.output_dir, "autotrade_event_journal.csv")
+        self._autotrade_journal_jsonl_path = os.path.join(self.output_dir, "autotrade_event_journal.jsonl")
         self._autotrade_candidates: Dict[str, Dict[str, Any]] = self._load_autotrade_state()
         self._autotrade_order_manager = None
         self._last_discord_heartbeat_ts = 0.0
@@ -3345,6 +3347,47 @@ class SignalMonitorRunner:
         except Exception as exc:
             default_logger().debug(f"Could not save autotrade state: {exc}", exc_info=True)
 
+    def _journal_autotrade_event(self, event: str, symbol: str = "", **details: Any) -> None:
+        """Write a durable audit event for every autotrade decision/action."""
+        try:
+            now = PKDateUtilities.currentDateTime().isoformat(timespec="seconds")
+            payload = {
+                "timestamp": now,
+                "event": str(event or ""),
+                "symbol": str(symbol or details.get("symbol") or "").upper(),
+                "strategy": getattr(self, "autotrade_strategy", "grade_b_confirmation"),
+                **details,
+            }
+            csv_row = {
+                "timestamp": payload.get("timestamp", ""),
+                "event": payload.get("event", ""),
+                "symbol": payload.get("symbol", ""),
+                "side": payload.get("side", ""),
+                "qty": payload.get("qty", ""),
+                "price": payload.get("price", ""),
+                "status": payload.get("status", ""),
+                "order_id": payload.get("order_id", ""),
+                "strategy": payload.get("strategy", ""),
+                "reason": payload.get("reason", ""),
+                "message": str(payload.get("message", ""))[:500],
+                "details_json": json.dumps(payload, default=str, sort_keys=True),
+            }
+            path = Path(getattr(self, "_autotrade_journal_path", "") or "")
+            jsonl_path = Path(getattr(self, "_autotrade_journal_jsonl_path", "") or "")
+            if not path:
+                return
+            path.parent.mkdir(parents=True, exist_ok=True)
+            pd.DataFrame([csv_row]).to_csv(
+                path,
+                mode="a",
+                header=not path.exists(),
+                index=False,
+            )
+            with jsonl_path.open("a", encoding="utf-8") as fp:
+                fp.write(json.dumps(payload, default=str, sort_keys=True) + "\n")
+        except Exception as exc:
+            default_logger().debug(f"Could not write autotrade journal event: {exc}", exc_info=True)
+
     def _get_autotrade_order_manager(self):
         if self._autotrade_order_manager is None:
             from pkscreener.classes.KiteOrderManager import KiteOrderManager
@@ -3401,6 +3444,16 @@ class SignalMonitorRunner:
                 "strength": self._to_float(row.get("SignalStrengthPct")),
                 "checks": str(row.get("Checks", "") or ""),
             }
+            self._journal_autotrade_event(
+                "candidate_registered",
+                symbol=symbol,
+                status="waiting_confirmation",
+                price=round(alert_price, 2),
+                trigger_price=trigger_price,
+                strength=self._to_float(row.get("SignalStrengthPct")),
+                reason=action,
+                message=str(row.get("Checks", "") or "")[:500],
+            )
 
     def _process_autotrade_entries(self) -> None:
         ticks = self.actionable_runner.live_ticks or {}
@@ -3414,6 +3467,14 @@ class SignalMonitorRunner:
             if float(candidate.get("expires_ts", 0.0) or 0.0) < now_ts:
                 candidate["status"] = "expired"
                 candidate["expired_at"] = now.isoformat(timespec="seconds")
+                self._journal_autotrade_event(
+                    "candidate_expired",
+                    symbol=str(candidate.get("symbol", "") or ""),
+                    status="expired",
+                    price=self._to_float(candidate.get("alert_price")),
+                    trigger_price=self._to_float(candidate.get("trigger_price")),
+                    reason="entry_window_expired",
+                )
                 continue
             symbol = str(candidate.get("symbol", "") or "").strip().upper()
             tick = ticks.get(symbol, {}) if isinstance(ticks, dict) else {}
@@ -3428,12 +3489,31 @@ class SignalMonitorRunner:
                 candidate["triggered_at"] = now.isoformat(timespec="seconds")
                 candidate["triggered_price"] = round(live_price, 2)
                 candidate["message"] = f"Skipped chase: live ₹{live_price:.2f} > max entry ₹{max_entry:.2f}"
+                self._journal_autotrade_event(
+                    "entry_skipped",
+                    symbol=symbol,
+                    status="missed_slippage",
+                    price=round(live_price, 2),
+                    trigger_price=round(trigger_price, 2),
+                    max_entry=round(max_entry, 2),
+                    reason="live_price_above_chase_guard",
+                    message=candidate["message"],
+                )
                 continue
             if not (getattr(self, "autotrade_real_orders", False) and getattr(self, "autotrade_buy_enabled", False)):
                 candidate["status"] = "armed_no_real_order"
                 candidate["triggered_at"] = now.isoformat(timespec="seconds")
                 candidate["triggered_price"] = round(live_price, 2)
                 candidate["message"] = "Confirmation hit, but real auto-buy flags are disabled."
+                self._journal_autotrade_event(
+                    "entry_armed_no_order",
+                    symbol=symbol,
+                    status="armed_no_real_order",
+                    price=round(live_price, 2),
+                    trigger_price=round(trigger_price, 2),
+                    reason="real_order_flags_disabled",
+                    message=candidate["message"],
+                )
                 self._notify_autotrade(candidate, "armed")
                 continue
 
@@ -3450,12 +3530,35 @@ class SignalMonitorRunner:
                 candidate["best_ask"] = round(best_ask, 2) if best_ask > 0 else 0.0
                 candidate["entry_order_price"] = entry_price
                 candidate["message"] = f"Skipped chase: buyable ₹{entry_price:.2f} > max entry ₹{max_entry:.2f}"
+                self._journal_autotrade_event(
+                    "entry_skipped",
+                    symbol=symbol,
+                    status="missed_slippage",
+                    price=entry_price,
+                    trigger_price=round(trigger_price, 2),
+                    best_ask=round(best_ask, 2) if best_ask > 0 else 0.0,
+                    max_entry=round(max_entry, 2),
+                    reason="buyable_price_above_chase_guard",
+                    message=candidate["message"],
+                )
                 continue
 
             stop_pct = float(candidate.get("stop_pct", self.autotrade_stop_pct) or self.autotrade_stop_pct)
             target_pct = float(candidate.get("target_pct", self.autotrade_target_pct) or self.autotrade_target_pct)
             stop_loss = round(entry_price * (1.0 - stop_pct / 100.0), 2)
             target1 = round(entry_price * (1.0 + target_pct / 100.0), 2)
+            self._journal_autotrade_event(
+                "entry_attempt",
+                symbol=symbol,
+                side="BUY",
+                status="SUBMITTING",
+                price=entry_price,
+                trigger_price=round(trigger_price, 2),
+                best_ask=round(best_ask, 2) if best_ask > 0 else 0.0,
+                stop_loss=stop_loss,
+                target1=target1,
+                reason="grade_b_confirmation_hit",
+            )
             result = self._get_autotrade_order_manager().auto_buy_from_candidate(
                 symbol=symbol,
                 live_price=entry_price,
@@ -3484,6 +3587,19 @@ class SignalMonitorRunner:
             candidate["order_message"] = str(getattr(result, "message", "") or "")
             candidate["order_id"] = str(getattr(result, "order_id", "") or "")
             candidate["status"] = "bought" if getattr(result, "success", False) else "buy_failed"
+            self._journal_autotrade_event(
+                "entry_result",
+                symbol=symbol,
+                side="BUY",
+                qty=int(getattr(result, "qty", 0) or 0),
+                price=float(getattr(result, "price", 0.0) or 0.0),
+                status=str(getattr(result, "status", "") or ""),
+                order_id=str(getattr(result, "order_id", "") or ""),
+                stop_loss=stop_loss,
+                target1=target1,
+                reason="buy" if getattr(result, "success", False) else "buy_failed",
+                message=str(getattr(result, "message", "") or ""),
+            )
             self._notify_autotrade(candidate, "buy" if getattr(result, "success", False) else "buy_failed")
 
     def _process_autotrade_exits(self) -> None:
