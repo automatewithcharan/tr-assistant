@@ -1377,6 +1377,17 @@ class KiteOrderManager:
 
         bucket_open_count = self._current_open_count_for_product(order_product)
         bucket_max_positions = self._max_positions_for_product(order_product)
+        if order_product == "MIS" and bucket_max_positions > 0 and bucket_open_count >= bucket_max_positions:
+            try:
+                report = self.reconcile_with_broker()
+                if report.get("auto_closed"):
+                    bucket_open_count = self._current_open_count_for_product(order_product)
+                    _log.info(
+                        "Reconciled stale MIS positions before buy: %s",
+                        ", ".join(report.get("auto_closed") or []),
+                    )
+            except Exception as exc:
+                _log.warning("MIS reconcile before max-position check failed: %s", exc)
         if bucket_max_positions > 0 and bucket_open_count >= bucket_max_positions:
             bucket_label = "intraday" if self._capital_bucket_for_product(order_product) == "intraday" else "swing"
             return self._return_logged_result(
@@ -1391,6 +1402,51 @@ class KiteOrderManager:
                 )
             )
 
+        if symbol in self._positions and self._positions[symbol].status == "open":
+            if order_product == "MIS":
+                try:
+                    report = self.reconcile_with_broker()
+                    if report.get("auto_closed") and not (
+                        symbol in self._positions and self._positions[symbol].status == "open"
+                    ):
+                        _log.info("Reconciled stale MIS %s before duplicate-holding check", symbol)
+                    else:
+                        return self._return_logged_result(
+                            OrderResult(
+                                False,
+                                symbol=symbol,
+                                side="BUY",
+                                qty=qty,
+                                price=price,
+                                status="SKIPPED",
+                                message="Already holding this stock",
+                            )
+                        )
+                except Exception as exc:
+                    _log.warning("MIS reconcile before duplicate-holding check failed: %s", exc)
+                    return self._return_logged_result(
+                        OrderResult(
+                            False,
+                            symbol=symbol,
+                            side="BUY",
+                            qty=qty,
+                            price=price,
+                            status="SKIPPED",
+                            message="Already holding this stock",
+                        )
+                    )
+            else:
+                return self._return_logged_result(
+                    OrderResult(
+                        False,
+                        symbol=symbol,
+                        side="BUY",
+                        qty=qty,
+                        price=price,
+                        status="SKIPPED",
+                        message="Already holding this stock",
+                    )
+                )
         if symbol in self._positions and self._positions[symbol].status == "open":
             return self._return_logged_result(
                 OrderResult(
