@@ -29,8 +29,18 @@ def _make_runner() -> SignalMonitorRunner:
     runner._last_discord_heartbeat_ts = 0.0
     runner._last_goal_suppressed_reasons = []
     runner.min_trade_value = 50000000.0
+    runner.budget_amount = 50000.0
     runner._top_gainer_radar_date = ""
     runner._top_gainer_radar_today = set()
+    runner.enable_leader_ignition = True
+    runner.leader_ignition_discord_alerts = False
+    runner._leader_ignition_date = ""
+    runner._leader_ignition_today = set()
+    runner._leader_reclaim_date = ""
+    runner._leader_reclaim_today = set()
+    runner._leader_candidates = {}
+    runner._leader_last_ticks_by_symbol = {}
+    runner._leader_ignition_state_path = f"{runner.output_dir}/signalmonitor_leader_ignition_state.json"
     return runner
 
 
@@ -373,6 +383,131 @@ def test_top_gainer_radar_blocks_weak_confirmation(monkeypatch):
     alerts = runner._build_top_gainer_radar_alerts(current_simple_df)
 
     assert alerts.empty
+
+
+def test_leader_ignition_watch_uses_raw_ticks_without_simple_board(monkeypatch):
+    monkeypatch.setattr(
+        signal_monitor_module.PKDateUtilities,
+        "currentDateTime",
+        staticmethod(lambda: datetime(2026, 5, 8, 9, 24, 0)),
+    )
+    runner = _make_runner()
+    runner.use_live_kite = True
+    runner._is_regular_market_hours = lambda: True
+    runner.actionable_runner = SimpleNamespace(
+        live_ticks={
+            "EARLY": {
+                "last_price": 101.2,
+                "open": 100.0,
+                "close": 100.0,
+                "change": 1.2,
+                "high": 101.25,
+                "volume_traded": 102000,
+                "total_buy_quantity": 220000,
+                "total_sell_quantity": 100000,
+            }
+        }
+    )
+    runner._leader_last_ticks_by_symbol = {
+        "EARLY": {"last_price": 100.8, "volume_traded": 100000}
+    }
+
+    alerts = runner._run_leader_ignition_lane()
+
+    assert list(alerts["Symbol"]) == ["EARLY"]
+    assert alerts.iloc[0]["NowAction"] == "Leader Ignition Watch"
+    audit = pd.read_csv(f"{runner.output_dir}/leader_ignition/leader_ignition_2026-05-08.csv")
+    assert list(audit["Decision"]) == ["pass"]
+    assert audit.iloc[0]["Reason"] == "early leader watch"
+
+
+def test_leader_ignition_rejects_already_stretched_mover(monkeypatch):
+    monkeypatch.setattr(
+        signal_monitor_module.PKDateUtilities,
+        "currentDateTime",
+        staticmethod(lambda: datetime(2026, 5, 8, 9, 31, 0)),
+    )
+    runner = _make_runner()
+    runner.use_live_kite = True
+    runner._is_regular_market_hours = lambda: True
+    runner.actionable_runner = SimpleNamespace(
+        live_ticks={
+            "CHASE": {
+                "last_price": 106.0,
+                "open": 100.0,
+                "close": 100.0,
+                "change": 6.0,
+                "high": 106.2,
+                "volume_traded": 200000,
+                "total_buy_quantity": 240000,
+                "total_sell_quantity": 100000,
+            }
+        }
+    )
+
+    alerts = runner._run_leader_ignition_lane()
+
+    assert alerts.empty
+    audit = pd.read_csv(f"{runner.output_dir}/leader_ignition/leader_ignition_2026-05-08.csv")
+    assert list(audit["Decision"]) == ["reject"]
+    assert audit.iloc[0]["Reason"] == "already stretched"
+
+
+def test_leader_pullback_reclaim_after_watch(monkeypatch):
+    current_time = datetime(2026, 5, 8, 9, 24, 0)
+    monkeypatch.setattr(
+        signal_monitor_module.PKDateUtilities,
+        "currentDateTime",
+        staticmethod(lambda: current_time),
+    )
+    runner = _make_runner()
+    runner.use_live_kite = True
+    runner._is_regular_market_hours = lambda: True
+
+    runner.actionable_runner = SimpleNamespace(
+        live_ticks={
+            "RECLAIM": {
+                "last_price": 101.2,
+                "open": 100.0,
+                "close": 100.0,
+                "change": 1.2,
+                "high": 101.25,
+                "volume_traded": 102000,
+                "total_buy_quantity": 220000,
+                "total_sell_quantity": 100000,
+            }
+        }
+    )
+    first = runner._run_leader_ignition_lane()
+    assert list(first["NowAction"]) == ["Leader Ignition Watch"]
+
+    runner.actionable_runner.live_ticks["RECLAIM"].update(
+        {
+            "last_price": 100.7,
+            "change": 0.7,
+            "high": 101.5,
+            "volume_traded": 104000,
+        }
+    )
+    pullback = runner._run_leader_ignition_lane()
+    assert pullback.empty
+    assert runner._leader_candidates["RECLAIM"]["status"] == "pullback_seen"
+
+    runner.actionable_runner.live_ticks["RECLAIM"].update(
+        {
+            "last_price": 101.1,
+            "change": 1.1,
+            "high": 101.5,
+            "volume_traded": 107000,
+            "total_buy_quantity": 250000,
+            "total_sell_quantity": 100000,
+        }
+    )
+    reclaim = runner._run_leader_ignition_lane()
+
+    assert list(reclaim["Symbol"]) == ["RECLAIM"]
+    assert reclaim.iloc[0]["NowAction"] == "Leader Pullback Reclaim"
+    assert runner._leader_candidates["RECLAIM"]["status"] == "reclaim_alerted"
 
 
 def test_discord_message_labels_direct_buy_as_swing_candidate():

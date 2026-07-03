@@ -55,6 +55,21 @@ class SignalMonitorRunner:
     TOP_GAINER_RADAR_MIN_PCT = float(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_MIN_PCT", "1.5") or 1.5)
     TOP_GAINER_RADAR_MAX_PCT = float(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_MAX_PCT", "3.5") or 3.5)
     TOP_GAINER_RADAR_MAX_PER_CYCLE = int(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_MAX_PER_CYCLE", "1") or 1)
+    LEADER_IGNITION_MIN_OPEN_PCT = float(os.environ.get("SIGNALMONITOR_LEADER_IGNITION_MIN_OPEN_PCT", "0.5") or 0.5)
+    LEADER_IGNITION_MAX_OPEN_PCT = float(os.environ.get("SIGNALMONITOR_LEADER_IGNITION_MAX_OPEN_PCT", "2.8") or 2.8)
+    LEADER_IGNITION_MIN_DAY_PCT = float(os.environ.get("SIGNALMONITOR_LEADER_IGNITION_MIN_DAY_PCT", "0.5") or 0.5)
+    LEADER_IGNITION_MAX_DAY_PCT = float(os.environ.get("SIGNALMONITOR_LEADER_IGNITION_MAX_DAY_PCT", "4.5") or 4.5)
+    LEADER_IGNITION_MAX_PULLBACK_PCT = float(os.environ.get("SIGNALMONITOR_LEADER_IGNITION_MAX_PULLBACK_PCT", "0.8") or 0.8)
+    LEADER_IGNITION_MIN_BS_RATIO = float(os.environ.get("SIGNALMONITOR_LEADER_IGNITION_MIN_BS_RATIO", "1.4") or 1.4)
+    LEADER_IGNITION_MIN_VOLUME_DELTA_PCT = float(os.environ.get("SIGNALMONITOR_LEADER_IGNITION_MIN_VOLUME_DELTA_PCT", "0.6") or 0.6)
+    LEADER_IGNITION_MIN_TRADED_VALUE = float(os.environ.get("SIGNALMONITOR_LEADER_IGNITION_MIN_TRADED_VALUE", "10000000") or 10000000)
+    LEADER_IGNITION_MAX_PER_CYCLE = int(os.environ.get("SIGNALMONITOR_LEADER_IGNITION_MAX_PER_CYCLE", "8") or 8)
+    LEADER_IGNITION_MAX_PER_DAY = int(os.environ.get("SIGNALMONITOR_LEADER_IGNITION_MAX_PER_DAY", "120") or 120)
+    LEADER_PULLBACK_MIN_PCT = float(os.environ.get("SIGNALMONITOR_LEADER_PULLBACK_MIN_PCT", "0.4") or 0.4)
+    LEADER_PULLBACK_MAX_PCT = float(os.environ.get("SIGNALMONITOR_LEADER_PULLBACK_MAX_PCT", "2.0") or 2.0)
+    LEADER_RECLAIM_PCT = float(os.environ.get("SIGNALMONITOR_LEADER_RECLAIM_PCT", "0.35") or 0.35)
+    LEADER_RECLAIM_MAX_PULLBACK_PCT = float(os.environ.get("SIGNALMONITOR_LEADER_RECLAIM_MAX_PULLBACK_PCT", "1.0") or 1.0)
+    LEADER_CANDIDATE_TTL_MINUTES = float(os.environ.get("SIGNALMONITOR_LEADER_CANDIDATE_TTL_MINUTES", "45") or 45)
     REPEAT_BUY_ALERT_SECONDS = int(os.environ.get("SIGNALMONITOR_REPEAT_BUY_ALERT_SECONDS", "60") or 60)
     FAST_MODE = str(os.environ.get("SIGNALMONITOR_FAST_MODE", "0") or "0").strip().lower() in {"1", "true", "yes", "y", "on"}
     MARKET_OPEN_MINUTES_IST = 9 * 60 + 15
@@ -174,6 +189,8 @@ class SignalMonitorRunner:
         self.save_full_outputs = not self.fast_mode and str(os.environ.get("SIGNALMONITOR_SAVE_FULL_OUTPUTS", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
         self.enable_standalone_ob_alerts = str(os.environ.get("SIGNALMONITOR_ENABLE_STANDALONE_OB", "0") or "0").strip().lower() in {"1", "true", "yes", "y", "on"}
         self.enable_early_breakout_alerts = str(os.environ.get("SIGNALMONITOR_ENABLE_EARLY_BREAKOUT", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
+        self.enable_leader_ignition = self._env_truthy("SIGNALMONITOR_ENABLE_LEADER_IGNITION", "1")
+        self.leader_ignition_discord_alerts = self._env_truthy("SIGNALMONITOR_LEADER_IGNITION_DISCORD", "0")
         self.enable_intraday_goal_mode = str(os.environ.get("SIGNALMONITOR_INTRADAY_GOAL_MODE", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
         self.goal_max_trades_per_day = max(1, int(float(os.environ.get("SIGNALMONITOR_GOAL_MAX_TRADES_PER_DAY", "50") or "50")))
         self.goal_stop_pct = max(0.25, float(os.environ.get("SIGNALMONITOR_GOAL_STOP_PCT", "1.0") or "1.0"))
@@ -202,6 +219,9 @@ class SignalMonitorRunner:
         self._autotrade_journal_jsonl_path = os.path.join(self.output_dir, "autotrade_event_journal.jsonl")
         self._autotrade_candidates: Dict[str, Dict[str, Any]] = self._load_autotrade_state()
         self._autotrade_order_manager = None
+        self._leader_ignition_state_path = os.path.join(self.output_dir, "signalmonitor_leader_ignition_state.json")
+        self._leader_candidates: Dict[str, Dict[str, Any]] = self._load_leader_ignition_state()
+        self._leader_last_ticks_by_symbol: Dict[str, Dict[str, Any]] = {}
         self._last_discord_heartbeat_ts = 0.0
         self._last_goal_suppressed_reasons: List[str] = []
         self.actionable_runner = ActionableReportRunner(
@@ -252,6 +272,10 @@ class SignalMonitorRunner:
         self._early_breakout_alerted_today: Set[str] = set()
         self._top_gainer_radar_date: str = ""
         self._top_gainer_radar_today: Set[str] = set()
+        self._leader_ignition_date: str = ""
+        self._leader_ignition_today: Set[str] = set()
+        self._leader_reclaim_date: str = ""
+        self._leader_reclaim_today: Set[str] = set()
         # Tick-velocity tracking: rolling 5-min history of (timestamp, vol_per_sec)
         # per symbol. Used to detect when a quiet stock suddenly gets active
         # and boost its scan priority before price has time to confirm.
@@ -302,6 +326,8 @@ class SignalMonitorRunner:
             OutputControls().printOutput(
                 f"  [+] No changed symbols detected for {self.universe}. Reusing the last live board."
             )
+            leader_ignition_df = self._run_leader_ignition_lane()
+            self._send_leader_ignition_shadow_alerts(leader_ignition_df)
             summary_df = self._build_summary_from_simple(previous_simple_df, total, 0)
             summary_df = self._annotate_summary_timing(summary_df, cycle_started, 0)
             _, scorecard_df = self.performance_tracker.register_and_update()
@@ -326,6 +352,8 @@ class SignalMonitorRunner:
         OutputControls().printOutput(
             label + (" using official Kite live ticks..." if self.use_live_kite else "...")
         )
+        leader_ignition_df = self._run_leader_ignition_lane()
+        self._send_leader_ignition_shadow_alerts(leader_ignition_df)
 
         report_df, actionable_df = self.actionable_runner.build_report(
             symbols=cycle_symbols,
@@ -2785,6 +2813,467 @@ class SignalMonitorRunner:
             + ", ".join(f"{r['Symbol']} (+{float(r['ChangePct']):.1f}%)" for _, r in out.iterrows())
         )
         return out[self.ALERT_COLUMNS].copy()
+
+    def _run_leader_ignition_lane(self) -> pd.DataFrame:
+        """Raw-tick early leader research lane.
+
+        This lane is intentionally independent of the scanner's Buy Now/Q score
+        pipeline. It watches every live tick for stocks beginning to lead while
+        they are still in a small move window, persists pass/reject evidence,
+        and then tracks whether a cleaner pullback-reclaim entry appears.
+        """
+        if not getattr(self, "enable_leader_ignition", False):
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+        if not self.use_live_kite or not self._is_regular_market_hours():
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+
+        live_ticks = self.actionable_runner.live_ticks or {}
+        if not live_ticks:
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+
+        try:
+            now = PKDateUtilities.currentDateTime()
+        except Exception:
+            now = datetime.now()
+        today = now.strftime("%Y-%m-%d")
+        if getattr(self, "_leader_ignition_date", "") != today:
+            self._leader_ignition_date = today
+            self._leader_ignition_today = self._load_daily_symbol_set("leader_ignition_watch", today=today)
+        if getattr(self, "_leader_reclaim_date", "") != today:
+            self._leader_reclaim_date = today
+            self._leader_reclaim_today = self._load_daily_symbol_set("leader_pullback_reclaim", today=today)
+
+        metrics_by_symbol: Dict[str, Dict[str, Any]] = {}
+        for sym, tick in live_ticks.items():
+            metrics = self._leader_tick_metrics(str(sym).strip().upper(), tick, now)
+            if metrics:
+                metrics_by_symbol[metrics["Symbol"]] = metrics
+
+        audit_rows: List[Dict[str, Any]] = []
+        alert_rows: List[Dict[str, Any]] = []
+        state_changed = False
+
+        reclaim_rows, reclaim_changed = self._update_leader_pullback_reclaims(
+            metrics_by_symbol,
+            now,
+            today,
+            audit_rows,
+        )
+        alert_rows.extend(reclaim_rows)
+        state_changed = state_changed or reclaim_changed
+
+        max_per_day = max(0, int(getattr(self, "LEADER_IGNITION_MAX_PER_DAY", 120) or 120))
+        remaining_day_slots = max(0, max_per_day - len(getattr(self, "_leader_ignition_today", set())))
+        watch_candidates: List[Tuple[float, Dict[str, Any], Dict[str, Any], Dict[str, Any]]] = []
+
+        if remaining_day_slots > 0:
+            for symbol, metrics in metrics_by_symbol.items():
+                if symbol in getattr(self, "_leader_ignition_today", set()):
+                    continue
+                existing = self._leader_candidates.get(symbol, {})
+                if str(existing.get("status", "")).lower() in {"watch", "pullback_seen", "reclaim_alerted"}:
+                    continue
+
+                interesting = (
+                    metrics["OpenMovePct"] >= self.LEADER_IGNITION_MIN_OPEN_PCT
+                    or metrics["DayChangePct"] >= self.LEADER_IGNITION_MIN_DAY_PCT
+                    or metrics["BuyerSellerRatio"] >= self.LEADER_IGNITION_MIN_BS_RATIO
+                    or metrics["VolumeDeltaPct"] >= self.LEADER_IGNITION_MIN_VOLUME_DELTA_PCT
+                )
+                if not interesting:
+                    continue
+
+                reject_reason = ""
+                if metrics["PriceNow"] < 50.0:
+                    reject_reason = "price below floor"
+                elif metrics["TradedValue"] < self.LEADER_IGNITION_MIN_TRADED_VALUE:
+                    reject_reason = "traded value below floor"
+                elif (
+                    metrics["OpenMovePct"] < self.LEADER_IGNITION_MIN_OPEN_PCT
+                    or metrics["DayChangePct"] < self.LEADER_IGNITION_MIN_DAY_PCT
+                ):
+                    reject_reason = "move below ignition window"
+                elif (
+                    metrics["OpenMovePct"] > self.LEADER_IGNITION_MAX_OPEN_PCT
+                    or metrics["DayChangePct"] > self.LEADER_IGNITION_MAX_DAY_PCT
+                ):
+                    reject_reason = "already stretched"
+                elif metrics["PullbackPct"] > self.LEADER_IGNITION_MAX_PULLBACK_PCT:
+                    reject_reason = "pulled back before watch"
+                elif (
+                    metrics["BuyerSellerRatio"] < self.LEADER_IGNITION_MIN_BS_RATIO
+                    and metrics["VolumeDeltaPct"] < self.LEADER_IGNITION_MIN_VOLUME_DELTA_PCT
+                ):
+                    reject_reason = "no buyer pressure or volume acceleration"
+
+                score = self._leader_ignition_score(metrics)
+                if reject_reason:
+                    audit_rows.append(
+                        self._leader_ignition_audit_row(metrics, "ignition_watch", "reject", reject_reason, score)
+                    )
+                    continue
+
+                alert_row = self._leader_alert_row(
+                    metrics,
+                    action="Leader Ignition Watch",
+                    score=score,
+                    why=(
+                        "Shadow lane: raw-tick early leader watch before scanner confirmation; "
+                        "not auto-traded."
+                    ),
+                )
+                expires_ts = now.timestamp() + float(self.LEADER_CANDIDATE_TTL_MINUTES) * 60.0
+                state = {
+                    "today": today,
+                    "symbol": symbol,
+                    "status": "watch",
+                    "created_at": now.isoformat(timespec="seconds"),
+                    "created_ts": now.timestamp(),
+                    "expires_ts": expires_ts,
+                    "watch_price": round(metrics["PriceNow"], 2),
+                    "high_price": round(max(metrics["DayHigh"], metrics["PriceNow"]), 2),
+                    "pullback_seen": False,
+                    "pullback_low": 0.0,
+                    "reclaim_trigger": 0.0,
+                    "score": round(score, 2),
+                }
+                audit_row = self._leader_ignition_audit_row(metrics, "ignition_watch", "pass", "early leader watch", score)
+                watch_candidates.append((score, alert_row, state, audit_row))
+
+        watch_candidates.sort(key=lambda item: (-item[0], str(item[1].get("Symbol", ""))))
+        max_per_cycle = max(1, int(getattr(self, "LEADER_IGNITION_MAX_PER_CYCLE", 8) or 8))
+        selected_watch = watch_candidates[: min(max_per_cycle, remaining_day_slots)]
+        selected_symbols = {str(row.get("Symbol", "")).strip().upper() for _, row, _, _ in selected_watch}
+        for score, alert_row, state, audit_row in selected_watch:
+            symbol = str(alert_row.get("Symbol", "")).strip().upper()
+            if not symbol:
+                continue
+            self._leader_candidates[symbol] = state
+            self._leader_ignition_today.add(symbol)
+            self._append_daily_symbol("leader_ignition_watch", symbol, today=today)
+            alert_rows.append(alert_row)
+            audit_rows.append(audit_row)
+            state_changed = True
+
+        for score, alert_row, _state, audit_row in watch_candidates[len(selected_watch):]:
+            symbol = str(alert_row.get("Symbol", "")).strip().upper()
+            if symbol in selected_symbols:
+                continue
+            audit_row = dict(audit_row)
+            audit_row["Decision"] = "reject"
+            audit_row["Reason"] = "cycle or daily leader slot not selected"
+            audit_rows.append(audit_row)
+
+        self._append_leader_ignition_audit(audit_rows, today=today)
+        if state_changed:
+            self._save_leader_ignition_state()
+
+        if alert_rows:
+            preview = ", ".join(
+                f"{row['Symbol']} {row['NowAction']} (+{float(row['ChangePct']):.1f}%)"
+                for row in alert_rows[:8]
+            )
+            OutputControls().printOutput(f"  [+] Leader ignition shadow lane: {len(alert_rows)} event(s) — {preview}")
+
+        return pd.DataFrame(alert_rows, columns=self.ALERT_COLUMNS)
+
+    def _leader_tick_metrics(self, symbol: str, tick: Dict[str, Any], now: datetime) -> Optional[Dict[str, Any]]:
+        """Compute one raw-tick metric bundle and update lane-local tick history."""
+        symbol = str(symbol or "").strip().upper()
+        if not symbol:
+            return None
+        price = self._to_float(tick.get("last_price"))
+        open_price = self._to_float(tick.get("open"))
+        prev_close = self._to_float(tick.get("close"))
+        if price <= 0 or open_price <= 0 or prev_close <= 0:
+            return None
+
+        previous = (getattr(self, "_leader_last_ticks_by_symbol", {}) or {}).get(symbol, {})
+        previous_price = self._to_float(previous.get("last_price"))
+        previous_volume = self._to_float(previous.get("volume_traded"))
+        volume = self._to_float(tick.get("volume_traded"))
+        volume_delta = max(0.0, volume - previous_volume) if previous_volume > 0 else 0.0
+        volume_delta_pct = (volume_delta / previous_volume * 100.0) if previous_volume > 0 else 0.0
+        price_delta_pct = ((price - previous_price) / previous_price * 100.0) if previous_price > 0 else 0.0
+
+        day_high = max(self._to_float(tick.get("high")), price)
+        pullback_pct = ((day_high - price) / price * 100.0) if day_high > 0 else 0.0
+        day_change_pct = self._to_float(tick.get("change"))
+        if abs(day_change_pct) < 0.0001:
+            day_change_pct = (price - prev_close) / prev_close * 100.0
+        open_move_pct = (price - open_price) / open_price * 100.0
+        total_buy = self._to_float(tick.get("total_buy_quantity"))
+        total_sell = self._to_float(tick.get("total_sell_quantity"))
+        buyer_seller_ratio = total_buy / total_sell if total_sell > 0 else (9.99 if total_buy > 0 else 0.0)
+
+        self._leader_last_ticks_by_symbol[symbol] = {
+            "last_price": price,
+            "volume_traded": volume,
+            "seen_ts": now.timestamp(),
+        }
+        return {
+            "When": self.run_at_str,
+            "Symbol": symbol,
+            "PriceNow": round(price, 2),
+            "Open": round(open_price, 2),
+            "PrevClose": round(prev_close, 2),
+            "DayHigh": round(day_high, 2),
+            "OpenMovePct": round(open_move_pct, 3),
+            "DayChangePct": round(day_change_pct, 3),
+            "PullbackPct": round(max(0.0, pullback_pct), 3),
+            "BuyerSellerRatio": round(buyer_seller_ratio, 3),
+            "TotalBuyQty": round(total_buy, 2),
+            "TotalSellQty": round(total_sell, 2),
+            "Volume": round(volume, 2),
+            "VolumeDelta": round(volume_delta, 2),
+            "VolumeDeltaPct": round(volume_delta_pct, 3),
+            "PriceDeltaPct": round(price_delta_pct, 3),
+            "TradedValue": round(price * volume, 2),
+        }
+
+    def _update_leader_pullback_reclaims(
+        self,
+        metrics_by_symbol: Dict[str, Dict[str, Any]],
+        now: datetime,
+        today: str,
+        audit_rows: List[Dict[str, Any]],
+    ) -> Tuple[List[Dict[str, Any]], bool]:
+        """Advance watch candidates into pullback-seen or reclaim-alerted states."""
+        alert_rows: List[Dict[str, Any]] = []
+        state_changed = False
+        for symbol, state in list((getattr(self, "_leader_candidates", {}) or {}).items()):
+            if str(state.get("today", "")) != today:
+                continue
+            status = str(state.get("status", "") or "").lower()
+            if status in {"expired", "invalidated", "reclaim_alerted"}:
+                continue
+            metrics = metrics_by_symbol.get(str(symbol).strip().upper())
+            if not metrics:
+                continue
+
+            if float(state.get("expires_ts", 0.0) or 0.0) < now.timestamp():
+                state["status"] = "expired"
+                state["closed_at"] = now.isoformat(timespec="seconds")
+                audit_rows.append(
+                    self._leader_ignition_audit_row(metrics, "pullback_reclaim", "reject", "watch expired", state.get("score", 0.0))
+                )
+                state_changed = True
+                continue
+
+            high_price = max(
+                self._to_float(state.get("high_price")),
+                metrics["DayHigh"],
+                metrics["PriceNow"],
+            )
+            state["high_price"] = round(high_price, 2)
+            pullback_from_high = ((high_price - metrics["PriceNow"]) / high_price * 100.0) if high_price > 0 else 0.0
+            if pullback_from_high > self.LEADER_PULLBACK_MAX_PCT:
+                state["status"] = "invalidated"
+                state["closed_at"] = now.isoformat(timespec="seconds")
+                audit_rows.append(
+                    self._leader_ignition_audit_row(metrics, "pullback_reclaim", "reject", "pullback too deep", state.get("score", 0.0))
+                )
+                state_changed = True
+                continue
+
+            if (
+                not bool(state.get("pullback_seen", False))
+                and pullback_from_high >= self.LEADER_PULLBACK_MIN_PCT
+            ):
+                state["pullback_seen"] = True
+                state["status"] = "pullback_seen"
+                state["pullback_low"] = round(metrics["PriceNow"], 2)
+                state["reclaim_trigger"] = round(
+                    metrics["PriceNow"] * (1.0 + float(self.LEADER_RECLAIM_PCT) / 100.0),
+                    2,
+                )
+                audit_rows.append(
+                    self._leader_ignition_audit_row(metrics, "pullback_reclaim", "watch", "healthy pullback seen", state.get("score", 0.0))
+                )
+                state_changed = True
+                continue
+
+            if bool(state.get("pullback_seen", False)):
+                pullback_low = self._to_float(state.get("pullback_low"))
+                if pullback_low <= 0 or metrics["PriceNow"] < pullback_low:
+                    pullback_low = metrics["PriceNow"]
+                    state["pullback_low"] = round(pullback_low, 2)
+                    state["reclaim_trigger"] = round(
+                        pullback_low * (1.0 + float(self.LEADER_RECLAIM_PCT) / 100.0),
+                        2,
+                    )
+                    state_changed = True
+
+                reclaim_trigger = self._to_float(state.get("reclaim_trigger"))
+                if (
+                    reclaim_trigger > 0
+                    and metrics["PriceNow"] >= reclaim_trigger
+                    and pullback_from_high <= self.LEADER_RECLAIM_MAX_PULLBACK_PCT
+                    and metrics["BuyerSellerRatio"] >= max(1.1, self.LEADER_IGNITION_MIN_BS_RATIO * 0.8)
+                    and symbol not in getattr(self, "_leader_reclaim_today", set())
+                ):
+                    score = self._leader_ignition_score(metrics) + 75.0
+                    row = self._leader_alert_row(
+                        metrics,
+                        action="Leader Pullback Reclaim",
+                        score=score,
+                        why=(
+                            "Shadow lane: early leader pulled back, then reclaimed with buyer pressure; "
+                            "not auto-traded."
+                        ),
+                    )
+                    alert_rows.append(row)
+                    state["status"] = "reclaim_alerted"
+                    state["closed_at"] = now.isoformat(timespec="seconds")
+                    state["reclaim_price"] = round(metrics["PriceNow"], 2)
+                    self._leader_reclaim_today.add(symbol)
+                    self._append_daily_symbol("leader_pullback_reclaim", symbol, today=today)
+                    audit_rows.append(
+                        self._leader_ignition_audit_row(metrics, "pullback_reclaim", "pass", "reclaim after healthy pullback", score)
+                    )
+                    state_changed = True
+
+        return alert_rows, state_changed
+
+    def _leader_ignition_score(self, metrics: Dict[str, Any]) -> float:
+        """Score early leaders using only raw tape features."""
+        return round(
+            500.0
+            + metrics["OpenMovePct"] * 35.0
+            + metrics["DayChangePct"] * 20.0
+            + min(metrics["BuyerSellerRatio"], 10.0) * 8.0
+            + min(metrics["VolumeDeltaPct"], 5.0) * 12.0
+            + min(metrics["TradedValue"] / 10_000_000.0, 10.0) * 2.0
+            - metrics["PullbackPct"] * 25.0,
+            2,
+        )
+
+    def _leader_alert_row(self, metrics: Dict[str, Any], action: str, score: float, why: str) -> Dict[str, Any]:
+        entry = metrics["PriceNow"]
+        stop_pct = float(getattr(self, "goal_stop_pct", 1.0) or 1.0)
+        target1_pct = float(getattr(self, "goal_target1_pct", 1.5) or 1.5)
+        target2_pct = float(getattr(self, "goal_target2_pct", 3.0) or 3.0)
+        suggested_qty = int(self.budget_amount // entry) if self.budget_amount and entry > 0 else 0
+        checks = (
+            "LeaderIgnition shadow | "
+            f"open {metrics['OpenMovePct']:+.1f}% | day {metrics['DayChangePct']:+.1f}% | "
+            f"B/S {metrics['BuyerSellerRatio']:.1f}x | "
+            f"vol_delta {metrics['VolumeDeltaPct']:.1f}% | "
+            f"pullback {metrics['PullbackPct']:.1f}%"
+        )
+        return {
+            "When": self.run_at_str,
+            "Symbol": metrics["Symbol"],
+            "PreviousAction": "None",
+            "NowAction": action,
+            "PriceNow": round(entry, 2),
+            "ChangePct": round(metrics["DayChangePct"], 2),
+            "EntryGapPct": 0.0,
+            "RSI": "",
+            "BuyAbove": round(entry, 2),
+            "SellIfBelow": round(entry * (1.0 - stop_pct / 100.0), 2),
+            "TakeProfit1": round(entry * (1.0 + target1_pct / 100.0), 2),
+            "TakeProfit2": round(entry * (1.0 + target2_pct / 100.0), 2),
+            "SuggestedQty": suggested_qty,
+            "SignalStrengthPct": round(score, 1),
+            "Checks": checks,
+            "Why": why,
+        }
+
+    def _leader_ignition_audit_row(
+        self,
+        metrics: Dict[str, Any],
+        stage: str,
+        decision: str,
+        reason: str,
+        score: float,
+    ) -> Dict[str, Any]:
+        row = {
+            "When": self.run_at_str,
+            "Stage": stage,
+            "Decision": decision,
+            "Reason": reason,
+            "Score": round(self._to_float(score), 2),
+        }
+        row.update(metrics)
+        return row
+
+    def _load_leader_ignition_state(self) -> Dict[str, Dict[str, Any]]:
+        try:
+            path = Path(getattr(self, "_leader_ignition_state_path", "") or "")
+            if not path.exists():
+                return {}
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            candidates = payload.get("candidates", payload) if isinstance(payload, dict) else {}
+            if not isinstance(candidates, dict):
+                return {}
+            today = self._today_key()
+            return {
+                str(key).strip().upper(): value
+                for key, value in candidates.items()
+                if isinstance(value, dict) and str(value.get("today", today)) == today
+            }
+        except Exception as exc:
+            default_logger().debug(f"Could not load leader ignition state: {exc}", exc_info=True)
+            return {}
+
+    def _save_leader_ignition_state(self) -> None:
+        try:
+            path = Path(getattr(self, "_leader_ignition_state_path", "") or "")
+            if not path:
+                return
+            path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "updated_at": PKDateUtilities.currentDateTime().isoformat(timespec="seconds"),
+                "lane": "leader_ignition_shadow",
+                "candidates": getattr(self, "_leader_candidates", {}) or {},
+            }
+            path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        except Exception as exc:
+            default_logger().debug(f"Could not save leader ignition state: {exc}", exc_info=True)
+
+    def _append_leader_ignition_audit(self, rows: List[Dict[str, Any]], today: str = "") -> None:
+        """Append compact pass/reject evidence for raw-tick leader candidates."""
+        if not rows:
+            return
+        try:
+            day = str(today or PKDateUtilities.currentDateTime().strftime("%Y-%m-%d"))
+        except Exception:
+            day = datetime.now().strftime("%Y-%m-%d")
+        try:
+            out_dir = Path(self.output_dir) / "leader_ignition"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            daily_path = out_dir / f"leader_ignition_{day}.csv"
+            latest_path = out_dir / "leader_ignition_latest.csv"
+            df = pd.DataFrame(rows)
+            df.to_csv(daily_path, mode="a", header=not daily_path.exists(), index=False)
+            df.to_csv(latest_path, index=False)
+        except Exception as exc:
+            default_logger().debug(f"Could not append leader ignition audit: {exc}", exc_info=True)
+
+    def _send_leader_ignition_shadow_alerts(self, alerts_df: pd.DataFrame) -> None:
+        """Optional Discord visibility for the shadow lane. Disabled by default."""
+        if not getattr(self, "leader_ignition_discord_alerts", False):
+            return
+        if "discord" not in getattr(self, "alert_channels", set()):
+            return
+        if alerts_df is None or alerts_df.empty:
+            return
+        try:
+            sent_at = PKDateUtilities.currentDateTime().strftime("%Y-%m-%d %H:%M:%S")
+        except Exception:
+            sent_at = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        lines = [
+            "**Leader Ignition Shadow - NOT A BUY SIGNAL**",
+            f"Source `{self._alert_source_label()}` | Sent `{sent_at}`",
+            "Raw-tick early leader research lane; no automatic orders.",
+        ]
+        for _, row in alerts_df.head(8).iterrows():
+            lines.append(
+                f"`{row['Symbol']}` {row['NowAction']} @ ₹{float(row['PriceNow']):.2f} "
+                f"| day {float(row['ChangePct']):+.1f}% | score {float(row['SignalStrengthPct']):.0f}"
+            )
+        self._send_discord_alert("\n".join(lines))
 
     def _build_top_gainer_radar_alerts(self, current_simple_df: pd.DataFrame) -> pd.DataFrame:
         """Fallback for live top-gainer moves the scanner labels Hold/Watch."""
