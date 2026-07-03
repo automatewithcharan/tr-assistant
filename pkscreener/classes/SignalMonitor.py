@@ -276,6 +276,8 @@ class SignalMonitorRunner:
         self._leader_ignition_today: Set[str] = set()
         self._leader_reclaim_date: str = ""
         self._leader_reclaim_today: Set[str] = set()
+        self._leader_audit_date: str = ""
+        self._leader_audit_seen_today: Set[str] = set()
         # Tick-velocity tracking: rolling 5-min history of (timestamp, vol_per_sec)
         # per symbol. Used to detect when a quiet stock suddenly gets active
         # and boost its scan priority before price has time to confirm.
@@ -3240,12 +3242,33 @@ class SignalMonitorRunner:
             day = str(today or PKDateUtilities.currentDateTime().strftime("%Y-%m-%d"))
         except Exception:
             day = datetime.now().strftime("%Y-%m-%d")
+        if getattr(self, "_leader_audit_date", "") != day:
+            self._leader_audit_date = day
+            self._leader_audit_seen_today = set()
+        filtered_rows: List[Dict[str, Any]] = []
+        seen = getattr(self, "_leader_audit_seen_today", set())
+        for row in rows:
+            key = "|".join(
+                [
+                    str(row.get("Symbol", "")).strip().upper(),
+                    str(row.get("Stage", "")).strip(),
+                    str(row.get("Decision", "")).strip(),
+                    str(row.get("Reason", "")).strip(),
+                ]
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            filtered_rows.append(row)
+        self._leader_audit_seen_today = seen
+        if not filtered_rows:
+            return
         try:
             out_dir = Path(self.output_dir) / "leader_ignition"
             out_dir.mkdir(parents=True, exist_ok=True)
             daily_path = out_dir / f"leader_ignition_{day}.csv"
             latest_path = out_dir / "leader_ignition_latest.csv"
-            df = pd.DataFrame(rows)
+            df = pd.DataFrame(filtered_rows)
             df.to_csv(daily_path, mode="a", header=not daily_path.exists(), index=False)
             df.to_csv(latest_path, index=False)
         except Exception as exc:
