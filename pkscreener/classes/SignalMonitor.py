@@ -219,6 +219,7 @@ class SignalMonitorRunner:
         self._autotrade_journal_jsonl_path = os.path.join(self.output_dir, "autotrade_event_journal.jsonl")
         self._autotrade_candidates: Dict[str, Dict[str, Any]] = self._load_autotrade_state()
         self._autotrade_order_manager = None
+        self._heartbeat_state_path = os.path.join(self.output_dir, f"signalmonitor_{self.universe}_heartbeat_state.json")
         self._leader_ignition_state_path = os.path.join(self.output_dir, "signalmonitor_leader_ignition_state.json")
         self._leader_candidates: Dict[str, Dict[str, Any]] = self._load_leader_ignition_state()
         self._leader_last_ticks_by_symbol: Dict[str, Dict[str, Any]] = {}
@@ -4326,7 +4327,11 @@ class SignalMonitorRunner:
         if interval_minutes <= 0:
             return
         now_ts = time.time()
-        if now_ts - float(getattr(self, "_last_discord_heartbeat_ts", 0.0) or 0.0) < interval_minutes * 60:
+        last_heartbeat_ts = max(
+            float(getattr(self, "_last_discord_heartbeat_ts", 0.0) or 0.0),
+            self._load_last_heartbeat_ts(),
+        )
+        if now_ts - last_heartbeat_ts < interval_minutes * 60:
             return
 
         summary = summary_df.iloc[0].to_dict() if summary_df is not None and not summary_df.empty else {}
@@ -4370,6 +4375,37 @@ class SignalMonitorRunner:
         ]
         self._send_discord_alert("\n".join(lines))
         self._last_discord_heartbeat_ts = now_ts
+        self._save_last_heartbeat_ts(now_ts)
+
+    def _heartbeat_state_file(self) -> Path:
+        path = str(getattr(self, "_heartbeat_state_path", "") or "").strip()
+        if not path:
+            output_dir = getattr(self, "output_dir", "") or Archiver.get_user_data_dir()
+            universe = str(getattr(self, "universe", "all") or "all").strip() or "all"
+            path = os.path.join(output_dir, f"signalmonitor_{universe}_heartbeat_state.json")
+        return Path(path)
+
+    def _load_last_heartbeat_ts(self) -> float:
+        try:
+            path = self._heartbeat_state_file()
+            if not path.exists():
+                return 0.0
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            return float(payload.get("last_heartbeat_ts", 0.0) or 0.0)
+        except Exception:
+            return 0.0
+
+    def _save_last_heartbeat_ts(self, timestamp: float) -> None:
+        try:
+            path = self._heartbeat_state_file()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            payload = {
+                "last_heartbeat_ts": float(timestamp or 0.0),
+                "updated_at": PKDateUtilities.currentDateTime().isoformat(timespec="seconds"),
+            }
+            path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        except Exception as exc:
+            default_logger().debug(f"Could not persist monitor heartbeat state: {exc}", exc_info=True)
 
     def _is_regular_market_hours(self) -> bool:
         """Only send live monitor alerts during NSE regular market hours."""
@@ -4377,6 +4413,14 @@ class SignalMonitorRunner:
             now_ist = PKDateUtilities.currentDateTime()
         except Exception:
             now_ist = datetime.now()
+        if now_ist.weekday() >= 5:
+            return False
+        try:
+            is_holiday, _occasion = PKDateUtilities.isHoliday(now_ist)
+            if is_holiday:
+                return False
+        except Exception:
+            pass
         minute_of_day = int(now_ist.hour) * 60 + int(now_ist.minute)
         return self.MARKET_OPEN_MINUTES_IST <= minute_of_day <= self.MARKET_CLOSE_MINUTES_IST
 

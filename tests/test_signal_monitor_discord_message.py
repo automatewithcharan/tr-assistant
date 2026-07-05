@@ -852,6 +852,67 @@ def test_monitor_heartbeat_reports_active_scanner_without_fresh_buy(monkeypatch)
     assert "VOLTAS" in sent_messages[0]
 
 
+def test_monitor_heartbeat_throttle_survives_runner_restart(monkeypatch, tmp_path):
+    runner = _make_runner()
+    runner.output_dir = str(tmp_path)
+    runner._heartbeat_state_path = str(tmp_path / "heartbeat_state.json")
+    sent_messages = []
+    runner._send_discord_alert = sent_messages.append
+    runner._is_regular_market_hours = lambda: True
+    monkeypatch.setattr(signal_monitor_module.time, "time", lambda: 1000.0)
+    monkeypatch.setattr(runner, "_load_daily_symbol_set", lambda *_args, **_kwargs: set())
+    summary_df = pd.DataFrame(
+        [
+            {
+                "ScannedSymbols": 2990,
+                "FreshAlertsThisRun": 0,
+                "BuyNowCount": 0,
+                "MomentumBuyCount": 0,
+                "SellNowCount": 0,
+            }
+        ]
+    )
+
+    runner._send_monitor_heartbeat(summary_df, pd.DataFrame(columns=runner.ALERT_COLUMNS))
+    assert len(sent_messages) == 1
+
+    runner._last_discord_heartbeat_ts = 0.0
+    monkeypatch.setattr(signal_monitor_module.time, "time", lambda: 1060.0)
+    runner._send_monitor_heartbeat(summary_df, pd.DataFrame(columns=runner.ALERT_COLUMNS))
+    assert len(sent_messages) == 1
+
+    monkeypatch.setattr(signal_monitor_module.time, "time", lambda: 1601.0)
+    runner._send_monitor_heartbeat(summary_df, pd.DataFrame(columns=runner.ALERT_COLUMNS))
+    assert len(sent_messages) == 2
+
+
+def test_regular_market_hours_blocks_weekend(monkeypatch):
+    runner = _make_runner()
+    monkeypatch.setattr(
+        signal_monitor_module.PKDateUtilities,
+        "currentDateTime",
+        staticmethod(lambda: datetime(2026, 7, 5, 10, 28, 0)),
+    )
+
+    assert runner._is_regular_market_hours() is False
+
+
+def test_regular_market_hours_blocks_trading_holiday(monkeypatch):
+    runner = _make_runner()
+    monkeypatch.setattr(
+        signal_monitor_module.PKDateUtilities,
+        "currentDateTime",
+        staticmethod(lambda: datetime(2026, 7, 6, 10, 28, 0)),
+    )
+    monkeypatch.setattr(
+        signal_monitor_module.PKDateUtilities,
+        "isHoliday",
+        staticmethod(lambda _date: (True, "Exchange holiday")),
+    )
+
+    assert runner._is_regular_market_hours() is False
+
+
 def test_intraday_goal_mode_blocks_direct_buy_without_confirmation():
     runner = _make_runner()
     alerts_df = pd.DataFrame(

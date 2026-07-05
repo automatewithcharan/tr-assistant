@@ -100,6 +100,24 @@ run_disk_guard() {
 }
 
 cd $REPO
+if [ "${WATCHDOG_ALLOW_NON_TRADING_DAY:-0}" != "1" ]; then
+    if ! "$PYTHON" - <<'PY'
+import sys
+from PKDevTools.classes.PKDateUtilities import PKDateUtilities
+
+now = PKDateUtilities.currentDateTime()
+holiday = False
+try:
+    holiday, _occasion = PKDateUtilities.isHoliday(now)
+except Exception:
+    holiday = False
+sys.exit(0 if now.weekday() < 5 and not holiday else 1)
+PY
+    then
+        echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Watchdog: skipped because market is closed today" >> "$LOG"
+        exit 0
+    fi
+fi
 run_disk_guard
 [ "$DISK_GUARD_STOPPED" -eq 1 ] && exit 0
 

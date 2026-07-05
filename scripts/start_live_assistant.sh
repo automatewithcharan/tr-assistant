@@ -27,6 +27,25 @@ if [[ ! -x "$PYTHON" ]]; then
     exit 1
 fi
 
+if [[ "${ASSISTANT_ALLOW_NON_TRADING_DAY:-0}" != "1" ]]; then
+    if ! "$PYTHON" - <<'PY'
+import sys
+from PKDevTools.classes.PKDateUtilities import PKDateUtilities
+
+now = PKDateUtilities.currentDateTime()
+holiday = False
+try:
+    holiday, _occasion = PKDateUtilities.isHoliday(now)
+except Exception:
+    holiday = False
+sys.exit(0 if now.weekday() < 5 and not holiday else 1)
+PY
+    then
+        echo "Market is closed today; live assistant start skipped. Set ASSISTANT_ALLOW_NON_TRADING_DAY=1 to override."
+        exit 0
+    fi
+fi
+
 # Ensure indices exist
 bash "$REPO_ROOT/scripts/ensure_required_indices.sh" || true
 

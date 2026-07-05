@@ -18,6 +18,25 @@ send_discord() {
     curl -s -X POST "$WEBHOOK"          -H 'Content-Type: application/json'          -d "{\"content\": \"$1\"}" > /dev/null 2>&1 || true
 }
 
+if [ "${PREWARM_ALLOW_NON_TRADING_DAY:-0}" != "1" ]; then
+    if ! "$PYTHON" - <<'PY'
+import sys
+from PKDevTools.classes.PKDateUtilities import PKDateUtilities
+
+now = PKDateUtilities.currentDateTime()
+holiday = False
+try:
+    holiday, _occasion = PKDateUtilities.isHoliday(now)
+except Exception:
+    holiday = False
+sys.exit(0 if now.weekday() < 5 and not holiday else 1)
+PY
+    then
+        echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Prewarm: skipped because market is closed today" >> $LOG
+        exit 0
+    fi
+fi
+
 echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Prewarm: starting cache refresh for NSE+BSE" >> $LOG
 send_discord "🔄 **Daily prewarm started** — refreshing cache for NSE+BSE stocks (8 AM IST)"
 
