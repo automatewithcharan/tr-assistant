@@ -27,6 +27,7 @@ from PKDevTools.classes.log import default_logger
 
 from pkscreener.classes.ActionableReport import ActionableReportRunner
 from pkscreener.classes.AnomalyDetector import VolumeAnomalyDetector
+from pkscreener.classes.LiveFeatureRecorder import LiveFeatureRecorder
 from pkscreener.classes.PaperTradeTracker import PaperTradeTracker
 from pkscreener.classes.RiskGuardrails import LiveTradingGuardrails
 from pkscreener.classes.SignalPerformanceTracker import SignalPerformanceTracker
@@ -191,6 +192,7 @@ class SignalMonitorRunner:
         self.enable_early_breakout_alerts = str(os.environ.get("SIGNALMONITOR_ENABLE_EARLY_BREAKOUT", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
         self.enable_leader_ignition = self._env_truthy("SIGNALMONITOR_ENABLE_LEADER_IGNITION", "1")
         self.leader_ignition_discord_alerts = self._env_truthy("SIGNALMONITOR_LEADER_IGNITION_DISCORD", "0")
+        self.enable_live_feature_recorder = self._env_truthy("SIGNALMONITOR_ENABLE_LIVE_FEATURE_RECORDER", "1")
         self.enable_intraday_goal_mode = str(os.environ.get("SIGNALMONITOR_INTRADAY_GOAL_MODE", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
         self.goal_max_trades_per_day = max(1, int(float(os.environ.get("SIGNALMONITOR_GOAL_MAX_TRADES_PER_DAY", "50") or "50")))
         self.goal_stop_pct = max(0.25, float(os.environ.get("SIGNALMONITOR_GOAL_STOP_PCT", "1.0") or "1.0"))
@@ -223,6 +225,19 @@ class SignalMonitorRunner:
         self._leader_ignition_state_path = os.path.join(self.output_dir, "signalmonitor_leader_ignition_state.json")
         self._leader_candidates: Dict[str, Dict[str, Any]] = self._load_leader_ignition_state()
         self._leader_last_ticks_by_symbol: Dict[str, Dict[str, Any]] = {}
+        self._live_feature_recorder = (
+            LiveFeatureRecorder(
+                output_dir=self.output_dir,
+                interval_seconds=float(os.environ.get("SIGNALMONITOR_LIVE_FEATURE_INTERVAL_SECONDS", "60") or 60),
+                top_gainer_pct=float(os.environ.get("SIGNALMONITOR_LIVE_FEATURE_TOP_GAINER_PCT", "5.0") or 5.0),
+                stability_window=int(float(os.environ.get("SIGNALMONITOR_LIVE_FEATURE_STABILITY_WINDOW", "3") or 3)),
+                min_stable_bs_ratio=float(os.environ.get("SIGNALMONITOR_LIVE_FEATURE_MIN_STABLE_BS", "2.0") or 2.0),
+                spread_ok_bps=float(os.environ.get("SIGNALMONITOR_LIVE_FEATURE_SPREAD_OK_BPS", "35") or 35),
+                max_rows_per_cycle=int(float(os.environ.get("SIGNALMONITOR_LIVE_FEATURE_MAX_ROWS_PER_CYCLE", "200") or 200)),
+            )
+            if self.enable_live_feature_recorder
+            else None
+        )
         self._last_discord_heartbeat_ts = 0.0
         self._last_goal_suppressed_reasons: List[str] = []
         self.actionable_runner = ActionableReportRunner(
@@ -331,6 +346,7 @@ class SignalMonitorRunner:
             )
             leader_ignition_df = self._run_leader_ignition_lane()
             self._send_leader_ignition_shadow_alerts(leader_ignition_df)
+            self._record_live_feature_snapshot(pd.DataFrame(columns=self.ALERT_COLUMNS))
             summary_df = self._build_summary_from_simple(previous_simple_df, total, 0)
             summary_df = self._annotate_summary_timing(summary_df, cycle_started, 0)
             _, scorecard_df = self.performance_tracker.register_and_update()
@@ -469,6 +485,7 @@ class SignalMonitorRunner:
         self._run_missed_opportunity_analysis()
         self._paper_track_alerts(alerts_df)
         self._close_paper_trades_if_eod()
+        self._record_live_feature_snapshot(alerts_df)
         summary_df = self._build_summary_from_simple(merged_simple_df, total, len(alerts_df))
         summary_df = self._annotate_summary_timing(summary_df, cycle_started, cycle_total)
         scorecard_df = None
@@ -3920,6 +3937,51 @@ class SignalMonitorRunner:
             self._process_autotrade_exits()
         finally:
             self._save_autotrade_state()
+
+    def _record_live_feature_snapshot(self, alerts_df: pd.DataFrame) -> None:
+        """Shadow-record live-only context for later strategy research."""
+        recorder = getattr(self, "_live_feature_recorder", None)
+        if recorder is None or not getattr(self, "enable_live_feature_recorder", False):
+            return
+        if not self.use_live_kite or not self._is_regular_market_hours():
+            return
+        ticks = self.actionable_runner.live_ticks or {}
+        if not ticks:
+            return
+
+        today = self._today_key()
+        alerted_symbols = {
+            str(symbol).strip().upper()
+            for symbol, day in (getattr(self, "_daily_alerted", {}) or {}).items()
+            if str(day) == today
+        }
+        for attr in (
+            "_early_breakout_alerted_today",
+            "_top_gainer_radar_today",
+            "_leader_ignition_today",
+            "_leader_reclaim_today",
+            "_ob_alerted_today",
+        ):
+            alerted_symbols.update(
+                str(symbol).strip().upper()
+                for symbol in (getattr(self, attr, set()) or set())
+                if str(symbol).strip()
+            )
+        if alerts_df is not None and not alerts_df.empty and "Symbol" in alerts_df.columns:
+            alerted_symbols.update(alerts_df["Symbol"].astype(str).str.strip().str.upper().tolist())
+
+        try:
+            rows_df = recorder.record(ticks, alerted_symbols=alerted_symbols, now=self.run_at)
+        except Exception as exc:
+            default_logger().debug(f"Live feature recorder failed: {exc}", exc_info=True)
+            return
+        if rows_df is not None and not rows_df.empty:
+            missed_count = int(rows_df["MissedRunnerCandidate"].astype(bool).sum()) if "MissedRunnerCandidate" in rows_df.columns else 0
+            stable_count = int(rows_df["OrderBookStable"].astype(bool).sum()) if "OrderBookStable" in rows_df.columns else 0
+            OutputControls().printOutput(
+                f"  [+] Live feature recorder: saved {len(rows_df)} row(s) "
+                f"(missed runners {missed_count}, stable OB {stable_count})"
+            )
 
     def _register_autotrade_candidates(self, alerts_df: pd.DataFrame) -> None:
         if alerts_df is None or alerts_df.empty:
