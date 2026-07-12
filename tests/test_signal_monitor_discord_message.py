@@ -1051,6 +1051,9 @@ def test_goal_selector_accepts_profitable_forward_backtest_summary(tmp_path):
                 "goal_hit_pct": 50.0,
                 "avg_daily_return_pct": 0.1761,
                 "worst_day_pct": -1.15,
+                "leakage_audit_passed": True,
+                "feature_availability": "signal_close_or_earlier",
+                "evidence_version": 2,
             }
         ]
     ).to_csv(selector, index=False)
@@ -1069,6 +1072,24 @@ def test_goal_selector_rejects_full_day_ohlc_backtest_summary(tmp_path):
                 "goal_hit_pct": 50.0,
                 "avg_daily_return_pct": 0.1761,
                 "worst_day_pct": -1.15,
+                "leakage_audit_passed": True,
+                "feature_availability": "signal_close_or_earlier",
+                "evidence_version": 2,
+            }
+        ]
+    ).to_csv(selector, index=False)
+
+    assert SignalMonitorRunner._goal_selector_is_validated(str(selector)) is False
+
+
+def test_goal_selector_rejects_legacy_accepted_file_without_leakage_audit(tmp_path):
+    selector = tmp_path / "legacy_selector.csv"
+    pd.DataFrame(
+        [
+            {
+                "selector": "leaked_entry_bar_liquidity",
+                "accepted": True,
+                "final_avg_daily_return_pct": 0.60,
             }
         ]
     ).to_csv(selector, index=False)

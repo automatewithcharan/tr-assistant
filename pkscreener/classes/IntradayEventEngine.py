@@ -8,6 +8,60 @@ import numpy as np
 import pandas as pd
 
 
+LIVE_EVENT_FEATURES = [
+    "move_from_open_pct",
+    "vol_ratio",
+    "vol_ratio_5",
+    "vwap_dist_pct",
+    "breakout_over_prior_high_pct",
+    "candle_body_pct",
+    "range_position",
+    "range_pct_so_far",
+    "recent_return_3bar_pct",
+    "or15_complete",
+    "or15_breakout_pct",
+    "benchmark_return_from_open_pct",
+    "benchmark_recent_return_3bar_pct",
+    "relative_strength_open_pct",
+    "relative_strength_3bar_pct",
+    "minute",
+    "event_or15_breakout",
+    "event_or15_retest_hold",
+    "event_prior_high_continuation",
+    "event_vwap_pullback_hold",
+    "event_vwap_reclaim",
+]
+
+CAUSAL_RICH_EVENT_FEATURES = LIVE_EVENT_FEATURES + [
+    "signal_bar_range_pct",
+    "signal_close_position",
+    "signal_body_to_range",
+    "signal_upper_wick_pct",
+    "signal_lower_wick_pct",
+    "pullback_from_high_pct",
+    "distance_to_prior_high_pct",
+    "distance_to_or15_high_pct",
+    "distance_to_vwap_pct",
+    "vwap_reclaim_strength_pct",
+    "vwap_retest_depth_pct",
+    "or15_retest_depth_pct",
+    "minutes_since_or15_complete",
+    "bars_to_signal",
+    "signal_bar_value_lakh",
+    "value_to_signal_cr",
+    "estimated_day_value_at_signal_cr",
+    "signal_value_share_pct",
+]
+
+EVENT_TYPES = [
+    "or15_breakout",
+    "or15_retest_hold",
+    "prior_high_continuation",
+    "vwap_pullback_hold",
+    "vwap_reclaim",
+]
+
+
 def _parse_time(value: str) -> pd.Timestamp:
     return pd.Timestamp(f"2000-01-01 {value}")
 
@@ -168,3 +222,70 @@ def detect_intraday_events(day: pd.DataFrame, config: Any) -> list[tuple[str, in
         )
         events.extend((name, idx, stage) for stage, idx in enumerate(indices, start=1))
     return events
+
+
+def live_event_feature_row(day: pd.DataFrame, index: int, event_type: str) -> dict[str, float]:
+    """Build the frozen live-compatible feature schema for one signal bar."""
+    if event_type not in EVENT_TYPES:
+        raise ValueError(f"unknown intraday event type: {event_type}")
+    signal = day.iloc[int(index)]
+    timestamp = pd.Timestamp(signal["datetime"])
+    row = {
+        feature: float(signal.get(feature, 0.0) or 0.0)
+        for feature in LIVE_EVENT_FEATURES
+        if not feature.startswith("event_") and feature != "minute"
+    }
+    row["minute"] = float(timestamp.hour * 60 + timestamp.minute)
+    for name in EVENT_TYPES:
+        row[f"event_{name}"] = float(name == event_type)
+    open_price = float(signal.get("open", 0.0) or 0.0)
+    high = float(signal.get("high", 0.0) or 0.0)
+    low = float(signal.get("low", 0.0) or 0.0)
+    close = float(signal.get("close", 0.0) or 0.0)
+    bar_range = max(high - low, 0.0)
+    high_so_far = float(signal.get("high_so_far", high) or high)
+    prior_high = float(signal.get("prior_high", 0.0) or 0.0)
+    vwap = float(signal.get("vwap", 0.0) or 0.0)
+    signal_time = pd.Timestamp(signal["datetime"])
+    or15_start = signal_time.normalize() + pd.Timedelta(hours=9, minutes=15)
+    or15_end = signal_time.normalize() + pd.Timedelta(hours=9, minutes=30)
+    known_or15 = day.iloc[: int(index) + 1]
+    known_or15 = known_or15[
+        (pd.to_datetime(known_or15["datetime"]) >= or15_start)
+        & (pd.to_datetime(known_or15["datetime"]) < or15_end)
+    ]
+    or15_high = float(known_or15["high"].max()) if not known_or15.empty else 0.0
+    previous = day.iloc[int(index) - 1] if int(index) > 0 else signal
+    previous_close = float(previous.get("close", close) or close)
+    previous_vwap = float(previous.get("vwap", vwap) or vwap)
+    values = (day.iloc[: int(index) + 1]["close"].astype(float) * day.iloc[: int(index) + 1]["volume"].astype(float))
+    value_to_signal = float(values.sum())
+    signal_bar_value = close * float(signal.get("volume", 0.0) or 0.0)
+    bars_to_signal = int(index) + 1
+    row.update(
+        {
+            "signal_bar_range_pct": bar_range / open_price * 100.0 if open_price > 0 else 0.0,
+            "signal_close_position": (close - low) / bar_range if bar_range > 0 else 0.0,
+            "signal_body_to_range": abs(close - open_price) / bar_range if bar_range > 0 else 0.0,
+            "signal_upper_wick_pct": max(high - max(open_price, close), 0.0) / open_price * 100.0 if open_price > 0 else 0.0,
+            "signal_lower_wick_pct": max(min(open_price, close) - low, 0.0) / open_price * 100.0 if open_price > 0 else 0.0,
+            "pullback_from_high_pct": (high_so_far - close) / high_so_far * 100.0 if high_so_far > 0 else 0.0,
+            "distance_to_prior_high_pct": (close - prior_high) / prior_high * 100.0 if prior_high > 0 else 0.0,
+            "distance_to_or15_high_pct": (close - or15_high) / or15_high * 100.0 if or15_high > 0 else 0.0,
+            "distance_to_vwap_pct": (close - vwap) / vwap * 100.0 if vwap > 0 else 0.0,
+            "vwap_reclaim_strength_pct": (close - previous_vwap) / previous_vwap * 100.0 if previous_close <= previous_vwap and previous_vwap > 0 else 0.0,
+            "vwap_retest_depth_pct": (vwap - low) / vwap * 100.0 if vwap > 0 else 0.0,
+            "or15_retest_depth_pct": (or15_high - low) / or15_high * 100.0 if or15_high > 0 else 0.0,
+            "minutes_since_or15_complete": max(0.0, float(row["minute"]) - 570.0),
+            "bars_to_signal": float(bars_to_signal),
+            "signal_bar_value_lakh": signal_bar_value / 100000.0,
+            "value_to_signal_cr": value_to_signal / 10000000.0,
+            "estimated_day_value_at_signal_cr": (value_to_signal / bars_to_signal * 75.0) / 10000000.0,
+            "signal_value_share_pct": signal_bar_value / value_to_signal * 100.0 if value_to_signal > 0 else 0.0,
+        }
+    )
+    return {
+        feature: float(value) if np.isfinite(float(value)) else 0.0
+        for feature in CAUSAL_RICH_EVENT_FEATURES
+        for value in [row.get(feature, 0.0)]
+    }

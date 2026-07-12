@@ -9,7 +9,11 @@ from typing import Any, Dict, Iterable
 
 import pandas as pd
 
-from pkscreener.classes.IntradayEventEngine import detect_intraday_events, prepare_intraday_day
+from pkscreener.classes.IntradayEventEngine import (
+    detect_intraday_events,
+    live_event_feature_row,
+    prepare_intraday_day,
+)
 
 
 @dataclass(frozen=True)
@@ -129,6 +133,7 @@ class IntradayEventShadowRecorder:
                 if key in self._event_keys:
                     continue
                 self._event_keys.add(key)
+                features = live_event_feature_row(prepared, index, event_type)
                 events.append(
                     {
                         "date": date,
@@ -145,6 +150,7 @@ class IntradayEventShadowRecorder:
                         "range_pct_so_far": round(float(signal["range_pct_so_far"]), 6),
                         "benchmark_available": True,
                         "paper_only": True,
+                        **features,
                     }
                 )
         if events:

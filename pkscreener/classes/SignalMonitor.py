@@ -288,6 +288,7 @@ class SignalMonitorRunner:
         self._last_partial_save_ts = 0.0
         self._paper_tracker = PaperTradeTracker()
         self._paper_closed_date: Optional[str] = None
+        self._event_shadow_outcomes_date: Optional[str] = None
         # Wall-clock tracking: first time we alert a symbol today -> skip repeat caps.
         # Persisted because the live monitor is often launched by schedulers where
         # process memory resets between cycles.
@@ -383,6 +384,7 @@ class SignalMonitorRunner:
             )
             self._print_summary(summary_df, previous_simple_df, pd.DataFrame(columns=self.ALERT_COLUMNS), scorecard_df)
             self._close_paper_trades_if_eod()
+            self._evaluate_event_shadow_outcomes_if_eod()
             self._cycle_number += 1
             return pd.DataFrame(), previous_simple_df, pd.DataFrame(columns=self.ALERT_COLUMNS), summary_df
 
@@ -500,8 +502,11 @@ class SignalMonitorRunner:
                 ]
             if not ob_alerts_df.empty:
                 alerts_df = pd.concat([alerts_df, ob_alerts_df], ignore_index=True)
-        alerts_df = self._apply_intraday_goal_mode(alerts_df)
+        # Paper evidence must continue collecting even when the live selector
+        # is revoked. Goal alerts and any real-order lane remain behind the
+        # causal validation gate below.
         self._run_ranked_confirmation_paper_lane(alerts_df)
+        alerts_df = self._apply_intraday_goal_mode(alerts_df)
         self._run_autotrade_lane(alerts_df)
         # V2: Follow-through check + exit monitoring
         self._check_followthrough_and_exits()
@@ -509,6 +514,7 @@ class SignalMonitorRunner:
         self._run_missed_opportunity_analysis()
         self._paper_track_alerts(alerts_df)
         self._close_paper_trades_if_eod()
+        self._evaluate_event_shadow_outcomes_if_eod()
         self._record_live_feature_snapshot(alerts_df)
         summary_df = self._build_summary_from_simple(merged_simple_df, total, len(alerts_df))
         summary_df = self._annotate_summary_timing(summary_df, cycle_started, cycle_total)
@@ -2468,6 +2474,23 @@ class SignalMonitorRunner:
             if not path.exists() or path.stat().st_size <= 0:
                 return False
             df = pd.read_csv(path)
+            audit_required = {
+                "leakage_audit_passed",
+                "feature_availability",
+                "evidence_version",
+            }
+            if not audit_required.issubset(set(df.columns)):
+                return False
+            leakage_ok = df["leakage_audit_passed"].astype(str).str.strip().str.lower().isin(
+                {"true", "1", "yes", "y"}
+            )
+            availability_ok = df["feature_availability"].astype(str).str.strip().str.lower().eq(
+                "signal_close_or_earlier"
+            )
+            evidence_version = pd.to_numeric(df["evidence_version"], errors="coerce").fillna(0)
+            df = df[leakage_ok & availability_ok & (evidence_version >= 2)].copy()
+            if df.empty:
+                return False
             if "accepted" in df.columns:
                 accepted = df["accepted"].astype(str).str.strip().str.lower().isin({"true", "1", "yes", "y"})
                 if not accepted.any():
@@ -4472,6 +4495,33 @@ class SignalMonitorRunner:
         self._paper_closed_date = today
         if summary:
             OutputControls().printOutput(summary, enableMultipleLineOutput=True)
+
+    def _evaluate_event_shadow_outcomes_if_eod(self) -> None:
+        recorder = getattr(self, "_intraday_event_shadow", None)
+        if recorder is None:
+            return
+        try:
+            now_ist = PKDateUtilities.currentDateTime()
+        except Exception:
+            now_ist = datetime.now()
+        today = now_ist.strftime("%Y-%m-%d")
+        minute_of_day = int(now_ist.hour) * 60 + int(now_ist.minute)
+        if minute_of_day < (15 * 60 + 30) or self._event_shadow_outcomes_date == today:
+            return
+        try:
+            from pkscreener.classes.IntradayEventShadowOutcomes import evaluate_event_shadow_day
+
+            outcomes, summary = evaluate_event_shadow_day(self.output_dir, today)
+            if not outcomes.empty:
+                self._event_shadow_outcomes_date = today
+                complete = int(outcomes["complete_session"].sum())
+                OutputControls().printOutput(
+                    f"  [+] Event shadow outcomes: {complete}/{len(outcomes)} complete event(s) evaluated"
+                )
+                if not summary.empty:
+                    OutputControls().printOutput(summary.to_string(index=False), enableMultipleLineOutput=True)
+        except Exception as exc:
+            default_logger().warning(f"Event shadow outcome evaluation failed: {exc}", exc_info=True)
 
     @staticmethod
     def _safe_int(value) -> int:
