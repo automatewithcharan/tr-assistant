@@ -283,6 +283,19 @@ class KiteTickerStreamRunner:
             tokens.append(token)
             self._token_to_symbol[int(token)] = str(symbol).strip().upper()
 
+        # The shared intraday event lane needs same-bar benchmark context.
+        # NIFTY 50's Kite instrument token is stable and index-only; it cannot
+        # be routed to an equity order. Keep this subscription configurable.
+        benchmark_enabled = str(os.environ.get("KITE_TICKER_INCLUDE_BENCHMARK", "1") or "1").strip().lower() in {
+            "1", "true", "yes", "y", "on"
+        }
+        if benchmark_enabled:
+            benchmark_token = int(os.environ.get("KITE_TICKER_BENCHMARK_TOKEN", "256265") or 256265)
+            benchmark_symbol = str(os.environ.get("KITE_TICKER_BENCHMARK_SYMBOL", "NIFTY 50") or "NIFTY 50").strip().upper()
+            if benchmark_token not in tokens:
+                tokens.append(benchmark_token)
+            self._token_to_symbol[benchmark_token] = benchmark_symbol
+
         # Persist the latest mapping for inspection/debugging.
         mapping_rows = [
             {"Symbol": symbol, "InstrumentToken": token}

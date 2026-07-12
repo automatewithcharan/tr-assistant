@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
+import pandas as pd
 import pytest
 
 from pkscreener.classes.LiveFeatureRecorder import LiveFeatureRecorder
@@ -124,3 +125,48 @@ def test_record_persists_and_throttles(tmp_path):
     assert second.empty
     path = tmp_path / "live_feature_recorder" / "live_features_2026-07-03.csv"
     assert path.exists()
+
+
+def test_record_decisions_persists_enriched_lane_journal(tmp_path):
+    recorder = LiveFeatureRecorder(output_dir=str(tmp_path), interval_seconds=60, top_gainer_pct=5.0)
+    now = datetime(2026, 7, 3, 9, 20, 7)
+    ticks = {"AAA": _tick(106.0, close=100.0, high=107.0, bid=105.95, ask=106.05)}
+    decisions = [
+        {
+            "When": "2026-07-03 09:20:07",
+            "Symbol": "AAA",
+            "Decision": "reject",
+            "Reason": "strength below radar floor",
+            "Action": "Watch for Buy",
+            "PriceNow": 106.0,
+            "ChangePct": 6.0,
+            "SignalStrengthPct": 35.0,
+            "VolumeVsAvg": 1.1,
+            "BuyerSellerRatio": 3.0,
+            "RSI": 62.0,
+            "PullbackPct": 0.9,
+            "Checks": "confidence ok",
+            "Why": "Price above ATR trailing stop",
+        }
+    ]
+
+    first = recorder.record_decisions("top_gainer_radar", decisions, ticks=ticks, now=now)
+    duplicate = recorder.record_decisions("top_gainer_radar", decisions, ticks=ticks, now=now + timedelta(seconds=10))
+
+    assert len(first) == 1
+    assert duplicate.empty
+    row = first.iloc[0]
+    assert row["Lane"] == "top_gainer_radar"
+    assert row["Symbol"] == "AAA"
+    assert row["Decision"] == "reject"
+    assert row["Reason"] == "strength below radar floor"
+    assert row["BestBid"] == 105.95
+    assert row["BestAsk"] == 106.05
+    assert row["SpreadBps"] == pytest.approx(9.434, abs=0.002)
+    assert bool(row["SpreadOk"]) is True
+
+    path = tmp_path / "live_feature_recorder" / "lane_decisions_2026-07-03.csv"
+    assert path.exists()
+    saved = pd.read_csv(path)
+    assert list(saved["Symbol"]) == ["AAA"]
+    assert list(saved["Lane"]) == ["top_gainer_radar"]

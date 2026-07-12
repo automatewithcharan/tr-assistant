@@ -28,6 +28,7 @@ from PKDevTools.classes.log import default_logger
 from pkscreener.classes.ActionableReport import ActionableReportRunner
 from pkscreener.classes.AnomalyDetector import VolumeAnomalyDetector
 from pkscreener.classes.LiveFeatureRecorder import LiveFeatureRecorder
+from pkscreener.classes.IntradayEventShadowRecorder import IntradayEventShadowRecorder
 from pkscreener.classes.PaperTradeTracker import PaperTradeTracker
 from pkscreener.classes.RiskGuardrails import LiveTradingGuardrails
 from pkscreener.classes.SignalPerformanceTracker import SignalPerformanceTracker
@@ -154,6 +155,7 @@ class SignalMonitorRunner:
         streaming_mode: bool = False,
         guardrail_account_name: str = "main",
         guardrail_max_daily_loss_amount: float = 0.0,
+        guardrail_max_daily_profit_amount: float = 0.0,
         guardrail_max_consecutive_losses: int = 0,
     ):
         self.config_manager = config_manager
@@ -172,6 +174,7 @@ class SignalMonitorRunner:
         self.streaming_mode = bool(streaming_mode) or bool(use_live_kite)
         self.guardrail_account_name = str(guardrail_account_name or "main").strip().lower().replace(" ", "_")
         self.guardrail_max_daily_loss_amount = max(0.0, float(guardrail_max_daily_loss_amount or 0.0))
+        self.guardrail_max_daily_profit_amount = max(0.0, float(guardrail_max_daily_profit_amount or 0.0))
         self.guardrail_max_consecutive_losses = max(0, int(guardrail_max_consecutive_losses or 0))
         self.output_dir = Archiver.get_user_data_dir()
         self.run_at = PKDateUtilities.currentDateTime()
@@ -186,7 +189,11 @@ class SignalMonitorRunner:
         self.enable_followthrough = not self.fast_mode and str(os.environ.get("SIGNALMONITOR_ENABLE_FOLLOWTHROUGH", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
         self.enable_missed_opportunity = not self.fast_mode and str(os.environ.get("SIGNALMONITOR_ENABLE_MISSED_OPPORTUNITY", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
         self.enable_scorecard = not self.fast_mode and str(os.environ.get("SIGNALMONITOR_ENABLE_SCORECARD", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
-        self.enable_paper_tracking = not self.fast_mode and str(os.environ.get("SIGNALMONITOR_ENABLE_PAPER_TRACKING", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
+        paper_tracking_setting = str(os.environ.get("SIGNALMONITOR_ENABLE_PAPER_TRACKING", "") or "").strip().lower()
+        if paper_tracking_setting:
+            self.enable_paper_tracking = paper_tracking_setting in {"1", "true", "yes", "y", "on"}
+        else:
+            self.enable_paper_tracking = not self.fast_mode
         self.save_full_outputs = not self.fast_mode and str(os.environ.get("SIGNALMONITOR_SAVE_FULL_OUTPUTS", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
         self.enable_standalone_ob_alerts = str(os.environ.get("SIGNALMONITOR_ENABLE_STANDALONE_OB", "0") or "0").strip().lower() in {"1", "true", "yes", "y", "on"}
         self.enable_early_breakout_alerts = str(os.environ.get("SIGNALMONITOR_ENABLE_EARLY_BREAKOUT", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
@@ -194,6 +201,9 @@ class SignalMonitorRunner:
         self.leader_ignition_discord_alerts = self._env_truthy("SIGNALMONITOR_LEADER_IGNITION_DISCORD", "0")
         self.enable_live_feature_recorder = self._env_truthy("SIGNALMONITOR_ENABLE_LIVE_FEATURE_RECORDER", "1")
         self.enable_intraday_goal_mode = str(os.environ.get("SIGNALMONITOR_INTRADAY_GOAL_MODE", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
+        self.goal_selector_file = str(os.environ.get("SIGNALMONITOR_GOAL_SELECTOR_FILE", "") or "").strip()
+        self.goal_selector_validated = self._goal_selector_is_validated(self.goal_selector_file)
+        self.goal_daily_capital = max(0.0, float(os.environ.get("SIGNALMONITOR_GOAL_DAILY_CAPITAL", "200000") or "200000"))
         self.goal_max_trades_per_day = max(1, int(float(os.environ.get("SIGNALMONITOR_GOAL_MAX_TRADES_PER_DAY", "50") or "50")))
         self.goal_stop_pct = max(0.25, float(os.environ.get("SIGNALMONITOR_GOAL_STOP_PCT", "1.0") or "1.0"))
         self.goal_target1_pct = max(0.5, float(os.environ.get("SIGNALMONITOR_GOAL_TARGET1_PCT", "1.5") or "1.5"))
@@ -216,11 +226,23 @@ class SignalMonitorRunner:
         self.autotrade_max_entry_slippage_pct = max(0.0, float(os.environ.get("SIGNALMONITOR_AUTOTRADE_MAX_ENTRY_SLIPPAGE_PCT", "0.4") or "0.4"))
         self.autotrade_limit_buffer_pct = max(0.0, float(os.environ.get("SIGNALMONITOR_AUTOTRADE_LIMIT_BUFFER_PCT", "0.10") or "0.10"))
         self.autotrade_strategy = str(os.environ.get("SIGNALMONITOR_AUTOTRADE_STRATEGY", "grade_b_confirmation") or "grade_b_confirmation").strip()
+        self.enable_ranked_confirmation_paper = self._env_truthy(
+            "SIGNALMONITOR_ENABLE_RANKED_CONFIRMATION_PAPER", "0"
+        )
+        self.enable_intraday_event_shadow = self._env_truthy(
+            "SIGNALMONITOR_ENABLE_EVENT_SHADOW", "0"
+        )
         self._autotrade_state_path = os.path.join(self.output_dir, "signalmonitor_autotrade_state.json")
         self._autotrade_journal_path = os.path.join(self.output_dir, "autotrade_event_journal.csv")
         self._autotrade_journal_jsonl_path = os.path.join(self.output_dir, "autotrade_event_journal.jsonl")
         self._autotrade_candidates: Dict[str, Dict[str, Any]] = self._load_autotrade_state()
         self._autotrade_order_manager = None
+        self._ranked_confirmation_paper_trader = None
+        self._intraday_event_shadow = (
+            IntradayEventShadowRecorder(self.output_dir)
+            if self.enable_intraday_event_shadow and self.use_live_kite
+            else None
+        )
         self._heartbeat_state_path = os.path.join(self.output_dir, f"signalmonitor_{self.universe}_heartbeat_state.json")
         self._leader_ignition_state_path = os.path.join(self.output_dir, "signalmonitor_leader_ignition_state.json")
         self._leader_candidates: Dict[str, Dict[str, Any]] = self._load_leader_ignition_state()
@@ -339,6 +361,7 @@ class SignalMonitorRunner:
         previous_state_df = self._load_previous_state()
         previous_simple_df = self._load_previous_simple()
         cycle_symbols = self._select_symbols_for_cycle(symbols, previous_simple_df)
+        self._record_intraday_event_shadow()
         cycle_total = len(cycle_symbols)
         if cycle_total == 0:
             OutputControls().printOutput(
@@ -478,6 +501,7 @@ class SignalMonitorRunner:
             if not ob_alerts_df.empty:
                 alerts_df = pd.concat([alerts_df, ob_alerts_df], ignore_index=True)
         alerts_df = self._apply_intraday_goal_mode(alerts_df)
+        self._run_ranked_confirmation_paper_lane(alerts_df)
         self._run_autotrade_lane(alerts_df)
         # V2: Follow-through check + exit monitoring
         self._check_followthrough_and_exits()
@@ -498,6 +522,24 @@ class SignalMonitorRunner:
         self._send_monitor_heartbeat(summary_df, alerts_df)
         self._cycle_number += 1
         return report_df, merged_simple_df, alerts_df, summary_df
+
+    def _record_intraday_event_shadow(self) -> None:
+        """Record shared-engine events without creating alerts or broker orders."""
+        recorder = getattr(self, "_intraday_event_shadow", None)
+        if recorder is None or not self._is_regular_market_hours():
+            return
+        try:
+            completed = recorder.update(self.actionable_runner.live_ticks or {}, fallback_time=self.run_at)
+            if not completed:
+                return
+            symbols = [str(row.get("symbol", "")).strip().upper() for row in completed]
+            events = recorder.detect_new_events(symbols)
+            OutputControls().printOutput(
+                f"  [+] Event shadow: completed {len(completed)} five-minute bar(s)"
+                + (f"; recorded {len(events)} event(s)" if events else "; no new events")
+            )
+        except Exception as exc:
+            default_logger().warning(f"Intraday event shadow recorder failed: {exc}", exc_info=True)
 
     def _save_partial_outputs(
         self,
@@ -1089,6 +1131,7 @@ class SignalMonitorRunner:
         guardrails = LiveTradingGuardrails(
             account_name=self.guardrail_account_name,
             max_daily_loss_amount=self.guardrail_max_daily_loss_amount,
+            max_daily_profit_amount=self.guardrail_max_daily_profit_amount,
             max_consecutive_losses=self.guardrail_max_consecutive_losses,
         )
         status = guardrails.evaluate()
@@ -2158,11 +2201,11 @@ class SignalMonitorRunner:
         return out
 
     def _apply_intraday_goal_mode(self, alerts_df: pd.DataFrame) -> pd.DataFrame:
-        """Keep only alerts that fit the strict 3%-burst intraday playbook.
+        """Keep only alerts that fit the strict intraday day-goal playbook.
 
-        This is not a promise of 3% daily returns. It is a capital-allocation
-        gate: one high-conviction buy-style candidate per day by default, with
-        tight intraday exits. Sell/exit alerts are always preserved.
+        This is not a promise of fixed daily returns. It is a capital-allocation
+        gate: a limited basket of high-conviction buy-style candidates per day,
+        with tight intraday exits. Sell/exit alerts are always preserved.
         """
         if not getattr(self, "enable_intraday_goal_mode", True):
             return alerts_df
@@ -2278,6 +2321,9 @@ class SignalMonitorRunner:
         )
 
     def _intraday_goal_decision(self, row: Dict) -> Tuple[bool, float, str]:
+        if not getattr(self, "goal_selector_validated", False):
+            return False, 0.0, "no validated profitable daily-goal selector"
+
         action = str(row.get("NowAction", "") or "").strip()
         action_lower = action.lower()
         checks = str(row.get("Checks", "") or "")
@@ -2313,8 +2359,8 @@ class SignalMonitorRunner:
         if getattr(self, "goal_anomaly_only", False) and not is_grade_a_b_anomaly:
             return False, 0.0, "anomaly-only goal mode"
 
-        # Highest priority: anomaly-style setups. The alert backtest only showed
-        # a 3% burst profile here; direct/OB-only signals were not robust.
+        # Highest priority: anomaly-style setups. Direct/OB-only signals need
+        # extra confirmation because they were less robust in forward checks.
         if "grade-a" in action_lower or "runner" in action_lower:
             if strength >= 60.0 and change_pct <= 7.0:
                 return True, 1000.0 + strength + min(volume_ratio, 10.0) * 5.0, "Grade-A/runner burst setup"
@@ -2404,13 +2450,68 @@ class SignalMonitorRunner:
 
         return False, 0.0, "not a goal-mode setup"
 
+    @staticmethod
+    def _goal_selector_is_validated(selector_file: str = "") -> bool:
+        """Return whether daily-goal buy promotion is backed by accepted research.
+
+        The default is deliberately false. A daily-goal selector becomes live-tradeable
+        only when a tuner output has at least one accepted row, or when explicitly
+        overridden for controlled experiments with SIGNALMONITOR_GOAL_SELECTOR_VALIDATED=1.
+        """
+        explicit = str(os.environ.get("SIGNALMONITOR_GOAL_SELECTOR_VALIDATED", "0") or "0").strip().lower()
+        if explicit in {"1", "true", "yes", "y", "on"}:
+            return True
+        if not selector_file:
+            return False
+        try:
+            path = Path(selector_file)
+            if not path.exists() or path.stat().st_size <= 0:
+                return False
+            df = pd.read_csv(path)
+            if "accepted" in df.columns:
+                accepted = df["accepted"].astype(str).str.strip().str.lower().isin({"true", "1", "yes", "y"})
+                if not accepted.any():
+                    return False
+                accepted_df = df[accepted].copy()
+                avg_cols = [c for c in ["test_avg_daily_return_pct", "final_avg_daily_return_pct", "walk_avg_daily_return_pct"] if c in accepted_df.columns]
+                if not avg_cols:
+                    return True
+                for col in avg_cols:
+                    if (pd.to_numeric(accepted_df[col], errors="coerce").fillna(-999.0) <= 0).any():
+                        return False
+                return True
+
+            # Daily-goal backtest summary files do not have an accepted column.
+            # Treat only the top post-alert, quality-ranked, profitable rows as
+            # live-eligible; this avoids validating full-day OHLC leakage.
+            required = {"avg_daily_return_pct", "goal_hit_pct", "days", "worst_day_pct"}
+            if not required.issubset(set(df.columns)):
+                return False
+            rows = df.copy()
+            if "outcome_source_filter" in rows.columns:
+                rows = rows[rows["outcome_source_filter"].astype(str).str.strip().str.lower() == "post_alert_intraday"]
+            else:
+                return False
+            if "rank_by" in rows.columns:
+                rows = rows[rows["rank_by"].astype(str).str.strip().str.lower() == "quality"]
+            if rows.empty:
+                return False
+            avg = pd.to_numeric(rows["avg_daily_return_pct"], errors="coerce").fillna(-999.0)
+            hit = pd.to_numeric(rows["goal_hit_pct"], errors="coerce").fillna(0.0)
+            days = pd.to_numeric(rows["days"], errors="coerce").fillna(0.0)
+            worst = pd.to_numeric(rows["worst_day_pct"], errors="coerce").fillna(-999.0)
+            eligible = (avg > 0.0) & (hit >= 40.0) & (days >= 10.0) & (worst > -1.5)
+            return bool(eligible.any())
+        except Exception:
+            return False
+
     def _tune_goal_mode_alert_row(self, row: Dict, reason: str) -> Dict:
         tuned = dict(row)
         entry = self._to_float(tuned.get("BuyAbove")) or self._to_float(tuned.get("PriceNow")) or 0.0
         if entry > 0:
             stop_pct = float(getattr(self, "goal_stop_pct", 1.0) or 1.0)
-            target1_pct = float(getattr(self, "goal_target1_pct", 3.0) or 3.0)
-            target2_pct = float(getattr(self, "goal_target2_pct", 5.0) or 5.0)
+            target1_pct = float(getattr(self, "goal_target1_pct", 1.5) or 1.5)
+            target2_pct = float(getattr(self, "goal_target2_pct", 3.0) or 3.0)
             tuned["BuyAbove"] = round(entry, 2)
             tuned["SellIfBelow"] = round(entry * (1.0 - stop_pct / 100.0), 2)
             tuned["TakeProfit1"] = round(entry * (1.0 + target1_pct / 100.0), 2)
@@ -2418,13 +2519,14 @@ class SignalMonitorRunner:
 
         checks = str(tuned.get("Checks", "") or "").strip()
         goal_check = (
-            f"GoalMode✓ 3% burst | SL {float(getattr(self, 'goal_stop_pct', 1.0) or 1.0):.1f}% | "
-            f"T1 {float(getattr(self, 'goal_target1_pct', 3.0) or 3.0):.1f}% | "
-            f"T2 {float(getattr(self, 'goal_target2_pct', 5.0) or 5.0):.1f}%"
+            f"GoalMode✓ day basket | SL {float(getattr(self, 'goal_stop_pct', 0.8) or 0.8):.1f}% | "
+            f"T1 {float(getattr(self, 'goal_target1_pct', 1.0) or 1.0):.1f}% | "
+            f"T2 {float(getattr(self, 'goal_target2_pct', 1.8) or 1.8):.1f}%"
         )
         tuned["Checks"] = f"{goal_check} | {checks}" if checks else goal_check
         why = str(tuned.get("Why", "") or "").strip()
-        goal_why = f"Goal mode: {reason}; max one high-conviction intraday attempt by default"
+        slots = max(1, int(getattr(self, "goal_max_trades_per_day", 1) or 1))
+        goal_why = f"Goal mode: {reason}; basket slot limit {slots}/day"
         tuned["Why"] = f"{goal_why} | {why}" if why else goal_why
         return tuned
 
@@ -3289,6 +3391,7 @@ class SignalMonitorRunner:
             df = pd.DataFrame(filtered_rows)
             df.to_csv(daily_path, mode="a", header=not daily_path.exists(), index=False)
             df.to_csv(latest_path, index=False)
+            self._record_lane_decisions("leader_ignition", filtered_rows)
         except Exception as exc:
             default_logger().debug(f"Could not append leader ignition audit: {exc}", exc_info=True)
 
@@ -3938,6 +4041,66 @@ class SignalMonitorRunner:
         finally:
             self._save_autotrade_state()
 
+    def _run_ranked_confirmation_paper_lane(self, alerts_df: pd.DataFrame) -> None:
+        """Run the sustained-confirmation experiment without broker orders."""
+        if not getattr(self, "enable_ranked_confirmation_paper", False):
+            return
+        if not self.use_live_kite or not self._is_regular_market_hours():
+            return
+        ticks = self.actionable_runner.live_ticks or {}
+        if not ticks:
+            return
+        if self._ranked_confirmation_paper_trader is None:
+            from pkscreener.classes.RankedConfirmationPaperTrader import (
+                RankedConfirmationPaperTrader,
+            )
+
+            self._ranked_confirmation_paper_trader = RankedConfirmationPaperTrader(
+                output_dir=self.output_dir,
+            )
+        try:
+            events = self._ranked_confirmation_paper_trader.process(
+                alerts_df,
+                ticks,
+                now=self.run_at,
+            )
+        except Exception as exc:
+            default_logger().warning(
+                f"Ranked confirmation paper lane failed: {exc}",
+                exc_info=True,
+            )
+            return
+        for event in events:
+            event_name = str(event.get("event", "") or "")
+            if event_name not in {"paper_entry", "paper_exit"}:
+                continue
+            symbol = str(event.get("symbol", "") or "").upper()
+            price = self._to_float(event.get("price"))
+            if event_name == "paper_entry":
+                OutputControls().printOutput(
+                    f"  [+] Paper entry {symbol} @ {price:.2f} "
+                    f"(rank {self._to_float(event.get('rank_score')):.1f})"
+                )
+                if "discord" in self.alert_channels:
+                    self._send_discord_alert(
+                        f"🧪 **PAPER ONLY — `{symbol}` entry**\n"
+                        f"Simulated entry `₹{price:.2f}` | rank "
+                        f"`{self._to_float(event.get('rank_score')):.1f}`\n"
+                        "No broker order was placed."
+                    )
+            else:
+                OutputControls().printOutput(
+                    f"  [+] Paper exit {symbol} @ {price:.2f} | "
+                    f"{event.get('reason', '')} | net Rs {self._to_float(event.get('net_pnl')):+.2f}"
+                )
+                if "discord" in self.alert_channels:
+                    self._send_discord_alert(
+                        f"🧪 **PAPER ONLY — `{symbol}` exit**\n"
+                        f"Simulated exit `₹{price:.2f}` | `{event.get('reason', '')}` | "
+                        f"net `₹{self._to_float(event.get('net_pnl')):+.2f}`\n"
+                        "No broker order was placed."
+                    )
+
     def _record_live_feature_snapshot(self, alerts_df: pd.DataFrame) -> None:
         """Shadow-record live-only context for later strategy research."""
         recorder = getattr(self, "_live_feature_recorder", None)
@@ -3981,6 +4144,28 @@ class SignalMonitorRunner:
             OutputControls().printOutput(
                 f"  [+] Live feature recorder: saved {len(rows_df)} row(s) "
                 f"(missed runners {missed_count}, stable OB {stable_count})"
+            )
+
+    def _record_lane_decisions(self, lane: str, rows: List[Dict[str, Any]]) -> None:
+        """Shadow-record pass/reject lane decisions with current live tick context."""
+        if not rows:
+            return
+        recorder = getattr(self, "_live_feature_recorder", None)
+        if recorder is None or not getattr(self, "enable_live_feature_recorder", False):
+            return
+        if not self.use_live_kite or not self._is_regular_market_hours():
+            return
+        ticks = self.actionable_runner.live_ticks or {}
+        if not ticks:
+            return
+        try:
+            rows_df = recorder.record_decisions(lane, rows, ticks=ticks, now=self.run_at)
+        except Exception as exc:
+            default_logger().debug(f"Live lane decision journal failed for {lane}: {exc}", exc_info=True)
+            return
+        if rows_df is not None and not rows_df.empty:
+            OutputControls().printOutput(
+                f"  [+] Live lane decision journal: saved {len(rows_df)} {lane} row(s)"
             )
 
     def _register_autotrade_candidates(self, alerts_df: pd.DataFrame) -> None:
@@ -4229,12 +4414,15 @@ class SignalMonitorRunner:
         for _, row in alerts_df.iterrows():
             action = str(row.get("NowAction", "") or "")
             action_lower = action.lower()
+            checks_lower = str(row.get("Checks", "") or "").lower()
             is_buy_style = (
                 action in {"Strong Buy Now", "Buy Now", "Momentum Buy"}
                 or "anomaly" in action_lower
                 or "breakout" in action_lower
                 or "runner" in action_lower
                 or "pre-move" in action_lower
+                or "ob" in action_lower
+                or "goalmode" in checks_lower
             )
             if not is_buy_style:
                 continue
@@ -5191,11 +5379,18 @@ class SignalMonitorRunner:
             return
 
         try:
-            requests.post(
+            response = requests.post(
                 webhook_url,
                 json={"content": message[:1900]},
                 timeout=10,
             )
+            if response.status_code < 200 or response.status_code >= 300:
+                OutputControls().printOutput(
+                    f"  [+] Discord alert failed with HTTP {response.status_code}."
+                )
+                default_logger().debug(
+                    f"Discord alert failed with HTTP {response.status_code}: {response.text[:300]}"
+                )
         except Exception as exc:
             default_logger().debug(f"Discord alert failed: {exc}", exc_info=True)
 
@@ -5246,6 +5441,7 @@ class SignalMonitorRunner:
             df = pd.DataFrame(rows)
             header = not os.path.exists(path)
             df.to_csv(path, mode="a", header=header, index=False)
+            self._record_lane_decisions("top_gainer_radar", rows)
         except Exception as exc:
             default_logger().debug(f"Could not append top-gainer radar audit: {exc}")
 

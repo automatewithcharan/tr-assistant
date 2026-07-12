@@ -63,6 +63,38 @@ class LiveFeatureRecorder:
         "RecordReason",
     ]
 
+    DECISION_COLUMNS = [
+        "When",
+        "Bucket",
+        "Lane",
+        "Stage",
+        "Symbol",
+        "Decision",
+        "Reason",
+        "SourceAction",
+        "PriceNow",
+        "TickLastPrice",
+        "ChangePct",
+        "OpenMovePct",
+        "PullbackPct",
+        "SignalStrengthPct",
+        "VolumeVsAvg",
+        "BuyerSellerRatio",
+        "RSI",
+        "DayHigh",
+        "Volume",
+        "VolumeDeltaPct",
+        "TradedValue",
+        "BuyQty",
+        "SellQty",
+        "BestBid",
+        "BestAsk",
+        "SpreadBps",
+        "SpreadOk",
+        "Checks",
+        "Why",
+    ]
+
     def __init__(
         self,
         output_dir: str,
@@ -82,6 +114,7 @@ class LiveFeatureRecorder:
         self.max_rows_per_cycle = max(1, int(max_rows_per_cycle or 200))
         self._last_record_ts = 0.0
         self._history: Dict[str, List[Dict[str, Any]]] = {}
+        self._decision_seen: Set[Tuple[str, str, str, str, str, str]] = set()
 
     def record(
         self,
@@ -108,6 +141,108 @@ class LiveFeatureRecorder:
             df.to_csv(path, mode="a", header=not path.exists(), index=False)
         except Exception as exc:
             default_logger().debug(f"Could not append live feature recorder rows: {exc}", exc_info=True)
+        return df
+
+    def record_decisions(
+        self,
+        lane: str,
+        decisions: List[Dict[str, Any]],
+        ticks: Optional[Dict[str, Dict[str, Any]]] = None,
+        now: Optional[datetime] = None,
+    ) -> pd.DataFrame:
+        """Append pass/reject lane decisions enriched with live tick context."""
+        if not decisions:
+            return pd.DataFrame(columns=self.DECISION_COLUMNS)
+
+        now_dt = now or self._now()
+        bucket = self._bucket(now_dt)
+        lane_name = str(lane or "unknown").strip() or "unknown"
+        normalized_ticks = {
+            str(symbol).strip().upper(): tick
+            for symbol, tick in (ticks or {}).items()
+            if str(symbol).strip() and isinstance(tick, dict)
+        }
+
+        rows: List[Dict[str, Any]] = []
+        day = now_dt.strftime("%Y-%m-%d")
+        for decision in decisions:
+            symbol = str(decision.get("Symbol", "") or "").strip().upper()
+            if not symbol:
+                continue
+            decision_label = str(decision.get("Decision", "") or "").strip()
+            reason = str(decision.get("Reason", "") or "").strip()
+            key = (day, bucket, lane_name, symbol, decision_label, reason)
+            if key in self._decision_seen:
+                continue
+            self._decision_seen.add(key)
+
+            tick = normalized_ticks.get(symbol, {})
+            price_now = self._to_float(decision.get("PriceNow")) or self._to_float(tick.get("last_price"))
+            tick_last_price = self._to_float(tick.get("last_price"))
+            day_high = self._to_float(tick.get("high")) or self._to_float(decision.get("DayHigh"))
+            best_bid, best_ask = self.best_bid_ask(tick)
+            spread_bps = self._spread_bps(best_bid, best_ask)
+            buy_qty = self._to_float(tick.get("total_buy_quantity")) or self._to_float(decision.get("TotalBuyQty"))
+            sell_qty = self._to_float(tick.get("total_sell_quantity")) or self._to_float(decision.get("TotalSellQty"))
+            bs_ratio = self._to_float(decision.get("BuyerSellerRatio")) or self._buyer_seller_ratio(buy_qty, sell_qty)
+            volume = self._to_float(tick.get("volume_traded")) or self._to_float(decision.get("Volume"))
+            traded_value = price_now * volume if price_now > 0 and volume > 0 else self._to_float(decision.get("TradedValue"))
+            change_pct = (
+                self._to_float(decision.get("ChangePct"))
+                or self._to_float(decision.get("DayChangePct"))
+                or self._day_change_pct(tick)
+            )
+            pullback_pct = self._to_float(decision.get("PullbackPct"))
+            if pullback_pct == 0.0 and day_high > 0 and price_now > 0:
+                pullback_pct = max(0.0, (day_high - price_now) / price_now * 100.0)
+
+            rows.append(
+                {
+                    "When": str(decision.get("When", "") or now_dt.strftime("%Y-%m-%d %H:%M:%S")),
+                    "Bucket": bucket,
+                    "Lane": lane_name,
+                    "Stage": str(decision.get("Stage", "") or ""),
+                    "Symbol": symbol,
+                    "Decision": decision_label,
+                    "Reason": reason,
+                    "SourceAction": str(decision.get("Action", "") or decision.get("Stage", "") or ""),
+                    "PriceNow": round(price_now, 2),
+                    "TickLastPrice": round(tick_last_price, 2),
+                    "ChangePct": round(change_pct, 3),
+                    "OpenMovePct": round(self._to_float(decision.get("OpenMovePct")), 3),
+                    "PullbackPct": round(max(0.0, pullback_pct), 3),
+                    "SignalStrengthPct": round(
+                        self._to_float(decision.get("SignalStrengthPct")) or self._to_float(decision.get("Score")),
+                        3,
+                    ),
+                    "VolumeVsAvg": round(self._to_float(decision.get("VolumeVsAvg")), 3),
+                    "BuyerSellerRatio": round(bs_ratio, 3),
+                    "RSI": round(self._to_float(decision.get("RSI")), 3),
+                    "DayHigh": round(day_high, 2),
+                    "Volume": int(volume),
+                    "VolumeDeltaPct": round(self._to_float(decision.get("VolumeDeltaPct")), 3),
+                    "TradedValue": round(traded_value, 2),
+                    "BuyQty": int(buy_qty),
+                    "SellQty": int(sell_qty),
+                    "BestBid": round(best_bid, 2),
+                    "BestAsk": round(best_ask, 2),
+                    "SpreadBps": round(spread_bps, 3),
+                    "SpreadOk": spread_bps == 0.0 or spread_bps <= self.spread_ok_bps,
+                    "Checks": str(decision.get("Checks", "") or ""),
+                    "Why": str(decision.get("Why", "") or ""),
+                }
+            )
+
+        if not rows:
+            return pd.DataFrame(columns=self.DECISION_COLUMNS)
+
+        df = pd.DataFrame(rows, columns=self.DECISION_COLUMNS)
+        path = self._decision_path_for(now_dt)
+        try:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            df.to_csv(path, mode="a", header=not path.exists(), index=False)
+        except Exception as exc:
+            default_logger().debug(f"Could not append live decision journal rows: {exc}", exc_info=True)
         return df
 
     def build_rows(
@@ -331,6 +466,10 @@ class LiveFeatureRecorder:
     def _path_for(self, now: datetime) -> Path:
         day = now.strftime("%Y-%m-%d")
         return Path(self.output_dir) / "live_feature_recorder" / f"live_features_{day}.csv"
+
+    def _decision_path_for(self, now: datetime) -> Path:
+        day = now.strftime("%Y-%m-%d")
+        return Path(self.output_dir) / "live_feature_recorder" / f"lane_decisions_{day}.csv"
 
     def _bucket(self, now: datetime) -> str:
         if self.interval_seconds <= 0:

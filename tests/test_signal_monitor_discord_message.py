@@ -4,6 +4,7 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 import pkscreener.classes.SignalMonitor as signal_monitor_module
+from pkscreener.classes.LiveFeatureRecorder import LiveFeatureRecorder
 from pkscreener.classes.SignalMonitor import SignalMonitorRunner
 
 
@@ -15,10 +16,15 @@ def _make_runner() -> SignalMonitorRunner:
     runner.output_dir = tempfile.mkdtemp()
     runner.last_guardrail_status = None
     runner.alert_channels = {"discord"}
+    runner.use_live_kite = False
     runner._board_shown_today = set()
     runner._board_shown_date = ""
+    runner.enable_live_feature_recorder = False
+    runner._live_feature_recorder = None
     runner.enable_intraday_goal_mode = True
-    runner.goal_max_trades_per_day = 20
+    runner.goal_selector_validated = True
+    runner.goal_max_trades_per_day = 1
+    runner.goal_daily_capital = 200000.0
     runner.goal_stop_pct = 1.0
     runner.goal_target1_pct = 1.5
     runner.goal_target2_pct = 3.0
@@ -42,6 +48,22 @@ def _make_runner() -> SignalMonitorRunner:
     runner._leader_last_ticks_by_symbol = {}
     runner._leader_ignition_state_path = f"{runner.output_dir}/signalmonitor_leader_ignition_state.json"
     return runner
+
+
+def test_paper_tracking_env_override_can_enable_fast_mode(monkeypatch):
+    monkeypatch.setattr(SignalMonitorRunner, "FAST_MODE", True)
+    monkeypatch.setenv("SIGNALMONITOR_ENABLE_PAPER_TRACKING", "1")
+
+    runner = SignalMonitorRunner(
+        config_manager=None,
+        universe="all",
+        limit=0,
+        use_live_kite=True,
+        alert_channels="discord",
+    )
+
+    assert runner.fast_mode is True
+    assert runner.enable_paper_tracking is True
 
 
 def _alert(symbol: str, action: str, strength: float) -> dict:
@@ -81,6 +103,53 @@ def test_discord_message_prioritizes_fresh_buy_now_over_anomaly():
     )
 
     assert message.index("`WELCORP`") < message.index("`AEROFLEX`")
+
+
+def test_discord_message_includes_source_and_sent_time(monkeypatch):
+    monkeypatch.setenv("SIGNALMONITOR_ALERT_SOURCE", "intraday-goal-paper")
+    monkeypatch.setattr(
+        signal_monitor_module.PKDateUtilities,
+        "currentDateTime",
+        staticmethod(lambda: datetime(2026, 5, 8, 10, 15, 9)),
+    )
+    runner = _make_runner()
+    alerts_df = pd.DataFrame([_alert("WELCORP", "Buy Now", 42.0)], columns=runner.ALERT_COLUMNS)
+
+    message = runner._build_discord_monitor_message(
+        alerts_df,
+        {"ScannedSymbols": 2990, "FreshAlertsThisRun": 1, "StrongBuyNowCount": 0, "BuyNowCount": 1, "SellNowCount": 0},
+    )
+
+    assert "Source `intraday-goal-paper`" in message
+    assert "Generated `2026-05-08 10:15:00`" in message
+    assert "Sent `2026-05-08 10:15:09`" in message
+
+
+def test_discord_alert_journal_persists_structured_rows(monkeypatch):
+    monkeypatch.setenv("SIGNALMONITOR_ALERT_SOURCE", "intraday-goal-paper")
+    monkeypatch.setattr(
+        signal_monitor_module.PKDateUtilities,
+        "currentDateTime",
+        staticmethod(lambda: datetime(2026, 5, 8, 10, 16, 5)),
+    )
+    runner = _make_runner()
+    row = _alert("WELCORP", "Buy Now", 42.0)
+    row["Checks"] = "GoalMode✓ day basket | confidence ok"
+    alerts_df = pd.DataFrame([row], columns=runner.ALERT_COLUMNS)
+
+    runner._journal_discord_alerts(
+        alerts_df,
+        {"ScannedSymbols": 2990, "FreshAlertsThisRun": 1},
+        "discord message",
+    )
+
+    journal = pd.read_csv(f"{runner.output_dir}/intraday_goal_alerts/intraday_goal_alerts_2026-05-08.csv")
+    assert list(journal["Symbol"]) == ["WELCORP"]
+    assert journal.iloc[0]["Source"] == "intraday-goal-paper"
+    assert journal.iloc[0]["GeneratedAt"] == "2026-05-08 10:15:00"
+    assert journal.iloc[0]["SentAt"] == "2026-05-08 10:16:05"
+    assert journal.iloc[0]["BuyZoneHigh"] == 102.51
+    assert bool(journal.iloc[0]["IsGoalMode"]) is True
 
 
 def test_discord_message_shows_current_buy_board_when_fresh_alert_is_anomaly_only():
@@ -256,14 +325,27 @@ def test_top_gainer_radar_surfaces_watch_mover_from_live_ticks(monkeypatch):
         staticmethod(lambda: datetime(2026, 5, 8, 9, 42, 0)),
     )
     runner = _make_runner()
+    runner.use_live_kite = True
+    runner._is_regular_market_hours = lambda: True
+    runner.enable_live_feature_recorder = True
+    runner._live_feature_recorder = LiveFeatureRecorder(
+        output_dir=runner.output_dir,
+        interval_seconds=60,
+        top_gainer_pct=5.0,
+    )
     runner.actionable_runner = SimpleNamespace(
         live_ticks={
             "CUPID": {
                 "last_price": 136.85,
                 "change": 2.83,
                 "high": 136.95,
+                "volume_traded": 175000,
                 "total_buy_quantity": 333000,
                 "total_sell_quantity": 100000,
+                "depth": {
+                    "buy": [{"price": 136.80, "quantity": 1000}],
+                    "sell": [{"price": 136.90, "quantity": 1000}],
+                },
             }
         }
     )
@@ -297,6 +379,12 @@ def test_top_gainer_radar_surfaces_watch_mover_from_live_ticks(monkeypatch):
 
     assert list(alerts["Symbol"]) == ["CUPID"]
     assert alerts.iloc[0]["NowAction"] == "📡 Top Gainer Radar"
+    journal = pd.read_csv(f"{runner.output_dir}/live_feature_recorder/lane_decisions_2026-05-08.csv")
+    assert list(journal["Lane"]) == ["top_gainer_radar"]
+    assert list(journal["Symbol"]) == ["CUPID"]
+    assert list(journal["Decision"]) == ["pass"]
+    assert journal.iloc[0]["Reason"] == "radar candidate passed"
+    assert journal.iloc[0]["BestBid"] == 136.80
 
 
 def test_top_gainer_radar_blocks_chased_mover(monkeypatch):
@@ -394,6 +482,12 @@ def test_leader_ignition_watch_uses_raw_ticks_without_simple_board(monkeypatch):
     runner = _make_runner()
     runner.use_live_kite = True
     runner._is_regular_market_hours = lambda: True
+    runner.enable_live_feature_recorder = True
+    runner._live_feature_recorder = LiveFeatureRecorder(
+        output_dir=runner.output_dir,
+        interval_seconds=60,
+        top_gainer_pct=5.0,
+    )
     runner.actionable_runner = SimpleNamespace(
         live_ticks={
             "EARLY": {
@@ -419,6 +513,10 @@ def test_leader_ignition_watch_uses_raw_ticks_without_simple_board(monkeypatch):
     audit = pd.read_csv(f"{runner.output_dir}/leader_ignition/leader_ignition_2026-05-08.csv")
     assert list(audit["Decision"]) == ["pass"]
     assert audit.iloc[0]["Reason"] == "early leader watch"
+    journal = pd.read_csv(f"{runner.output_dir}/live_feature_recorder/lane_decisions_2026-05-08.csv")
+    assert list(journal["Lane"]) == ["leader_ignition"]
+    assert list(journal["Stage"]) == ["ignition_watch"]
+    assert list(journal["Decision"]) == ["pass"]
 
 
 def test_leader_ignition_rejects_already_stretched_mover(monkeypatch):
@@ -561,6 +659,21 @@ def test_discord_message_labels_orderbook_as_intraday_scalp():
     assert "not a swing buy" in message
     assert "**ENTRY ZONE**" in message
     assert "Scalp qty `10`" in message
+
+
+def test_goal_mode_orderbook_alert_is_paper_tracked():
+    runner = _make_runner()
+    runner.enable_paper_tracking = True
+    runner._is_regular_market_hours = lambda: True
+    tracked = []
+    runner._paper_tracker = SimpleNamespace(log_entry=lambda **kwargs: tracked.append(kwargs))
+
+    row = _alert("TFCILTD", "🌊 OB Sustained", 67.8)
+    row["Checks"] = "goalmode selected | OB B/S 3.0x"
+    runner._paper_track_alerts(pd.DataFrame([row], columns=runner.ALERT_COLUMNS))
+
+    assert len(tracked) == 1
+    assert tracked[0]["symbol"] == "TFCILTD"
 
 
 def _make_ob_runner(monkeypatch, tick):
@@ -823,6 +936,7 @@ def test_discord_send_chunks_goal_alerts_that_do_not_fit_one_message():
 
 def test_monitor_heartbeat_reports_active_scanner_without_fresh_buy(monkeypatch):
     runner = _make_runner()
+    runner.goal_max_trades_per_day = 20
     sent_messages = []
     runner._send_discord_alert = sent_messages.append
     runner._is_regular_market_hours = lambda: True
@@ -856,9 +970,10 @@ def test_monitor_heartbeat_throttle_survives_runner_restart(monkeypatch, tmp_pat
     runner = _make_runner()
     runner.output_dir = str(tmp_path)
     runner._heartbeat_state_path = str(tmp_path / "heartbeat_state.json")
+    runner.goal_max_trades_per_day = 20
+    runner._is_regular_market_hours = lambda: True
     sent_messages = []
     runner._send_discord_alert = sent_messages.append
-    runner._is_regular_market_hours = lambda: True
     monkeypatch.setattr(signal_monitor_module.time, "time", lambda: 1000.0)
     monkeypatch.setattr(runner, "_load_daily_symbol_set", lambda *_args, **_kwargs: set())
     summary_df = pd.DataFrame(
@@ -911,6 +1026,70 @@ def test_regular_market_hours_blocks_trading_holiday(monkeypatch):
     )
 
     assert runner._is_regular_market_hours() is False
+
+
+def test_intraday_goal_mode_blocks_buys_without_validated_selector():
+    runner = _make_runner()
+    runner.goal_selector_validated = False
+    alert = _alert("AEROFLEX", "⚡ Grade-B Anomaly", 72.0)
+    alert["Checks"] = "Q:72/100 [B] | Vol 8.9x | +1.2% | B/S 2.1x"
+    alerts_df = pd.DataFrame([alert], columns=runner.ALERT_COLUMNS)
+
+    out = runner._apply_intraday_goal_mode(alerts_df)
+
+    assert out.empty
+
+
+def test_goal_selector_accepts_profitable_forward_backtest_summary(tmp_path):
+    selector = tmp_path / "daily_goal_summary.csv"
+    pd.DataFrame(
+        [
+            {
+                "outcome_source_filter": "post_alert_intraday",
+                "rank_by": "quality",
+                "days": 14,
+                "goal_hit_pct": 50.0,
+                "avg_daily_return_pct": 0.1761,
+                "worst_day_pct": -1.15,
+            }
+        ]
+    ).to_csv(selector, index=False)
+
+    assert SignalMonitorRunner._goal_selector_is_validated(str(selector)) is True
+
+
+def test_goal_selector_rejects_full_day_ohlc_backtest_summary(tmp_path):
+    selector = tmp_path / "daily_goal_summary.csv"
+    pd.DataFrame(
+        [
+            {
+                "outcome_source_filter": "any",
+                "rank_by": "quality",
+                "days": 14,
+                "goal_hit_pct": 50.0,
+                "avg_daily_return_pct": 0.1761,
+                "worst_day_pct": -1.15,
+            }
+        ]
+    ).to_csv(selector, index=False)
+
+    assert SignalMonitorRunner._goal_selector_is_validated(str(selector)) is False
+
+
+def test_intraday_goal_mode_can_select_multiple_basket_slots():
+    runner = _make_runner()
+    runner.goal_max_trades_per_day = 2
+    first = _alert("AEROFLEX", "⚡ Grade-B Anomaly", 72.0)
+    first["Checks"] = "Q:72/100 [B] | Vol 8.9x | +1.2% | B/S 2.1x"
+    second = _alert("WELCORP", "⚡ Grade-B Anomaly", 70.0)
+    second["Checks"] = "Q:70/100 [B] | Vol 7.5x | +1.5% | B/S 2.0x"
+    third = _alert("TFCILTD", "⚡ Grade-B Anomaly", 68.0)
+    third["Checks"] = "Q:68/100 [B] | Vol 6.5x | +1.9% | B/S 1.8x"
+    alerts_df = pd.DataFrame([third, first, second], columns=runner.ALERT_COLUMNS)
+
+    out = runner._apply_intraday_goal_mode(alerts_df)
+
+    assert list(out["Symbol"]) == ["AEROFLEX", "WELCORP"]
 
 
 def test_intraday_goal_mode_blocks_direct_buy_without_confirmation():
