@@ -11,6 +11,7 @@ import html
 import json
 import os
 import subprocess
+import sys
 import time
 import uuid
 from datetime import datetime, timedelta
@@ -4520,8 +4521,41 @@ class SignalMonitorRunner:
                 )
                 if not summary.empty:
                     OutputControls().printOutput(summary.to_string(index=False), enableMultipleLineOutput=True)
+                self._run_event_shadow_model_training()
         except Exception as exc:
             default_logger().warning(f"Event shadow outcome evaluation failed: {exc}", exc_info=True)
+
+    def _run_event_shadow_model_training(self) -> None:
+        """Refresh the paper-only shadow model readiness report after EOD labels."""
+        repo_root = Path(__file__).resolve().parents[2]
+        trainer = repo_root / "scripts" / "train_intraday_event_shadow_model.py"
+        if not trainer.exists():
+            return
+        outcome_glob = str(Path(self.output_dir) / "intraday_event_shadow" / "outcomes_*.csv")
+        model_dir = str(Path(self.output_dir) / "intraday_event_shadow" / "model_v1")
+        result = subprocess.run(
+            [
+                sys.executable,
+                str(trainer),
+                "--input",
+                outcome_glob,
+                "--output-dir",
+                model_dir,
+            ],
+            cwd=str(repo_root),
+            capture_output=True,
+            text=True,
+            timeout=300,
+            check=False,
+        )
+        if result.returncode not in {0, 1, 2}:
+            default_logger().warning(
+                f"Event shadow model trainer failed rc={result.returncode}: {result.stderr[-500:]}"
+            )
+        else:
+            OutputControls().printOutput(
+                f"  [+] Event shadow model readiness refreshed (status code {result.returncode})"
+            )
 
     @staticmethod
     def _safe_int(value) -> int:
