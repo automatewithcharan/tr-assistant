@@ -10,6 +10,7 @@ from typing import Any, Dict, Iterable
 import pandas as pd
 
 from pkscreener.classes.IntradayEventEngine import (
+    add_cross_sectional_event_features,
     detect_intraday_events,
     live_event_feature_row,
     prepare_intraday_day,
@@ -154,6 +155,7 @@ class IntradayEventShadowRecorder:
                     }
                 )
         if events:
+            events = add_cross_sectional_event_features(events)
             self._append_csv(self._events_path(events[0]["date"]), events)
         return events
 

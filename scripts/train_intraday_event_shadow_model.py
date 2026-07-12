@@ -13,7 +13,7 @@ from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 
-from pkscreener.classes.IntradayEventEngine import CAUSAL_RICH_EVENT_FEATURES
+from pkscreener.classes.IntradayEventEngine import CAUSAL_MODEL_FEATURES
 
 
 def load_outcomes(pattern: str) -> pd.DataFrame:
@@ -22,7 +22,7 @@ def load_outcomes(pattern: str) -> pd.DataFrame:
     if not parts:
         return pd.DataFrame()
     frame = pd.concat(parts, ignore_index=True)
-    required = {"date", "symbol", "complete_session", "target_before_stop", "net_return_pct", *CAUSAL_RICH_EVENT_FEATURES}
+    required = {"date", "symbol", "complete_session", "target_before_stop", "net_return_pct", *CAUSAL_MODEL_FEATURES}
     missing = required - set(frame.columns)
     if missing:
         raise ValueError(f"shadow outcomes missing columns: {', '.join(sorted(missing))}")
@@ -32,7 +32,7 @@ def load_outcomes(pattern: str) -> pd.DataFrame:
     frame["symbol"] = frame["symbol"].astype(str).str.upper()
     frame["label"] = frame["target_before_stop"].astype(str).str.strip().str.lower().isin({"true", "1", "yes"}).astype(int)
     frame["net_return_pct"] = pd.to_numeric(frame["net_return_pct"], errors="coerce")
-    for feature in CAUSAL_RICH_EVENT_FEATURES:
+    for feature in CAUSAL_MODEL_FEATURES:
         frame[feature] = pd.to_numeric(frame[feature], errors="coerce")
     return frame.dropna(subset=["net_return_pct"]).sort_values(["date", "symbol"]).reset_index(drop=True)
 
@@ -102,9 +102,9 @@ def main() -> int:
     validation = frame[frame["date"].isin(validation_dates)].copy()
     final = frame[frame["date"].isin(final_dates)].copy()
     estimator = model()
-    estimator.fit(train[CAUSAL_RICH_EVENT_FEATURES], train["label"])
-    validation["prediction"] = estimator.predict_proba(validation[CAUSAL_RICH_EVENT_FEATURES])[:, 1]
-    final["prediction"] = estimator.predict_proba(final[CAUSAL_RICH_EVENT_FEATURES])[:, 1]
+    estimator.fit(train[CAUSAL_MODEL_FEATURES], train["label"])
+    validation["prediction"] = estimator.predict_proba(validation[CAUSAL_MODEL_FEATURES])[:, 1]
+    final["prediction"] = estimator.predict_proba(final[CAUSAL_MODEL_FEATURES])[:, 1]
     candidates = []
     for raw in args.thresholds.split(","):
         threshold = float(raw.strip())
@@ -131,7 +131,7 @@ def main() -> int:
     pd.concat([validation, final], ignore_index=True).to_csv(output / "scored_holdout.csv", index=False)
     (output / "summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     if accepted:
-        joblib.dump({"model": estimator, "features": CAUSAL_RICH_EVENT_FEATURES, "threshold": selected_threshold, "manifest": summary}, output / "paper_shadow_model.joblib")
+        joblib.dump({"model": estimator, "features": CAUSAL_MODEL_FEATURES, "threshold": selected_threshold, "manifest": summary}, output / "paper_shadow_model.joblib")
     print(json.dumps(summary, indent=2))
     return 0 if accepted else 1
 

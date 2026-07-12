@@ -1,6 +1,6 @@
 import pandas as pd
 
-from pkscreener.classes.IntradayEventEngine import CAUSAL_RICH_EVENT_FEATURES
+from pkscreener.classes.IntradayEventEngine import CAUSAL_MODEL_FEATURES
 from scripts.train_intraday_event_shadow_model import daily_picks, metrics, split_dates
 
 
@@ -38,4 +38,4 @@ def test_metrics_counts_idle_days_and_rupee_goal():
 
 def test_model_schema_contains_no_outcomes():
     forbidden = {"target_before_stop", "net_return_pct", "max_favorable_pct", "max_adverse_pct"}
-    assert forbidden.isdisjoint(CAUSAL_RICH_EVENT_FEATURES)
+    assert forbidden.isdisjoint(CAUSAL_MODEL_FEATURES)

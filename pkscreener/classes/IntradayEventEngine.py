@@ -53,6 +53,21 @@ CAUSAL_RICH_EVENT_FEATURES = LIVE_EVENT_FEATURES + [
     "signal_value_share_pct",
 ]
 
+CROSS_SECTIONAL_EVENT_FEATURES = [
+    "cs_candidate_count",
+    "cs_event_family_count",
+    "cs_move_rank_pct",
+    "cs_vol_ratio_rank_pct",
+    "cs_vol_ratio_5_rank_pct",
+    "cs_relative_strength_rank_pct",
+    "cs_recent_strength_rank_pct",
+    "cs_signal_value_rank_pct",
+    "cs_vwap_distance_rank_pct",
+    "cs_pullback_rank_pct",
+]
+
+CAUSAL_MODEL_FEATURES = CAUSAL_RICH_EVENT_FEATURES + CROSS_SECTIONAL_EVENT_FEATURES
+
 EVENT_TYPES = [
     "or15_breakout",
     "or15_retest_hold",
@@ -289,3 +304,27 @@ def live_event_feature_row(day: pd.DataFrame, index: int, event_type: str) -> di
         for feature in CAUSAL_RICH_EVENT_FEATURES
         for value in [row.get(feature, 0.0)]
     }
+
+
+def add_cross_sectional_event_features(rows: list[dict]) -> list[dict]:
+    """Add same-timestamp percentile features to a batch of live events."""
+    if not rows:
+        return rows
+    frame = pd.DataFrame(rows)
+    mapping = {
+        "move_from_open_pct": "cs_move_rank_pct",
+        "vol_ratio": "cs_vol_ratio_rank_pct",
+        "vol_ratio_5": "cs_vol_ratio_5_rank_pct",
+        "relative_strength_open_pct": "cs_relative_strength_rank_pct",
+        "relative_strength_3bar_pct": "cs_recent_strength_rank_pct",
+        "signal_bar_value_lakh": "cs_signal_value_rank_pct",
+        "vwap_dist_pct": "cs_vwap_distance_rank_pct",
+        "pullback_from_high_pct": "cs_pullback_rank_pct",
+    }
+    frame["cs_candidate_count"] = float(len(frame))
+    family_counts = frame["event_type"].astype(str).value_counts()
+    frame["cs_event_family_count"] = frame["event_type"].astype(str).map(family_counts).astype(float)
+    for source, target in mapping.items():
+        values = pd.to_numeric(frame.get(source, 0.0), errors="coerce").fillna(0.0)
+        frame[target] = values.rank(method="average", pct=True) * 100.0
+    return frame.to_dict(orient="records")
