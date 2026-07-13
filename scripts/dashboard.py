@@ -16,6 +16,7 @@ By default it binds to 127.0.0.1 (local only). To expose on the VM's network
 interface instead (understand the risk — this page shows your real positions):
     DASH_HOST=0.0.0.0 .venv/bin/python3 scripts/dashboard.py
 """
+import csv
 import json
 import os
 import statistics
@@ -93,6 +94,83 @@ def load_json(path, default):
         return json.loads(Path(path).read_text())
     except Exception:
         return default
+
+
+def load_csv_rows(path):
+    try:
+        with Path(path).open(newline="", encoding="utf-8") as handle:
+            return list(csv.DictReader(handle))
+    except Exception:
+        return []
+
+
+def truthy(value):
+    return str(value or "").strip().lower() in {"1", "1.0", "true", "yes", "y", "on"}
+
+
+def ranked_confirmation_stats():
+    root = DATA / "ranked_confirmation_paper"
+    rows = load_csv_rows(root / "trades_latest.csv")
+    closed = [row for row in rows if truthy(row.get("closed"))]
+    open_rows = [row for row in rows if not truthy(row.get("closed"))]
+    pnls = [float(row.get("net_pnl") or 0.0) for row in closed]
+    wins = sum(1 for value in pnls if value > 0)
+    losses = sum(1 for value in pnls if value < 0)
+    streak = 0
+    for value in reversed(pnls):
+        if value < 0:
+            streak += 1
+        else:
+            break
+    candidates = load_csv_rows(root / "candidates_latest.csv")
+    return {
+        "date": str(rows[0].get("date", "")) if rows else "",
+        "closed": len(closed),
+        "open": len(open_rows),
+        "candidates": len(candidates),
+        "wins": wins,
+        "losses": losses,
+        "win_rate": wins / len(closed) * 100.0 if closed else 0.0,
+        "net_pnl": sum(pnls),
+        "targets": sum(1 for row in closed if row.get("exit_reason") == "target_hit"),
+        "stops": sum(1 for row in closed if row.get("exit_reason") == "stop_hit"),
+        "consecutive_losses": streak,
+        "entry_paused": streak >= 2,
+        "trades": rows,
+    }
+
+
+def evidence_readiness_stats():
+    rows = load_csv_rows(DATA / "live_feature_recorder" / "evidence_readiness.csv")
+    eligible = [row for row in rows if truthy(row.get("StrategyEligibleBucket"))]
+
+    def number(row, field):
+        try:
+            return float(row.get(field) or 0.0)
+        except Exception:
+            return 0.0
+
+    best = max(eligible, key=lambda row: number(row, "StressAvgDailyReturnPct"), default={})
+    status_paths = sorted((DATA / "live_feature_recorder" / "eod").glob("*/status.json"))
+    if not status_paths:
+        status_paths = sorted((DATA / "live_feature_recorder" / "bootstrap").glob("*/status.json"))
+    status = load_json(status_paths[-1], {}) if status_paths else {}
+    return {
+        "rows": len(rows),
+        "sessions": max((int(number(row, "Sessions")) for row in rows), default=0),
+        "shadow_candidates": sum(1 for row in rows if truthy(row.get("ShadowCandidate"))),
+        "goal_passes": sum(1 for row in rows if truthy(row.get("GoalEvidencePassed"))),
+        "best_bucket": str(best.get("FeatureBucket", "")),
+        "best_contract": str(best.get("Contract", "")),
+        "best_coverage": number(best, "CoveragePct"),
+        "best_stress_return": number(best, "StressAvgDailyReturnPct"),
+        "best_stress_pnl": number(best, "ProjectedStressDailyPnl"),
+        "best_lower_bound": number(best, "StressReturnLower95Pct"),
+        "coverage": float(status.get("combined_coverage_pct") or 0.0),
+        "coverage_passed": bool(status.get("coverage_gate_passed", False)),
+        "evidence_accepted": False,
+        "status_date": str(status.get("date") or status.get("end_date") or ""),
+    }
 
 
 # ---------------------------------------------------------------- paper lanes
@@ -205,6 +283,8 @@ def render():
     now = datetime.now(IST).strftime("%Y-%m-%d %H:%M:%S IST")
     positions = real_positions()
     lanes = all_lanes()
+    ranked = ranked_confirmation_stats()
+    evidence = evidence_readiness_stats()
 
     tot_inv = sum(r["invested"] for r in positions)
     tot_val = sum(r["value"] for r in positions)
@@ -321,6 +401,65 @@ def render():
     {wrows}
   </table>"""
 
+    ranked_rows = ""
+    for row in ranked["trades"]:
+        closed = truthy(row.get("closed"))
+        pnl = float(row.get("net_pnl") or 0.0)
+        pnl_class = "gain" if pnl > 0 else ("loss" if pnl < 0 else "muted")
+        status = escape(str(row.get("exit_reason") or ("open" if not closed else "closed")))
+        ranked_rows += f"""<tr>
+            <td class="sym">{escape(str(row.get('symbol', '')))}</td>
+            <td class="num">{float(row.get('entry_price') or 0.0):.2f}</td>
+            <td class="num">{float(row.get('exit_price') or 0.0):.2f}</td>
+            <td>{status}</td>
+            <td class="num {pnl_class}">{money(pnl)}</td>
+        </tr>"""
+    if not ranked_rows:
+        ranked_rows = '<tr><td colspan="5" class="muted">No ranked paper trades yet.</td></tr>'
+    pause_badge = (
+        '<span class="badge red">ENTRY PAUSED: 2 LOSSES</span>'
+        if ranked["entry_paused"]
+        else '<span class="badge grey">PAPER ONLY</span>'
+    )
+    ranked_pnl_class = "gain" if ranked["net_pnl"] >= 0 else "loss"
+    ranked_html = f"""
+  <h2>Ranked Grade-B confirmation (paper only)</h2>
+  <div class="summary">
+    <span>Date <span class="big">{escape(ranked['date'] or 'n/a')}</span></span>
+    <span>Closed <span class="big">{ranked['closed']}</span></span>
+    <span>Win rate <span class="big">{ranked['win_rate']:.0f}%</span></span>
+    <span>Net <span class="big {ranked_pnl_class}">{money(ranked['net_pnl'])}</span></span>
+    {pause_badge}
+  </div>
+  <div class="updated" style="margin-top:6px">
+    {ranked['candidates']} candidates observed; {ranked['targets']} targets, {ranked['stops']} stops.
+    Simulated fills include fees and slippage. No broker orders.
+  </div>
+  <table>
+    <tr><th>Symbol</th><th class="num">Entry</th><th class="num">Exit</th><th>Reason</th><th class="num">Net P&amp;L</th></tr>
+    {ranked_rows}
+  </table>"""
+
+    evidence_class = "gain" if evidence["best_stress_return"] > 0 else "loss"
+    coverage_class = "gain" if evidence["coverage_passed"] else "loss"
+    evidence_html = f"""
+  <h2>Live evidence readiness</h2>
+  <div class="summary">
+    <span>Sessions <span class="big">{evidence['sessions']}</span></span>
+    <span>Coverage <span class="big {coverage_class}">{evidence['coverage']:.1f}%</span></span>
+    <span>Shadow candidates <span class="big">{evidence['shadow_candidates']}</span></span>
+    <span>&#8377;10k passes <span class="big">{evidence['goal_passes']}</span></span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    Latest evidence through {escape(evidence['status_date'] or 'n/a')}.
+    Best eligible research row: <b>{escape(evidence['best_bucket'] or 'none')}</b> /
+    {escape(evidence['best_contract'] or 'none')} at
+    <span class="{evidence_class}">{evidence['best_stress_return']:+.3f}% stressed daily
+    ({money(evidence['best_stress_pnl'])})</span>, coverage {evidence['best_coverage']:.1f}%,
+    lower bound {evidence['best_lower_bound']:+.3f}%.
+    Evidence accepted: <b>NO</b>; paper promotion: <b>NO</b>; real orders: <b>NO</b>.
+  </div>"""
+
     tot_cls = "gain" if tot_pnl >= 0 else "loss"
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
@@ -373,6 +512,8 @@ def render():
         <th class="num">Win rate</th><th class="num">Avg/trade</th><th class="num">On &#8377;capital</th></tr>
     {lane_rows}
   </table>
+{ranked_html}
+{evidence_html}
 {gate_html}
 {watch_html}
   <div class="updated" style="margin-top:18px">
