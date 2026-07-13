@@ -12,29 +12,40 @@ def _simulate(
     entry_price: float,
     target_pct: float,
     stop_pct: float,
+    side: str = "long",
 ) -> tuple[float, str, bool]:
-    target = entry_price * (1.0 + float(target_pct) / 100.0)
-    stop = entry_price * (1.0 - float(stop_pct) / 100.0)
+    if side not in {"long", "short"}:
+        raise ValueError(f"unsupported side: {side}")
+    direction = 1.0 if side == "long" else -1.0
+    target = entry_price * (1.0 + direction * float(target_pct) / 100.0)
+    stop = entry_price * (1.0 - direction * float(stop_pct) / 100.0)
     for row in future.itertuples(index=False):
-        hit_target = float(row.high) >= target
-        hit_stop = float(row.low) <= stop
+        if side == "long":
+            hit_target = float(row.high) >= target
+            hit_stop = float(row.low) <= stop
+        else:
+            hit_target = float(row.low) <= target
+            hit_stop = float(row.high) >= stop
         if hit_target and hit_stop:
             return -float(stop_pct), "ambiguous_stop_target", False
         if hit_stop:
             return -float(stop_pct), "stop", False
         if hit_target:
             return float(target_pct), "target", True
-    eod_return = (float(future.iloc[-1]["close"]) - entry_price) / entry_price * 100.0
+    eod_return = direction * (float(future.iloc[-1]["close"]) - entry_price) / entry_price * 100.0
     return eod_return, "eod", False
 
 
-def evaluate_event_shadow_day(
+def _evaluate(
     output_dir: str | Path,
     date: str,
-    target_pct: float = 1.5,
-    stop_pct: float = 1.0,
-    cost_pct: float = 0.15,
-    required_last_bar: str = "15:25:00",
+    target_pct: float,
+    stop_pct: float,
+    cost_pct: float,
+    required_last_bar: str,
+    side: str,
+    output_stem: str,
+    summary_stem: str,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     root = Path(output_dir) / "intraday_event_shadow"
     bars_path = root / f"bars_{date}.csv"
@@ -62,13 +73,26 @@ def evaluate_event_shadow_day(
         entry_price = float(future.iloc[0]["open"])
         if entry_price <= 0:
             continue
-        gross, reason, target_before_stop = _simulate(future, entry_price, target_pct, stop_pct)
-        mfe = (float(future["high"].max()) - entry_price) / entry_price * 100.0
-        mae = (float(future["low"].min()) - entry_price) / entry_price * 100.0
-        eod = (float(future.iloc[-1]["close"]) - entry_price) / entry_price * 100.0
+        gross, reason, target_before_stop = _simulate(
+            future,
+            entry_price,
+            target_pct,
+            stop_pct,
+            side=side,
+        )
+        if side == "long":
+            mfe = (float(future["high"].max()) - entry_price) / entry_price * 100.0
+            mae = (float(future["low"].min()) - entry_price) / entry_price * 100.0
+            eod = (float(future.iloc[-1]["close"]) - entry_price) / entry_price * 100.0
+        else:
+            mfe = (entry_price - float(future["low"].min())) / entry_price * 100.0
+            mae = (entry_price - float(future["high"].max())) / entry_price * 100.0
+            eod = (entry_price - float(future.iloc[-1]["close"])) / entry_price * 100.0
+        evidence = f"live_5minute_shadow_{side}_conservative"
         rows.append(
             {
                 **event,
+                "side": side,
                 "entry_time": entry_time.isoformat(),
                 "entry_price": round(entry_price, 4),
                 "target_pct": float(target_pct),
@@ -83,7 +107,7 @@ def evaluate_event_shadow_day(
                 "eod_return_pct": round(float(eod), 6),
                 "bars_after_entry": int(len(future)),
                 "complete_session": complete,
-                "evidence": "live_5minute_shadow_conservative",
+                "evidence": evidence,
             }
         )
     outcomes = pd.DataFrame(rows)
@@ -95,6 +119,7 @@ def evaluate_event_shadow_day(
         summary_rows.append(
             {
                 "date": str(date),
+                "side": side,
                 "event_type": event_type,
                 "events": int(len(group)),
                 "target_before_stop_pct": round(float(group["target_before_stop"].mean() * 100.0), 4),
@@ -104,10 +129,53 @@ def evaluate_event_shadow_day(
                 "avg_mfe_pct": round(float(group["max_favorable_pct"].mean()), 6),
                 "avg_mae_pct": round(float(group["max_adverse_pct"].mean()), 6),
                 "ambiguous_events": int(group["exit_reason"].eq("ambiguous_stop_target").sum()),
-                "evidence": "live_5minute_shadow_conservative",
+                "evidence": evidence,
             }
         )
     summary = pd.DataFrame(summary_rows)
-    outcomes.to_csv(root / f"outcomes_{date}.csv", index=False)
-    summary.to_csv(root / f"outcome_summary_{date}.csv", index=False)
+    outcomes.to_csv(root / f"{output_stem}_{date}.csv", index=False)
+    summary.to_csv(root / f"{summary_stem}_{date}.csv", index=False)
     return outcomes, summary
+
+
+def evaluate_event_shadow_day(
+    output_dir: str | Path,
+    date: str,
+    target_pct: float = 1.5,
+    stop_pct: float = 1.0,
+    cost_pct: float = 0.15,
+    required_last_bar: str = "15:25:00",
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    return _evaluate(
+        output_dir,
+        date,
+        target_pct,
+        stop_pct,
+        cost_pct,
+        required_last_bar,
+        side="long",
+        output_stem="outcomes",
+        summary_stem="outcome_summary",
+    )
+
+
+def evaluate_event_shadow_fade_day(
+    output_dir: str | Path,
+    date: str,
+    target_pct: float = 2.0,
+    stop_pct: float = 0.5,
+    cost_pct: float = 0.15,
+    required_last_bar: str = "15:25:00",
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Evaluate the bullish event stream as a paper-only short fade."""
+    return _evaluate(
+        output_dir,
+        date,
+        target_pct,
+        stop_pct,
+        cost_pct,
+        required_last_bar,
+        side="short",
+        output_stem="fade_outcomes",
+        summary_stem="fade_outcome_summary",
+    )

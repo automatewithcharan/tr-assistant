@@ -1,6 +1,9 @@
 import pandas as pd
 
-from pkscreener.classes.IntradayEventShadowOutcomes import evaluate_event_shadow_day
+from pkscreener.classes.IntradayEventShadowOutcomes import (
+    evaluate_event_shadow_day,
+    evaluate_event_shadow_fade_day,
+)
 
 
 def _write_day(tmp_path, future_highs, future_lows, future_closes):
@@ -48,3 +51,19 @@ def test_incomplete_symbol_is_not_used_in_summary(tmp_path):
     outcomes, summary = evaluate_event_shadow_day(tmp_path, "2026-01-02")
     assert bool(outcomes.iloc[0]["complete_session"]) is False
     assert summary.empty
+
+
+def test_short_fade_shadow_uses_directional_target_and_cost(tmp_path):
+    _write_day(tmp_path, [100.2, 100.1, 100.0], [99.5, 97.9, 98.0], [99.0, 98.0, 98.0])
+    outcomes, summary = evaluate_event_shadow_fade_day(tmp_path, "2026-01-02")
+    assert outcomes.iloc[0]["side"] == "short"
+    assert outcomes.iloc[0]["exit_reason"] == "target"
+    assert outcomes.iloc[0]["net_return_pct"] == 1.85
+    assert summary.iloc[0]["side"] == "short"
+
+
+def test_short_fade_same_bar_is_conservative_stop(tmp_path):
+    _write_day(tmp_path, [100.6, 100.1, 100.0], [97.9, 99.0, 99.0], [100.0, 99.0, 99.0])
+    outcomes, _ = evaluate_event_shadow_fade_day(tmp_path, "2026-01-02")
+    assert outcomes.iloc[0]["exit_reason"] == "ambiguous_stop_target"
+    assert outcomes.iloc[0]["net_return_pct"] == -0.65

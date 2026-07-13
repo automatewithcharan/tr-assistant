@@ -4510,9 +4510,13 @@ class SignalMonitorRunner:
         if minute_of_day < (15 * 60 + 30) or self._event_shadow_outcomes_date == today:
             return
         try:
-            from pkscreener.classes.IntradayEventShadowOutcomes import evaluate_event_shadow_day
+            from pkscreener.classes.IntradayEventShadowOutcomes import (
+                evaluate_event_shadow_day,
+                evaluate_event_shadow_fade_day,
+            )
 
             outcomes, summary = evaluate_event_shadow_day(self.output_dir, today)
+            fade_outcomes, fade_summary = evaluate_event_shadow_fade_day(self.output_dir, today)
             if not outcomes.empty:
                 self._event_shadow_outcomes_date = today
                 complete = int(outcomes["complete_session"].sum())
@@ -4521,6 +4525,17 @@ class SignalMonitorRunner:
                 )
                 if not summary.empty:
                     OutputControls().printOutput(summary.to_string(index=False), enableMultipleLineOutput=True)
+                if not fade_outcomes.empty:
+                    complete_fades = int(fade_outcomes["complete_session"].sum())
+                    OutputControls().printOutput(
+                        f"  [+] Event fade shadow outcomes: {complete_fades}/{len(fade_outcomes)} "
+                        "complete paper-only event(s) evaluated"
+                    )
+                    if not fade_summary.empty:
+                        OutputControls().printOutput(
+                            fade_summary.to_string(index=False),
+                            enableMultipleLineOutput=True,
+                        )
                 self._run_event_shadow_model_training()
         except Exception as exc:
             default_logger().warning(f"Event shadow outcome evaluation failed: {exc}", exc_info=True)
