@@ -128,6 +128,7 @@ def test_summary_reports_bucket_hit_rates(tmp_path):
     assert row["FeatureBucket"] == "missed_stable_tight_sector"
     assert row["Rows"] == 2
     assert row["t1_0_s1_0_hit_rate_pct"] == 50.0
+    assert row["EvaluatedSessions"] == 1
 
 
 def test_lane_decision_outcomes_use_price_now_and_reason_bucket(tmp_path):

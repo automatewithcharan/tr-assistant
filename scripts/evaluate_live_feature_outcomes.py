@@ -416,6 +416,33 @@ def summarize(outcomes: pd.DataFrame) -> pd.DataFrame:
                 else np.nan
             ),
         }
+        daily_return_column = (
+            "ForwardReturnPct"
+            if "ForwardReturnPct" in available.columns
+            and available["ForwardReturnPct"].notna().any()
+            else "EodReturnPct"
+        )
+        if len(available) and "Date" in available.columns and daily_return_column in available.columns:
+            daily_forward = pd.to_numeric(
+                available[daily_return_column], errors="coerce"
+            ).groupby(available["Date"].astype(str)).mean().dropna()
+        else:
+            daily_forward = pd.Series(dtype=float)
+        row["EvaluatedSessions"] = int(len(daily_forward))
+        row["AvgDailyEqualReturnPct"] = (
+            round(float(daily_forward.mean()), 4) if len(daily_forward) else np.nan
+        )
+        row["PositiveSessionPct"] = (
+            round(float((daily_forward > 0).mean() * 100.0), 2)
+            if len(daily_forward)
+            else np.nan
+        )
+        row["WorstSessionPct"] = (
+            round(float(daily_forward.min()), 4) if len(daily_forward) else np.nan
+        )
+        row["BestSessionPct"] = (
+            round(float(daily_forward.max()), 4) if len(daily_forward) else np.nan
+        )
         eligible_rows = int(row["EligibleRows"])
         row["CoveragePct"] = (
             round(float(len(available) / eligible_rows * 100.0), 2)
@@ -437,11 +464,21 @@ def summarize(outcomes: pd.DataFrame) -> pd.DataFrame:
             row[f"{col.replace('_outcome', '')}_hit_rate_pct"] = round(float(hit_rate), 2)
             return_col = col.replace("_outcome", "_return_pct")
             if return_col in available.columns:
+                numeric_returns = pd.to_numeric(available[return_col], errors="coerce")
                 row[f"{col.replace('_outcome', '')}_avg_return_pct"] = (
-                    round(float(pd.to_numeric(available[return_col], errors="coerce").mean()), 4)
+                    round(float(numeric_returns.mean()), 4)
                     if len(available)
                     else np.nan
                 )
+                if "Date" in available.columns:
+                    daily_contract = numeric_returns.groupby(
+                        available["Date"].astype(str)
+                    ).mean().dropna()
+                    row[f"{col.replace('_outcome', '')}_avg_daily_equal_pct"] = (
+                        round(float(daily_contract.mean()), 4)
+                        if len(daily_contract)
+                        else np.nan
+                    )
         grouped.append(row)
     return pd.DataFrame(grouped).sort_values(["Rows", "FeatureBucket"], ascending=[False, True])
 

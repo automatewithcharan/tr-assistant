@@ -40,9 +40,19 @@ send_discord() {
         --data-binary "$payload" >/dev/null 2>&1 || true
 }
 
+run_readiness() {
+    "$PYTHON" "$REPO/scripts/assess_live_evidence_readiness.py" \
+        --inputs \
+        "$REPO/results/Data/live_feature_recorder/eod/*/live_features_rows.csv" \
+        "$REPO/results/Data/live_feature_recorder/eod/*/lane_decisions_rows.csv" \
+        --output "$REPO/results/Data/live_feature_recorder/evidence_readiness.csv" \
+        >>"$LOG" 2>&1 || true
+}
+
 if [ -f "$OUTPUT_ROOT/status.json" ]; then
     existing_status=$("$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status", ""))' "$OUTPUT_ROOT/status.json" 2>/dev/null || true)
     if [ "$existing_status" = "complete" ]; then
+        run_readiness
         exit 0
     fi
 fi
@@ -84,5 +94,6 @@ if [ "$RC" -eq 0 ]; then
 else
     send_discord "Live evidence EOD needs attention for $DATE | rc=$RC | $SUMMARY | see $LOG"
 fi
+run_readiness
 echo "[$(date -u +'%Y-%m-%d %H:%M:%S UTC')] live evidence EOD finished rc=$RC $SUMMARY" >>"$LOG"
 exit "$RC"

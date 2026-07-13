@@ -72,4 +72,5 @@ def test_combine_outputs_rebuilds_cross_day_summary(tmp_path):
     assert summary.iloc[0]["Rows"] == 2
     assert summary.iloc[0]["CoveragePct"] == 100.0
     assert summary.iloc[0]["t1_0_s1_0_hit_rate_pct"] == 50.0
+    assert summary.iloc[0]["AvgDailyEqualReturnPct"] == 0.0
     assert Path(tmp_path / "combined_summary.csv").exists()
