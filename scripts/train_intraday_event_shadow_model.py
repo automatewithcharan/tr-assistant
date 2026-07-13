@@ -16,18 +16,33 @@ from sklearn.pipeline import Pipeline
 from pkscreener.classes.IntradayEventEngine import CAUSAL_MODEL_FEATURES
 
 
-def load_outcomes(pattern: str) -> pd.DataFrame:
+def load_outcomes(pattern: str, selected_only: bool = True) -> pd.DataFrame:
     files = sorted(Path().glob(pattern)) if not Path(pattern).is_absolute() else sorted(Path(pattern).parent.glob(Path(pattern).name))
     parts = [pd.read_csv(path) for path in files if path.is_file()]
     if not parts:
         return pd.DataFrame()
     frame = pd.concat(parts, ignore_index=True)
-    required = {"date", "symbol", "complete_session", "target_before_stop", "net_return_pct", *CAUSAL_MODEL_FEATURES}
+    required = {
+        "date",
+        "symbol",
+        "signal_time",
+        "complete_session",
+        "target_before_stop",
+        "net_return_pct",
+        *CAUSAL_MODEL_FEATURES,
+    }
+    if selected_only:
+        required.add("first_batch_selected")
     missing = required - set(frame.columns)
     if missing:
         raise ValueError(f"shadow outcomes missing columns: {', '.join(sorted(missing))}")
     complete = frame["complete_session"].astype(str).str.strip().str.lower().isin({"true", "1", "yes"})
     frame = frame[complete].copy()
+    if selected_only:
+        selected = frame["first_batch_selected"].astype(str).str.strip().str.lower().isin(
+            {"true", "1", "yes"}
+        )
+        frame = frame[selected].copy()
     frame["date"] = frame["date"].astype(str)
     frame["symbol"] = frame["symbol"].astype(str).str.upper()
     frame["label"] = frame["target_before_stop"].astype(str).str.strip().str.lower().isin({"true", "1", "yes"}).astype(int)
@@ -55,7 +70,14 @@ def model() -> Pipeline:
 
 def daily_picks(frame: pd.DataFrame, threshold: float) -> pd.DataFrame:
     eligible = frame[frame["prediction"] >= float(threshold)].copy()
-    eligible.sort_values(["date", "prediction", "symbol"], ascending=[True, False, True], inplace=True)
+    if "signal_time" not in eligible.columns:
+        eligible["signal_time"] = ""
+    eligible["signal_time"] = pd.to_datetime(eligible["signal_time"], errors="coerce")
+    eligible.sort_values(
+        ["date", "signal_time", "prediction", "symbol"],
+        ascending=[True, True, False, True],
+        inplace=True,
+    )
     return eligible.groupby("date", group_keys=False).head(1)
 
 
@@ -81,7 +103,7 @@ def main() -> int:
     parser.add_argument("--output-dir", default="results/Data/intraday_event_shadow/model_v1")
     parser.add_argument("--capital", type=float, default=400000.0)
     parser.add_argument("--daily-goal", type=float, default=10000.0)
-    parser.add_argument("--min-sessions", type=int, default=20)
+    parser.add_argument("--min-sessions", type=int, default=100)
     parser.add_argument("--min-events", type=int, default=100)
     parser.add_argument("--thresholds", default="0.40,0.50,0.60,0.70,0.80")
     args = parser.parse_args()
@@ -124,8 +146,9 @@ def main() -> int:
         "paper_shadow_model_accepted": accepted,
         "real_orders_allowed": False,
         "feature_availability": "signal_close_or_earlier",
+        "candidate_availability": "first_threshold_eligible_signal_batch",
         "leakage_audit_passed": True,
-        "evidence_version": 2,
+        "evidence_version": 3,
     }
     validation_grid.to_csv(output / "validation_thresholds.csv", index=False)
     pd.concat([validation, final], ignore_index=True).to_csv(output / "scored_holdout.csv", index=False)
