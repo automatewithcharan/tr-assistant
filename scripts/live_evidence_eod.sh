@@ -45,6 +45,8 @@ run_readiness() {
         --inputs \
         "$REPO/results/Data/live_feature_recorder/eod/*/live_features_rows.csv" \
         "$REPO/results/Data/live_feature_recorder/eod/*/lane_decisions_rows.csv" \
+        "$REPO/results/Data/live_feature_recorder/bootstrap/*/live_features_rows.csv" \
+        "$REPO/results/Data/live_feature_recorder/bootstrap/*/lane_decisions_rows.csv" \
         --output "$REPO/results/Data/live_feature_recorder/evidence_readiness.csv" \
         >>"$LOG" 2>&1 || true
 }

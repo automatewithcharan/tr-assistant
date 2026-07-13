@@ -51,7 +51,7 @@ def test_robust_forward_bucket_can_only_become_shadow_candidate():
                     "Date": date,
                     "When": pd.Timestamp(f"{date} 09:30:00"),
                     "Symbol": f"S{index}",
-                    "FeatureBucket": "candidate",
+                    "FeatureBucket": "missed_runner",
                     "EvaluationEligible": True,
                     "OutcomeAvailable": True,
                     "ForwardReturnPct": 0.3,
@@ -80,7 +80,7 @@ def test_goal_evidence_still_cannot_enable_trading():
                     "Date": date,
                     "When": pd.Timestamp(f"{date} 09:30:{index:02d}"),
                     "Symbol": f"S{index}",
-                    "FeatureBucket": "candidate",
+                    "FeatureBucket": "missed_runner",
                     "EvaluationEligible": True,
                     "OutcomeAvailable": True,
                     "ForwardReturnPct": 3.0,
@@ -104,7 +104,7 @@ def test_missing_coverage_blocks_shadow_candidate():
                     "Date": date,
                     "When": pd.Timestamp(f"{date} 09:30:00"),
                     "Symbol": f"S{index}",
-                    "FeatureBucket": "candidate",
+                    "FeatureBucket": "missed_runner",
                     "EvaluationEligible": True,
                     "OutcomeAvailable": index == 0,
                     "ForwardReturnPct": 0.3,
@@ -162,3 +162,47 @@ def test_csv_false_strings_are_parsed_as_false(tmp_path: Path):
     outcomes = load_outcomes([str(path)])
     assert not bool(outcomes.iloc[0]["EvaluationEligible"])
     assert not bool(outcomes.iloc[0]["OutcomeAvailable"])
+
+
+def test_nested_wildcard_inputs_are_loaded(tmp_path: Path):
+    path = tmp_path / "eod" / "2026-07-01" / "live_features_rows.csv"
+    path.parent.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "Date": "2026-07-01",
+                "When": "2026-07-01 09:30:00",
+                "Symbol": "ABC",
+                "FeatureBucket": "missed_runner",
+                "EvaluationEligible": True,
+                "OutcomeAvailable": True,
+                "ForwardReturnPct": 0.5,
+            }
+        ]
+    ).to_csv(path, index=False)
+    pattern = str(tmp_path / "eod" / "*" / "live_features_rows.csv")
+    outcomes = load_outcomes([pattern])
+    assert len(outcomes) == 1
+    assert outcomes.iloc[0]["Symbol"] == "ABC"
+
+
+def test_profitable_reject_bucket_cannot_become_shadow_candidate():
+    dates = pd.bdate_range("2026-01-01", periods=24).strftime("%Y-%m-%d").tolist()
+    rows = []
+    for date in dates:
+        for index in range(5):
+            rows.append(
+                {
+                    "Date": date,
+                    "When": pd.Timestamp(f"{date} 09:30:00"),
+                    "Symbol": f"S{index}",
+                    "FeatureBucket": "leader_ignition|ignition_watch|reject|too late",
+                    "EvaluationEligible": True,
+                    "OutcomeAvailable": True,
+                    "ForwardReturnPct": 3.0,
+                }
+            )
+    row = assess(pd.DataFrame(rows)).iloc[0]
+    assert not bool(row["StrategyEligibleBucket"])
+    assert not bool(row["SampleGatePassed"])
+    assert not bool(row["ShadowCandidate"])

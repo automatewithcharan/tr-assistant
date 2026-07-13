@@ -24,6 +24,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.evaluate_live_feature_outcomes import (
+    boolean_series,
     dedupe_first_evidence_state,
     evaluate_rows_from_minutes,
     load_lane_decisions,
@@ -214,12 +215,12 @@ def evaluate_stream(
 def _coverage(outcomes: pd.DataFrame) -> tuple[int, int, int, float]:
     total = int(len(outcomes))
     eligible = (
-        int(outcomes["EvaluationEligible"].fillna(False).astype(bool).sum())
+        int(boolean_series(outcomes["EvaluationEligible"]).sum())
         if total and "EvaluationEligible" in outcomes.columns
         else total
     )
     evaluated = (
-        int(outcomes["OutcomeAvailable"].fillna(False).astype(bool).sum())
+        int(boolean_series(outcomes["OutcomeAvailable"]).sum())
         if total and "OutcomeAvailable" in outcomes.columns
         else 0
     )
@@ -325,7 +326,7 @@ def main() -> int:
         "raw_decision_rows": int(len(decisions)),
         "symbols": len(symbols),
         "minute_complete_symbols": (
-            int(audit["complete"].fillna(False).astype(bool).sum())
+            int(boolean_series(audit["complete"]).sum())
             if not audit.empty and "complete" in audit.columns
             else None
         ),

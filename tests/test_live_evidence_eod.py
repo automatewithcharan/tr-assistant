@@ -3,11 +3,22 @@ from pathlib import Path
 import pandas as pd
 
 from scripts.run_live_evidence_eod import (
+    _coverage,
     evidence_symbols,
     evaluate_stream,
     load_daily_evidence,
     minute_day_coverage,
 )
+
+
+def test_coverage_parses_persisted_false_strings():
+    outcomes = pd.DataFrame(
+        {
+            "EvaluationEligible": ["True", "True"],
+            "OutcomeAvailable": ["False", "True"],
+        }
+    )
+    assert _coverage(outcomes) == (2, 2, 1, 50.0)
 
 
 def test_load_daily_evidence_and_symbol_union(tmp_path):

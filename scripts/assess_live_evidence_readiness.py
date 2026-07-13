@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from glob import glob
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +28,7 @@ def _files(patterns: list[str]) -> list[Path]:
     for pattern in patterns:
         value = Path(pattern)
         if any(char in pattern for char in "*?[]"):
-            paths.update(value.parent.glob(value.name))
+            paths.update(Path(match) for match in glob(pattern, recursive=True))
         elif value.exists():
             paths.add(value)
     return sorted(paths)
@@ -74,6 +75,19 @@ def return_contracts(outcomes: pd.DataFrame) -> dict[str, str]:
     if "ForwardReturnPct" in outcomes.columns:
         contracts["forward_horizon"] = "ForwardReturnPct"
     return dict(sorted(contracts.items()))
+
+
+def strategy_eligible_bucket(bucket_name: str) -> bool:
+    """Only causal candidate/pass states may advance beyond research reporting."""
+    name = str(bucket_name or "").strip()
+    parts = name.split("|")
+    if len(parts) >= 3:
+        return parts[2].strip().lower() == "pass"
+    return name in {
+        "missed_runner",
+        "missed_stable_depth",
+        "missed_stable_tight_sector",
+    }
 
 
 def first_batch_rows(bucket: pd.DataFrame) -> pd.DataFrame:
@@ -160,6 +174,7 @@ def assess(
     contracts = return_contracts(outcomes)
     rows = []
     for bucket_name, bucket in outcomes.groupby("FeatureBucket", sort=True):
+        strategy_eligible = strategy_eligible_bucket(bucket_name)
         selected = first_batch_rows(bucket)
         eligible_rows = int(len(selected))
         for contract, return_column in contracts.items():
@@ -207,6 +222,7 @@ def assess(
             row: dict[str, Any] = {
                 "FeatureBucket": bucket_name,
                 "Contract": contract,
+                "StrategyEligibleBucket": strategy_eligible,
                 "Sessions": len(all_dates),
                 "TradeSessions": trade_sessions,
                 "FirstBatchCandidates": candidates,
@@ -235,7 +251,8 @@ def assess(
                 "StressGoalHitSessionPct": round(stress_target_hit_pct, 2),
             }
             row["SampleGatePassed"] = bool(
-                len(all_dates) >= int(min_sessions)
+                strategy_eligible
+                and len(all_dates) >= int(min_sessions)
                 and trade_sessions >= int(min_trade_sessions)
                 and candidates >= int(min_candidates)
                 and coverage >= float(min_coverage_pct)
@@ -266,12 +283,13 @@ def assess(
         [
             "ShadowCandidate",
             "GoalEvidencePassed",
+            "StrategyEligibleBucket",
             "SampleGatePassed",
             "StressAvgDailyReturnPct",
             "BlockFloorPct",
             "FirstBatchCandidates",
         ],
-        ascending=[False, False, False, False, False, False],
+        ascending=[False, False, False, False, False, False, False],
         inplace=True,
     )
     return report.reset_index(drop=True)

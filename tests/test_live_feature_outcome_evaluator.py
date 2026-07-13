@@ -6,11 +6,58 @@ from scripts.evaluate_live_feature_outcomes import (
     dedupe_first_evidence_state,
     evaluate_rows,
     evaluate_rows_from_minutes,
+    feature_bucket,
     load_lane_decisions,
     load_live_features,
     load_symbol_days,
     summarize,
 )
+
+
+def test_feature_bucket_parses_persisted_false_strings():
+    row = pd.Series(
+        {
+            "MissedRunnerCandidate": "False",
+            "OrderBookStable": "False",
+            "SpreadOk": "False",
+            "AlreadyAlertedToday": "False",
+            "SectorTop2Count": 0,
+        }
+    )
+    assert feature_bucket(row) == "other"
+
+
+def test_summary_excludes_persisted_false_outcome_strings():
+    outcomes = pd.DataFrame(
+        [
+            {
+                "FeatureBucket": "missed_runner",
+                "Symbol": "AAA",
+                "Date": "2026-07-01",
+                "EvaluationEligible": "True",
+                "OutcomeAvailable": "False",
+                "ForwardReturnPct": 9.0,
+                "MaxFavorablePct": 9.0,
+                "MaxAdversePct": 0.0,
+                "EodReturnPct": float("nan"),
+            },
+            {
+                "FeatureBucket": "missed_runner",
+                "Symbol": "BBB",
+                "Date": "2026-07-01",
+                "EvaluationEligible": "True",
+                "OutcomeAvailable": "True",
+                "ForwardReturnPct": 0.5,
+                "MaxFavorablePct": 0.7,
+                "MaxAdversePct": -0.2,
+                "EodReturnPct": float("nan"),
+            },
+        ]
+    )
+    row = summarize(outcomes).iloc[0]
+    assert row["EligibleRows"] == 2
+    assert row["EvaluatedRows"] == 1
+    assert row["AvgForwardReturnPct"] == 0.5
 
 
 def _write_symbol(path: Path, symbol: str, rows: list[dict]):

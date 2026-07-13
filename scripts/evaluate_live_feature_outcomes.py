@@ -35,6 +35,25 @@ TARGETS = (0.5, 0.7, 1.0, 1.5, 3.0)
 STOPS = (0.5, 1.0, 2.5)
 
 
+def as_bool(value: object) -> bool:
+    if value is None:
+        return False
+    try:
+        if pd.isna(value):
+            return False
+    except Exception:
+        pass
+    if isinstance(value, (bool, np.bool_)):
+        return bool(value)
+    if isinstance(value, (int, float, np.integer, np.floating)):
+        return float(value) != 0.0
+    return str(value).strip().lower() in {"1", "1.0", "true", "yes", "y", "on"}
+
+
+def boolean_series(values: pd.Series) -> pd.Series:
+    return values.apply(as_bool).astype(bool)
+
+
 def _metric_suffix(value: float) -> str:
     return str(float(value)).replace(".", "_").replace("-", "m")
 
@@ -170,10 +189,10 @@ def simulate_target_stop(
 
 
 def feature_bucket(row: pd.Series) -> str:
-    missed = bool(row.get("MissedRunnerCandidate", False))
-    stable = bool(row.get("OrderBookStable", False))
-    spread_ok = bool(row.get("SpreadOk", False))
-    alerted = bool(row.get("AlreadyAlertedToday", False))
+    missed = as_bool(row.get("MissedRunnerCandidate", False))
+    stable = as_bool(row.get("OrderBookStable", False))
+    spread_ok = as_bool(row.get("SpreadOk", False))
+    alerted = as_bool(row.get("AlreadyAlertedToday", False))
     sector_top2 = float(row.get("SectorTop2Count", 0) or 0) >= 2
     if missed and stable and spread_ok and sector_top2:
         return "missed_stable_tight_sector"
@@ -387,7 +406,7 @@ def summarize(outcomes: pd.DataFrame) -> pd.DataFrame:
     grouped = []
     for bucket, group in outcomes.groupby("FeatureBucket", dropna=False):
         available = (
-            group[group["OutcomeAvailable"].fillna(False).astype(bool)]
+            group[boolean_series(group["OutcomeAvailable"])]
             if "OutcomeAvailable" in group.columns
             else group
         )
@@ -395,7 +414,7 @@ def summarize(outcomes: pd.DataFrame) -> pd.DataFrame:
             "FeatureBucket": bucket,
             "Rows": int(len(group)),
             "EligibleRows": (
-                int(group["EvaluationEligible"].fillna(False).astype(bool).sum())
+                int(boolean_series(group["EvaluationEligible"]).sum())
                 if "EvaluationEligible" in group.columns
                 else int(len(group))
             ),
