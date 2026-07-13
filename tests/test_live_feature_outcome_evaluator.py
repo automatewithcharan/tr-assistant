@@ -342,6 +342,23 @@ def test_late_state_is_ineligible_instead_of_shortened_to_partial_horizon():
     assert summary.iloc[0]["EligibleRows"] == 0
 
 
+def test_premarket_state_is_ineligible():
+    features = pd.DataFrame(
+        [
+            {
+                "When": pd.Timestamp("2026-07-06 09:14:30"),
+                "Date": "2026-07-06",
+                "Symbol": "AAA",
+                "LastPrice": 100.0,
+                "MissedRunnerCandidate": True,
+            }
+        ]
+    )
+    outcomes = evaluate_rows_from_minutes(features, {}, horizon_minutes=60)
+    assert not bool(outcomes.iloc[0]["EvaluationEligible"])
+    assert outcomes.iloc[0]["OutcomeSource"] == "outside_regular_market"
+
+
 def test_missing_minute_candles_are_reported_not_counted_as_zero_returns():
     features = pd.DataFrame(
         [
@@ -387,3 +404,25 @@ def test_decision_evaluation_dedupes_repeated_monitor_cycles():
 
     assert len(deduped) == 1
     assert deduped.iloc[0]["When"] == pd.Timestamp("2026-07-06 09:20:00")
+
+
+def test_dedupe_ignores_stale_premarket_state():
+    rows = [
+        {
+            "When": pd.Timestamp("2026-07-06 09:14:30"),
+            "Date": "2026-07-06",
+            "Symbol": "AAA",
+            "MissedRunnerCandidate": True,
+            "LastPrice": 99.0,
+        },
+        {
+            "When": pd.Timestamp("2026-07-06 09:16:00"),
+            "Date": "2026-07-06",
+            "Symbol": "AAA",
+            "MissedRunnerCandidate": True,
+            "LastPrice": 100.0,
+        },
+    ]
+    deduped = dedupe_first_evidence_state(pd.DataFrame(rows))
+    assert len(deduped) == 1
+    assert deduped.iloc[0]["When"] == pd.Timestamp("2026-07-06 09:16:00")

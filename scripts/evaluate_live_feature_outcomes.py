@@ -33,6 +33,8 @@ DEFAULT_OUT_PREFIX = "results/Data/live_feature_recorder/live_feature_outcomes"
 DEFAULT_DECISION_OUT_PREFIX = "results/Data/live_feature_recorder/lane_decision_outcomes"
 TARGETS = (0.5, 0.7, 1.0, 1.5, 3.0)
 STOPS = (0.5, 1.0, 2.5)
+MARKET_OPEN_MINUTE = 9 * 60 + 15
+MARKET_LAST_CANDLE_MINUTE = 15 * 60 + 29
 
 
 def as_bool(value: object) -> bool:
@@ -237,7 +239,16 @@ def dedupe_first_evidence_state(features: pd.DataFrame) -> pd.DataFrame:
     """
     if features is None or features.empty:
         return pd.DataFrame() if features is None else features.copy()
-    frame = features.sort_values("When").copy()
+    frame = features.copy()
+    frame["When"] = pd.to_datetime(frame["When"], errors="coerce")
+    minute_of_day = frame["When"].dt.hour * 60 + frame["When"].dt.minute
+    frame = frame[
+        minute_of_day.between(
+            MARKET_OPEN_MINUTE,
+            MARKET_LAST_CANDLE_MINUTE,
+            inclusive="both",
+        )
+    ].sort_values("When")
     if "Lane" in frame.columns and frame["Lane"].astype(str).str.strip().ne("").any():
         for column in ("Lane", "Stage", "Decision", "Reason"):
             if column not in frame.columns:
@@ -325,9 +336,12 @@ def evaluate_rows_from_minutes(
         out["EvaluationSource"] = "lane_decision" if lane else "live_feature"
         out["FeatureBucket"] = decision_bucket(row) if lane else feature_bucket(row)
 
-        market_close_minute = 15 * 60 + 29
         signal_minute = signal_when.hour * 60 + signal_when.minute
-        eligible = signal_minute + int(horizon_minutes) <= market_close_minute
+        regular_market = MARKET_OPEN_MINUTE <= signal_minute <= MARKET_LAST_CANDLE_MINUTE
+        eligible = bool(
+            regular_market
+            and signal_minute + int(horizon_minutes) <= MARKET_LAST_CANDLE_MINUTE
+        )
         out["EvaluationEligible"] = eligible
         complete_window = False
         if eligible and candles is not None and not candles.empty:
@@ -352,7 +366,9 @@ def evaluate_rows_from_minutes(
         )
         available = bool(horizon.get("OutcomeAvailable", False))
         out["OutcomeAvailable"] = available
-        if not eligible:
+        if not regular_market:
+            unavailable_source = "outside_regular_market"
+        elif not eligible:
             unavailable_source = "insufficient_market_horizon"
         elif not complete_window:
             unavailable_source = "incomplete_kite_minute_window"
