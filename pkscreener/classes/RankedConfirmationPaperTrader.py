@@ -43,6 +43,7 @@ class RankedPaperConfig:
     max_entry_extension_pct: float = 0.45
     min_open_move_pct: float = 0.50
     max_open_move_pct: float = 3.00
+    min_day_change_pct: float = 0.50
     max_day_change_pct: float = 5.00
     max_pullback_pct: float = 0.75
     min_volume_growth_pct: float = 0.50
@@ -80,6 +81,7 @@ class RankedPaperConfig:
             max_entry_extension_pct=f("SIGNALMONITOR_RANKED_PAPER_MAX_EXTENSION_PCT", 0.45),
             min_open_move_pct=f("SIGNALMONITOR_RANKED_PAPER_MIN_OPEN_MOVE_PCT", 0.50),
             max_open_move_pct=f("SIGNALMONITOR_RANKED_PAPER_MAX_OPEN_MOVE_PCT", 3.00),
+            min_day_change_pct=f("SIGNALMONITOR_RANKED_PAPER_MIN_DAY_CHANGE_PCT", 0.50),
             max_day_change_pct=f("SIGNALMONITOR_RANKED_PAPER_MAX_DAY_CHANGE_PCT", 5.00),
             max_pullback_pct=f("SIGNALMONITOR_RANKED_PAPER_MAX_PULLBACK_PCT", 0.75),
             min_volume_growth_pct=f("SIGNALMONITOR_RANKED_PAPER_MIN_VOLUME_GROWTH_PCT", 0.50),
@@ -385,6 +387,8 @@ class RankedConfirmationPaperTrader:
         pullback = (current.day_high / price - 1.0) * 100.0 if current.day_high > 0 else 0.0
         if not (self.config.min_open_move_pct <= open_move <= self.config.max_open_move_pct):
             return False, "open_move_outside_early_window", {}
+        if day_change < self.config.min_day_change_pct:
+            return False, "day_move_below_positive_floor", {}
         if day_change > self.config.max_day_change_pct:
             return False, "day_move_too_extended", {}
         if pullback > self.config.max_pullback_pct:

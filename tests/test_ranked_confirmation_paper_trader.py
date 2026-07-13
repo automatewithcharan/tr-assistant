@@ -22,6 +22,7 @@ def _config(**overrides):
         "max_entry_extension_pct": 0.45,
         "min_open_move_pct": 0.5,
         "max_open_move_pct": 3.0,
+        "min_day_change_pct": 0.5,
         "max_day_change_pct": 5.0,
         "max_pullback_pct": 0.75,
         "min_volume_growth_pct": 0.5,
@@ -70,7 +71,14 @@ def _tick(price, volume, open_price=99.0, prev_close=99.0, bs=2.0, vwap=100.0):
     }
 
 
-def _advance_to_entry(trader, start, symbol="TEST", strength=65.0, open_price=99.0):
+def _advance_to_entry(
+    trader,
+    start,
+    symbol="TEST",
+    strength=65.0,
+    open_price=99.0,
+    prev_close=99.0,
+):
     prices = [100.00, 100.16, 100.18, 100.20]
     volumes = [100_000, 100_400, 100_800, 101_200]
     events = []
@@ -80,7 +88,14 @@ def _advance_to_entry(trader, start, symbol="TEST", strength=65.0, open_price=99
         events.extend(
             trader.process(
                 alerts,
-                {symbol: _tick(price, volume, open_price=open_price)},
+                {
+                    symbol: _tick(
+                        price,
+                        volume,
+                        open_price=open_price,
+                        prev_close=prev_close,
+                    )
+                },
                 now=now,
             )
         )
@@ -113,6 +128,17 @@ def test_extended_mover_is_not_entered(tmp_path):
     )
     assert candidates.iloc[0]["status_reason"] == "open_move_outside_early_window"
     assert candidates.iloc[0]["observation_count"] == 4
+
+
+def test_gap_down_rebound_is_not_a_positive_day_continuation(tmp_path):
+    start = datetime(2026, 7, 13, 9, 30, 0)
+    trader = RankedConfirmationPaperTrader(str(tmp_path), _config(), now_fn=lambda: start)
+
+    _advance_to_entry(trader, start, open_price=99.0, prev_close=102.0)
+
+    # Price is +1.2% from the open but still below the prior close.
+    assert "TEST" not in trader.trades
+    assert trader.candidates["TEST"].status_reason == "day_move_below_positive_floor"
 
 
 def test_unstable_buy_pressure_is_not_confirmation(tmp_path):
