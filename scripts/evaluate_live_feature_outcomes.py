@@ -10,15 +10,27 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+import sys
 from typing import Iterable
 
 import numpy as np
 import pandas as pd
 
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from scripts.evaluate_live_microstructure_tape import (
+    load_minute_candles,
+    minute_candle_outcome,
+)
+
 
 DEFAULT_INPUT = "results/Data/live_feature_recorder/live_features_*.csv"
+DEFAULT_DECISION_INPUT = "results/Data/live_feature_recorder/lane_decisions_*.csv"
 DEFAULT_DATA_DIR = "results/Data/kite_history_cache/5minute"
 DEFAULT_OUT_PREFIX = "results/Data/live_feature_recorder/live_feature_outcomes"
+DEFAULT_DECISION_OUT_PREFIX = "results/Data/live_feature_recorder/lane_decision_outcomes"
 TARGETS = (0.5, 0.7, 1.0, 1.5, 3.0)
 STOPS = (0.5, 1.0, 2.5)
 
@@ -57,6 +69,40 @@ def load_live_features(pattern: str) -> pd.DataFrame:
     out["Date"] = out["When"].dt.date.astype(str)
     out["Symbol"] = out["Symbol"].astype(str).str.strip().str.upper()
     out["LastPrice"] = pd.to_numeric(out["LastPrice"], errors="coerce")
+    return out.dropna(subset=["When", "LastPrice"]).reset_index(drop=True)
+
+
+def load_lane_decisions(pattern: str) -> pd.DataFrame:
+    """Load pass/reject lane decisions and normalize entry price columns."""
+    frames = []
+    for path in _input_files(pattern):
+        try:
+            df = pd.read_csv(path)
+        except Exception:
+            continue
+        if df.empty:
+            continue
+        df["SourceFile"] = str(path)
+        frames.append(df)
+    if not frames:
+        return pd.DataFrame()
+
+    out = pd.concat(frames, ignore_index=True)
+    required = {"When", "Symbol"}
+    missing = required - set(out.columns)
+    if missing:
+        raise ValueError(f"lane decision input missing columns: {', '.join(sorted(missing))}")
+    if "PriceNow" not in out.columns and "LastPrice" not in out.columns:
+        raise ValueError("lane decision input missing price column: PriceNow or LastPrice")
+    out["When"] = pd.to_datetime(out["When"], errors="coerce")
+    out["Date"] = out["When"].dt.date.astype(str)
+    out["Symbol"] = out["Symbol"].astype(str).str.strip().str.upper()
+    price_col = "PriceNow" if "PriceNow" in out.columns else "LastPrice"
+    out["PriceNow"] = pd.to_numeric(out[price_col], errors="coerce")
+    out["LastPrice"] = out["PriceNow"]
+    for column in ("Lane", "Stage", "Decision", "Reason"):
+        if column not in out.columns:
+            out[column] = ""
     return out.dropna(subset=["When", "LastPrice"]).reset_index(drop=True)
 
 
@@ -142,6 +188,51 @@ def feature_bucket(row: pd.Series) -> str:
     return "other"
 
 
+def _label(value: object, fallback: str) -> str:
+    if value is None:
+        return fallback
+    try:
+        if pd.isna(value):
+            return fallback
+    except Exception:
+        pass
+    text = str(value).strip()
+    if not text or text.lower() == "nan":
+        return fallback
+    return text
+
+
+def decision_bucket(row: pd.Series) -> str:
+    lane = _label(row.get("Lane", ""), "unknown_lane")
+    stage = _label(row.get("Stage", ""), "no_stage")
+    decision = _label(row.get("Decision", ""), "no_decision")
+    reason = _label(row.get("Reason", ""), "no_reason")
+    return f"{lane}|{stage}|{decision}|{reason}"
+
+
+def dedupe_first_evidence_state(features: pd.DataFrame) -> pd.DataFrame:
+    """Freeze the first causal occurrence of each daily evidence state.
+
+    Raw recorder rows remain append-only. This only prevents a state repeated
+    every monitor cycle from receiving dozens of times more evaluation weight.
+    """
+    if features is None or features.empty:
+        return pd.DataFrame() if features is None else features.copy()
+    frame = features.sort_values("When").copy()
+    if "Lane" in frame.columns and frame["Lane"].astype(str).str.strip().ne("").any():
+        for column in ("Lane", "Stage", "Decision", "Reason"):
+            if column not in frame.columns:
+                frame[column] = ""
+            frame[column] = frame[column].fillna("").astype(str)
+        keys = ["Date", "Symbol", "Lane", "Stage", "Decision", "Reason"]
+    else:
+        frame["_FeatureBucket"] = frame.apply(feature_bucket, axis=1)
+        keys = ["Date", "Symbol", "_FeatureBucket"]
+    return frame.drop_duplicates(keys, keep="first").drop(
+        columns=["_FeatureBucket"], errors="ignore"
+    ).reset_index(drop=True)
+
+
 def evaluate_rows(features: pd.DataFrame, symbol_days: dict[tuple[str, str], pd.DataFrame]) -> pd.DataFrame:
     rows = []
     for _, row in features.iterrows():
@@ -155,13 +246,23 @@ def evaluate_rows(features: pd.DataFrame, symbol_days: dict[tuple[str, str], pd.
             future = day[day["datetime"] >= entry_time].reset_index(drop=True)
 
         out = row.to_dict()
-        out["FeatureBucket"] = feature_bucket(row)
-        if future.empty or entry_price <= 0:
-            out["BarsAfterEntry"] = 0
-            out["MaxFavorablePct"] = 0.0
-            out["MaxAdversePct"] = 0.0
-            out["EodReturnPct"] = 0.0
+        lane = str(row.get("Lane", "") or "").strip()
+        if lane:
+            out["EvaluationSource"] = "lane_decision"
+            out["FeatureBucket"] = decision_bucket(row)
         else:
+            out["EvaluationSource"] = "live_feature"
+            out["FeatureBucket"] = feature_bucket(row)
+        if future.empty or entry_price <= 0:
+            out["OutcomeAvailable"] = False
+            out["OutcomeSource"] = "missing_local_candles"
+            out["BarsAfterEntry"] = 0
+            out["MaxFavorablePct"] = np.nan
+            out["MaxAdversePct"] = np.nan
+            out["EodReturnPct"] = np.nan
+        else:
+            out["OutcomeAvailable"] = True
+            out["OutcomeSource"] = "legacy_local_candle_from_recorded_price"
             max_high = float(future["high"].max())
             min_low = float(future["low"].min())
             eod_close = float(future.iloc[-1]["close"])
@@ -181,6 +282,100 @@ def evaluate_rows(features: pd.DataFrame, symbol_days: dict[tuple[str, str], pd.
     return pd.DataFrame(rows)
 
 
+def evaluate_rows_from_minutes(
+    features: pd.DataFrame,
+    candle_groups: dict[tuple[str, str], pd.DataFrame],
+    horizon_minutes: int = 60,
+    fee_pct: float = 0.10,
+    slippage_bps: float = 5.0,
+) -> pd.DataFrame:
+    """Label evidence using the next untouched Kite minute open.
+
+    The signal minute is excluded. Target/stop ambiguity is resolved against
+    the trade by ``minute_candle_outcome`` and every return includes adverse
+    entry/exit slippage plus fees.
+    """
+    rows = []
+    for _, row in features.iterrows():
+        symbol = str(row["Symbol"]).strip().upper()
+        date = str(row["Date"])
+        signal_when = pd.Timestamp(row["When"])
+        candles = candle_groups.get((date, symbol))
+        out = row.to_dict()
+        lane = str(row.get("Lane", "") or "").strip()
+        out["EvaluationSource"] = "lane_decision" if lane else "live_feature"
+        out["FeatureBucket"] = decision_bucket(row) if lane else feature_bucket(row)
+
+        market_close_minute = 15 * 60 + 29
+        signal_minute = signal_when.hour * 60 + signal_when.minute
+        eligible = signal_minute + int(horizon_minutes) <= market_close_minute
+        out["EvaluationEligible"] = eligible
+        complete_window = False
+        if eligible and candles is not None and not candles.empty:
+            timestamps = pd.to_datetime(candles["datetime"], errors="coerce").dropna()
+            expected_entry = signal_when.floor("min") + pd.Timedelta(minutes=1)
+            expected_last = (signal_when + pd.Timedelta(minutes=int(horizon_minutes))).floor("min")
+            complete_window = bool(
+                not timestamps.empty
+                and expected_entry in set(timestamps.tolist())
+                and pd.Timestamp(timestamps.max()) >= expected_last
+            )
+        outcome_candles = candles if complete_window else None
+
+        horizon = minute_candle_outcome(
+            outcome_candles,
+            signal_when,
+            target_pct=999.0,
+            stop_pct=999.0,
+            horizon_minutes=horizon_minutes,
+            fee_pct=fee_pct,
+            slippage_bps=slippage_bps,
+        )
+        available = bool(horizon.get("OutcomeAvailable", False))
+        out["OutcomeAvailable"] = available
+        if not eligible:
+            unavailable_source = "insufficient_market_horizon"
+        elif not complete_window:
+            unavailable_source = "incomplete_kite_minute_window"
+        else:
+            unavailable_source = "missing_kite_minute_candles"
+        out["OutcomeSource"] = horizon.get("OutcomeSource", unavailable_source)
+        out["BarsAfterEntry"] = int(horizon.get("FutureSnapshots", 0) or 0)
+        out["EntryPrice"] = horizon.get("EntryAsk", np.nan)
+        out["MaxFavorablePct"] = horizon.get("MfePct", np.nan)
+        out["MaxAdversePct"] = horizon.get("MaePct", np.nan)
+        out["ForwardReturnPct"] = horizon.get("NetReturnPct", np.nan)
+        out["EodReturnPct"] = np.nan
+        out["HorizonMinutes"] = int(horizon_minutes)
+        out["FeePct"] = float(fee_pct)
+        out["SlippageBps"] = float(slippage_bps)
+
+        for target in TARGETS:
+            for stop in STOPS:
+                suffix = f"t{_metric_suffix(target)}_s{_metric_suffix(stop)}"
+                outcome = minute_candle_outcome(
+                    outcome_candles,
+                    signal_when,
+                    target_pct=target,
+                    stop_pct=stop,
+                    horizon_minutes=horizon_minutes,
+                    fee_pct=fee_pct,
+                    slippage_bps=slippage_bps,
+                )
+                reason = str(outcome.get("ExitReason", "no_future"))
+                if reason.startswith("target"):
+                    normalized_reason = "target"
+                elif reason.startswith("stop"):
+                    normalized_reason = "stop"
+                else:
+                    normalized_reason = reason
+                out[f"{suffix}_outcome"] = normalized_reason
+                out[f"{suffix}_return_pct"] = outcome.get("NetReturnPct", np.nan)
+                out[f"{suffix}_exit_time"] = outcome.get("ExitWhen", "")
+        rows.append(out)
+    return pd.DataFrame(rows)
+
+
 def summarize(outcomes: pd.DataFrame) -> pd.DataFrame:
     if outcomes.empty:
         return pd.DataFrame()
@@ -191,31 +386,78 @@ def summarize(outcomes: pd.DataFrame) -> pd.DataFrame:
     ]
     grouped = []
     for bucket, group in outcomes.groupby("FeatureBucket", dropna=False):
+        available = (
+            group[group["OutcomeAvailable"].fillna(False).astype(bool)]
+            if "OutcomeAvailable" in group.columns
+            else group
+        )
         row = {
             "FeatureBucket": bucket,
             "Rows": int(len(group)),
+            "EligibleRows": (
+                int(group["EvaluationEligible"].fillna(False).astype(bool).sum())
+                if "EvaluationEligible" in group.columns
+                else int(len(group))
+            ),
+            "EvaluatedRows": int(len(available)),
+            "CoveragePct": 0.0,
             "Symbols": int(group["Symbol"].nunique()) if "Symbol" in group.columns else 0,
-            "AvgMfePct": round(float(group["MaxFavorablePct"].mean()), 4),
-            "MedianMfePct": round(float(group["MaxFavorablePct"].median()), 4),
-            "AvgMaePct": round(float(group["MaxAdversePct"].mean()), 4),
-            "AvgEodReturnPct": round(float(group["EodReturnPct"].mean()), 4),
+            "AvgMfePct": round(float(available["MaxFavorablePct"].mean()), 4) if len(available) else np.nan,
+            "MedianMfePct": round(float(available["MaxFavorablePct"].median()), 4) if len(available) else np.nan,
+            "AvgMaePct": round(float(available["MaxAdversePct"].mean()), 4) if len(available) else np.nan,
+            "AvgEodReturnPct": (
+                round(float(available["EodReturnPct"].mean()), 4)
+                if len(available) and available["EodReturnPct"].notna().any()
+                else np.nan
+            ),
+            "AvgForwardReturnPct": (
+                round(float(available["ForwardReturnPct"].mean()), 4)
+                if len(available) and "ForwardReturnPct" in available.columns
+                else np.nan
+            ),
         }
+        eligible_rows = int(row["EligibleRows"])
+        row["CoveragePct"] = (
+            round(float(len(available) / eligible_rows * 100.0), 2)
+            if eligible_rows
+            else 0.0
+        )
+        for column in ("EvaluationSource", "Lane", "Stage", "Decision", "Reason"):
+            if column in group.columns:
+                values = sorted(
+                    {
+                        str(value)
+                        for value in group[column].dropna().tolist()
+                        if str(value).strip() and str(value).lower() != "nan"
+                    }
+                )
+                row[column] = values[0] if len(values) == 1 else ("mixed" if values else "")
         for col in target_cols:
-            hit_rate = (group[col].astype(str) == "target").mean() * 100.0
+            hit_rate = (available[col].astype(str) == "target").mean() * 100.0 if len(available) else 0.0
             row[f"{col.replace('_outcome', '')}_hit_rate_pct"] = round(float(hit_rate), 2)
+            return_col = col.replace("_outcome", "_return_pct")
+            if return_col in available.columns:
+                row[f"{col.replace('_outcome', '')}_avg_return_pct"] = (
+                    round(float(pd.to_numeric(available[return_col], errors="coerce").mean()), 4)
+                    if len(available)
+                    else np.nan
+                )
         grouped.append(row)
     return pd.DataFrame(grouped).sort_values(["Rows", "FeatureBucket"], ascending=[False, True])
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser()
-    parser.add_argument("--input", default=DEFAULT_INPUT)
-    parser.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
-    parser.add_argument("--out-prefix", default=DEFAULT_OUT_PREFIX)
-    args = parser.parse_args()
-
-    features = load_live_features(args.input)
-    out_prefix = Path(args.out_prefix)
+def write_outcomes(
+    features: pd.DataFrame,
+    data_dir: str,
+    out_prefix_value: str,
+    empty_message: str,
+    minute_data_dir: str = "",
+    horizon_minutes: int = 60,
+    fee_pct: float = 0.10,
+    slippage_bps: float = 5.0,
+    dedupe_first: bool = False,
+) -> tuple[pd.DataFrame, pd.DataFrame, Path, Path]:
+    out_prefix = Path(out_prefix_value)
     out_prefix.parent.mkdir(parents=True, exist_ok=True)
     outcomes_path = Path(f"{out_prefix}_rows.csv")
     summary_path = Path(f"{out_prefix}_summary.csv")
@@ -223,13 +465,27 @@ def main() -> int:
     if features.empty:
         pd.DataFrame().to_csv(outcomes_path, index=False)
         pd.DataFrame().to_csv(summary_path, index=False)
-        print("No live feature rows found.")
+        print(empty_message)
         print(f"Saved: {outcomes_path}")
         print(f"Saved: {summary_path}")
-        return 0
+        return pd.DataFrame(), pd.DataFrame(), outcomes_path, summary_path
 
-    symbol_days = load_symbol_days(args.data_dir, features["Symbol"].unique())
-    outcomes = evaluate_rows(features, symbol_days)
+    evaluation_rows = dedupe_first_evidence_state(features) if dedupe_first else features
+    if minute_data_dir:
+        symbol_days = load_minute_candles(
+            minute_data_dir,
+            evaluation_rows["Symbol"].astype(str).unique().tolist(),
+        )
+        outcomes = evaluate_rows_from_minutes(
+            evaluation_rows,
+            symbol_days,
+            horizon_minutes=horizon_minutes,
+            fee_pct=fee_pct,
+            slippage_bps=slippage_bps,
+        )
+    else:
+        symbol_days = load_symbol_days(data_dir, evaluation_rows["Symbol"].unique())
+        outcomes = evaluate_rows(evaluation_rows, symbol_days)
     summary = summarize(outcomes)
     outcomes.to_csv(outcomes_path, index=False)
     summary.to_csv(summary_path, index=False)
@@ -238,6 +494,61 @@ def main() -> int:
     print(f"Rows: {len(outcomes)} symbols={outcomes['Symbol'].nunique()} days={outcomes['Date'].nunique()}")
     if not summary.empty:
         print(summary.head(20).to_string(index=False))
+    return outcomes, summary, outcomes_path, summary_path
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--input", default=DEFAULT_INPUT)
+    parser.add_argument("--decision-input", default=DEFAULT_DECISION_INPUT)
+    parser.add_argument("--data-dir", default=DEFAULT_DATA_DIR)
+    parser.add_argument("--out-prefix", default=DEFAULT_OUT_PREFIX)
+    parser.add_argument("--decision-out-prefix", default=DEFAULT_DECISION_OUT_PREFIX)
+    parser.add_argument("--minute-data-dir", default="")
+    parser.add_argument("--horizon-minutes", type=int, default=60)
+    parser.add_argument("--fee-pct", type=float, default=0.10)
+    parser.add_argument("--slippage-bps", type=float, default=5.0)
+    parser.add_argument(
+        "--dedupe-first-state",
+        action="store_true",
+        help="Evaluate only the first daily occurrence of each symbol/state.",
+    )
+    parser.add_argument(
+        "--mode",
+        choices=["features", "decisions", "both"],
+        default="features",
+        help="Which evidence stream to label.",
+    )
+    args = parser.parse_args()
+
+    if args.mode in {"features", "both"}:
+        features = load_live_features(args.input)
+        write_outcomes(
+            features,
+            args.data_dir,
+            args.out_prefix,
+            "No live feature rows found.",
+            minute_data_dir=args.minute_data_dir,
+            horizon_minutes=args.horizon_minutes,
+            fee_pct=args.fee_pct,
+            slippage_bps=args.slippage_bps,
+            dedupe_first=args.dedupe_first_state,
+        )
+
+    if args.mode in {"decisions", "both"}:
+        decisions = load_lane_decisions(args.decision_input)
+        write_outcomes(
+            decisions,
+            args.data_dir,
+            args.decision_out_prefix,
+            "No lane decision rows found.",
+            minute_data_dir=args.minute_data_dir,
+            horizon_minutes=args.horizon_minutes,
+            fee_pct=args.fee_pct,
+            slippage_bps=args.slippage_bps,
+            dedupe_first=args.dedupe_first_state,
+        )
+
     return 0
 
 
