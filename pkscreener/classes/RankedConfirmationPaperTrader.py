@@ -58,6 +58,7 @@ class RankedPaperConfig:
     fast_failure_sell_ratio: float = 1.30
     fee_pct_per_side: float = 0.05
     slippage_bps_per_side: float = 5.0
+    latest_entry_minutes: int = 14 * 60 + 45
     eod_exit_minutes: int = 15 * 60 + 10
 
     @classmethod
@@ -96,6 +97,8 @@ class RankedPaperConfig:
             fast_failure_sell_ratio=f("SIGNALMONITOR_RANKED_PAPER_FAST_FAILURE_SELL_RATIO", 1.30),
             fee_pct_per_side=f("SIGNALMONITOR_RANKED_PAPER_FEE_PCT_PER_SIDE", 0.05),
             slippage_bps_per_side=f("SIGNALMONITOR_RANKED_PAPER_SLIPPAGE_BPS", 5.0),
+            latest_entry_minutes=i("SIGNALMONITOR_RANKED_PAPER_LATEST_ENTRY_MINUTES", 14 * 60 + 45),
+            eod_exit_minutes=i("SIGNALMONITOR_RANKED_PAPER_EOD_EXIT_MINUTES", 15 * 60 + 10),
         )
 
 
@@ -194,6 +197,7 @@ class RankedConfirmationPaperTrader:
         self._date = self._now().strftime("%Y-%m-%d")
         self.candidates: Dict[str, RankedPaperCandidate] = {}
         self.trades: Dict[str, RankedPaperTrade] = {}
+        self._daily_summary_emitted = False
         self._load_state()
 
     def process(
@@ -212,6 +216,7 @@ class RankedConfirmationPaperTrader:
             self._update_open_trades(ticks, now, events)
             self._expire_candidates(now, events)
             self._enter_ranked_candidates(ticks, now, events)
+            self._maybe_emit_daily_summary(now, events)
             self._save_state()
             self._write_trades()
             self._write_candidates()
@@ -282,6 +287,13 @@ class RankedConfirmationPaperTrader:
         now: datetime,
         events: List[Dict[str, Any]],
     ) -> None:
+        minute_of_day = now.hour * 60 + now.minute
+        if minute_of_day >= self.config.latest_entry_minutes:
+            for candidate in self.candidates.values():
+                if candidate.status == "observing":
+                    candidate.status_reason = "latest_entry_cutoff_reached"
+                    candidate.last_decision_at = now.isoformat(timespec="seconds")
+            return
         if self._guardrail_reason():
             return
         open_count = sum(1 for trade in self.trades.values() if not trade.closed)
@@ -535,6 +547,52 @@ class RankedConfirmationPaperTrader:
             return "consecutive_loss_limit_reached"
         return ""
 
+    def _maybe_emit_daily_summary(
+        self,
+        now: datetime,
+        events: List[Dict[str, Any]],
+    ) -> None:
+        if self._daily_summary_emitted:
+            return
+        minute_of_day = now.hour * 60 + now.minute
+        if minute_of_day < self.config.eod_exit_minutes:
+            return
+        if any(not trade.closed for trade in self.trades.values()):
+            return
+        trades = list(self.trades.values())
+        closed = [trade for trade in trades if trade.closed]
+        wins = sum(1 for trade in closed if trade.net_pnl > 0)
+        losses = sum(1 for trade in closed if trade.net_pnl < 0)
+        net_pnl = round(sum(trade.net_pnl for trade in closed), 2)
+        details = {
+            "date": self._date,
+            "candidates": len(self.candidates),
+            "trades": len(closed),
+            "wins": wins,
+            "losses": losses,
+            "win_rate_pct": round(wins / len(closed) * 100.0, 2) if closed else 0.0,
+            "net_pnl": net_pnl,
+            "targets": sum(1 for trade in closed if trade.exit_reason == "target_hit"),
+            "stops": sum(1 for trade in closed if trade.exit_reason == "stop_hit"),
+            "failed_confirmations": sum(
+                1 for trade in closed if trade.exit_reason == "failed_confirmation_exit"
+            ),
+            "eod_exits": sum(1 for trade in closed if trade.exit_reason == "eod_exit"),
+        }
+        events.append(
+            self._event(
+                now,
+                "paper_daily_summary",
+                "PORTFOLIO",
+                "complete",
+                "eod_summary",
+                0.0,
+                net_pnl=net_pnl,
+                details=details,
+            )
+        )
+        self._daily_summary_emitted = True
+
     def _expire_candidates(self, now: datetime, events: List[Dict[str, Any]]) -> None:
         for candidate in self.candidates.values():
             if candidate.status != "observing":
@@ -570,6 +628,7 @@ class RankedConfirmationPaperTrader:
         self.candidates = {}
         self.trades = {}
         self._date = today
+        self._daily_summary_emitted = False
 
     def _observation(self, tick: Dict[str, Any], now: datetime) -> Optional[CandidateObservation]:
         if not isinstance(tick, dict):
@@ -745,6 +804,7 @@ class RankedConfirmationPaperTrader:
     def _save_state(self) -> None:
         payload = {
             "date": self._date,
+            "daily_summary_emitted": self._daily_summary_emitted,
             "candidates": {symbol: asdict(value) for symbol, value in self.candidates.items()},
             "trades": {symbol: asdict(value) for symbol, value in self.trades.items()},
         }
@@ -759,6 +819,7 @@ class RankedConfirmationPaperTrader:
             payload = json.loads(self.state_path.read_text(encoding="utf-8"))
             if str(payload.get("date", "")) != self._date:
                 return
+            self._daily_summary_emitted = bool(payload.get("daily_summary_emitted", False))
             self.candidates = {
                 symbol: RankedPaperCandidate(
                     **{

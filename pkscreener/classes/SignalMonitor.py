@@ -4105,7 +4105,34 @@ class SignalMonitorRunner:
             return
         for event in events:
             event_name = str(event.get("event", "") or "")
-            if event_name not in {"paper_entry", "paper_exit"}:
+            if event_name not in {"paper_entry", "paper_exit", "paper_daily_summary"}:
+                continue
+            if event_name == "paper_daily_summary":
+                try:
+                    details = json.loads(str(event.get("details_json", "{}") or "{}"))
+                except Exception:
+                    details = {}
+                summary_line = (
+                    "Paper daily summary: "
+                    f"{int(details.get('trades', 0) or 0)} trade(s), "
+                    f"{int(details.get('wins', 0) or 0)} win(s), "
+                    f"{int(details.get('losses', 0) or 0)} loss(es), "
+                    f"net Rs {self._to_float(details.get('net_pnl')):+.2f}"
+                )
+                OutputControls().printOutput(f"  [+] {summary_line}")
+                if "discord" in self.alert_channels:
+                    self._send_discord_alert(
+                        "**PAPER DAILY SUMMARY**\n"
+                        f"Trades `{int(details.get('trades', 0) or 0)}` | "
+                        f"Wins `{int(details.get('wins', 0) or 0)}` | "
+                        f"Losses `{int(details.get('losses', 0) or 0)}` | "
+                        f"Net `Rs {self._to_float(details.get('net_pnl')):+.2f}`\n"
+                        f"Targets `{int(details.get('targets', 0) or 0)}` | "
+                        f"Stops `{int(details.get('stops', 0) or 0)}` | "
+                        f"Failed confirmations `{int(details.get('failed_confirmations', 0) or 0)}` | "
+                        f"EOD exits `{int(details.get('eod_exits', 0) or 0)}`\n"
+                        "Paper simulation only. No broker orders were placed."
+                    )
                 continue
             symbol = str(event.get("symbol", "") or "").upper()
             price = self._to_float(event.get("price"))

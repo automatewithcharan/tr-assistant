@@ -37,6 +37,7 @@ def _config(**overrides):
         "fast_failure_sell_ratio": 1.3,
         "fee_pct_per_side": 0.05,
         "slippage_bps_per_side": 5.0,
+        "latest_entry_minutes": 14 * 60 + 45,
         "eod_exit_minutes": 15 * 60 + 10,
     }
     values.update(overrides)
@@ -223,3 +224,38 @@ def test_consecutive_loss_guard_blocks_next_entry(tmp_path):
     assert not [event for event in events if event["event"] == "paper_entry" and event["symbol"] == "NEXT"]
     assert "NEXT" not in trader.trades
     assert trader._guardrail_reason() == "consecutive_loss_limit_reached"
+
+
+def test_latest_entry_cutoff_blocks_fresh_paper_entry(tmp_path):
+    start = datetime(2026, 7, 13, 14, 44, 0)
+    trader = RankedConfirmationPaperTrader(str(tmp_path), _config(), now_fn=lambda: start)
+
+    events = _advance_to_entry(trader, start)
+
+    assert not [event for event in events if event["event"] == "paper_entry"]
+    assert "TEST" not in trader.trades
+    assert trader.candidates["TEST"].status_reason == "latest_entry_cutoff_reached"
+
+
+def test_eod_summary_is_emitted_once_and_survives_state_reload(tmp_path):
+    start = datetime(2026, 7, 13, 9, 30, 0)
+    config = _config()
+    trader = RankedConfirmationPaperTrader(str(tmp_path), config, now_fn=lambda: start)
+    _advance_to_entry(trader, start)
+    trade = trader.trades["TEST"]
+    eod = datetime(2026, 7, 13, 15, 10, 0)
+
+    events = trader.process(
+        pd.DataFrame(),
+        {"TEST": _tick(trade.entry_price, 110_000, vwap=trade.entry_price)},
+        now=eod,
+    )
+
+    assert len([event for event in events if event["event"] == "paper_exit"]) == 1
+    summaries = [event for event in events if event["event"] == "paper_daily_summary"]
+    assert len(summaries) == 1
+    assert '"trades": 1' in summaries[0]["details_json"]
+
+    reloaded = RankedConfirmationPaperTrader(str(tmp_path), config, now_fn=lambda: eod)
+    repeated = reloaded.process(pd.DataFrame(), {}, now=eod + timedelta(seconds=10))
+    assert not [event for event in repeated if event["event"] == "paper_daily_summary"]
