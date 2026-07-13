@@ -276,7 +276,9 @@ def real_positions():
 # -------------------------------------------------------------------- render
 
 def money(x):
-    return f"₹{x:,.0f}"
+    value = float(x or 0.0)
+    sign = "-" if value < 0 else ""
+    return f"{sign}₹{abs(value):,.0f}"
 
 
 def render():

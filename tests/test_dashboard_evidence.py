@@ -5,6 +5,11 @@ import pandas as pd
 from scripts import dashboard
 
 
+def test_money_formats_negative_rupees_conventionally():
+    assert dashboard.money(-840) == "-₹840"
+    assert dashboard.money(1250) == "₹1,250"
+
+
 def test_ranked_confirmation_stats_reports_losses_and_pause(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(dashboard, "DATA", tmp_path)
     root = tmp_path / "ranked_confirmation_paper"
