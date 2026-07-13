@@ -77,6 +77,26 @@ EVENT_TYPES = [
 ]
 
 
+def score_intraday_event(event_type: str, values: Mapping[str, Any]) -> float:
+    """Return the shared causal heuristic score for one completed signal bar."""
+    relative_strength = float(values.get("relative_strength_open_pct", 0.0) or 0.0)
+    volume_ratio = float(values.get("vol_ratio", 0.0) or 0.0)
+    candle_body = float(values.get("candle_body_pct", 0.0) or 0.0)
+    range_used = float(values.get("range_pct_so_far", 0.0) or 0.0)
+    score = relative_strength * 0.8
+    score += min(volume_ratio, 8.0) * 0.25
+    score += candle_body * 0.6
+    score -= max(range_used - 3.5, 0.0) * 0.35
+    score += {
+        "or15_breakout": 0.45,
+        "or15_retest_hold": 0.35,
+        "prior_high_continuation": 0.25,
+        "vwap_reclaim": 0.15,
+        "vwap_pullback_hold": 0.10,
+    }.get(str(event_type), 0.0)
+    return float(score)
+
+
 def _parse_time(value: str) -> pd.Timestamp:
     return pd.Timestamp(f"2000-01-01 {value}")
 

@@ -14,6 +14,7 @@ from pkscreener.classes.IntradayEventEngine import (
     detect_intraday_events,
     live_event_feature_row,
     prepare_intraday_day,
+    score_intraday_event,
 )
 
 
@@ -149,6 +150,7 @@ class IntradayEventShadowRecorder:
                         "vwap_dist_pct": round(float(signal["vwap_dist_pct"]), 6),
                         "relative_strength_open_pct": round(float(signal["relative_strength_open_pct"]), 6),
                         "range_pct_so_far": round(float(signal["range_pct_so_far"]), 6),
+                        "event_score": round(score_intraday_event(event_type, signal), 6),
                         "benchmark_available": True,
                         "paper_only": True,
                         **features,

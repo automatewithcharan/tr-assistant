@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pandas as pd
 
+from pkscreener.classes.IntradayEventEngine import score_intraday_event
+
 
 def _simulate(
     future: pd.DataFrame,
@@ -113,6 +115,24 @@ def _evaluate(
     outcomes = pd.DataFrame(rows)
     if outcomes.empty:
         return outcomes, pd.DataFrame()
+    if "event_score" not in outcomes.columns:
+        outcomes["event_score"] = float("nan")
+    outcomes["event_score"] = pd.to_numeric(outcomes["event_score"], errors="coerce")
+    missing_score = outcomes["event_score"].isna()
+    if missing_score.any():
+        outcomes.loc[missing_score, "event_score"] = [
+            score_intraday_event(str(row.get("event_type", "")), row)
+            for row in outcomes.loc[missing_score].to_dict(orient="records")
+        ]
+    outcomes["first_batch_selected"] = False
+    earliest_signal = outcomes["signal_time"].min()
+    first_batch = outcomes[outcomes["signal_time"].eq(earliest_signal)].copy()
+    if not first_batch.empty:
+        selected_index = first_batch.sort_values(
+            ["event_score", "symbol", "event_type"],
+            ascending=[False, True, True],
+        ).index[0]
+        outcomes.loc[selected_index, "first_batch_selected"] = True
     complete = outcomes[outcomes["complete_session"]].copy()
     summary_rows = []
     for event_type, group in complete.groupby("event_type", sort=True):
@@ -133,6 +153,32 @@ def _evaluate(
             }
         )
     summary = pd.DataFrame(summary_rows)
+    selected = complete[complete["first_batch_selected"]]
+    if not selected.empty:
+        summary = pd.concat(
+            [
+                summary,
+                pd.DataFrame(
+                    [
+                        {
+                            "date": str(date),
+                            "side": side,
+                            "event_type": "__first_batch_portfolio__",
+                            "events": int(len(selected)),
+                            "target_before_stop_pct": round(float(selected["target_before_stop"].mean() * 100.0), 4),
+                            "positive_net_pct": round(float((selected["net_return_pct"] > 0).mean() * 100.0), 4),
+                            "avg_net_return_pct": round(float(selected["net_return_pct"].mean()), 6),
+                            "median_net_return_pct": round(float(selected["net_return_pct"].median()), 6),
+                            "avg_mfe_pct": round(float(selected["max_favorable_pct"].mean()), 6),
+                            "avg_mae_pct": round(float(selected["max_adverse_pct"].mean()), 6),
+                            "ambiguous_events": int(selected["exit_reason"].eq("ambiguous_stop_target").sum()),
+                            "evidence": evidence,
+                        }
+                    ]
+                ),
+            ],
+            ignore_index=True,
+        )
     outcomes.to_csv(root / f"{output_stem}_{date}.csv", index=False)
     summary.to_csv(root / f"{summary_stem}_{date}.csv", index=False)
     return outcomes, summary

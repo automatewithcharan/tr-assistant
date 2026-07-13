@@ -67,3 +67,23 @@ def test_short_fade_same_bar_is_conservative_stop(tmp_path):
     outcomes, _ = evaluate_event_shadow_fade_day(tmp_path, "2026-01-02")
     assert outcomes.iloc[0]["exit_reason"] == "ambiguous_stop_target"
     assert outcomes.iloc[0]["net_return_pct"] == -0.65
+
+
+def test_outcomes_freeze_top_candidate_from_first_signal_batch(tmp_path):
+    _write_day(tmp_path, [101.0, 101.0, 101.0], [99.5, 99.5, 99.5], [100.2, 100.2, 100.2])
+    events_path = tmp_path / "intraday_event_shadow" / "events_2026-01-02.csv"
+    events = pd.read_csv(events_path)
+    events = pd.concat(
+        [
+            events.assign(event_score=1.0),
+            events.assign(symbol="AAA", event_type="vwap_reclaim", event_score=2.0),
+        ],
+        ignore_index=True,
+    )
+    events.to_csv(events_path, index=False)
+    outcomes, summary = evaluate_event_shadow_day(tmp_path, "2026-01-02")
+    selected = outcomes[outcomes["first_batch_selected"]]
+    assert len(selected) == 1
+    assert selected.iloc[0]["event_type"] == "vwap_reclaim"
+    portfolio = summary[summary["event_type"] == "__first_batch_portfolio__"]
+    assert len(portfolio) == 1

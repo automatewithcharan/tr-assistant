@@ -3,7 +3,11 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
-from pkscreener.classes.IntradayEventEngine import detect_intraday_events, prepare_intraday_day
+from pkscreener.classes.IntradayEventEngine import (
+    detect_intraday_events,
+    prepare_intraday_day,
+    score_intraday_event,
+)
 
 
 def _config(**overrides):
@@ -41,6 +45,19 @@ def _bars():
             "volume": [1000, 1000, 1000, 2500, 4000],
         }
     )
+
+
+def test_shared_event_score_matches_causal_heuristic():
+    score = score_intraday_event(
+        "or15_breakout",
+        {
+            "relative_strength_open_pct": 1.0,
+            "vol_ratio": 2.0,
+            "candle_body_pct": 0.5,
+            "range_pct_so_far": 4.0,
+        },
+    )
+    assert score == pytest.approx(1.875)
 
 
 def test_prepare_intraday_day_uses_only_bars_available_at_each_row():
