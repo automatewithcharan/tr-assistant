@@ -2478,6 +2478,7 @@ class SignalMonitorRunner:
             audit_required = {
                 "leakage_audit_passed",
                 "feature_availability",
+                "candidate_availability",
                 "evidence_version",
             }
             if not audit_required.issubset(set(df.columns)):
@@ -2488,8 +2489,16 @@ class SignalMonitorRunner:
             availability_ok = df["feature_availability"].astype(str).str.strip().str.lower().eq(
                 "signal_close_or_earlier"
             )
+            candidate_availability_ok = df["candidate_availability"].astype(str).str.strip().str.lower().isin(
+                {"first_threshold_eligible_signal_batch", "signal_time_or_earlier"}
+            )
             evidence_version = pd.to_numeric(df["evidence_version"], errors="coerce").fillna(0)
-            df = df[leakage_ok & availability_ok & (evidence_version >= 2)].copy()
+            df = df[
+                leakage_ok
+                & availability_ok
+                & candidate_availability_ok
+                & (evidence_version >= 3)
+            ].copy()
             if df.empty:
                 return False
             if "accepted" in df.columns:

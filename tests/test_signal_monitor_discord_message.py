@@ -1053,7 +1053,8 @@ def test_goal_selector_accepts_profitable_forward_backtest_summary(tmp_path):
                 "worst_day_pct": -1.15,
                 "leakage_audit_passed": True,
                 "feature_availability": "signal_close_or_earlier",
-                "evidence_version": 2,
+                "candidate_availability": "first_threshold_eligible_signal_batch",
+                "evidence_version": 3,
             }
         ]
     ).to_csv(selector, index=False)
@@ -1072,6 +1073,28 @@ def test_goal_selector_rejects_full_day_ohlc_backtest_summary(tmp_path):
                 "goal_hit_pct": 50.0,
                 "avg_daily_return_pct": 0.1761,
                 "worst_day_pct": -1.15,
+                "leakage_audit_passed": True,
+                "feature_availability": "signal_close_or_earlier",
+                "candidate_availability": "first_threshold_eligible_signal_batch",
+                "evidence_version": 3,
+            }
+        ]
+    ).to_csv(selector, index=False)
+
+    assert SignalMonitorRunner._goal_selector_is_validated(str(selector)) is False
+
+
+def test_goal_selector_rejects_v2_all_day_best_candidate_selection(tmp_path):
+    selector = tmp_path / "v2_selector.csv"
+    pd.DataFrame(
+        [
+            {
+                "outcome_source_filter": "post_alert_intraday",
+                "rank_by": "quality",
+                "days": 413,
+                "goal_hit_pct": 50.0,
+                "avg_daily_return_pct": 1.0,
+                "worst_day_pct": -1.0,
                 "leakage_audit_passed": True,
                 "feature_availability": "signal_close_or_earlier",
                 "evidence_version": 2,
