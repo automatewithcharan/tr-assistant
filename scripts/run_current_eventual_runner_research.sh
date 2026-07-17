@@ -56,17 +56,26 @@ nice -n 10 "$PYTHON" scripts/walk_forward_eventual_runner_classifier.py \
     --calendar-file "$CALENDAR" --output-prefix "$OUT/classifier" \
     >> "$LOG" 2>&1
 
-MESSAGE=$("$PYTHON" - "$OUT/classifier_status.json" <<'PY'
+nice -n 10 "$PYTHON" scripts/walk_forward_eventual_runner_classifier.py \
+    --candidates "$OUT/fixed_time_candidates.csv" \
+    --calendar-file "$CALENDAR" --output-prefix "$OUT/direct_target" \
+    --label-mode target_before_stop >> "$LOG" 2>&1
+
+MESSAGE=$("$PYTHON" - "$OUT/classifier_status.json" "$OUT/direct_target_status.json" <<'PY'
 import json, sys
-s = json.load(open(sys.argv[1]))
-m = s["selected"]
+runner = json.load(open(sys.argv[1]))
+direct = json.load(open(sys.argv[2]))
+r = runner["selected"]
+d = direct["selected"]
 print(
     "Eventual-runner 505 research complete | "
-    f"selection={s.get('selected', {}).get('selection_gate_passed', False)} "
-    f"goal={s.get('final_goal_contract_passed', False)} | "
-    f"stress final avg Rs {float(m.get('stress_final_avg_daily_pnl', 0)):.0f}/day | "
-    f"lower95 Rs {float(m.get('stress_final_mean_lower_95_pnl', 0)):.0f}/day | "
-    f"goal days {float(m.get('stress_final_goal_hit_pct', 0)):.1f}% | "
+    f"runner avg/lower Rs {float(r.get('stress_final_avg_daily_pnl', 0)):.0f}/"
+    f"{float(r.get('stress_final_mean_lower_95_pnl', 0)):.0f}; "
+    f"direct avg/lower Rs {float(d.get('stress_final_avg_daily_pnl', 0)):.0f}/"
+    f"{float(d.get('stress_final_mean_lower_95_pnl', 0)):.0f}; "
+    f"direct goal days {float(d.get('stress_final_goal_hit_pct', 0)):.1f}% | "
+    f"gates runner={runner.get('final_goal_contract_passed', False)} "
+    f"direct={direct.get('final_goal_contract_passed', False)} | "
     "research only, real orders OFF"
 )
 PY

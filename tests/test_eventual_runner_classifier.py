@@ -6,7 +6,10 @@ import sys
 from scripts.walk_forward_eventual_runner_classifier import (
     FEATURES,
     build_runner_labels,
+    build_target_before_stop_labels,
+    evaluate_opportunity_bounds,
     evaluate_registry,
+    optimistic_opportunity_bound,
     score_walk_forward,
 )
 
@@ -51,6 +54,17 @@ def test_runner_label_requires_cross_strictly_after_signal():
     labeled = build_runner_labels(candidates, events)
     assert labeled.set_index("symbol").loc["AAA", "eventual_runner_label"] == 1
     assert labeled.set_index("symbol").loc["BBB", "eventual_runner_label"] == 0
+
+
+def test_direct_trade_label_requires_target_before_stop_exit():
+    candidates = pd.DataFrame(
+        {
+            "symbol": ["AAA", "BBB", "CCC"],
+            "exit__test": ["target", "stop", "horizon"],
+        }
+    )
+    labeled = build_target_before_stop_labels(candidates, "exit__test")
+    assert labeled["target_before_stop_label"].tolist() == [1, 0, 0]
 
 
 def test_research_entrypoints_run_without_external_pythonpath():
@@ -118,4 +132,51 @@ def test_registry_uses_exact_unleveraged_reuse_and_keeps_orders_off():
     assert not summary.empty
     assert set(summary["capital_reuse"]) == {"exact_exit_bar_unleveraged"}
     assert "stress_selection_block_floor_pct" in summary.columns
+    assert not summary["real_orders_allowed"].any()
+
+
+def test_optimistic_bound_uses_future_positive_returns_and_ignores_overlap():
+    date = "2026-01-02"
+    scored = pd.DataFrame(
+        [
+            {"date": date, "signal_minute": 570, "return__test": 1.5},
+            {"date": date, "signal_minute": 570, "return__test": -1.0},
+            {"date": date, "signal_minute": 585, "return__test": 1.5},
+        ]
+    )
+    bound = optimistic_opportunity_bound(
+        scored,
+        [date],
+        "return__test",
+        capital=400_000.0,
+        slots=1,
+        daily_goal=10_000.0,
+    )
+    assert bound.iloc[0]["trades"] == 2
+    assert bound.iloc[0]["pnl"] == 12_000.0
+    assert bool(bound.iloc[0]["daily_goal_hit"])
+    assert not bool(bound.iloc[0]["real_orders_allowed"])
+
+
+def test_opportunity_bound_stress_and_goal_respect_arguments():
+    dates = pd.bdate_range("2026-01-01", periods=40).strftime("%Y-%m-%d").tolist()
+    scored = pd.DataFrame(
+        [
+            {"date": date, "signal_minute": 570, "return__test": 1.5}
+            for date in dates
+        ]
+    )
+    summary, daily = evaluate_opportunity_bounds(
+        scored,
+        dates,
+        "return__test",
+        capital=100_000.0,
+        daily_goal=1_400.0,
+        stress_cost_pct=0.2,
+    )
+    one_slot = summary.set_index("slots").loc[1]
+    assert one_slot["final_goal_hit_pct"] == 100.0
+    assert one_slot["stress_final_goal_hit_pct"] == 0.0
+    assert set(daily) == {1, 2}
+    assert not summary["paper_promotion_allowed"].any()
     assert not summary["real_orders_allowed"].any()

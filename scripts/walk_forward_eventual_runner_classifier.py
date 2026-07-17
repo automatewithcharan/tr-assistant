@@ -81,12 +81,27 @@ def build_runner_labels(
     return output
 
 
+def build_target_before_stop_labels(
+    candidates: pd.DataFrame,
+    exit_reason_column: str,
+) -> pd.DataFrame:
+    if exit_reason_column not in candidates.columns:
+        raise ValueError(f"candidate input missing exit reason column: {exit_reason_column}")
+    output = candidates.copy()
+    output["target_before_stop_label"] = (
+        output[exit_reason_column].astype(str).str.strip().str.lower().eq("target")
+    ).astype(int)
+    return output
+
+
 def load_labeled_candidates(
     candidate_path: str,
-    event_path: str,
+    event_path: str | None,
     return_column: str,
     exit_time_column: str,
     threshold_pct: float = 10.0,
+    label_mode: str = "eventual_runner",
+    exit_reason_column: str = "",
 ) -> pd.DataFrame:
     candidates = pd.read_csv(candidate_path)
     required = {
@@ -99,6 +114,8 @@ def load_labeled_candidates(
         exit_time_column,
         *[feature for feature in FEATURES if feature != "log_signal_turnover"],
     }
+    if label_mode == "target_before_stop":
+        required.add(exit_reason_column)
     missing = required - set(candidates.columns)
     if missing:
         raise ValueError(f"candidate input missing columns: {', '.join(sorted(missing))}")
@@ -115,6 +132,10 @@ def load_labeled_candidates(
     candidates = candidates.dropna(
         subset=["date", "symbol", "entry_time", exit_time_column, return_column]
     ).copy()
+    if label_mode == "target_before_stop":
+        return build_target_before_stop_labels(candidates, exit_reason_column)
+    if not event_path:
+        raise ValueError("runner event input is required for eventual-runner labels")
     events = pd.read_csv(event_path)
     return build_runner_labels(candidates, events, threshold_pct)
 
@@ -148,7 +169,10 @@ def score_walk_forward(
     min_positive_rows: int = 20,
     retrain_every_days: int = 10,
     min_samples_leaf: int = 40,
+    label_column: str = "eventual_runner_label",
 ) -> pd.DataFrame:
+    if label_column not in frame.columns:
+        raise ValueError(f"training label missing: {label_column}")
     groups = {date: group.copy() for date, group in frame.groupby("date", sort=False)}
     scored = []
     model = None
@@ -166,7 +190,7 @@ def score_walk_forward(
             if not parts:
                 continue
             train = pd.concat(parts, ignore_index=True)
-            positives = int(train["eventual_runner_label"].sum())
+            positives = int(train[label_column].sum())
             negatives = int(len(train) - positives)
             if (
                 len(train) < int(min_train_rows)
@@ -177,14 +201,14 @@ def score_walk_forward(
             day_counts = train.groupby("date")["symbol"].transform("count").clip(lower=1)
             positive_boost = min(50.0, negatives / max(1.0, positives))
             weights = (1.0 / day_counts.to_numpy(dtype=float)) * np.where(
-                train["eventual_runner_label"].to_numpy(dtype=int) == 1,
+                train[label_column].to_numpy(dtype=int) == 1,
                 positive_boost,
                 1.0,
             )
             model = _model(min_samples_leaf)
             model.fit(
                 train[FEATURES],
-                train["eventual_runner_label"],
+                train[label_column],
                 model__sample_weight=weights,
             )
             trained_index = index
@@ -218,6 +242,137 @@ def select_candidates(
     return selected
 
 
+def optimistic_opportunity_bound(
+    scored: pd.DataFrame,
+    calendar_dates: list[str],
+    return_column: str,
+    capital: float,
+    slots: int,
+    daily_goal: float,
+    extra_cost_pct: float = 0.0,
+) -> pd.DataFrame:
+    """Return a deliberately optimistic upper bound for the fixed contract.
+
+    This benchmark uses future returns, assumes every signal-time allocation is
+    available even when prior trades overlap, and keeps only positive outcomes.
+    It is therefore diagnostic leakage by design and can never promote a model.
+    If this bound misses the goal, the candidate/exit contract itself is too
+    weak; if it is strong while the model fails, candidate ranking is the gap.
+    """
+    if capital <= 0:
+        raise ValueError("capital must be positive")
+    if slots < 1:
+        raise ValueError("slots must be at least one")
+    required = {"date", "signal_minute", return_column}
+    missing = required - set(scored.columns)
+    if missing:
+        raise ValueError(f"scored frame missing columns: {', '.join(sorted(missing))}")
+
+    frame = scored[["date", "signal_minute", return_column]].copy()
+    frame["date"] = frame["date"].astype(str)
+    frame[return_column] = (
+        pd.to_numeric(frame[return_column], errors="coerce") - float(extra_cost_pct)
+    )
+    frame = frame.dropna(subset=[return_column])
+    frame = frame[frame[return_column] > 0.0]
+    if not frame.empty:
+        chosen = (
+            frame.sort_values(
+                ["date", "signal_minute", return_column],
+                ascending=[True, True, False],
+            )
+            .groupby(["date", "signal_minute"], group_keys=False)
+            .head(int(slots))
+        )
+        observed = chosen.groupby("date")[return_column].agg(["sum", "count"])
+    else:
+        observed = pd.DataFrame(columns=["sum", "count"])
+
+    allocation = float(capital) / int(slots)
+    rows = []
+    for date in calendar_dates:
+        total_return_points = float(observed.at[str(date), "sum"]) if str(date) in observed.index else 0.0
+        trades = int(observed.at[str(date), "count"]) if str(date) in observed.index else 0
+        pnl = allocation * total_return_points / 100.0
+        rows.append(
+            {
+                "date": str(date),
+                "trades": trades,
+                "pnl": round(pnl, 2),
+                "daily_return_pct": round(pnl / float(capital) * 100.0, 6),
+                "daily_goal_hit": bool(pnl >= float(daily_goal)),
+                "bound_assumptions": "future_returns_overlap_ignored_positive_only",
+                "real_orders_allowed": False,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def _period_metrics_for_goal(
+    daily: pd.DataFrame,
+    prefix: str,
+    capital: float,
+    daily_goal: float,
+) -> dict[str, Any]:
+    metrics = period_metrics(daily, prefix, capital)
+    values = pd.to_numeric(daily["pnl"], errors="coerce").fillna(0.0)
+    metrics[f"{prefix}_goal_hit_pct"] = round(
+        float((values >= float(daily_goal)).mean() * 100.0), 2
+    )
+    return metrics
+
+
+def evaluate_opportunity_bounds(
+    scored: pd.DataFrame,
+    calendar_dates: list[str],
+    return_column: str,
+    capital: float,
+    daily_goal: float,
+    stress_cost_pct: float,
+) -> tuple[pd.DataFrame, dict[int, pd.DataFrame]]:
+    scored_dates = [date for date in calendar_dates if date >= str(scored["date"].min())]
+    splits = temporal_splits(scored_dates, warmup_days=0)
+    rows = []
+    stress_daily_by_slots = {}
+    for slots in (1, 2):
+        raw = optimistic_opportunity_bound(
+            scored, scored_dates, return_column, capital, slots, daily_goal
+        )
+        stress = optimistic_opportunity_bound(
+            scored,
+            scored_dates,
+            return_column,
+            capital,
+            slots,
+            daily_goal,
+            extra_cost_pct=stress_cost_pct,
+        )
+        stress_daily_by_slots[slots] = stress
+        row: dict[str, Any] = {
+            "slots": slots,
+            "uses_future_outcomes": True,
+            "ignores_trade_overlap": True,
+            "paper_promotion_allowed": False,
+            "real_orders_allowed": False,
+        }
+        for name, dates in splits.items():
+            row.update(
+                _period_metrics_for_goal(
+                    raw[raw["date"].isin(dates)], name, capital, daily_goal
+                )
+            )
+            row.update(
+                _period_metrics_for_goal(
+                    stress[stress["date"].isin(dates)],
+                    f"stress_{name}",
+                    capital,
+                    daily_goal,
+                )
+            )
+        rows.append(row)
+    return pd.DataFrame(rows), stress_daily_by_slots
+
+
 def evaluate_registry(
     scored: pd.DataFrame,
     calendar_dates: list[str],
@@ -227,6 +382,7 @@ def evaluate_registry(
     daily_goal: float = 10_000.0,
     stress_cost_pct: float = 0.10,
     thresholds: tuple[float, ...] = (0.5, 0.6, 0.7, 0.8, 0.9),
+    label_column: str = "eventual_runner_label",
 ) -> tuple[pd.DataFrame, dict[tuple[float, int, int], tuple[pd.DataFrame, pd.DataFrame]]]:
     scored_dates = [date for date in calendar_dates if date >= str(scored["date"].min())]
     splits = temporal_splits(scored_dates, warmup_days=0)
@@ -237,6 +393,7 @@ def evaluate_registry(
     for threshold in thresholds:
         for top_per_signal in (1, 2):
             selected = select_candidates(scored, threshold, top_per_signal)
+            selected["selection_label"] = selected[label_column]
             for slots in (1, 2):
                 key = (float(threshold), int(top_per_signal), int(slots))
                 daily, trades = simulate_calendar(
@@ -267,9 +424,13 @@ def evaluate_registry(
                 }
                 for name, dates in splits.items():
                     period = daily[daily["date"].isin(dates)]
-                    row.update(period_metrics(period, name, capital))
+                    row.update(_period_metrics_for_goal(period, name, capital, daily_goal))
                     stress_period = stress_daily[stress_daily["date"].isin(dates)]
-                    row.update(period_metrics(stress_period, f"stress_{name}", capital))
+                    row.update(
+                        _period_metrics_for_goal(
+                            stress_period, f"stress_{name}", capital, daily_goal
+                        )
+                    )
                 block_values = []
                 stress_block_values = []
                 for index, dates in enumerate(blocks, start=1):
@@ -288,11 +449,17 @@ def evaluate_registry(
                     block_values.append(value)
                     stress_block_values.append(stress_value)
                 executed = trades[trades["executed"].eq(True)] if not trades.empty else trades
-                row["selected_runner_precision_pct"] = round(
-                    float(executed["eventual_runner_label"].mean() * 100.0)
+                row["selected_label_precision_pct"] = round(
+                    float(executed["selection_label"].mean() * 100.0)
                     if not executed.empty
                     else 0.0,
                     2,
+                )
+                row["label_column"] = label_column
+                row["selected_runner_precision_pct"] = (
+                    row["selected_label_precision_pct"]
+                    if label_column == "eventual_runner_label"
+                    else 0.0
                 )
                 row["selection_block_floor_pct"] = round(min(block_values), 6)
                 row["stress_selection_block_floor_pct"] = round(
@@ -329,11 +496,17 @@ def evaluate_registry(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--candidates", required=True)
-    parser.add_argument("--runner-events", required=True)
+    parser.add_argument("--runner-events")
     parser.add_argument("--calendar-file", required=True)
     parser.add_argument("--output-prefix", required=True)
     parser.add_argument("--return-column", default="return__h60_target_1.5_stop_1")
     parser.add_argument("--exit-time-column", default="exit_time__h60_target_1.5_stop_1")
+    parser.add_argument("--exit-reason-column", default="exit__h60_target_1.5_stop_1")
+    parser.add_argument(
+        "--label-mode",
+        choices=("eventual_runner", "target_before_stop"),
+        default="eventual_runner",
+    )
     parser.add_argument("--runner-threshold", type=float, default=10.0)
     parser.add_argument("--capital", type=float, default=400_000.0)
     parser.add_argument("--daily-goal", type=float, default=10_000.0)
@@ -344,9 +517,16 @@ def main() -> int:
         args.return_column,
         args.exit_time_column,
         args.runner_threshold,
+        args.label_mode,
+        args.exit_reason_column,
     )
     calendar = load_calendar_dates(args.calendar_file)
-    scored = score_walk_forward(frame, calendar)
+    label_column = (
+        "target_before_stop_label"
+        if args.label_mode == "target_before_stop"
+        else "eventual_runner_label"
+    )
+    scored = score_walk_forward(frame, calendar, label_column=label_column)
     if scored.empty:
         raise RuntimeError("eventual-runner classifier produced no scored rows")
     summary, artifacts = evaluate_registry(
@@ -356,6 +536,15 @@ def main() -> int:
         args.exit_time_column,
         args.capital,
         args.daily_goal,
+        label_column=label_column,
+    )
+    opportunity_summary, opportunity_daily = evaluate_opportunity_bounds(
+        scored,
+        calendar,
+        args.return_column,
+        args.capital,
+        args.daily_goal,
+        stress_cost_pct=0.10,
     )
     selected = summary.iloc[0].to_dict()
     key = (
@@ -369,6 +558,12 @@ def main() -> int:
     summary.to_csv(prefix.with_name(prefix.name + "_summary.csv"), index=False)
     daily.to_csv(prefix.with_name(prefix.name + "_selected_daily.csv"), index=False)
     trades.to_csv(prefix.with_name(prefix.name + "_selected_trades.csv"), index=False)
+    opportunity_summary.to_csv(
+        prefix.with_name(prefix.name + "_opportunity_bound_summary.csv"), index=False
+    )
+    opportunity_daily[2].to_csv(
+        prefix.with_name(prefix.name + "_opportunity_bound_stress_daily.csv"), index=False
+    )
     final_goal_contract_passed = bool(
         selected["selection_gate_passed"]
         and selected["stress_final_trade_days"] >= 30
@@ -377,10 +572,15 @@ def main() -> int:
         and selected["stress_final_worst_day_pct"] > -1.5
     )
     status = {
-        "strategy": "walk_forward_eventual_10pct_runner_classifier",
+        "strategy": f"walk_forward_{args.label_mode}_classifier",
+        "label_mode": args.label_mode,
+        "training_label": label_column,
         "selection_uses_final_period": False,
         "label_available_only_after_session": True,
         "capital_reuse": "exact_exit_bar_unleveraged",
+        "optimistic_opportunity_bound": opportunity_summary.to_dict(orient="records"),
+        "opportunity_bound_uses_future_outcomes": True,
+        "opportunity_bound_can_promote_strategy": False,
         "selected": selected,
         "final_goal_contract_passed": final_goal_contract_passed,
         "evidence_accepted": False,

@@ -79,6 +79,11 @@ nice -n 10 "$PYTHON" scripts/walk_forward_eventual_runner_classifier.py \
     --calendar-file "$CALENDAR" --output-prefix "$OUT/eventual_runner_classifier" \
     >> "$LOG" 2>&1
 
+nice -n 10 "$PYTHON" scripts/walk_forward_eventual_runner_classifier.py \
+    --candidates "$OUT/fixed_time_candidates.csv" \
+    --calendar-file "$CALENDAR" --output-prefix "$OUT/direct_target_classifier" \
+    --label-mode target_before_stop >> "$LOG" 2>&1
+
 nice -n 10 "$PYTHON" scripts/research_rank_acceleration_registry.py \
     --input "$OUT/fixed_time_candidates.csv" --calendar-file "$CALENDAR" \
     --output-prefix "$OUT/long" >> "$LOG" 2>&1

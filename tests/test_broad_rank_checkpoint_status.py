@@ -31,6 +31,12 @@ def _write_classifier_status(directory, *, goal):
     )
 
 
+def _write_direct_classifier_status(directory, *, goal):
+    (directory / "direct_target_classifier_status.json").write_text(
+        json.dumps({"final_goal_contract_passed": goal}), encoding="utf-8"
+    )
+
+
 def test_partial_checkpoint_is_diagnostic_even_when_strategy_metrics_pass(tmp_path):
     _write_side_status(tmp_path, "long")
     _write_side_status(tmp_path, "short", goal=False)
@@ -72,6 +78,17 @@ def test_full_coverage_can_report_classifier_goal_without_enabling_orders(tmp_pa
     assert status["eventual_runner_classifier_goal_passed"]
     assert status["historical_goal_gate_passed"]
     assert status["forward_validation_required"]
+    assert not status["paper_promotion_allowed"]
+    assert not status["real_orders_allowed"]
+
+
+def test_full_coverage_can_report_direct_target_goal_without_enabling_orders(tmp_path):
+    _write_side_status(tmp_path, "long", selection=False, goal=False)
+    _write_side_status(tmp_path, "short", selection=False, goal=False)
+    _write_direct_classifier_status(tmp_path, goal=True)
+    status = build_status(tmp_path, 2900, 2900, 2915)
+    assert status["direct_target_classifier_goal_passed"]
+    assert status["historical_goal_gate_passed"]
     assert not status["paper_promotion_allowed"]
     assert not status["real_orders_allowed"]
 

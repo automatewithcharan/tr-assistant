@@ -37,6 +37,9 @@ def build_status(
     classifier_status = load_optional_status(
         output_dir / "eventual_runner_classifier_status.json"
     )
+    direct_classifier_status = load_optional_status(
+        output_dir / "direct_target_classifier_status.json"
+    )
     cached = max(0, int(cached_symbols))
     mapped = max(0, int(mapped_symbols))
     coverage_ratio = cached / mapped if mapped else 0.0
@@ -48,6 +51,9 @@ def build_status(
     short_goal = bool(short_status.get("final_goal_evidence_passed", False))
     classifier_goal = bool(
         classifier_status.get("final_goal_contract_passed", False)
+    )
+    direct_classifier_goal = bool(
+        direct_classifier_status.get("final_goal_contract_passed", False)
     )
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -64,9 +70,10 @@ def build_status(
         "long_final_goal_evidence_passed": long_goal,
         "short_final_goal_evidence_passed": short_goal,
         "eventual_runner_classifier_goal_passed": classifier_goal,
+        "direct_target_classifier_goal_passed": direct_classifier_goal,
         "historical_goal_gate_passed": bool(
             broad_coverage_gate_passed
-            and (long_goal or short_goal or classifier_goal)
+            and (long_goal or short_goal or classifier_goal or direct_classifier_goal)
         ),
         "evidence_accepted": False,
         "paper_promotion_allowed": False,
@@ -76,6 +83,7 @@ def build_status(
         "long_status": long_status,
         "short_status": short_status,
         "eventual_runner_classifier_status": classifier_status,
+        "direct_target_classifier_status": direct_classifier_status,
     }
 
 

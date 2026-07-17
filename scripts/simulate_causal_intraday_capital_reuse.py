@@ -98,6 +98,7 @@ def simulate_day(
                 "net_return_pct": round(net_return, 6),
                 "pnl": round(pnl, 2),
                 "selection_score": float(row.get("selection_score", 0.0) or 0.0),
+                "selection_label": int(row.get("selection_label", 0) or 0),
                 "eventual_runner_label": int(row.get("eventual_runner_label", 0) or 0),
             }
         )
