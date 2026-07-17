@@ -68,32 +68,8 @@ nice -n 10 "$PYTHON" scripts/research_rank_acceleration_registry.py \
     --output-prefix "$OUT/short" --horizon-minutes 60 \
     >> "$LOG" 2>&1
 
-"$PYTHON" - "$OUT" "$STATUS" "$MILESTONE" "$CACHED" "$MAPPED" <<'PY'
-import json
-import sys
-from datetime import datetime, timezone
-from pathlib import Path
-
-output_dir, status_path, milestone, cached, mapped = sys.argv[1:]
-output = Path(output_dir)
-long_status = json.load(open(output / "long_status.json"))
-short_status = json.load(open(output / "short_status.json"))
-status = {
-    "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
-    "milestone": int(milestone),
-    "cached_symbols": int(cached),
-    "mapped_symbols": int(mapped),
-    "long_selection_gate_passed": bool(long_status.get("selection_gate_passed", False)),
-    "short_selection_gate_passed": bool(short_status.get("selection_gate_passed", False)),
-    "long_final_goal_evidence_passed": bool(long_status.get("final_goal_evidence_passed", False)),
-    "short_final_goal_evidence_passed": bool(short_status.get("final_goal_evidence_passed", False)),
-    "evidence_accepted": False,
-    "paper_promotion_allowed": False,
-    "real_orders_allowed": False,
-    "long_status": long_status,
-    "short_status": short_status,
-}
-Path(status_path).write_text(json.dumps(status, indent=2, default=str), encoding="utf-8")
-PY
+"$PYTHON" scripts/build_broad_rank_checkpoint_status.py \
+    --output-dir "$OUT" --status "$STATUS" --milestone "$MILESTONE" \
+    --cached-symbols "$CACHED" --mapped-symbols "$MAPPED" >> "$LOG" 2>&1
 
 echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] completed checkpoint=$MILESTONE cached=$CACHED" >> "$LOG"
