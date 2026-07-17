@@ -407,14 +407,14 @@ def broad_rank_checkpoint_stats():
     }
 
 
-def eventual_runner_classifier_stats():
-    status_path = DATA / "eventual_runner_current_505" / "classifier_status.json"
+def _classifier_stats(current_name, checkpoint_name, fallback_strategy):
+    status_path = DATA / "eventual_runner_current_505" / current_name
     evidence_scope = "current 505-symbol baseline"
     checkpoint_root = DATA / "broad_rank_acceleration"
     checkpoint_statuses = []
     if checkpoint_root.exists():
         for path in checkpoint_root.glob(
-            "checkpoint_*/eventual_runner_classifier_status.json"
+            f"checkpoint_*/{checkpoint_name}"
         ):
             try:
                 milestone = int(path.parent.name.rsplit("_", 1)[-1])
@@ -426,10 +426,17 @@ def eventual_runner_classifier_stats():
         evidence_scope = f"broad checkpoint {milestone}"
     status = load_json(status_path, {})
     selected = status.get("selected", {}) if isinstance(status, dict) else {}
+    bound_rows = status.get("optimistic_opportunity_bound", []) if isinstance(status, dict) else []
+    bound_rows = [row for row in bound_rows if isinstance(row, dict)]
+    bound = max(
+        bound_rows,
+        key=lambda row: float(row.get("stress_final_mean_lower_95_pnl") or 0.0),
+        default={},
+    )
     return {
         "available": bool(status and selected),
         "evidence_scope": evidence_scope,
-        "strategy": str(status.get("strategy") or "eventual 10% runner"),
+        "strategy": str(status.get("strategy") or fallback_strategy),
         "capital_reuse": str(status.get("capital_reuse") or "pending exact replay"),
         "selection_gate_passed": bool(selected.get("selection_gate_passed", False)),
         "final_goal_contract_passed": bool(status.get("final_goal_contract_passed", False)),
@@ -438,9 +445,36 @@ def eventual_runner_classifier_stats():
         "stress_final_goal_hit_pct": float(selected.get("stress_final_goal_hit_pct") or 0.0),
         "threshold": float(selected.get("threshold") or 0.0),
         "slots": int(selected.get("slots") or 0),
+        "opportunity_bound_available": bool(bound),
+        "opportunity_bound_slots": int(bound.get("slots") or 0),
+        "opportunity_bound_final_avg_pnl": float(
+            bound.get("stress_final_avg_daily_pnl") or 0.0
+        ),
+        "opportunity_bound_final_lower95_pnl": float(
+            bound.get("stress_final_mean_lower_95_pnl") or 0.0
+        ),
+        "opportunity_bound_goal_hit_pct": float(
+            bound.get("stress_final_goal_hit_pct") or 0.0
+        ),
         "paper_promotion_allowed": False,
         "real_orders_allowed": False,
     }
+
+
+def eventual_runner_classifier_stats():
+    return _classifier_stats(
+        "classifier_status.json",
+        "eventual_runner_classifier_status.json",
+        "eventual 10% runner",
+    )
+
+
+def direct_target_classifier_stats():
+    return _classifier_stats(
+        "direct_target_status.json",
+        "direct_target_classifier_status.json",
+        "target before stop",
+    )
 
 
 # ---------------------------------------------------------------- paper lanes
@@ -566,6 +600,7 @@ def render():
     broad_backfill = broad_backfill_stats()
     broad_rank = broad_rank_checkpoint_stats()
     runner_classifier = eventual_runner_classifier_stats()
+    direct_classifier = direct_target_classifier_stats()
 
     tot_inv = sum(r["invested"] for r in positions)
     tot_val = sum(r["value"] for r in positions)
@@ -895,6 +930,30 @@ def render():
     paper promotion: <b>NO</b>; real orders: <b>NO</b>.
   </div>"""
 
+    direct_classifier_class = "gain" if direct_classifier["stress_final_avg_pnl"] > 0 else "loss"
+    direct_classifier_html = f"""
+  <h2>Profit-aligned classifier</h2>
+  <div class="summary">
+    <span>Status <span class="big">{'EVALUATED' if direct_classifier['available'] else 'PENDING'}</span></span>
+    <span>Stress final <span class="big {direct_classifier_class}">{money(direct_classifier['stress_final_avg_pnl'])}/day</span></span>
+    <span>Lower 95% <span class="big {direct_classifier_class}">{money(direct_classifier['stress_final_lower95_pnl'])}/day</span></span>
+    <span>Goal days <span class="big">{direct_classifier['stress_final_goal_hit_pct']:.1f}%</span></span>
+  </div>
+  <div class="summary">
+    <span>Clairvoyant bound <span class="big">{money(direct_classifier['opportunity_bound_final_avg_pnl'])}/day</span></span>
+    <span>Bound lower 95% <span class="big">{money(direct_classifier['opportunity_bound_final_lower95_pnl'])}/day</span></span>
+    <span>Bound goal days <span class="big">{direct_classifier['opportunity_bound_goal_hit_pct']:.1f}%</span></span>
+    <span>Bound slots <span class="big">{direct_classifier['opportunity_bound_slots']}</span></span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    Prior-only target-before-stop label; identical 60-minute +1.5%/-1.0% execution contract.
+    The bound uses future outcomes and ignores overlap, so it is diagnosis only and can never promote trading.
+    Evidence: <b>{escape(direct_classifier['evidence_scope'])}</b>.
+    Selection gate: <b>{'PASS' if direct_classifier['selection_gate_passed'] else 'NO'}</b>;
+    untouched Rs 10,000 contract: <b>{'PASS' if direct_classifier['final_goal_contract_passed'] else 'NO'}</b>;
+    paper promotion: <b>NO</b>; real orders: <b>NO</b>.
+  </div>"""
+
     tot_cls = "gain" if tot_pnl >= 0 else "loss"
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
@@ -956,6 +1015,7 @@ def render():
 {micro_html}
 {ignition_html}
 {runner_classifier_html}
+{direct_classifier_html}
 {backfill_html}
 {gate_html}
 {watch_html}

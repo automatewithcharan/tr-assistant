@@ -106,6 +106,41 @@ def test_eventual_runner_dashboard_prefers_highest_broad_checkpoint(tmp_path, mo
     assert stats["stress_final_avg_pnl"] == 300.0
 
 
+def test_direct_target_dashboard_reads_clairvoyant_bound_without_promotion(tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "DATA", tmp_path)
+    root = tmp_path / "eventual_runner_current_505"
+    root.mkdir()
+    (root / "direct_target_status.json").write_text(
+        json.dumps(
+            {
+                "selected": {"stress_final_avg_daily_pnl": -200.0},
+                "optimistic_opportunity_bound": [
+                    {
+                        "slots": 1,
+                        "stress_final_avg_daily_pnl": 11_000.0,
+                        "stress_final_mean_lower_95_pnl": 10_100.0,
+                        "stress_final_goal_hit_pct": 60.0,
+                    },
+                    {
+                        "slots": 2,
+                        "stress_final_avg_daily_pnl": 9_000.0,
+                        "stress_final_mean_lower_95_pnl": 8_000.0,
+                        "stress_final_goal_hit_pct": 40.0,
+                    },
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    stats = dashboard.direct_target_classifier_stats()
+    assert stats["available"]
+    assert stats["stress_final_avg_pnl"] == -200.0
+    assert stats["opportunity_bound_final_lower95_pnl"] == 10_100.0
+    assert stats["opportunity_bound_slots"] == 1
+    assert not stats["paper_promotion_allowed"]
+    assert not stats["real_orders_allowed"]
+
+
 def test_ranked_confirmation_stats_reports_losses_and_pause(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(dashboard, "DATA", tmp_path)
     root = tmp_path / "ranked_confirmation_paper"
