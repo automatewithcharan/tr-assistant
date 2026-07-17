@@ -26,6 +26,16 @@ if [ -f "$REPO/.env.dev" ]; then
     BUCKET="${TRADE_ASSISTANT_ARCHIVE_BUCKET:-$BUCKET}"
 fi
 
+send_discord() {
+    local content="$1"
+    [ -z "${DISCORD_WEBHOOK_URL:-}" ] && return
+    local payload
+    payload=$("$PYTHON" -c 'import json,sys; print(json.dumps({"content": sys.argv[1]}))' "$content")
+    curl -sS -X POST "$DISCORD_WEBHOOK_URL" \
+        -H 'Content-Type: application/json' \
+        --data-binary "$payload" >/dev/null 2>&1 || true
+}
+
 mkdir -p "$(dirname "$LOG")"
 echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] planning broad backfill" >> "$LOG"
 "$PYTHON" scripts/plan_broad_universe_backfill.py \
@@ -55,10 +65,33 @@ set +e
 BATCH_RC=$?
 set -e
 
+SYNC_RC=0
 if [ -n "$BUCKET" ] && command -v gsutil >/dev/null 2>&1; then
     RANGE_DIR="$REPO/results/Data/kite_history_backfill/5minute/${START}_${END}"
+    set +e
     gsutil -q -m rsync -r "$RANGE_DIR" "$BUCKET/kite_history_backfill/5minute/${START}_${END}/" >> "$LOG" 2>&1
+    SYNC_RC=$?
+    set -e
 fi
 
-echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] completed batch $BATCH_INDEX rc=$BATCH_RC" >> "$LOG"
-exit 0
+set +e
+"$PYTHON" scripts/plan_broad_universe_backfill.py \
+    --universe "$UNIVERSE" --interval 5minute --start "$START" --end "$END" \
+    --batch-size "$BATCH_SIZE" --chunk-days 60 --out-prefix "$PREFIX" >> "$LOG" 2>&1
+PLAN_RC=$?
+set -e
+
+AUDIT=$(printf '%s_batch_%04d_5minute_audit.csv' "$PREFIX" "$BATCH_INDEX")
+STATUS="$REPO/results/Data/broad_universe_backfill_latest.json"
+rm -f "$STATUS"
+set +e
+"$PYTHON" scripts/summarize_broad_backfill_batch.py \
+    --summary "${PREFIX}_summary.json" --audit "$AUDIT" \
+    --batch-index "$BATCH_INDEX" --batch-rc "$BATCH_RC" \
+    --plan-rc "$PLAN_RC" --sync-rc "$SYNC_RC" --output "$STATUS" >> "$LOG" 2>&1
+SUMMARY_RC=$?
+set -e
+MESSAGE=$("$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("message", "Broad history status unreadable"))' "$STATUS" 2>/dev/null || echo "Broad history status missing")
+send_discord "$MESSAGE"
+echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] completed batch $BATCH_INDEX rc=$BATCH_RC plan_rc=$PLAN_RC sync_rc=$SYNC_RC summary_rc=$SUMMARY_RC" >> "$LOG"
+exit "$SUMMARY_RC"
