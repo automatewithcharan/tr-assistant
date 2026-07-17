@@ -240,3 +240,34 @@ def test_historical_transfer_reports_strict_future_holdout(tmp_path: Path, monke
     assert stats["lower95"] == -2.296733
     assert not stats["paper_promotion_allowed"]
     assert not stats["real_orders_allowed"]
+
+
+def test_event_exit_contracts_keep_exploratory_and_forward_separate(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(dashboard, "DATA", tmp_path)
+    root = tmp_path / "intraday_event_shadow_rebuilt" / "exit_contracts"
+    root.mkdir(parents=True)
+    (root / "status.json").write_text(
+        json.dumps({"config_count": 48, "sessions": 4, "forward_sessions": 0, "paper_candidates": 0}),
+        encoding="utf-8",
+    )
+    pd.DataFrame(
+        [
+            {
+                "config": "t5_s0.5_n1",
+                "exploratory_avg_daily_pnl": 3767.09,
+                "exploratory_lower_95_pct": -3.208355,
+                "forward_avg_daily_pnl": 0.0,
+                "forward_lower_95_pct": "",
+                "paper_candidate": False,
+            }
+        ]
+    ).to_csv(root / "readiness.csv", index=False)
+
+    stats = dashboard.event_exit_contract_stats()
+
+    assert stats["configs"] == 48
+    assert stats["forward_sessions"] == 0
+    assert stats["exploratory_best"] == "t5_s0.5_n1"
+    assert stats["exploratory_avg_pnl"] == 3767.09
+    assert not stats["paper_promotion_allowed"]
+    assert not stats["real_orders_allowed"]

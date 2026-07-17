@@ -278,6 +278,47 @@ def historical_transfer_stats():
     }
 
 
+def event_exit_contract_stats():
+    status = load_json(
+        DATA / "intraday_event_shadow_rebuilt" / "exit_contracts" / "status.json",
+        {},
+    )
+    rows = load_csv_rows(
+        DATA / "intraday_event_shadow_rebuilt" / "exit_contracts" / "readiness.csv"
+    )
+
+    def number(row, field):
+        try:
+            return float(row.get(field) or 0.0)
+        except Exception:
+            return 0.0
+
+    exploratory_best = max(rows, key=lambda row: number(row, "exploratory_avg_daily_pnl"), default={})
+    forward_best = max(
+        rows,
+        key=lambda row: (
+            truthy(row.get("paper_candidate")),
+            number(row, "forward_lower_95_pct"),
+            number(row, "forward_avg_daily_pnl"),
+        ),
+        default={},
+    )
+    return {
+        "configs": int(status.get("config_count") or len(rows)),
+        "sessions": int(status.get("sessions") or 0),
+        "forward_sessions": int(status.get("forward_sessions") or 0),
+        "paper_candidates": int(status.get("paper_candidates") or 0),
+        "exploratory_best": str(exploratory_best.get("config") or "none"),
+        "exploratory_avg_pnl": number(exploratory_best, "exploratory_avg_daily_pnl"),
+        "exploratory_lower95": number(exploratory_best, "exploratory_lower_95_pct"),
+        "forward_best": str(forward_best.get("config") or "none"),
+        "forward_avg_pnl": number(forward_best, "forward_avg_daily_pnl"),
+        "forward_lower95": number(forward_best, "forward_lower_95_pct"),
+        "paper_promotion_allowed": any(truthy(row.get("paper_candidate")) for row in rows),
+        "real_orders_allowed": False,
+    }
+
+
 # ---------------------------------------------------------------- paper lanes
 
 def lane_stats(path, label, closed_filter, ret_field="net_return_pct"):
@@ -395,6 +436,7 @@ def render():
     ranked_replay = ranked_replay_readiness_stats()
     event_shadow = event_shadow_readiness_stats()
     historical_transfer = historical_transfer_stats()
+    exit_contracts = event_exit_contract_stats()
 
     tot_inv = sum(r["invested"] for r in positions)
     tot_val = sum(r["value"] for r in positions)
@@ -636,6 +678,26 @@ def render():
     Paper promotion: <b>NO</b>; real orders: <b>NO</b>.
   </div>"""
 
+    exit_forward_class = "gain" if exit_contracts["forward_avg_pnl"] > 0 else "loss"
+    exit_contract_html = f"""
+  <h2>Frozen event exit contracts</h2>
+  <div class="summary">
+    <span>Contracts <span class="big">{exit_contracts['configs']}</span></span>
+    <span>Total sessions <span class="big">{exit_contracts['sessions']}</span></span>
+    <span>Forward sessions <span class="big">{exit_contracts['forward_sessions']}/20</span></span>
+    <span>Paper candidates <span class="big">{exit_contracts['paper_candidates']}</span></span>
+    <span class="badge red">FORWARD ONLY</span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    July 13-16 is exploratory only. Best exploratory mean was
+    <b>{escape(exit_contracts['exploratory_best'])}</b> at {money(exit_contracts['exploratory_avg_pnl'])}/day,
+    lower bound {exit_contracts['exploratory_lower95']:+.3f}% and cannot be selected.
+    Current forward leader: <b>{escape(exit_contracts['forward_best'])}</b>,
+    <span class="{exit_forward_class}">{money(exit_contracts['forward_avg_pnl'])}/day</span>,
+    lower bound {exit_contracts['forward_lower95']:+.3f}%.
+    Paper promotion: <b>NO</b>; real orders: <b>NO</b>.
+  </div>"""
+
     tot_cls = "gain" if tot_pnl >= 0 else "loss"
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
@@ -693,6 +755,7 @@ def render():
 {evidence_html}
 {event_shadow_html}
 {transfer_html}
+{exit_contract_html}
 {gate_html}
 {watch_html}
   <div class="updated" style="margin-top:18px">
