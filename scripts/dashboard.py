@@ -408,10 +408,27 @@ def broad_rank_checkpoint_stats():
 
 
 def eventual_runner_classifier_stats():
-    status = load_json(DATA / "eventual_runner_current_505" / "classifier_status.json", {})
+    status_path = DATA / "eventual_runner_current_505" / "classifier_status.json"
+    evidence_scope = "current 505-symbol baseline"
+    checkpoint_root = DATA / "broad_rank_acceleration"
+    checkpoint_statuses = []
+    if checkpoint_root.exists():
+        for path in checkpoint_root.glob(
+            "checkpoint_*/eventual_runner_classifier_status.json"
+        ):
+            try:
+                milestone = int(path.parent.name.rsplit("_", 1)[-1])
+            except (TypeError, ValueError):
+                continue
+            checkpoint_statuses.append((milestone, path))
+    if checkpoint_statuses:
+        milestone, status_path = max(checkpoint_statuses, key=lambda item: item[0])
+        evidence_scope = f"broad checkpoint {milestone}"
+    status = load_json(status_path, {})
     selected = status.get("selected", {}) if isinstance(status, dict) else {}
     return {
         "available": bool(status and selected),
+        "evidence_scope": evidence_scope,
         "strategy": str(status.get("strategy") or "eventual 10% runner"),
         "capital_reuse": str(status.get("capital_reuse") or "pending exact replay"),
         "selection_gate_passed": bool(selected.get("selection_gate_passed", False)),
@@ -872,6 +889,7 @@ def render():
   </div>
   <div class="updated" style="margin-top:6px">
     Prior-only 10% runner label; 60-minute +1.5%/-1.0% contract; {escape(runner_classifier['capital_reuse'])}.
+    Evidence: <b>{escape(runner_classifier['evidence_scope'])}</b>.
     Selection gate: <b>{'PASS' if runner_classifier['selection_gate_passed'] else 'NO'}</b>;
     untouched Rs 10,000 contract: <b>{'PASS' if runner_classifier['final_goal_contract_passed'] else 'NO'}</b>;
     paper promotion: <b>NO</b>; real orders: <b>NO</b>.

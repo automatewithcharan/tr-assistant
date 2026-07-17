@@ -86,6 +86,26 @@ def test_eventual_runner_classifier_stats_reads_stressed_final_only(tmp_path, mo
     assert not stats["real_orders_allowed"]
 
 
+def test_eventual_runner_dashboard_prefers_highest_broad_checkpoint(tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "DATA", tmp_path)
+    current = tmp_path / "eventual_runner_current_505"
+    current.mkdir()
+    (current / "classifier_status.json").write_text(
+        json.dumps({"selected": {"stress_final_avg_daily_pnl": 100.0}}),
+        encoding="utf-8",
+    )
+    for milestone, pnl in ((1000, 200.0), (2000, 300.0)):
+        root = tmp_path / "broad_rank_acceleration" / f"checkpoint_{milestone}"
+        root.mkdir(parents=True)
+        (root / "eventual_runner_classifier_status.json").write_text(
+            json.dumps({"selected": {"stress_final_avg_daily_pnl": pnl}}),
+            encoding="utf-8",
+        )
+    stats = dashboard.eventual_runner_classifier_stats()
+    assert stats["evidence_scope"] == "broad checkpoint 2000"
+    assert stats["stress_final_avg_pnl"] == 300.0
+
+
 def test_ranked_confirmation_stats_reports_losses_and_pause(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(dashboard, "DATA", tmp_path)
     root = tmp_path / "ranked_confirmation_paper"
