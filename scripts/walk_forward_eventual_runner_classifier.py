@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import sys
 from typing import Any
 
 import numpy as np
@@ -13,6 +14,10 @@ import pandas as pd
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from scripts.research_rank_acceleration_registry import period_metrics, temporal_splits
 from scripts.select_causal_intraday_exit_grid import load_calendar_dates

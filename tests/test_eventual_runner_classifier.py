@@ -1,4 +1,7 @@
 import pandas as pd
+from pathlib import Path
+import subprocess
+import sys
 
 from scripts.walk_forward_eventual_runner_classifier import (
     FEATURES,
@@ -48,6 +51,23 @@ def test_runner_label_requires_cross_strictly_after_signal():
     labeled = build_runner_labels(candidates, events)
     assert labeled.set_index("symbol").loc["AAA", "eventual_runner_label"] == 1
     assert labeled.set_index("symbol").loc["BBB", "eventual_runner_label"] == 0
+
+
+def test_research_entrypoints_run_without_external_pythonpath():
+    root = Path(__file__).resolve().parents[1]
+    for script in (
+        "scripts/research_rank_acceleration_registry.py",
+        "scripts/walk_forward_eventual_runner_classifier.py",
+    ):
+        result = subprocess.run(
+            [sys.executable, str(root / script), "--help"],
+            cwd=root,
+            env={"PATH": "/usr/bin:/bin"},
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        assert result.returncode == 0, result.stderr
 
 
 def test_walk_forward_model_is_always_trained_through_prior_date():

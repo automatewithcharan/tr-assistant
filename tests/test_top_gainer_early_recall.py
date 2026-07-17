@@ -33,6 +33,19 @@ def test_runner_events_record_first_threshold_cross(tmp_path):
     assert ten["first_cross_minute"] == 585
 
 
+def test_runner_event_limit_is_deterministic(tmp_path):
+    _write_symbol(tmp_path / "BBB.csv", [100, 106])
+    _write_symbol(tmp_path / "AAA.csv", [100, 106])
+    events = load_runner_events(
+        str(tmp_path),
+        (5.0,),
+        workers=1,
+        min_daily_turnover=1.0,
+        limit_symbols=1,
+    )
+    assert set(events["symbol"]) == {"AAA"}
+
+
 def test_recall_requires_detection_before_cross_and_reports_followthrough():
     events = pd.DataFrame(
         [

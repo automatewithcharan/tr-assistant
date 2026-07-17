@@ -85,8 +85,12 @@ def load_runner_events(
     workers: int = 8,
     min_price: float = 50.0,
     min_daily_turnover: float = 30_000_000.0,
+    limit_symbols: int = 0,
 ) -> pd.DataFrame:
     files = sorted(Path(data_dir).glob("*.csv"))
+    files = [path for path in files if path.stem.upper() != "NIFTY 50"]
+    if int(limit_symbols) > 0:
+        files = files[: int(limit_symbols)]
     inputs = [(str(path), thresholds, min_price, min_daily_turnover) for path in files]
     rows: list[dict[str, Any]] = []
     if int(workers) <= 1:
@@ -214,6 +218,7 @@ def main() -> int:
     parser.add_argument("--min-price", type=float, default=50.0)
     parser.add_argument("--min-daily-turnover", type=float, default=30_000_000.0)
     parser.add_argument("--target-exit-column", default="exit__h60_target_1.5_stop_1")
+    parser.add_argument("--limit-symbols", type=int, default=0)
     args = parser.parse_args()
     thresholds = parse_float_list(args.runner_thresholds)
     cutoffs = parse_clock_list(args.cutoffs)
@@ -223,6 +228,7 @@ def main() -> int:
         workers=args.workers,
         min_price=args.min_price,
         min_daily_turnover=args.min_daily_turnover,
+        limit_symbols=args.limit_symbols,
     )
     candidates = load_candidates(args.candidates, args.target_exit_column)
     if not candidates.empty:
