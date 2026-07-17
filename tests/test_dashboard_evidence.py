@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -169,5 +170,40 @@ def test_ranked_replay_readiness_reports_accumulated_rejection(tmp_path: Path, m
     assert stats["best_config"] == "patient_strong"
     assert stats["stress_avg_daily_pnl"] == -20.0
     assert stats["shadow_candidates"] == 0
+    assert not stats["paper_promotion_allowed"]
+    assert not stats["real_orders_allowed"]
+
+
+def test_event_shadow_readiness_reports_stressed_baseline(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(dashboard, "DATA", tmp_path)
+    root = tmp_path / "intraday_event_shadow_rebuilt" / "model_v1"
+    root.mkdir(parents=True)
+    (root / "summary.json").write_text(
+        json.dumps(
+            {
+                "sessions": 4,
+                "events": 9056,
+                "status": "insufficient_forward_evidence",
+                "frozen_heuristic_baseline": {
+                    "trades": 4,
+                    "stress_avg_daily_return_pct": 0.625,
+                    "stress_lower95_daily_return_pct": -0.403125,
+                    "stress_avg_daily_pnl": 2500.0,
+                    "positive_session_pct": 75.0,
+                    "daily_goal_hit_pct": 0.0,
+                    "sample_gate_passed": False,
+                    "performance_gate_passed": False,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    stats = dashboard.event_shadow_readiness_stats()
+
+    assert stats["sessions"] == 4
+    assert stats["events"] == 9056
+    assert stats["stress_avg_pnl"] == 2500.0
+    assert stats["stress_lower95"] == -0.403125
     assert not stats["paper_promotion_allowed"]
     assert not stats["real_orders_allowed"]

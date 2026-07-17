@@ -53,15 +53,24 @@ class IntradayEventShadowRecorder:
 
     @staticmethod
     def _timestamp(tick: Dict[str, Any], fallback: Any = None) -> pd.Timestamp | None:
-        for value in (tick.get("exchange_timestamp"), tick.get("last_trade_time"), fallback):
+        # KiteTicker timestamps are persisted as UTC-naive strings on the VM.
+        # The event engine's session windows are IST. A fallback supplied by
+        # SignalMonitor is already its local/aware wall clock and must not be
+        # shifted a second time.
+        for value, naive_timezone in (
+            (tick.get("exchange_timestamp"), "UTC"),
+            (tick.get("last_trade_time"), "UTC"),
+            (fallback, "Asia/Kolkata"),
+        ):
             if value in (None, "", "None"):
                 continue
             parsed = pd.to_datetime(value, errors="coerce")
             if pd.isna(parsed):
                 continue
             timestamp = pd.Timestamp(parsed)
-            if timestamp.tzinfo is not None:
-                timestamp = timestamp.tz_convert("Asia/Kolkata").tz_localize(None)
+            if timestamp.tzinfo is None:
+                timestamp = timestamp.tz_localize(naive_timezone)
+            timestamp = timestamp.tz_convert("Asia/Kolkata").tz_localize(None)
             return timestamp
         return None
 

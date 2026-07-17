@@ -233,6 +233,29 @@ def ranked_replay_readiness_stats():
     }
 
 
+def event_shadow_readiness_stats():
+    summary = load_json(
+        DATA / "intraday_event_shadow_rebuilt" / "model_v1" / "summary.json",
+        {},
+    )
+    baseline = summary.get("frozen_heuristic_baseline", {}) or {}
+    return {
+        "sessions": int(summary.get("sessions") or 0),
+        "events": int(summary.get("events") or 0),
+        "trades": int(baseline.get("trades") or 0),
+        "stress_avg_return": float(baseline.get("stress_avg_daily_return_pct") or 0.0),
+        "stress_lower95": float(baseline.get("stress_lower95_daily_return_pct") or 0.0),
+        "stress_avg_pnl": float(baseline.get("stress_avg_daily_pnl") or 0.0),
+        "positive_sessions": float(baseline.get("positive_session_pct") or 0.0),
+        "goal_hit_pct": float(baseline.get("daily_goal_hit_pct") or 0.0),
+        "sample_gate_passed": bool(baseline.get("sample_gate_passed", False)),
+        "performance_gate_passed": bool(baseline.get("performance_gate_passed", False)),
+        "paper_promotion_allowed": False,
+        "real_orders_allowed": False,
+        "status": str(summary.get("status") or "no evidence"),
+    }
+
+
 # ---------------------------------------------------------------- paper lanes
 
 def lane_stats(path, label, closed_filter, ret_field="net_return_pct"):
@@ -348,6 +371,7 @@ def render():
     ranked = ranked_confirmation_stats()
     evidence = evidence_readiness_stats()
     ranked_replay = ranked_replay_readiness_stats()
+    event_shadow = event_shadow_readiness_stats()
 
     tot_inv = sum(r["invested"] for r in positions)
     tot_val = sum(r["value"] for r in positions)
@@ -546,6 +570,30 @@ def render():
     Evidence accepted: <b>NO</b>; paper promotion: <b>NO</b>; real orders: <b>NO</b>.
   </div>"""
 
+    event_shadow_class = "gain" if event_shadow["stress_avg_return"] > 0 else "loss"
+    event_shadow_verdict = (
+        "PAPER GATE PASSED"
+        if event_shadow["sample_gate_passed"] and event_shadow["performance_gate_passed"]
+        else "COLLECTING EVIDENCE"
+    )
+    event_shadow_html = f"""
+  <h2>Causal event-shadow readiness</h2>
+  <div class="summary">
+    <span>Sessions <span class="big">{event_shadow['sessions']}</span></span>
+    <span>Complete candidates <span class="big">{event_shadow['events']}</span></span>
+    <span>Frozen trades <span class="big">{event_shadow['trades']}</span></span>
+    <span>Positive sessions <span class="big">{event_shadow['positive_sessions']:.0f}%</span></span>
+    <span class="badge {'grey' if event_shadow['sample_gate_passed'] else 'red'}">{event_shadow_verdict}</span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    Frozen first-signal-batch heuristic after embedded costs plus 0.10% stress:
+    <span class="{event_shadow_class}">{event_shadow['stress_avg_return']:+.3f}% / {money(event_shadow['stress_avg_pnl'])} per day</span>;
+    lower confidence bound {event_shadow['stress_lower95']:+.3f}%;
+    &#8377;10k hit sessions {event_shadow['goal_hit_pct']:.1f}%.
+    Status: <b>{escape(event_shadow['status'])}</b>;
+    paper promotion: <b>NO</b>; real orders: <b>NO</b>.
+  </div>"""
+
     tot_cls = "gain" if tot_pnl >= 0 else "loss"
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
@@ -601,6 +649,7 @@ def render():
 {ranked_html}
 {ranked_replay_html}
 {evidence_html}
+{event_shadow_html}
 {gate_html}
 {watch_html}
   <div class="updated" style="margin-top:18px">

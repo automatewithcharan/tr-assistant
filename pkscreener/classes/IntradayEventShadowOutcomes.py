@@ -59,14 +59,22 @@ def _evaluate(
     events = pd.read_csv(events_path, parse_dates=["signal_time"])
     if bars.empty or events.empty:
         return pd.DataFrame(), pd.DataFrame()
+    bars["symbol"] = bars["symbol"].astype(str).str.strip().str.upper()
+    bars.sort_values(["symbol", "datetime"], inplace=True)
+    bars_by_symbol = {
+        str(symbol): group.reset_index(drop=True)
+        for symbol, group in bars.groupby("symbol", sort=False)
+    }
     required_bar = pd.Timestamp(f"{date} {required_last_bar}")
-    latest_by_symbol = bars.groupby(bars["symbol"].astype(str).str.upper())["datetime"].max()
+    latest_by_symbol = bars.groupby("symbol")["datetime"].max()
 
     rows = []
     for event in events.to_dict(orient="records"):
         symbol = str(event.get("symbol", "")).strip().upper()
         signal_time = pd.Timestamp(event["signal_time"])
-        symbol_bars = bars[bars["symbol"].astype(str).str.upper().eq(symbol)].sort_values("datetime")
+        symbol_bars = bars_by_symbol.get(symbol)
+        if symbol_bars is None:
+            continue
         future = symbol_bars[symbol_bars["datetime"] > signal_time].copy()
         complete = bool(latest_by_symbol.get(symbol, pd.Timestamp.min) >= required_bar)
         if future.empty:
@@ -190,7 +198,7 @@ def evaluate_event_shadow_day(
     target_pct: float = 1.5,
     stop_pct: float = 1.0,
     cost_pct: float = 0.15,
-    required_last_bar: str = "15:25:00",
+    required_last_bar: str = "15:20:00",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     return _evaluate(
         output_dir,
@@ -211,7 +219,7 @@ def evaluate_event_shadow_fade_day(
     target_pct: float = 2.0,
     stop_pct: float = 0.5,
     cost_pct: float = 0.15,
-    required_last_bar: str = "15:25:00",
+    required_last_bar: str = "15:20:00",
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Evaluate the bullish event stream as a paper-only short fade."""
     return _evaluate(

@@ -1,7 +1,13 @@
 import pandas as pd
 
 from pkscreener.classes.IntradayEventEngine import CAUSAL_MODEL_FEATURES
-from scripts.train_intraday_event_shadow_model import daily_picks, load_outcomes, metrics, split_dates
+from scripts.train_intraday_event_shadow_model import (
+    daily_picks,
+    frozen_baseline_metrics,
+    load_outcomes,
+    metrics,
+    split_dates,
+)
 
 
 def test_split_dates_is_chronological_and_disjoint():
@@ -61,3 +67,29 @@ def test_load_outcomes_keeps_only_frozen_first_batch_candidate(tmp_path):
     pd.DataFrame(rows).to_csv(path, index=False)
     loaded = load_outcomes(str(path))
     assert loaded["symbol"].tolist() == ["A"]
+
+    all_candidates = load_outcomes(str(path), selected_only=False)
+    assert all_candidates["symbol"].tolist() == ["A", "B"]
+
+
+def test_frozen_baseline_applies_stress_and_never_promotes_small_sample():
+    frame = pd.DataFrame(
+        [
+            {
+                "date": "2026-01-01", "symbol": "A", "signal_time": "2026-01-01 09:20",
+                "net_return_pct": 1.35, "first_batch_selected": True,
+            },
+            {
+                "date": "2026-01-02", "symbol": "B", "signal_time": "2026-01-02 09:20",
+                "net_return_pct": -1.15, "first_batch_selected": True,
+            },
+        ]
+    )
+
+    result = frozen_baseline_metrics(frame, capital=400_000, daily_goal=10_000)
+
+    assert result["stress_avg_daily_return_pct"] == 0.0
+    assert result["stress_avg_daily_pnl"] == 0.0
+    assert not result["sample_gate_passed"]
+    assert not result["paper_promotion_allowed"]
+    assert not result["real_orders_allowed"]

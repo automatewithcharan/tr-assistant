@@ -43,14 +43,28 @@ def test_timestamp_converts_timezone_to_ist():
     assert str(timestamp) == "2026-01-02 09:15:00"
 
 
+def test_timestamp_treats_naive_kite_exchange_time_as_utc():
+    timestamp = IntradayEventShadowRecorder._timestamp(
+        {"exchange_timestamp": "2026-01-02 03:45:00"}
+    )
+
+    assert str(timestamp) == "2026-01-02 09:15:00"
+
+
+def test_timestamp_preserves_naive_ist_fallback_clock():
+    timestamp = IntradayEventShadowRecorder._timestamp({}, fallback="2026-01-02 09:15:00")
+
+    assert str(timestamp) == "2026-01-02 09:15:00"
+
+
 def test_restores_completed_bars_for_today(tmp_path):
     import pandas as pd
 
     recorder = IntradayEventShadowRecorder(tmp_path)
     today = str(pd.Timestamp.now(tz="Asia/Kolkata").date())
-    recorder.update({"AAA": _tick(100, 1000, f"{today} 09:15:01")})
-    recorder.update({"AAA": _tick(101, 1100, f"{today} 09:16:01")})
-    recorder.update({"AAA": _tick(102, 1300, f"{today} 09:20:01")})
+    recorder.update({"AAA": _tick(100, 1000, f"{today} 03:45:01")})
+    recorder.update({"AAA": _tick(101, 1100, f"{today} 03:46:01")})
+    recorder.update({"AAA": _tick(102, 1300, f"{today} 03:50:01")})
 
     restored = IntradayEventShadowRecorder(tmp_path)
 

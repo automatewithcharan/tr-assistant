@@ -5,6 +5,8 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
+import sys
 from pathlib import Path
 
 import joblib
@@ -12,6 +14,10 @@ import pandas as pd
 from sklearn.ensemble import HistGradientBoostingClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from pkscreener.classes.IntradayEventEngine import CAUSAL_MODEL_FEATURES
 
@@ -97,6 +103,55 @@ def metrics(frame: pd.DataFrame, threshold: float, capital: float, daily_goal: f
     }
 
 
+def frozen_baseline_metrics(
+    frame: pd.DataFrame,
+    *,
+    capital: float,
+    daily_goal: float,
+    extra_stress_cost_pct: float = 0.10,
+) -> dict:
+    dates = sorted(frame["date"].astype(str).unique().tolist()) if not frame.empty else []
+    if "first_batch_selected" not in frame.columns:
+        selected = frame.iloc[0:0].copy()
+    else:
+        mask = frame["first_batch_selected"].astype(str).str.strip().str.lower().isin(
+            {"true", "1", "yes"}
+        )
+        selected = frame[mask].copy()
+    selected = selected.sort_values(["date", "signal_time", "symbol"]).drop_duplicates("date")
+    returns = (
+        pd.to_numeric(selected.set_index("date")["net_return_pct"], errors="coerce")
+        .reindex(dates)
+        .fillna(0.0)
+    )
+    traded = selected.set_index("date").index.astype(str)
+    stress = returns.copy()
+    stress.loc[stress.index.isin(traded)] -= float(extra_stress_cost_pct)
+    if len(stress) > 1:
+        lower95 = float(stress.mean() - 1.645 * stress.std(ddof=1) / math.sqrt(len(stress)))
+    else:
+        lower95 = float(stress.mean()) if len(stress) else 0.0
+    pnl = stress * float(capital) / 100.0
+    return {
+        "sessions": int(len(dates)),
+        "trades": int(len(selected)),
+        "extra_stress_cost_pct": float(extra_stress_cost_pct),
+        "stress_avg_daily_return_pct": round(float(stress.mean()), 6) if len(stress) else 0.0,
+        "stress_lower95_daily_return_pct": round(lower95, 6),
+        "stress_avg_daily_pnl": round(float(pnl.mean()), 2) if len(pnl) else 0.0,
+        "positive_session_pct": round(float((stress > 0).mean() * 100.0), 4) if len(stress) else 0.0,
+        "daily_goal_hit_pct": round(float((pnl >= float(daily_goal)).mean() * 100.0), 4) if len(pnl) else 0.0,
+        "sample_gate_passed": bool(len(dates) >= 20 and len(selected) >= 20),
+        "performance_gate_passed": bool(
+            len(dates) >= 20
+            and lower95 > 0.0
+            and float(stress.mean()) > 0.0
+        ),
+        "paper_promotion_allowed": False,
+        "real_orders_allowed": False,
+    }
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--input", default="results/Data/intraday_event_shadow/outcomes_*.csv")
@@ -108,11 +163,19 @@ def main() -> int:
     parser.add_argument("--thresholds", default="0.40,0.50,0.60,0.70,0.80")
     args = parser.parse_args()
 
-    frame = load_outcomes(args.input)
+    # A ranker must learn from the full candidate cross-section. Restricting
+    # training to the preselected heuristic winner leaves one row per day and
+    # makes it impossible to learn why alternatives should rank lower.
+    frame = load_outcomes(args.input, selected_only=False)
     sessions = int(frame["date"].nunique()) if not frame.empty else 0
     output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
     readiness = {"sessions": sessions, "events": int(len(frame)), "minimum_sessions": args.min_sessions, "minimum_events": args.min_events}
+    readiness["frozen_heuristic_baseline"] = frozen_baseline_metrics(
+        frame,
+        capital=args.capital,
+        daily_goal=args.daily_goal,
+    )
     if sessions < args.min_sessions or len(frame) < args.min_events:
         readiness.update({"status": "insufficient_forward_evidence", "paper_shadow_model_accepted": False, "real_orders_allowed": False})
         (output / "summary.json").write_text(json.dumps(readiness, indent=2), encoding="utf-8")

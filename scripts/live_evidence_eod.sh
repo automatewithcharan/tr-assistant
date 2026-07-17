@@ -84,12 +84,31 @@ run_live_microstructure_research() {
         >>"$LOG" 2>&1 || true
 }
 
+run_event_shadow_rebuild() {
+    local bars="$REPO/results/Data/intraday_event_shadow/bars_${DATE}.csv"
+    local rebuilt="$REPO/results/Data/intraday_event_shadow_rebuilt"
+    if [ ! -s "$bars" ]; then
+        return
+    fi
+    "$PYTHON" "$REPO/scripts/rebuild_intraday_event_shadow_evidence.py" \
+        --source-root "$REPO/results/Data" \
+        --output-root "$rebuilt" \
+        --dates "$DATE" \
+        --source-timezone auto \
+        >>"$LOG" 2>&1 || true
+    "$PYTHON" "$REPO/scripts/train_intraday_event_shadow_model.py" \
+        --input "$rebuilt/intraday_event_shadow/outcomes_*.csv" \
+        --output-dir "$rebuilt/model_v1" \
+        >>"$LOG" 2>&1 || true
+}
+
 if [ -f "$OUTPUT_ROOT/status.json" ]; then
     existing_status=$("$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status", ""))' "$OUTPUT_ROOT/status.json" 2>/dev/null || true)
     if [ "$existing_status" = "complete" ]; then
         run_readiness
         run_ranked_replay
         run_live_microstructure_research
+        run_event_shadow_rebuild
         exit 0
     fi
 fi
@@ -134,5 +153,6 @@ fi
 run_readiness
 run_ranked_replay
 run_live_microstructure_research
+run_event_shadow_rebuild
 echo "[$(date -u +'%Y-%m-%d %H:%M:%S UTC')] live evidence EOD finished rc=$RC $SUMMARY" >>"$LOG"
 exit "$RC"
