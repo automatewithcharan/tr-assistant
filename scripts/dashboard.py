@@ -256,6 +256,28 @@ def event_shadow_readiness_stats():
     }
 
 
+def historical_transfer_stats():
+    summary = load_json(
+        DATA / "intraday_event_shadow_rebuilt" / "historical_transfer" / "holdout_summary.json",
+        {},
+    )
+    return {
+        "sessions": int(summary.get("sessions") or 0),
+        "candidates": int(summary.get("scored_live_candidates") or 0),
+        "trades": int(summary.get("traded_sessions") or 0),
+        "avg_return": float(summary.get("avg_stressed_return_pct") or 0.0),
+        "avg_pnl": float(summary.get("avg_stressed_pnl") or 0.0),
+        "total_pnl": float(summary.get("total_stressed_pnl") or 0.0),
+        "lower95": float(summary.get("lower_95_pct") or 0.0),
+        "positive_sessions": float(summary.get("positive_session_pct") or 0.0),
+        "goal_hit_pct": float(summary.get("goal_hit_pct") or 0.0),
+        "paper_promotion_allowed": bool(summary.get("paper_promotion_allowed", False)),
+        "real_orders_allowed": False,
+        "historical_end": str((summary.get("temporal_boundary") or {}).get("historical_end") or "n/a"),
+        "live_end": str((summary.get("temporal_boundary") or {}).get("live_end") or "n/a"),
+    }
+
+
 # ---------------------------------------------------------------- paper lanes
 
 def lane_stats(path, label, closed_filter, ret_field="net_return_pct"):
@@ -372,6 +394,7 @@ def render():
     evidence = evidence_readiness_stats()
     ranked_replay = ranked_replay_readiness_stats()
     event_shadow = event_shadow_readiness_stats()
+    historical_transfer = historical_transfer_stats()
 
     tot_inv = sum(r["invested"] for r in positions)
     tot_val = sum(r["value"] for r in positions)
@@ -594,6 +617,25 @@ def render():
     paper promotion: <b>NO</b>; real orders: <b>NO</b>.
   </div>"""
 
+    transfer_class = "gain" if historical_transfer["avg_return"] > 0 else "loss"
+    transfer_html = f"""
+  <h2>Historical ML to live transfer</h2>
+  <div class="summary">
+    <span>Future sessions <span class="big">{historical_transfer['sessions']}</span></span>
+    <span>Scored candidates <span class="big">{historical_transfer['candidates']}</span></span>
+    <span>Frozen trades <span class="big">{historical_transfer['trades']}</span></span>
+    <span>Positive sessions <span class="big">{historical_transfer['positive_sessions']:.0f}%</span></span>
+    <span class="badge red">NOT PROMOTED</span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    Historical family model frozen through {escape(historical_transfer['historical_end'])}, evaluated through {escape(historical_transfer['live_end'])}.
+    Embedded costs plus 0.10% stress:
+    <span class="{transfer_class}">{historical_transfer['avg_return']:+.3f}% / {money(historical_transfer['avg_pnl'])} per day</span>;
+    total {money(historical_transfer['total_pnl'])}; lower confidence bound {historical_transfer['lower95']:+.3f}%;
+    &#8377;10k hit sessions {historical_transfer['goal_hit_pct']:.1f}%.
+    Paper promotion: <b>NO</b>; real orders: <b>NO</b>.
+  </div>"""
+
     tot_cls = "gain" if tot_pnl >= 0 else "loss"
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
@@ -650,6 +692,7 @@ def render():
 {ranked_replay_html}
 {evidence_html}
 {event_shadow_html}
+{transfer_html}
 {gate_html}
 {watch_html}
   <div class="updated" style="margin-top:18px">

@@ -100,6 +100,15 @@ run_event_shadow_rebuild() {
         --input "$rebuilt/intraday_event_shadow/outcomes_*.csv" \
         --output-dir "$rebuilt/model_v1" \
         >>"$LOG" 2>&1 || true
+    local frozen_bundle="$REPO/results/Data/research_models/historical_event_family_target.joblib"
+    if [ -s "$frozen_bundle" ]; then
+        "$PYTHON" "$REPO/scripts/evaluate_historical_event_model_live_holdout.py" \
+            --live-glob "$rebuilt/intraday_event_shadow/outcomes_*.csv" \
+            --output-prefix "$rebuilt/historical_transfer/holdout" \
+            --model-bundle "$frozen_bundle" \
+            --reuse-model-bundle \
+            >>"$LOG" 2>&1 || true
+    fi
 }
 
 if [ -f "$OUTPUT_ROOT/status.json" ]; then

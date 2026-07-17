@@ -207,3 +207,36 @@ def test_event_shadow_readiness_reports_stressed_baseline(tmp_path: Path, monkey
     assert stats["stress_lower95"] == -0.403125
     assert not stats["paper_promotion_allowed"]
     assert not stats["real_orders_allowed"]
+
+
+def test_historical_transfer_reports_strict_future_holdout(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(dashboard, "DATA", tmp_path)
+    root = tmp_path / "intraday_event_shadow_rebuilt" / "historical_transfer"
+    root.mkdir(parents=True)
+    (root / "holdout_summary.json").write_text(
+        json.dumps(
+            {
+                "sessions": 4,
+                "scored_live_candidates": 9056,
+                "traded_sessions": 4,
+                "avg_stressed_return_pct": 0.0,
+                "avg_stressed_pnl": 0.0,
+                "total_stressed_pnl": 0.0,
+                "lower_95_pct": -2.296733,
+                "positive_session_pct": 50.0,
+                "goal_hit_pct": 0.0,
+                "paper_promotion_allowed": False,
+                "temporal_boundary": {"historical_end": "2026-05-29", "live_end": "2026-07-16"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    stats = dashboard.historical_transfer_stats()
+
+    assert stats["sessions"] == 4
+    assert stats["candidates"] == 9056
+    assert stats["avg_pnl"] == 0.0
+    assert stats["lower95"] == -2.296733
+    assert not stats["paper_promotion_allowed"]
+    assert not stats["real_orders_allowed"]
