@@ -280,7 +280,7 @@ def test_frozen_microstructure_and_backfill_status(tmp_path: Path, monkeypatch):
     (recorder / "frozen_microstructure_selector_status.json").write_text(
         json.dumps(
             {
-                "selector": "missed_stable_tight_sector",
+                "selector": "missed_stable_executable_sector",
                 "contract": "forward_horizon",
                 "forward_start": "2026-07-17",
                 "selection": {"avg_daily_pnl": 647.72},

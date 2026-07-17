@@ -27,6 +27,21 @@ def test_feature_bucket_parses_persisted_false_strings():
     assert feature_bucket(row) == "other"
 
 
+def test_feature_bucket_rejects_zero_quote_as_non_executable():
+    row = pd.Series(
+        {
+            "MissedRunnerCandidate": True,
+            "OrderBookStable": True,
+            "SpreadOk": True,
+            "BestBid": 0.0,
+            "BestAsk": 0.0,
+            "SpreadBps": 0.0,
+            "SectorTop2Count": 2,
+        }
+    )
+    assert feature_bucket(row) == "missed_stable_depth"
+
+
 def test_summary_excludes_persisted_false_outcome_strings():
     outcomes = pd.DataFrame(
         [
@@ -77,6 +92,9 @@ def test_evaluator_labels_target_before_stop(tmp_path):
                 "MissedRunnerCandidate": True,
                 "OrderBookStable": True,
                 "SpreadOk": True,
+                "BestBid": 99.9,
+                "BestAsk": 100.0,
+                "SpreadBps": 10.0,
                 "AlreadyAlertedToday": False,
                 "SectorTop2Count": 2,
             }
@@ -96,7 +114,7 @@ def test_evaluator_labels_target_before_stop(tmp_path):
     days = load_symbol_days(str(candle_dir), {"AAA"})
     out = evaluate_rows(features, days)
 
-    assert out.iloc[0]["FeatureBucket"] == "missed_stable_tight_sector"
+    assert out.iloc[0]["FeatureBucket"] == "missed_stable_executable_sector"
     assert out.iloc[0]["MaxFavorablePct"] == 2.0
     assert out.iloc[0]["MaxAdversePct"] == -0.2
     assert out.iloc[0]["t1_0_s1_0_outcome"] == "target"
@@ -114,6 +132,9 @@ def test_evaluator_labels_stop_before_target(tmp_path):
                 "MissedRunnerCandidate": False,
                 "OrderBookStable": False,
                 "SpreadOk": True,
+                "BestBid": 99.9,
+                "BestAsk": 100.0,
+                "SpreadBps": 10.0,
                 "AlreadyAlertedToday": True,
                 "SectorTop2Count": 0,
             }
@@ -144,6 +165,9 @@ def test_summary_reports_bucket_hit_rates(tmp_path):
                 "MissedRunnerCandidate": True,
                 "OrderBookStable": True,
                 "SpreadOk": True,
+                "BestBid": 99.9,
+                "BestAsk": 100.0,
+                "SpreadBps": 10.0,
                 "AlreadyAlertedToday": False,
                 "SectorTop2Count": 2,
             },
@@ -155,6 +179,9 @@ def test_summary_reports_bucket_hit_rates(tmp_path):
                 "MissedRunnerCandidate": True,
                 "OrderBookStable": True,
                 "SpreadOk": True,
+                "BestBid": 99.9,
+                "BestAsk": 100.0,
+                "SpreadBps": 10.0,
                 "AlreadyAlertedToday": False,
                 "SectorTop2Count": 2,
             },
@@ -172,7 +199,7 @@ def test_summary_reports_bucket_hit_rates(tmp_path):
     summary = summarize(evaluate_rows(features, days))
 
     row = summary.iloc[0]
-    assert row["FeatureBucket"] == "missed_stable_tight_sector"
+    assert row["FeatureBucket"] == "missed_stable_executable_sector"
     assert row["Rows"] == 2
     assert row["t1_0_s1_0_hit_rate_pct"] == 50.0
     assert row["EvaluatedSessions"] == 1

@@ -16,9 +16,9 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.assess_live_evidence_readiness import first_batch_rows, load_outcomes  # noqa: E402
+from scripts.assess_live_evidence_readiness import _bool_series, first_batch_rows, load_outcomes  # noqa: E402
 
-SELECTOR = "missed_stable_tight_sector"
+SELECTOR = "missed_stable_executable_sector"
 CONTRACT = "forward_horizon"
 RETURN_COLUMN = "ForwardReturnPct"
 FROZEN_THROUGH = "2026-07-16"
@@ -26,7 +26,20 @@ FORWARD_START = "2026-07-17"
 
 
 def daily_returns(outcomes: pd.DataFrame, dates: list[str], extra_cost_pct: float = 0.0) -> tuple[pd.DataFrame, int]:
-    bucket = outcomes[outcomes["FeatureBucket"].eq(SELECTOR)].copy()
+    numeric = {}
+    for column in ("BestBid", "BestAsk", "SpreadBps", "SectorTop2Count"):
+        values = outcomes[column] if column in outcomes.columns else pd.Series(0.0, index=outcomes.index)
+        numeric[column] = pd.to_numeric(values, errors="coerce").fillna(0.0)
+    mask = (
+        _bool_series(outcomes.get("MissedRunnerCandidate", pd.Series(False, index=outcomes.index)))
+        & _bool_series(outcomes.get("OrderBookStable", pd.Series(False, index=outcomes.index)))
+        & _bool_series(outcomes.get("SpreadOk", pd.Series(False, index=outcomes.index)))
+        & (numeric["BestBid"] > 0.0)
+        & (numeric["BestAsk"] > numeric["BestBid"])
+        & numeric["SpreadBps"].between(0.0, 20.0, inclusive="right")
+        & (numeric["SectorTop2Count"] >= 2.0)
+    )
+    bucket = outcomes[mask].copy()
     selected = first_batch_rows(bucket)
     selected[RETURN_COLUMN] = pd.to_numeric(selected.get(RETURN_COLUMN), errors="coerce")
     selected = selected[selected["OutcomeAvailable"] & selected[RETURN_COLUMN].notna()].copy()

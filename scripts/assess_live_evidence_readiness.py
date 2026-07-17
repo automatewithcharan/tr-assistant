@@ -11,6 +11,8 @@ from typing import Any
 import numpy as np
 import pandas as pd
 
+from scripts.evaluate_live_feature_outcomes import feature_bucket
+
 
 DEFAULT_OUTPUT = "results/Data/live_feature_recorder/evidence_readiness.csv"
 
@@ -55,6 +57,13 @@ def load_outcomes(patterns: list[str]) -> pd.DataFrame:
     outcomes["Date"] = outcomes["Date"].astype(str)
     outcomes["Symbol"] = outcomes["Symbol"].astype(str).str.strip().str.upper()
     outcomes["FeatureBucket"] = outcomes["FeatureBucket"].astype(str)
+    # Reclassify persisted live-feature rows from their raw causal fields. This
+    # prevents legacy CSV labels from preserving a now-fixed execution bug.
+    if "MissedRunnerCandidate" in outcomes.columns:
+        live_feature_mask = outcomes["MissedRunnerCandidate"].notna()
+        outcomes.loc[live_feature_mask, "FeatureBucket"] = outcomes.loc[
+            live_feature_mask
+        ].apply(feature_bucket, axis=1)
     outcomes["When"] = pd.to_datetime(outcomes.get("When"), errors="coerce")
     outcomes["OutcomeAvailable"] = _bool_series(outcomes["OutcomeAvailable"])
     if "EvaluationEligible" not in outcomes.columns:
@@ -86,7 +95,7 @@ def strategy_eligible_bucket(bucket_name: str) -> bool:
     return name in {
         "missed_runner",
         "missed_stable_depth",
-        "missed_stable_tight_sector",
+        "missed_stable_executable_sector",
     }
 
 

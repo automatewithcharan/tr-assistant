@@ -194,10 +194,19 @@ def feature_bucket(row: pd.Series) -> str:
     missed = as_bool(row.get("MissedRunnerCandidate", False))
     stable = as_bool(row.get("OrderBookStable", False))
     spread_ok = as_bool(row.get("SpreadOk", False))
+    best_bid = float(row.get("BestBid", 0) or 0)
+    best_ask = float(row.get("BestAsk", 0) or 0)
+    spread_bps = float(row.get("SpreadBps", 0) or 0)
+    executable_spread = (
+        spread_ok
+        and best_bid > 0.0
+        and best_ask > best_bid
+        and 0.0 < spread_bps <= 20.0
+    )
     alerted = as_bool(row.get("AlreadyAlertedToday", False))
     sector_top2 = float(row.get("SectorTop2Count", 0) or 0) >= 2
-    if missed and stable and spread_ok and sector_top2:
-        return "missed_stable_tight_sector"
+    if missed and stable and executable_spread and sector_top2:
+        return "missed_stable_executable_sector"
     if missed and stable:
         return "missed_stable_depth"
     if missed:

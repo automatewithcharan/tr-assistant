@@ -1,6 +1,6 @@
 import pandas as pd
 
-from scripts.assess_frozen_microstructure_selector import accepted, metrics
+from scripts.assess_frozen_microstructure_selector import accepted, daily_returns, metrics
 
 
 def test_metrics_include_cash_days_and_goal_rate():
@@ -39,3 +39,43 @@ def test_metrics_accept_empty_forward_period():
     result = metrics(empty, capital=400000.0, goal=10000.0)
     assert result["sessions"] == 0
     assert result["lower_95_pct"] is None
+
+
+def test_frozen_rule_excludes_zero_quote_rows():
+    rows = pd.DataFrame(
+        [
+            {
+                "Date": "2026-07-01",
+                "When": pd.Timestamp("2026-07-01 09:30:00"),
+                "Symbol": "ZERO",
+                "FeatureBucket": "missed_stable_tight_sector",
+                "MissedRunnerCandidate": True,
+                "OrderBookStable": True,
+                "SpreadOk": True,
+                "BestBid": 0.0,
+                "BestAsk": 0.0,
+                "SpreadBps": 0.0,
+                "SectorTop2Count": 2,
+                "OutcomeAvailable": True,
+                "ForwardReturnPct": 9.0,
+            },
+            {
+                "Date": "2026-07-01",
+                "When": pd.Timestamp("2026-07-01 09:31:00"),
+                "Symbol": "REAL",
+                "FeatureBucket": "missed_stable_tight_sector",
+                "MissedRunnerCandidate": True,
+                "OrderBookStable": True,
+                "SpreadOk": True,
+                "BestBid": 100.0,
+                "BestAsk": 100.1,
+                "SpreadBps": 9.995,
+                "SectorTop2Count": 2,
+                "OutcomeAvailable": True,
+                "ForwardReturnPct": 0.5,
+            },
+        ]
+    )
+    daily, candidates = daily_returns(rows, ["2026-07-01"])
+    assert candidates == 1
+    assert daily.iloc[0]["daily_return_pct"] == 0.5

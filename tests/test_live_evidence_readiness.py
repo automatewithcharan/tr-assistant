@@ -164,6 +164,32 @@ def test_csv_false_strings_are_parsed_as_false(tmp_path: Path):
     assert not bool(outcomes.iloc[0]["OutcomeAvailable"])
 
 
+def test_legacy_zero_quote_bucket_is_reclassified(tmp_path: Path):
+    path = tmp_path / "outcomes.csv"
+    pd.DataFrame(
+        [
+            {
+                "Date": "2026-07-01",
+                "When": "2026-07-01 09:30:00",
+                "Symbol": "ZERO",
+                "FeatureBucket": "missed_stable_tight_sector",
+                "MissedRunnerCandidate": True,
+                "OrderBookStable": True,
+                "SpreadOk": True,
+                "BestBid": 0.0,
+                "BestAsk": 0.0,
+                "SpreadBps": 0.0,
+                "SectorTop2Count": 2,
+                "EvaluationEligible": True,
+                "OutcomeAvailable": True,
+                "ForwardReturnPct": 9.0,
+            }
+        ]
+    ).to_csv(path, index=False)
+    outcomes = load_outcomes([str(path)])
+    assert outcomes.iloc[0]["FeatureBucket"] == "missed_stable_depth"
+
+
 def test_nested_wildcard_inputs_are_loaded(tmp_path: Path):
     path = tmp_path / "eod" / "2026-07-01" / "live_features_rows.csv"
     path.parent.mkdir(parents=True)
