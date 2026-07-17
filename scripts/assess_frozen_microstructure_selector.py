@@ -18,7 +18,7 @@ if str(ROOT) not in sys.path:
 
 from scripts.assess_live_evidence_readiness import _bool_series, first_batch_rows, load_outcomes  # noqa: E402
 
-SELECTOR = "missed_stable_executable_sector"
+SELECTOR = "missed_stable_executable_known_sector"
 CONTRACT = "forward_horizon"
 RETURN_COLUMN = "ForwardReturnPct"
 FROZEN_THROUGH = "2026-07-16"
@@ -27,9 +27,10 @@ FORWARD_START = "2026-07-17"
 
 def daily_returns(outcomes: pd.DataFrame, dates: list[str], extra_cost_pct: float = 0.0) -> tuple[pd.DataFrame, int]:
     numeric = {}
-    for column in ("BestBid", "BestAsk", "SpreadBps", "SectorTop2Count"):
+    for column in ("BestBid", "BestAsk", "SpreadBps", "SectorTop2Count", "LastPrice", "TradedValue"):
         values = outcomes[column] if column in outcomes.columns else pd.Series(0.0, index=outcomes.index)
         numeric[column] = pd.to_numeric(values, errors="coerce").fillna(0.0)
+    sector = outcomes.get("Sector", pd.Series("", index=outcomes.index)).fillna("").astype(str).str.strip().str.upper()
     mask = (
         _bool_series(outcomes.get("MissedRunnerCandidate", pd.Series(False, index=outcomes.index)))
         & _bool_series(outcomes.get("OrderBookStable", pd.Series(False, index=outcomes.index)))
@@ -37,7 +38,11 @@ def daily_returns(outcomes: pd.DataFrame, dates: list[str], extra_cost_pct: floa
         & (numeric["BestBid"] > 0.0)
         & (numeric["BestAsk"] > numeric["BestBid"])
         & numeric["SpreadBps"].between(0.0, 20.0, inclusive="right")
+        & sector.ne("UNKNOWN")
+        & sector.ne("")
         & (numeric["SectorTop2Count"] >= 2.0)
+        & (numeric["LastPrice"] >= 50.0)
+        & (numeric["TradedValue"] >= 30_000_000.0)
     )
     bucket = outcomes[mask].copy()
     selected = first_batch_rows(bucket)
@@ -122,9 +127,15 @@ def main() -> int:
     stress_daily, _ = daily_returns(outcomes, forward_dates, extra_cost_pct=args.stress_cost_pct)
     selection = metrics(selection_daily, args.capital, args.daily_goal)
     selection["candidates"] = selection_candidates
+    selection_gate_passed = bool(
+        selection["avg_daily_return_pct"] > 0.0
+        and selection["lower_95_pct"] is not None
+        and selection["lower_95_pct"] > 0.0
+        and selection["block_floor_pct"] > 0.0
+    )
     forward = metrics(forward_daily, args.capital, args.daily_goal)
     stress = metrics(stress_daily, args.capital, args.daily_goal)
-    is_accepted = accepted(
+    is_accepted = selection_gate_passed and accepted(
         forward,
         stress,
         args.min_forward_sessions,
@@ -140,6 +151,8 @@ def main() -> int:
         "forward_start": FORWARD_START,
         "selection_uses_forward_period": False,
         "selection": selection,
+        "selection_gate_passed": selection_gate_passed,
+        "selection_rejected": not selection_gate_passed,
         "forward": forward,
         "forward_stress": stress,
         "minimum_forward_sessions": args.min_forward_sessions,

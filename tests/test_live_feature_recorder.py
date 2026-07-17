@@ -54,6 +54,20 @@ def test_best_bid_ask_and_spread_from_depth(tmp_path):
     assert row["SpreadOk"] is True
 
 
+def test_zero_quote_is_not_an_executable_spread(tmp_path):
+    recorder = LiveFeatureRecorder(output_dir=str(tmp_path), interval_seconds=0, top_gainer_pct=0.5)
+    tick = _tick(101.0, close=100.0)
+    tick["depth"] = {"buy": [], "sell": []}
+    rows = recorder.build_rows(
+        {"AAA": tick},
+        alerted_symbols={"AAA"},
+        now=datetime(2026, 7, 3, 9, 20),
+    )
+    assert rows[0]["BestBid"] == 0.0
+    assert rows[0]["BestAsk"] == 0.0
+    assert rows[0]["SpreadOk"] is False
+
+
 def test_order_book_stability_requires_multiple_samples(tmp_path):
     recorder = LiveFeatureRecorder(
         output_dir=str(tmp_path),
@@ -111,6 +125,20 @@ def test_sector_context_and_missed_runner_label(tmp_path):
     assert aaa["SectorTop2Count"] == 2
     assert aaa["SectorBreadthPct"] == pytest.approx(66.667, abs=0.01)
     assert "missed_runner" in aaa["RecordReason"]
+
+
+def test_unknown_symbols_do_not_create_a_fake_sector_cluster(tmp_path):
+    recorder = LiveFeatureRecorder(output_dir=str(tmp_path), interval_seconds=0, top_gainer_pct=5.0)
+    ticks = {f"S{index}": _tick(106.0, close=100.0) for index in range(5)}
+    with patch("pkscreener.classes.LiveFeatureRecorder.get_sector", return_value="UNKNOWN"):
+        rows = recorder.build_rows(
+            ticks,
+            alerted_symbols=set(),
+            now=datetime(2026, 7, 3, 9, 40),
+        )
+    assert rows
+    assert all(row["SectorTop2Count"] == 0 for row in rows)
+    assert all("sector_leader_cluster" not in row["RecordReason"] for row in rows)
 
 
 def test_record_persists_and_throttles(tmp_path):

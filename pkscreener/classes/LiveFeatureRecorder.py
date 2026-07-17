@@ -227,7 +227,11 @@ class LiveFeatureRecorder:
                     "BestBid": round(best_bid, 2),
                     "BestAsk": round(best_ask, 2),
                     "SpreadBps": round(spread_bps, 3),
-                    "SpreadOk": spread_bps == 0.0 or spread_bps <= self.spread_ok_bps,
+                    "SpreadOk": (
+                        best_bid > 0.0
+                        and best_ask > best_bid
+                        and 0.0 < spread_bps <= self.spread_ok_bps
+                    ),
                     "Checks": str(decision.get("Checks", "") or ""),
                     "Why": str(decision.get("Why", "") or ""),
                 }
@@ -288,7 +292,11 @@ class LiveFeatureRecorder:
             already_alerted = symbol in alerted
             missed_runner = is_top_gainer_now and not already_alerted
             ob_stable = bool(history_stats["stable"])
-            spread_ok = spread_bps == 0.0 or spread_bps <= self.spread_ok_bps
+            spread_ok = (
+                best_bid > 0.0
+                and best_ask > best_bid
+                and 0.0 < spread_bps <= self.spread_ok_bps
+            )
 
             reasons = []
             if missed_runner:
@@ -365,7 +373,7 @@ class LiveFeatureRecorder:
                 best_bid = LiveFeatureRecorder._to_float((buy_depth[0] or {}).get("price"))
             if best_ask <= 0 and sell_depth:
                 best_ask = LiveFeatureRecorder._to_float((sell_depth[0] or {}).get("price"))
-        if best_bid <= 0 or best_ask <= 0 or best_ask < best_bid:
+        if best_bid <= 0 or best_ask <= best_bid:
             return 0.0, 0.0
         return best_bid, best_ask
 
@@ -380,6 +388,8 @@ class LiveFeatureRecorder:
             elif change < 0:
                 market_decliners += 1
             sector = get_sector(symbol) or "UNKNOWN"
+            if sector == "UNKNOWN":
+                continue
             sector_changes.setdefault(sector, []).append(change)
 
         stats: Dict[str, Dict[str, float]] = {}

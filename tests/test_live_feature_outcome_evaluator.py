@@ -42,6 +42,24 @@ def test_feature_bucket_rejects_zero_quote_as_non_executable():
     assert feature_bucket(row) == "missed_stable_depth"
 
 
+def test_feature_bucket_rejects_unknown_sector_as_confirmation():
+    row = pd.Series(
+        {
+            "MissedRunnerCandidate": True,
+            "OrderBookStable": True,
+            "SpreadOk": True,
+            "BestBid": 99.9,
+            "BestAsk": 100.0,
+            "SpreadBps": 10.0,
+            "Sector": "UNKNOWN",
+            "SectorTop2Count": 200,
+            "LastPrice": 100.0,
+            "TradedValue": 50_000_000.0,
+        }
+    )
+    assert feature_bucket(row) == "missed_stable_depth"
+
+
 def test_summary_excludes_persisted_false_outcome_strings():
     outcomes = pd.DataFrame(
         [
@@ -95,6 +113,8 @@ def test_evaluator_labels_target_before_stop(tmp_path):
                 "BestBid": 99.9,
                 "BestAsk": 100.0,
                 "SpreadBps": 10.0,
+                "Sector": "PHARMA",
+                "TradedValue": 50_000_000.0,
                 "AlreadyAlertedToday": False,
                 "SectorTop2Count": 2,
             }
@@ -114,7 +134,7 @@ def test_evaluator_labels_target_before_stop(tmp_path):
     days = load_symbol_days(str(candle_dir), {"AAA"})
     out = evaluate_rows(features, days)
 
-    assert out.iloc[0]["FeatureBucket"] == "missed_stable_executable_sector"
+    assert out.iloc[0]["FeatureBucket"] == "missed_stable_executable_known_sector"
     assert out.iloc[0]["MaxFavorablePct"] == 2.0
     assert out.iloc[0]["MaxAdversePct"] == -0.2
     assert out.iloc[0]["t1_0_s1_0_outcome"] == "target"
@@ -168,6 +188,8 @@ def test_summary_reports_bucket_hit_rates(tmp_path):
                 "BestBid": 99.9,
                 "BestAsk": 100.0,
                 "SpreadBps": 10.0,
+                "Sector": "PHARMA",
+                "TradedValue": 50_000_000.0,
                 "AlreadyAlertedToday": False,
                 "SectorTop2Count": 2,
             },
@@ -182,6 +204,8 @@ def test_summary_reports_bucket_hit_rates(tmp_path):
                 "BestBid": 99.9,
                 "BestAsk": 100.0,
                 "SpreadBps": 10.0,
+                "Sector": "PHARMA",
+                "TradedValue": 50_000_000.0,
                 "AlreadyAlertedToday": False,
                 "SectorTop2Count": 2,
             },
@@ -199,7 +223,7 @@ def test_summary_reports_bucket_hit_rates(tmp_path):
     summary = summarize(evaluate_rows(features, days))
 
     row = summary.iloc[0]
-    assert row["FeatureBucket"] == "missed_stable_executable_sector"
+    assert row["FeatureBucket"] == "missed_stable_executable_known_sector"
     assert row["Rows"] == 2
     assert row["t1_0_s1_0_hit_rate_pct"] == 50.0
     assert row["EvaluatedSessions"] == 1

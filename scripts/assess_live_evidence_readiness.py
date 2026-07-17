@@ -95,7 +95,7 @@ def strategy_eligible_bucket(bucket_name: str) -> bool:
     return name in {
         "missed_runner",
         "missed_stable_depth",
-        "missed_stable_executable_sector",
+        "missed_stable_executable_known_sector",
     }
 
 
