@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 from pathlib import Path
@@ -133,7 +134,13 @@ def save_cache(df: pd.DataFrame, symbol: str, interval: str, start: str, end: st
     out = df.copy()
     out["symbol"] = _normalise_symbol(symbol)
     out = out.drop_duplicates(subset=["datetime"]).sort_values("datetime")
-    out.to_csv(cache_path(symbol, interval, start, end), index=False)
+    path = cache_path(symbol, interval, start, end)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        out.to_csv(temporary, index=False)
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def fetch_chunk(client, token: int, start: pd.Timestamp, end: pd.Timestamp, interval: str, retries: int = 5) -> pd.DataFrame:
