@@ -8,7 +8,7 @@ cd "$REPO"
 
 PYTHON="$REPO/.venv/bin/python"
 [ -x "$PYTHON" ] || PYTHON="$REPO/.venv/bin/python3"
-LOCK=/tmp/broad_universe_backfill.lock
+LOCK="${BROAD_UNIVERSE_BACKFILL_LOCK:-$REPO/results/Data/.broad_universe_backfill.lock}"
 DATA_DIR="$REPO/results/Data/kite_history_backfill/5minute/2024-05-30_2026-05-29"
 CALENDAR="$DATA_DIR/NIFTY 50.csv"
 OUT="$REPO/results/Data/eventual_runner_current_505"
@@ -33,7 +33,9 @@ send_discord() {
 }
 
 mkdir -p "$OUT"
-exec 9>"$LOCK"
+(umask 000; : >>"$LOCK")
+chmod a+rw "$LOCK" 2>/dev/null || true
+exec 9>>"$LOCK"
 flock -n 9 || exit 0
 trap 'rc=$?; send_discord "Eventual-runner 505 research FAILED | rc=$rc | see $LOG | real orders remain OFF"; exit $rc' ERR
 

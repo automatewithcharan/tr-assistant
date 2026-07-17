@@ -8,8 +8,8 @@ cd "$REPO"
 
 PYTHON="$REPO/.venv/bin/python"
 [ -x "$PYTHON" ] || PYTHON="$REPO/venv/bin/python3"
-LOCK=/tmp/broad_rank_acceleration_checkpoint.lock
-BACKFILL_LOCK=/tmp/broad_universe_backfill.lock
+LOCK="${BROAD_RANK_CHECKPOINT_LOCK:-$REPO/results/Data/.broad_rank_acceleration_checkpoint.lock}"
+BACKFILL_LOCK="${BROAD_UNIVERSE_BACKFILL_LOCK:-$REPO/results/Data/.broad_universe_backfill.lock}"
 LOG="$REPO/results/Data/broad_rank_acceleration/checkpoint.log"
 SUMMARY="$REPO/results/Data/broad_universe_5minute_backfill_summary.json"
 DATA_DIR="$REPO/results/Data/kite_history_backfill/5minute/2024-05-30_2026-05-29"
@@ -25,9 +25,13 @@ if [ "$WORKERS" -gt 16 ]; then
     WORKERS=16
 fi
 
-exec 9>"$LOCK"
+(umask 000; : >>"$LOCK")
+chmod a+rw "$LOCK" 2>/dev/null || true
+exec 9>>"$LOCK"
 flock -n 9 || exit 0
-exec 8>"$BACKFILL_LOCK"
+(umask 000; : >>"$BACKFILL_LOCK")
+chmod a+rw "$BACKFILL_LOCK" 2>/dev/null || true
+exec 8>>"$BACKFILL_LOCK"
 flock -n 8 || exit 0
 mkdir -p "$(dirname "$LOG")"
 

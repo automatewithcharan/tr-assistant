@@ -6,7 +6,7 @@ cd "$REPO"
 
 PYTHON="$REPO/.venv/bin/python"
 [ -x "$PYTHON" ] || PYTHON="$REPO/venv/bin/python3"
-LOCK=/tmp/broad_universe_backfill.lock
+LOCK="${BROAD_UNIVERSE_BACKFILL_LOCK:-$REPO/results/Data/.broad_universe_backfill.lock}"
 LOG="$REPO/results/Data/broad_universe_backfill.log"
 PREFIX="$REPO/results/Data/broad_universe_5minute_backfill"
 UNIVERSE="$REPO/results/Indices/NSE_BSE_COMBINED.csv"
@@ -15,7 +15,9 @@ END="${BROAD_BACKFILL_END:-2026-05-29}"
 BATCH_SIZE="${BROAD_BACKFILL_BATCH_SIZE:-100}"
 BUCKET="${TRADE_ASSISTANT_ARCHIVE_BUCKET:-}"
 
-exec 9>"$LOCK"
+(umask 000; : >>"$LOCK")
+chmod a+rw "$LOCK" 2>/dev/null || true
+exec 9>>"$LOCK"
 flock -n 9 || exit 0
 
 if [ -f "$REPO/.env.dev" ]; then
