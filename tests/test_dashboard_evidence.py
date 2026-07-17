@@ -42,6 +42,40 @@ def test_ranked_confirmation_stats_reports_losses_and_pause(tmp_path: Path, monk
     assert stats["net_pnl"] == -700.0
     assert stats["stops"] == 2
     assert stats["entry_paused"]
+    assert stats["forward_closed"] == 2
+    assert stats["forward_wins"] == 0
+    assert stats["forward_net_pnl"] == -700.0
+
+
+def test_ranked_confirmation_stats_accumulates_daily_ledgers_without_latest_duplicate(
+    tmp_path: Path, monkeypatch
+):
+    monkeypatch.setattr(dashboard, "DATA", tmp_path)
+    root = tmp_path / "ranked_confirmation_paper"
+    root.mkdir(parents=True)
+    day_one = pd.DataFrame(
+        [{
+            "date": "2026-07-13", "symbol": "AAA", "entry_time": "09:30",
+            "closed": True, "net_pnl": -400.0, "exit_reason": "stop_hit",
+        }]
+    )
+    day_two = pd.DataFrame(
+        [{
+            "date": "2026-07-14", "symbol": "BBB", "entry_time": "10:00",
+            "closed": True, "net_pnl": 250.0, "exit_reason": "target_hit",
+        }]
+    )
+    day_one.to_csv(root / "trades_2026-07-13.csv", index=False)
+    day_two.to_csv(root / "trades_2026-07-14.csv", index=False)
+    day_two.to_csv(root / "trades_latest.csv", index=False)
+    pd.DataFrame().to_csv(root / "candidates_latest.csv", index=False)
+
+    stats = dashboard.ranked_confirmation_stats()
+
+    assert stats["forward_days"] == 2
+    assert stats["forward_closed"] == 2
+    assert stats["forward_wins"] == 1
+    assert stats["forward_net_pnl"] == -150.0
 
 
 def test_evidence_readiness_stats_uses_best_stressed_candidate(tmp_path: Path, monkeypatch):

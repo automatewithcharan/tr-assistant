@@ -123,6 +123,24 @@ def ranked_confirmation_stats():
         else:
             break
     candidates = load_csv_rows(root / "candidates_latest.csv")
+    accumulated = []
+    for path in sorted(root.glob("trades_20*.csv")):
+        accumulated.extend(load_csv_rows(path))
+    if not accumulated:
+        accumulated = list(rows)
+    unique_accumulated = {}
+    for row in accumulated:
+        key = (
+            str(row.get("date", "")),
+            str(row.get("symbol", "")),
+            str(row.get("entry_time", "")),
+        )
+        unique_accumulated[key] = row
+    accumulated_closed = [
+        row for row in unique_accumulated.values() if truthy(row.get("closed"))
+    ]
+    accumulated_pnls = [float(row.get("net_pnl") or 0.0) for row in accumulated_closed]
+    accumulated_wins = sum(1 for value in accumulated_pnls if value > 0)
     return {
         "date": str(rows[0].get("date", "")) if rows else "",
         "closed": len(closed),
@@ -137,6 +155,14 @@ def ranked_confirmation_stats():
         "consecutive_losses": streak,
         "entry_paused": streak >= 2,
         "trades": rows,
+        "forward_days": len({str(row.get("date", "")) for row in accumulated_closed}),
+        "forward_closed": len(accumulated_closed),
+        "forward_wins": accumulated_wins,
+        "forward_win_rate": (
+            accumulated_wins / len(accumulated_closed) * 100.0
+            if accumulated_closed else 0.0
+        ),
+        "forward_net_pnl": sum(accumulated_pnls),
     }
 
 
@@ -458,18 +484,20 @@ def render():
         if ranked["entry_paused"]
         else '<span class="badge grey">PAPER ONLY</span>'
     )
-    ranked_pnl_class = "gain" if ranked["net_pnl"] >= 0 else "loss"
+    ranked_pnl_class = "gain" if ranked["forward_net_pnl"] >= 0 else "loss"
     ranked_html = f"""
   <h2>Ranked Grade-B confirmation (paper only)</h2>
   <div class="summary">
-    <span>Date <span class="big">{escape(ranked['date'] or 'n/a')}</span></span>
-    <span>Closed <span class="big">{ranked['closed']}</span></span>
-    <span>Win rate <span class="big">{ranked['win_rate']:.0f}%</span></span>
-    <span>Net <span class="big {ranked_pnl_class}">{money(ranked['net_pnl'])}</span></span>
+    <span>Forward days <span class="big">{ranked['forward_days']}</span></span>
+    <span>Closed <span class="big">{ranked['forward_closed']}</span></span>
+    <span>Win rate <span class="big">{ranked['forward_win_rate']:.0f}%</span></span>
+    <span>Net <span class="big {ranked_pnl_class}">{money(ranked['forward_net_pnl'])}</span></span>
     {pause_badge}
   </div>
   <div class="updated" style="margin-top:6px">
-    {ranked['candidates']} candidates observed; {ranked['targets']} targets, {ranked['stops']} stops.
+    Accumulated forward-live ledger through {escape(ranked['date'] or 'n/a')}.
+    Today: {ranked['candidates']} candidates observed; {ranked['closed']} closed,
+    {ranked['targets']} targets, {ranked['stops']} stops, {money(ranked['net_pnl'])} net.
     Simulated fills include fees and slippage. No broker orders.
   </div>
   <table>
