@@ -173,6 +173,40 @@ def evidence_readiness_stats():
     }
 
 
+def ranked_replay_readiness_stats():
+    rows = load_csv_rows(DATA / "ranked_confirmation_replay" / "readiness.csv")
+
+    def number(row, field):
+        try:
+            return float(row.get(field) or 0.0)
+        except Exception:
+            return 0.0
+
+    best = max(
+        rows,
+        key=lambda row: (
+            truthy(row.get("ShadowCandidate")),
+            number(row, "StressLower95DailyPnl"),
+            number(row, "StressAvgDailyPnl"),
+        ),
+        default={},
+    )
+    return {
+        "configs": len(rows),
+        "complete_days": max((int(number(row, "CompleteDays")) for row in rows), default=0),
+        "closed_trades": int(number(best, "ClosedTrades")),
+        "wins": int(number(best, "Wins")),
+        "best_config": str(best.get("ConfigName", "")),
+        "stress_avg_daily_pnl": number(best, "StressAvgDailyPnl"),
+        "stress_lower95_daily_pnl": number(best, "StressLower95DailyPnl"),
+        "profit_factor": number(best, "ProfitFactor"),
+        "shadow_candidates": sum(1 for row in rows if truthy(row.get("ShadowCandidate"))),
+        "goal_passes": sum(1 for row in rows if truthy(row.get("GoalEvidencePassed"))),
+        "paper_promotion_allowed": any(truthy(row.get("PaperPromotionAllowed")) for row in rows),
+        "real_orders_allowed": False,
+    }
+
+
 # ---------------------------------------------------------------- paper lanes
 
 def lane_stats(path, label, closed_filter, ret_field="net_return_pct"):
@@ -287,6 +321,7 @@ def render():
     lanes = all_lanes()
     ranked = ranked_confirmation_stats()
     evidence = evidence_readiness_stats()
+    ranked_replay = ranked_replay_readiness_stats()
 
     tot_inv = sum(r["invested"] for r in positions)
     tot_val = sum(r["value"] for r in positions)
@@ -442,6 +477,27 @@ def render():
     {ranked_rows}
   </table>"""
 
+    replay_class = "gain" if ranked_replay["stress_avg_daily_pnl"] > 0 else "loss"
+    replay_verdict = "SHADOW CANDIDATE" if ranked_replay["shadow_candidates"] else "NOT READY"
+    ranked_replay_html = f"""
+  <h2>Ranked exact-tape readiness</h2>
+  <div class="summary">
+    <span>Complete days <span class="big">{ranked_replay['complete_days']}</span></span>
+    <span>Fixed configs <span class="big">{ranked_replay['configs']}</span></span>
+    <span>Shadow candidates <span class="big">{ranked_replay['shadow_candidates']}</span></span>
+    <span>&#8377;10k passes <span class="big">{ranked_replay['goal_passes']}</span></span>
+    <span class="badge {'grey' if ranked_replay['shadow_candidates'] else 'red'}">{replay_verdict}</span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    Best fixed configuration: <b>{escape(ranked_replay['best_config'] or 'none')}</b>;
+    {ranked_replay['closed_trades']} closed trades, {ranked_replay['wins']} winners,
+    stressed average <span class="{replay_class}">{money(ranked_replay['stress_avg_daily_pnl'])}/day</span>,
+    lower confidence bound {money(ranked_replay['stress_lower95_daily_pnl'])}/day,
+    profit factor {ranked_replay['profit_factor']:.2f}.
+    Paper promotion: <b>{'YES' if ranked_replay['paper_promotion_allowed'] else 'NO'}</b>;
+    real orders: <b>NO</b>.
+  </div>"""
+
     evidence_class = "gain" if evidence["best_stress_return"] > 0 else "loss"
     coverage_class = "gain" if evidence["coverage_passed"] else "loss"
     evidence_html = f"""
@@ -515,6 +571,7 @@ def render():
     {lane_rows}
   </table>
 {ranked_html}
+{ranked_replay_html}
 {evidence_html}
 {gate_html}
 {watch_html}

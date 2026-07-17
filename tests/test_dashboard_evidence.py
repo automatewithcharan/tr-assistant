@@ -92,3 +92,48 @@ def test_evidence_readiness_stats_uses_best_stressed_candidate(tmp_path: Path, m
     assert stats["best_stress_pnl"] == -149.59
     assert stats["shadow_candidates"] == 0
     assert stats["goal_passes"] == 0
+
+
+def test_ranked_replay_readiness_reports_accumulated_rejection(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(dashboard, "DATA", tmp_path)
+    root = tmp_path / "ranked_confirmation_replay"
+    root.mkdir(parents=True)
+    pd.DataFrame(
+        [
+            {
+                "ConfigName": "baseline_current",
+                "CompleteDays": 5,
+                "ClosedTrades": 7,
+                "Wins": 0,
+                "StressAvgDailyPnl": -650.0,
+                "StressLower95DailyPnl": -900.0,
+                "ProfitFactor": 0.0,
+                "ShadowCandidate": False,
+                "GoalEvidencePassed": False,
+                "PaperPromotionAllowed": False,
+                "RealOrdersAllowed": False,
+            },
+            {
+                "ConfigName": "patient_strong",
+                "CompleteDays": 5,
+                "ClosedTrades": 2,
+                "Wins": 1,
+                "StressAvgDailyPnl": -20.0,
+                "StressLower95DailyPnl": -200.0,
+                "ProfitFactor": 0.8,
+                "ShadowCandidate": "False",
+                "GoalEvidencePassed": "False",
+                "PaperPromotionAllowed": "False",
+                "RealOrdersAllowed": "False",
+            },
+        ]
+    ).to_csv(root / "readiness.csv", index=False)
+
+    stats = dashboard.ranked_replay_readiness_stats()
+
+    assert stats["complete_days"] == 5
+    assert stats["best_config"] == "patient_strong"
+    assert stats["stress_avg_daily_pnl"] == -20.0
+    assert stats["shadow_candidates"] == 0
+    assert not stats["paper_promotion_allowed"]
+    assert not stats["real_orders_allowed"]

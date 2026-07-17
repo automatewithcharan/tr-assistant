@@ -183,10 +183,13 @@ class RankedConfirmationPaperTrader:
         output_dir: str,
         config: Optional[RankedPaperConfig] = None,
         now_fn: Optional[Callable[[], datetime]] = None,
+        persist: bool = True,
     ) -> None:
         self.config = config or RankedPaperConfig.from_env()
+        self.persist = bool(persist)
         self.output_dir = Path(output_dir) / "ranked_confirmation_paper"
-        self.output_dir.mkdir(parents=True, exist_ok=True)
+        if self.persist:
+            self.output_dir.mkdir(parents=True, exist_ok=True)
         self.state_path = self.output_dir / "state.json"
         self.trades_path = self.output_dir / "trades_latest.csv"
         self.candidates_path = self.output_dir / "candidates_latest.csv"
@@ -198,7 +201,8 @@ class RankedConfirmationPaperTrader:
         self.candidates: Dict[str, RankedPaperCandidate] = {}
         self.trades: Dict[str, RankedPaperTrade] = {}
         self._daily_summary_emitted = False
-        self._load_state()
+        if self.persist:
+            self._load_state()
 
     def process(
         self,
@@ -217,9 +221,10 @@ class RankedConfirmationPaperTrader:
             self._expire_candidates(now, events)
             self._enter_ranked_candidates(ticks, now, events)
             self._maybe_emit_daily_summary(now, events)
-            self._save_state()
-            self._write_trades()
-            self._write_candidates()
+            if self.persist:
+                self._save_state()
+                self._write_trades()
+                self._write_candidates()
         return events
 
     def _register_alerts(self, alerts: Any, now: datetime, events: List[Dict[str, Any]]) -> None:
@@ -279,7 +284,8 @@ class RankedConfirmationPaperTrader:
             if candidate is not None and candidate.status == "observing":
                 candidate.observations.append(observation)
                 candidate.observations = candidate.observations[-180:]
-            self._append_observation_tape(candidate, observation)
+            if self.persist:
+                self._append_observation_tape(candidate, observation)
 
     def _enter_ranked_candidates(
         self,
@@ -720,7 +726,8 @@ class RankedConfirmationPaperTrader:
             "net_pnl": round(net_pnl, 2),
             "details_json": json.dumps(details or {}, sort_keys=True, default=str),
         }
-        self._append_event(row)
+        if self.persist:
+            self._append_event(row)
         return row
 
     def _append_event(self, row: Dict[str, Any]) -> None:
