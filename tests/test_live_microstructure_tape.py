@@ -4,6 +4,7 @@ from scripts.evaluate_live_microstructure_tape import (
     candidate_rules,
     executable_outcome,
     minute_candle_outcome,
+    minute_candle_short_outcome,
     summarize,
 )
 
@@ -137,6 +138,55 @@ def test_minute_outcome_resolves_ambiguous_bar_as_stop_first():
         }
     )
     outcome = minute_candle_outcome(
+        candles,
+        pd.Timestamp("2026-01-02 09:30:10"),
+        target_pct=0.5,
+        stop_pct=0.5,
+        horizon_minutes=30,
+        fee_pct=0.10,
+        slippage_bps=5.0,
+    )
+    assert outcome["ExitReason"] == "stop_first_same_bar"
+    assert outcome["NetReturnPct"] < -0.64
+
+
+def test_minute_short_enters_next_minute_and_hits_target():
+    candles = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(
+                ["2026-01-02 09:30", "2026-01-02 09:31", "2026-01-02 09:32"]
+            ),
+            "open": [110.0, 100.0, 99.7],
+            "high": [120.0, 100.2, 99.8],
+            "low": [90.0, 99.8, 99.0],
+            "close": [100.0, 99.9, 99.2],
+        }
+    )
+    outcome = minute_candle_short_outcome(
+        candles,
+        pd.Timestamp("2026-01-02 09:30:30"),
+        target_pct=0.5,
+        stop_pct=0.5,
+        horizon_minutes=30,
+        fee_pct=0.10,
+        slippage_bps=0.0,
+    )
+    assert outcome["EntryBid"] == 100.0
+    assert outcome["ExitReason"] == "target"
+    assert outcome["NetReturnPct"] == 0.4
+
+
+def test_minute_short_resolves_ambiguous_bar_as_stop_first():
+    candles = pd.DataFrame(
+        {
+            "datetime": pd.to_datetime(["2026-01-02 09:31"]),
+            "open": [100.0],
+            "high": [101.0],
+            "low": [99.0],
+            "close": [99.5],
+        }
+    )
+    outcome = minute_candle_short_outcome(
         candles,
         pd.Timestamp("2026-01-02 09:30:10"),
         target_pct=0.5,

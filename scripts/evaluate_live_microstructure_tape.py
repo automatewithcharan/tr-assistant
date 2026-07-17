@@ -280,6 +280,83 @@ def minute_candle_outcome(
     }
 
 
+def minute_candle_short_outcome(
+    candles: pd.DataFrame,
+    signal_when: pd.Timestamp,
+    target_pct: float,
+    stop_pct: float,
+    horizon_minutes: int,
+    fee_pct: float,
+    slippage_bps: float,
+) -> dict:
+    """Simulate a causal short from the next full minute with adverse costs."""
+    if candles is None or candles.empty:
+        return {"OutcomeAvailable": False}
+    signal_when = pd.Timestamp(signal_when)
+    entry_minute = signal_when.floor("min") + pd.Timedelta(minutes=1)
+    cutoff = signal_when + pd.Timedelta(minutes=int(horizon_minutes))
+    future = candles[
+        (candles["datetime"] >= entry_minute) & (candles["datetime"] <= cutoff)
+    ].copy()
+    if future.empty or pd.Timestamp(future.iloc[0]["datetime"]) != entry_minute:
+        return {"OutcomeAvailable": False}
+
+    slip = float(slippage_bps) / 10_000.0
+    entry = float(future.iloc[0]["open"]) * (1.0 - slip)
+    if entry <= 0:
+        return {"OutcomeAvailable": False}
+    target_price = entry * (1.0 - float(target_pct) / 100.0)
+    stop_price = entry * (1.0 + float(stop_pct) / 100.0)
+    reason = "horizon"
+    exit_price = float(future.iloc[-1]["close"]) * (1.0 + slip)
+    exit_when = pd.Timestamp(future.iloc[-1]["datetime"])
+
+    for bar in future.itertuples(index=False):
+        open_price = float(bar.open)
+        high = float(bar.high)
+        low = float(bar.low)
+        when = pd.Timestamp(bar.datetime)
+        if open_price >= stop_price:
+            reason = "stop_gap"
+            exit_price = open_price * (1.0 + slip)
+            exit_when = when
+            break
+        if open_price <= target_price:
+            reason = "target_gap"
+            exit_price = target_price
+            exit_when = when
+            break
+        stop_hit = high >= stop_price
+        target_hit = low <= target_price
+        if stop_hit:
+            reason = "stop_first_same_bar" if target_hit else "stop"
+            exit_price = stop_price * (1.0 + slip)
+            exit_when = when
+            break
+        if target_hit:
+            reason = "target"
+            exit_price = target_price
+            exit_when = when
+            break
+
+    gross = (entry - exit_price) / entry * 100.0
+    highs = future["high"].to_numpy(dtype=float)
+    lows = future["low"].to_numpy(dtype=float)
+    return {
+        "OutcomeAvailable": True,
+        "OutcomeSource": "kite_minute_next_open_short",
+        "EntryBid": round(entry, 4),
+        "ExitPrice": round(exit_price, 4),
+        "ExitWhen": exit_when,
+        "ExitReason": reason,
+        "GrossReturnPct": round(gross, 6),
+        "NetReturnPct": round(gross - float(fee_pct), 6),
+        "MfePct": round((entry - float(np.min(lows))) / entry * 100.0, 6),
+        "MaePct": round((entry - float(np.max(highs))) / entry * 100.0, 6),
+        "FutureSnapshots": int(len(future)),
+    }
+
+
 def label_candidates(
     tape: pd.DataFrame,
     candidates: pd.DataFrame,

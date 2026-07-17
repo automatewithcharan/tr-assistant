@@ -64,11 +64,32 @@ run_ranked_replay() {
         >>"$LOG" 2>&1 || true
 }
 
+run_live_microstructure_research() {
+    local feature_pattern="$REPO/results/Data/live_feature_recorder/live_features_20*.csv"
+    local minute_pattern="$REPO/results/Data/kite_history_backfill/minute/*"
+    if ! compgen -G "$feature_pattern" >/dev/null; then
+        return
+    fi
+    "$PYTHON" "$REPO/scripts/assess_live_runner_fade.py" \
+        --input "$feature_pattern" \
+        --minute-cache-glob "$minute_pattern" \
+        --output-dir "$REPO/results/Data/live_runner_fade" \
+        --end-date "$DATE" \
+        >>"$LOG" 2>&1 || true
+    "$PYTHON" "$REPO/scripts/assess_live_microstructure_ignition.py" \
+        --input "$feature_pattern" \
+        --minute-cache-glob "$minute_pattern" \
+        --output-dir "$REPO/results/Data/live_microstructure_ignition" \
+        --end-date "$DATE" \
+        >>"$LOG" 2>&1 || true
+}
+
 if [ -f "$OUTPUT_ROOT/status.json" ]; then
     existing_status=$("$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status", ""))' "$OUTPUT_ROOT/status.json" 2>/dev/null || true)
     if [ "$existing_status" = "complete" ]; then
         run_readiness
         run_ranked_replay
+        run_live_microstructure_research
         exit 0
     fi
 fi
@@ -112,5 +133,6 @@ else
 fi
 run_readiness
 run_ranked_replay
+run_live_microstructure_research
 echo "[$(date -u +'%Y-%m-%d %H:%M:%S UTC')] live evidence EOD finished rc=$RC $SUMMARY" >>"$LOG"
 exit "$RC"
