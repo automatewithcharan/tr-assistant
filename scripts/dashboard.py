@@ -376,6 +376,37 @@ def broad_backfill_stats():
     }
 
 
+def broad_rank_checkpoint_stats():
+    root = DATA / "broad_rank_acceleration"
+    statuses = []
+    for path in sorted(root.glob("checkpoint_*/status.json")) if root.exists() else []:
+        status = load_json(path, {})
+        if not isinstance(status, dict) or not status:
+            continue
+        try:
+            milestone = int(status.get("milestone") or path.parent.name.rsplit("_", 1)[-1])
+        except (TypeError, ValueError):
+            continue
+        statuses.append((milestone, status))
+    statuses.sort(key=lambda item: item[0])
+    completed = [milestone for milestone, _ in statuses]
+    latest = statuses[-1][1] if statuses else {}
+    next_milestone = next(
+        (milestone for milestone in (1_000, 2_000, 2_900) if milestone not in completed),
+        0,
+    )
+    return {
+        "completed": completed,
+        "latest_milestone": completed[-1] if completed else 0,
+        "next_milestone": next_milestone,
+        "diagnostic_only": bool(latest.get("diagnostic_only", True)),
+        "coverage_gate_passed": bool(latest.get("broad_coverage_gate_passed", False)),
+        "historical_goal_gate_passed": bool(latest.get("historical_goal_gate_passed", False)),
+        "paper_promotion_allowed": False,
+        "real_orders_allowed": False,
+    }
+
+
 # ---------------------------------------------------------------- paper lanes
 
 def lane_stats(path, label, closed_filter, ret_field="net_return_pct"):
@@ -497,6 +528,7 @@ def render():
     frozen_micro = frozen_microstructure_stats()
     ignition_registry = ignition_registry_stats()
     broad_backfill = broad_backfill_stats()
+    broad_rank = broad_rank_checkpoint_stats()
 
     tot_inv = sum(r["invested"] for r in positions)
     tot_val = sum(r["value"] for r in positions)
@@ -802,7 +834,11 @@ def render():
   <div class="updated" style="margin-top:6px">
     Exact five-minute range {escape(broad_backfill['start'])} to {escape(broad_backfill['end'])};
     live universe {broad_backfill['universe']} symbols, {broad_backfill['api_calls']:,} estimated API calls remaining.
-    Acquisition is research infrastructure only and cannot enable paper or real orders.
+    Latest rank checkpoint: <b>{broad_rank['latest_milestone'] or 'none'}</b>;
+    next: <b>{broad_rank['next_milestone'] or 'complete'}</b>.
+    State: <b>{'DIAGNOSTIC ONLY' if broad_rank['diagnostic_only'] else 'FULL COVERAGE'}</b>;
+    historical Rs 10,000 gate: <b>{'PASS' if broad_rank['historical_goal_gate_passed'] else 'NO'}</b>.
+    Acquisition and checkpoints cannot enable paper or real orders.
   </div>"""
 
     tot_cls = "gain" if tot_pnl >= 0 else "loss"

@@ -11,6 +11,49 @@ def test_money_formats_negative_rupees_conventionally():
     assert dashboard.money(1250) == "₹1,250"
 
 
+def test_broad_rank_checkpoint_stats_distinguishes_diagnostic_and_full(tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "DATA", tmp_path)
+    first = tmp_path / "broad_rank_acceleration" / "checkpoint_1000"
+    first.mkdir(parents=True)
+    (first / "status.json").write_text(
+        json.dumps(
+            {
+                "milestone": 1000,
+                "diagnostic_only": True,
+                "broad_coverage_gate_passed": False,
+                "historical_goal_gate_passed": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    diagnostic = dashboard.broad_rank_checkpoint_stats()
+    assert diagnostic["latest_milestone"] == 1000
+    assert diagnostic["next_milestone"] == 2000
+    assert diagnostic["diagnostic_only"]
+    assert not diagnostic["historical_goal_gate_passed"]
+
+    final = tmp_path / "broad_rank_acceleration" / "checkpoint_2900"
+    final.mkdir(parents=True)
+    (final / "status.json").write_text(
+        json.dumps(
+            {
+                "milestone": 2900,
+                "diagnostic_only": False,
+                "broad_coverage_gate_passed": True,
+                "historical_goal_gate_passed": True,
+            }
+        ),
+        encoding="utf-8",
+    )
+    complete = dashboard.broad_rank_checkpoint_stats()
+    assert complete["latest_milestone"] == 2900
+    assert complete["next_milestone"] == 2000
+    assert complete["coverage_gate_passed"]
+    assert complete["historical_goal_gate_passed"]
+    assert not complete["paper_promotion_allowed"]
+    assert not complete["real_orders_allowed"]
+
+
 def test_ranked_confirmation_stats_reports_losses_and_pause(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(dashboard, "DATA", tmp_path)
     root = tmp_path / "ranked_confirmation_paper"
