@@ -49,6 +49,12 @@ run_readiness() {
         "$REPO/results/Data/live_feature_recorder/bootstrap/*/lane_decisions_rows.csv" \
         --output "$REPO/results/Data/live_feature_recorder/evidence_readiness.csv" \
         >>"$LOG" 2>&1 || true
+    "$PYTHON" "$REPO/scripts/assess_frozen_microstructure_selector.py" \
+        --inputs \
+        "$REPO/results/Data/live_feature_recorder/eod/*/live_features_rows.csv" \
+        "$REPO/results/Data/live_feature_recorder/bootstrap/*/live_features_rows.csv" \
+        --output-prefix "$REPO/results/Data/live_feature_recorder/frozen_microstructure_selector" \
+        >>"$LOG" 2>&1 || true
 }
 
 run_ranked_replay() {
