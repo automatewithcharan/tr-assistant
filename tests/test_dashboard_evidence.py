@@ -137,6 +137,7 @@ def test_direct_target_dashboard_reads_clairvoyant_bound_without_promotion(tmp_p
     assert stats["stress_final_avg_pnl"] == -200.0
     assert stats["opportunity_bound_final_lower95_pnl"] == 10_100.0
     assert stats["opportunity_bound_slots"] == 1
+    assert stats["signal_window"] == "pending"
     assert not stats["paper_promotion_allowed"]
     assert not stats["real_orders_allowed"]
 

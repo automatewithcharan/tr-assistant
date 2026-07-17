@@ -445,6 +445,7 @@ def _classifier_stats(current_name, checkpoint_name, fallback_strategy):
         "stress_final_goal_hit_pct": float(selected.get("stress_final_goal_hit_pct") or 0.0),
         "threshold": float(selected.get("threshold") or 0.0),
         "slots": int(selected.get("slots") or 0),
+        "signal_window": str(selected.get("signal_window") or "pending"),
         "opportunity_bound_available": bool(bound),
         "opportunity_bound_slots": int(bound.get("slots") or 0),
         "opportunity_bound_final_avg_pnl": float(
@@ -925,6 +926,7 @@ def render():
   <div class="updated" style="margin-top:6px">
     Prior-only 10% runner label; 60-minute +1.5%/-1.0% contract; {escape(runner_classifier['capital_reuse'])}.
     Evidence: <b>{escape(runner_classifier['evidence_scope'])}</b>.
+    Signal window: <b>{escape(runner_classifier['signal_window'])}</b>.
     Selection gate: <b>{'PASS' if runner_classifier['selection_gate_passed'] else 'NO'}</b>;
     untouched Rs 10,000 contract: <b>{'PASS' if runner_classifier['final_goal_contract_passed'] else 'NO'}</b>;
     paper promotion: <b>NO</b>; real orders: <b>NO</b>.
@@ -949,6 +951,7 @@ def render():
     Prior-only target-before-stop label; identical 60-minute +1.5%/-1.0% execution contract.
     The bound uses future outcomes and ignores overlap, so it is diagnosis only and can never promote trading.
     Evidence: <b>{escape(direct_classifier['evidence_scope'])}</b>.
+    Signal window: <b>{escape(direct_classifier['signal_window'])}</b>.
     Selection gate: <b>{'PASS' if direct_classifier['selection_gate_passed'] else 'NO'}</b>;
     untouched Rs 10,000 contract: <b>{'PASS' if direct_classifier['final_goal_contract_passed'] else 'NO'}</b>;
     paper promotion: <b>NO</b>; real orders: <b>NO</b>.

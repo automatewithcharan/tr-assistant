@@ -135,6 +135,35 @@ def test_registry_uses_exact_unleveraged_reuse_and_keeps_orders_off():
     assert not summary["real_orders_allowed"].any()
 
 
+def test_signal_window_selection_uses_prefinal_period_only():
+    dates = pd.bdate_range("2025-01-01", periods=120).strftime("%Y-%m-%d").tolist()
+    rows = []
+    for index, date in enumerate(dates):
+        prefinal = index < 90
+        for minute, value in ((570, 1.0 if prefinal else -1.0), (585, -1.0 if prefinal else 1.0)):
+            row = _feature_row(date, f"S{minute}", minute, 1)
+            row.update(
+                {
+                    "runner_probability": 0.9,
+                    "entry_time": f"{date} {'09:35' if minute == 570 else '09:50'}",
+                    "exit_time__test": f"{date} {'09:40' if minute == 570 else '09:55'}",
+                    "return__test": value,
+                }
+            )
+            rows.append(row)
+    summary, _ = evaluate_registry(
+        pd.DataFrame(rows),
+        dates,
+        "return__test",
+        "exit_time__test",
+        thresholds=(0.8,),
+    )
+    selected = summary.iloc[0]
+    assert selected["signal_window"] == "through_09:30"
+    assert bool(selected["selection_gate_passed"])
+    assert selected["stress_final_avg_daily_pnl"] < 0.0
+
+
 def test_optimistic_bound_uses_future_positive_returns_and_ignores_overlap():
     date = "2026-01-02"
     scored = pd.DataFrame(

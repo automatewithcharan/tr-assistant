@@ -383,102 +383,132 @@ def evaluate_registry(
     stress_cost_pct: float = 0.10,
     thresholds: tuple[float, ...] = (0.5, 0.6, 0.7, 0.8, 0.9),
     label_column: str = "eventual_runner_label",
-) -> tuple[pd.DataFrame, dict[tuple[float, int, int], tuple[pd.DataFrame, pd.DataFrame]]]:
+) -> tuple[
+    pd.DataFrame,
+    dict[tuple[str, float, int, int], tuple[pd.DataFrame, pd.DataFrame]],
+]:
     scored_dates = [date for date in calendar_dates if date >= str(scored["date"].min())]
     splits = temporal_splits(scored_dates, warmup_days=0)
     prefinal = [*splits["train"], *splits["validation"]]
     blocks = [list(values) for values in np.array_split(prefinal, 4) if len(values)]
     rows = []
     artifacts = {}
-    for threshold in thresholds:
-        for top_per_signal in (1, 2):
-            selected = select_candidates(scored, threshold, top_per_signal)
-            selected["selection_label"] = selected[label_column]
-            for slots in (1, 2):
-                key = (float(threshold), int(top_per_signal), int(slots))
-                daily, trades = simulate_calendar(
-                    selected,
-                    scored_dates,
-                    capital,
-                    slots,
-                    return_column,
-                    exit_time_column,
-                    daily_goal,
-                )
-                stress_daily, _ = simulate_calendar(
-                    selected,
-                    scored_dates,
-                    capital,
-                    slots,
-                    return_column,
-                    exit_time_column,
-                    daily_goal,
-                    extra_cost_pct=stress_cost_pct,
-                )
-                artifacts[key] = (daily, trades)
-                row: dict[str, Any] = {
-                    "threshold": float(threshold),
-                    "top_per_signal": int(top_per_signal),
-                    "slots": int(slots),
-                    "capital_reuse": "exact_exit_bar_unleveraged",
-                }
-                for name, dates in splits.items():
-                    period = daily[daily["date"].isin(dates)]
-                    row.update(_period_metrics_for_goal(period, name, capital, daily_goal))
-                    stress_period = stress_daily[stress_daily["date"].isin(dates)]
-                    row.update(
-                        _period_metrics_for_goal(
-                            stress_period, f"stress_{name}", capital, daily_goal
+    available_minutes = tuple(
+        sorted(pd.to_numeric(scored["signal_minute"]).dropna().astype(int).unique())
+    )
+    signal_windows = []
+    for end_index in range(len(available_minutes)):
+        minutes = available_minutes[: end_index + 1]
+        label = "through_" + f"{minutes[-1] // 60:02d}:{minutes[-1] % 60:02d}"
+        signal_windows.append((label, minutes))
+    for signal_window, allowed_minutes in signal_windows:
+        window_scored = scored[scored["signal_minute"].isin(allowed_minutes)].copy()
+        for threshold in thresholds:
+            for top_per_signal in (1, 2):
+                selected = select_candidates(window_scored, threshold, top_per_signal)
+                selected["selection_label"] = selected[label_column]
+                for slots in (1, 2):
+                    key = (
+                        signal_window,
+                        float(threshold),
+                        int(top_per_signal),
+                        int(slots),
+                    )
+                    daily, trades = simulate_calendar(
+                        selected,
+                        scored_dates,
+                        capital,
+                        slots,
+                        return_column,
+                        exit_time_column,
+                        daily_goal,
+                    )
+                    stress_daily, _ = simulate_calendar(
+                        selected,
+                        scored_dates,
+                        capital,
+                        slots,
+                        return_column,
+                        exit_time_column,
+                        daily_goal,
+                        extra_cost_pct=stress_cost_pct,
+                    )
+                    artifacts[key] = (daily, trades)
+                    row: dict[str, Any] = {
+                        "signal_window": signal_window,
+                        "signal_minutes": ",".join(
+                            str(value) for value in allowed_minutes
+                        ),
+                        "threshold": float(threshold),
+                        "top_per_signal": int(top_per_signal),
+                        "slots": int(slots),
+                        "capital_reuse": "exact_exit_bar_unleveraged",
+                    }
+                    for name, dates in splits.items():
+                        period = daily[daily["date"].isin(dates)]
+                        row.update(
+                            _period_metrics_for_goal(
+                                period, name, capital, daily_goal
+                            )
                         )
+                        stress_period = stress_daily[stress_daily["date"].isin(dates)]
+                        row.update(
+                            _period_metrics_for_goal(
+                                stress_period, f"stress_{name}", capital, daily_goal
+                            )
+                        )
+                    block_values = []
+                    stress_block_values = []
+                    for index, dates in enumerate(blocks, start=1):
+                        value = float(
+                            daily[daily["date"].isin(dates)]["daily_return_pct"].mean()
+                        )
+                        stress_value = float(
+                            stress_daily[stress_daily["date"].isin(dates)][
+                                "daily_return_pct"
+                            ].mean()
+                        )
+                        row[f"block_{index}_avg_daily_return_pct"] = round(value, 6)
+                        row[f"stress_block_{index}_avg_daily_return_pct"] = round(
+                            stress_value, 6
+                        )
+                        block_values.append(value)
+                        stress_block_values.append(stress_value)
+                    executed = (
+                        trades[trades["executed"].eq(True)]
+                        if not trades.empty
+                        else trades
                     )
-                block_values = []
-                stress_block_values = []
-                for index, dates in enumerate(blocks, start=1):
-                    value = float(
-                        daily[daily["date"].isin(dates)]["daily_return_pct"].mean()
+                    row["selected_label_precision_pct"] = round(
+                        float(executed["selection_label"].mean() * 100.0)
+                        if not executed.empty
+                        else 0.0,
+                        2,
                     )
-                    stress_value = float(
-                        stress_daily[stress_daily["date"].isin(dates)][
-                            "daily_return_pct"
-                        ].mean()
+                    row["label_column"] = label_column
+                    row["selected_runner_precision_pct"] = (
+                        row["selected_label_precision_pct"]
+                        if label_column == "eventual_runner_label"
+                        else 0.0
                     )
-                    row[f"block_{index}_avg_daily_return_pct"] = round(value, 6)
-                    row[f"stress_block_{index}_avg_daily_return_pct"] = round(
-                        stress_value, 6
+                    row["selection_block_floor_pct"] = round(min(block_values), 6)
+                    row["stress_selection_block_floor_pct"] = round(
+                        min(stress_block_values), 6
                     )
-                    block_values.append(value)
-                    stress_block_values.append(stress_value)
-                executed = trades[trades["executed"].eq(True)] if not trades.empty else trades
-                row["selected_label_precision_pct"] = round(
-                    float(executed["selection_label"].mean() * 100.0)
-                    if not executed.empty
-                    else 0.0,
-                    2,
-                )
-                row["label_column"] = label_column
-                row["selected_runner_precision_pct"] = (
-                    row["selected_label_precision_pct"]
-                    if label_column == "eventual_runner_label"
-                    else 0.0
-                )
-                row["selection_block_floor_pct"] = round(min(block_values), 6)
-                row["stress_selection_block_floor_pct"] = round(
-                    min(stress_block_values), 6
-                )
-                row["sample_gate_passed"] = bool(
-                    row["train_trade_days"] >= 60
-                    and row["validation_trade_days"] >= 30
-                )
-                row["selection_gate_passed"] = bool(
-                    row["sample_gate_passed"]
-                    and row["stress_selection_block_floor_pct"] > 0.0
-                    and row["stress_train_avg_daily_return_pct"] > 0.0
-                    and row["stress_validation_avg_daily_return_pct"] > 0.0
-                )
-                row["evidence_accepted"] = False
-                row["paper_promotion_allowed"] = False
-                row["real_orders_allowed"] = False
-                rows.append(row)
+                    row["sample_gate_passed"] = bool(
+                        row["train_trade_days"] >= 60
+                        and row["validation_trade_days"] >= 30
+                    )
+                    row["selection_gate_passed"] = bool(
+                        row["sample_gate_passed"]
+                        and row["stress_selection_block_floor_pct"] > 0.0
+                        and row["stress_train_avg_daily_return_pct"] > 0.0
+                        and row["stress_validation_avg_daily_return_pct"] > 0.0
+                    )
+                    row["evidence_accepted"] = False
+                    row["paper_promotion_allowed"] = False
+                    row["real_orders_allowed"] = False
+                    rows.append(row)
     summary = pd.DataFrame(rows)
     summary.sort_values(
         [
@@ -548,6 +578,7 @@ def main() -> int:
     )
     selected = summary.iloc[0].to_dict()
     key = (
+        str(selected["signal_window"]),
         float(selected["threshold"]),
         int(selected["top_per_signal"]),
         int(selected["slots"]),
