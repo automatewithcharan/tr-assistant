@@ -14,6 +14,16 @@ LOG="$REPO/results/Data/broad_rank_acceleration/checkpoint.log"
 SUMMARY="$REPO/results/Data/broad_universe_5minute_backfill_summary.json"
 DATA_DIR="$REPO/results/Data/kite_history_backfill/5minute/2024-05-30_2026-05-29"
 CALENDAR="$DATA_DIR/NIFTY 50.csv"
+WORKERS="${BROAD_RANK_WORKERS:-$(nproc)}"
+case "$WORKERS" in
+    ''|*[!0-9]*) WORKERS="$(nproc)" ;;
+esac
+if [ "$WORKERS" -lt 1 ]; then
+    WORKERS=1
+fi
+if [ "$WORKERS" -gt 16 ]; then
+    WORKERS=16
+fi
 
 exec 9>"$LOCK"
 flock -n 9 || exit 0
@@ -55,7 +65,7 @@ nice -n 10 "$PYTHON" scripts/backtest_fixed_time_leader_rank.py \
     --output-prefix "$OUT/fixed_time" \
     --signal-times 09:30,09:45,10:00,10:30 \
     --horizons 60 --targets 0.5,0.7,1.0,1.5 --stops 0.5,0.7,1.0,1.5 \
-    --top-k 1,2 --workers 24 --progress-every 100 --warmup-days 76 \
+    --top-k 1,2 --workers "$WORKERS" --progress-every 100 --warmup-days 76 \
     >> "$LOG" 2>&1
 
 nice -n 10 "$PYTHON" scripts/research_rank_acceleration_registry.py \
