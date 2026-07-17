@@ -46,15 +46,25 @@ def normalize_archived_bars(frame: pd.DataFrame, source_timezone: str = "auto") 
     else:
         timezone = str(source_timezone or "auto").strip().lower()
         if timezone == "auto":
-            minute_90 = float(
-                (data["datetime"].dt.hour * 60 + data["datetime"].dt.minute).quantile(0.90)
-            )
-            timezone = "utc" if minute_90 < 12 * 60 else "ist"
+            raw_minute = data["datetime"].dt.hour * 60 + data["datetime"].dt.minute
+            latest_minute = int(raw_minute.max())
+            has_preopen_clock_rows = bool((raw_minute < MARKET_OPEN).any())
+            if latest_minute >= 12 * 60 and has_preopen_clock_rows:
+                # A process restart after the timezone fix can append IST bars
+                # to an older UTC-naive file. Old market rows are before 09:15
+                # on the UTC clock; new rows already occupy the IST session.
+                utc_part = raw_minute < MARKET_OPEN
+                data.loc[utc_part, "datetime"] += pd.Timedelta(hours=5, minutes=30)
+                timezone = "mixed"
+            else:
+                timezone = "utc" if latest_minute < 12 * 60 else "ist"
         if timezone == "utc":
             data["datetime"] = data["datetime"] + pd.Timedelta(hours=5, minutes=30)
             repair = "utc_naive_plus_0530"
         elif timezone == "ist":
             repair = "ist_naive_unchanged"
+        elif timezone == "mixed":
+            repair = "mixed_utc_preopen_shifted_ist_preserved"
         else:
             raise ValueError(f"unsupported source timezone: {source_timezone}")
 

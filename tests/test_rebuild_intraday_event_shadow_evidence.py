@@ -39,3 +39,21 @@ def test_normalize_archived_bars_does_not_shift_fixed_ist_archive():
 
     assert mode == "ist_naive_unchanged"
     assert repaired["datetime"].dt.strftime("%H:%M").tolist() == ["09:15", "15:20"]
+
+
+def test_normalize_archived_bars_repairs_mixed_restart_archive():
+    frame = _bars(
+        [
+            "2026-07-16 03:45:00",  # old UTC-naive 09:15 IST
+            "2026-07-16 06:25:00",  # old UTC-naive 11:55 IST
+            "2026-07-16 12:00:00",  # post-restart IST
+            "2026-07-16 15:20:00",  # post-restart IST
+        ]
+    )
+
+    repaired, mode = normalize_archived_bars(frame, source_timezone="auto")
+
+    assert mode == "mixed_utc_preopen_shifted_ist_preserved"
+    assert repaired["datetime"].dt.strftime("%H:%M").tolist() == [
+        "09:15", "11:55", "12:00", "15:20"
+    ]
