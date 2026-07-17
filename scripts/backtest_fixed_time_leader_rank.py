@@ -29,7 +29,7 @@ from scripts.select_causal_intraday_exit_grid import (
     EXIT_STOP,
     EXIT_TARGET,
     ExitContract,
-    first_touch_grid,
+    first_touch_grid_with_indices,
     load_calendar_dates,
 )
 
@@ -87,6 +87,14 @@ class LeaderContract:
     @property
     def exit_column(self) -> str:
         return f"exit__{self.key}"
+
+    @property
+    def exit_bar_column(self) -> str:
+        return f"exit_bar__{self.key}"
+
+    @property
+    def exit_time_column(self) -> str:
+        return f"exit_time__{self.key}"
 
 
 def parse_clock_list(value: str) -> tuple[int, ...]:
@@ -170,7 +178,7 @@ def _simulate_contracts(
             ExitContract(contract.target_pct, contract.stop_pct, "long")
             for contract in horizon_contracts
         ]
-        gross, codes = first_touch_grid(
+        gross, codes, exit_indices = first_touch_grid_with_indices(
             day.loc[entry_index:final_index, "high"].to_numpy(dtype=float),
             day.loc[entry_index:final_index, "low"].to_numpy(dtype=float),
             float(day.loc[final_index, "close"]),
@@ -185,6 +193,13 @@ def _simulate_contracts(
                 6,
             )
             output[contract.exit_column] = _exit_reason(int(codes[index]))
+            exit_index = int(exit_indices[index])
+            output[contract.exit_bar_column] = exit_index
+            output[contract.exit_time_column] = (
+                str(pd.Timestamp(day.loc[entry_index + exit_index, "datetime"]))
+                if exit_index >= 0
+                else ""
+            )
     return output
 
 

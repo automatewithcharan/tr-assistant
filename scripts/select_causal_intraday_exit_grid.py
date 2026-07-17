@@ -66,11 +66,26 @@ def first_touch_grid(
     Candle ordering is conservative: a stop wins if target and stop first
     appear at the same bar index.
     """
+    returns, codes, _ = first_touch_grid_with_indices(
+        highs, lows, eod_close, entry_price, contracts
+    )
+    return returns, codes
+
+
+def first_touch_grid_with_indices(
+    highs: np.ndarray,
+    lows: np.ndarray,
+    eod_close: float,
+    entry_price: float,
+    contracts: list[ExitContract],
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Return gross returns, exit codes, and zero-based exit bar indices."""
     count = len(contracts)
     returns = np.full(count, np.nan, dtype=np.float32)
     codes = np.full(count, EXIT_MISSING, dtype=np.uint8)
+    indices = np.full(count, -1, dtype=np.int32)
     if entry_price <= 0 or len(highs) == 0 or len(lows) == 0:
-        return returns, codes
+        return returns, codes, indices
 
     target_first: dict[float, int] = {}
     stop_first: dict[float, int] = {}
@@ -99,13 +114,16 @@ def first_touch_grid(
         if stop_index <= target_index and stop_index < missing_index:
             returns[index] = -abs(contract.stop_pct)
             codes[index] = EXIT_STOP
+            indices[index] = stop_index
         elif target_index < stop_index and target_index < missing_index:
             returns[index] = contract.target_pct
             codes[index] = EXIT_TARGET
+            indices[index] = target_index
         else:
             returns[index] = eod_return
             codes[index] = EXIT_EOD
-    return returns, codes
+            indices[index] = len(highs) - 1
+    return returns, codes, indices
 
 
 def _load_candidates(path: str) -> pd.DataFrame:

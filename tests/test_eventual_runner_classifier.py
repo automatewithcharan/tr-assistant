@@ -1,0 +1,100 @@
+import pandas as pd
+
+from scripts.walk_forward_eventual_runner_classifier import (
+    FEATURES,
+    build_runner_labels,
+    evaluate_registry,
+    score_walk_forward,
+)
+
+
+def _feature_row(date, symbol, minute, label):
+    row = {
+        "date": date,
+        "symbol": symbol,
+        "signal_minute": minute,
+        "entry_time": f"{date} 09:35",
+        "eventual_runner_label": label,
+    }
+    for feature in FEATURES:
+        row[feature] = 0.9 if label else 0.2
+    row["signal_minute"] = minute
+    return row
+
+
+def test_runner_label_requires_cross_strictly_after_signal():
+    candidates = pd.DataFrame(
+        [
+            {"date": "2026-01-02", "symbol": "AAA", "signal_minute": 570},
+            {"date": "2026-01-02", "symbol": "BBB", "signal_minute": 600},
+        ]
+    )
+    events = pd.DataFrame(
+        [
+            {
+                "date": "2026-01-02",
+                "symbol": "AAA",
+                "runner_threshold_pct": 10.0,
+                "first_cross_minute": 600,
+            },
+            {
+                "date": "2026-01-02",
+                "symbol": "BBB",
+                "runner_threshold_pct": 10.0,
+                "first_cross_minute": 600,
+            },
+        ]
+    )
+    labeled = build_runner_labels(candidates, events)
+    assert labeled.set_index("symbol").loc["AAA", "eventual_runner_label"] == 1
+    assert labeled.set_index("symbol").loc["BBB", "eventual_runner_label"] == 0
+
+
+def test_walk_forward_model_is_always_trained_through_prior_date():
+    dates = pd.bdate_range("2025-01-01", periods=70).strftime("%Y-%m-%d").tolist()
+    rows = []
+    for index, date in enumerate(dates):
+        for candidate in range(5):
+            label = int(candidate == 0 and index % 2 == 0)
+            rows.append(_feature_row(date, f"S{candidate}", 570, label))
+    scored = score_walk_forward(
+        pd.DataFrame(rows),
+        dates,
+        lookback_days=40,
+        min_train_days=20,
+        min_train_rows=50,
+        min_positive_rows=5,
+        retrain_every_days=5,
+        min_samples_leaf=5,
+    )
+    assert not scored.empty
+    assert all(
+        str(trained) < str(date)
+        for trained, date in zip(scored["model_trained_through"], scored["date"])
+    )
+
+
+def test_registry_uses_exact_unleveraged_reuse_and_keeps_orders_off():
+    dates = pd.bdate_range("2026-01-01", periods=40).strftime("%Y-%m-%d").tolist()
+    rows = []
+    for date in dates:
+        row = _feature_row(date, "AAA", 570, 1)
+        row.update(
+            {
+                "runner_probability": 0.9,
+                "entry_time": f"{date} 09:35",
+                "exit_time__test": f"{date} 09:40",
+                "return__test": 1.0,
+            }
+        )
+        rows.append(row)
+    summary, _ = evaluate_registry(
+        pd.DataFrame(rows),
+        dates,
+        "return__test",
+        "exit_time__test",
+        thresholds=(0.8,),
+    )
+    assert not summary.empty
+    assert set(summary["capital_reuse"]) == {"exact_exit_bar_unleveraged"}
+    assert not summary["real_orders_allowed"].any()

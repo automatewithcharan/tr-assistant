@@ -22,6 +22,10 @@ def load_status(path: Path) -> dict[str, Any]:
     return payload
 
 
+def load_optional_status(path: Path) -> dict[str, Any]:
+    return load_status(path) if path.exists() and path.stat().st_size > 0 else {}
+
+
 def build_status(
     output_dir: Path,
     milestone: int,
@@ -30,6 +34,9 @@ def build_status(
 ) -> dict[str, Any]:
     long_status = load_status(output_dir / "long_status.json")
     short_status = load_status(output_dir / "short_status.json")
+    classifier_status = load_optional_status(
+        output_dir / "eventual_runner_classifier_status.json"
+    )
     cached = max(0, int(cached_symbols))
     mapped = max(0, int(mapped_symbols))
     coverage_ratio = cached / mapped if mapped else 0.0
@@ -39,6 +46,9 @@ def build_status(
     )
     long_goal = bool(long_status.get("final_goal_evidence_passed", False))
     short_goal = bool(short_status.get("final_goal_evidence_passed", False))
+    classifier_goal = bool(
+        classifier_status.get("final_goal_contract_passed", False)
+    )
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "milestone": int(milestone),
@@ -53,8 +63,10 @@ def build_status(
         "short_selection_gate_passed": bool(short_status.get("selection_gate_passed", False)),
         "long_final_goal_evidence_passed": long_goal,
         "short_final_goal_evidence_passed": short_goal,
+        "eventual_runner_classifier_goal_passed": classifier_goal,
         "historical_goal_gate_passed": bool(
-            broad_coverage_gate_passed and (long_goal or short_goal)
+            broad_coverage_gate_passed
+            and (long_goal or short_goal or classifier_goal)
         ),
         "evidence_accepted": False,
         "paper_promotion_allowed": False,
@@ -63,6 +75,7 @@ def build_status(
         "universe_caveat": "current_live_universe_not_point_in_time_membership",
         "long_status": long_status,
         "short_status": short_status,
+        "eventual_runner_classifier_status": classifier_status,
     }
 
 

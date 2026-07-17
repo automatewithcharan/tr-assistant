@@ -73,6 +73,12 @@ nice -n 10 "$PYTHON" scripts/audit_top_gainer_early_recall.py \
     --output-prefix "$OUT/top_gainer_recall" --workers "$WORKERS" \
     >> "$LOG" 2>&1
 
+nice -n 10 "$PYTHON" scripts/walk_forward_eventual_runner_classifier.py \
+    --candidates "$OUT/fixed_time_candidates.csv" \
+    --runner-events "$OUT/top_gainer_recall_events.csv" \
+    --calendar-file "$CALENDAR" --output-prefix "$OUT/eventual_runner_classifier" \
+    >> "$LOG" 2>&1
+
 nice -n 10 "$PYTHON" scripts/research_rank_acceleration_registry.py \
     --input "$OUT/fixed_time_candidates.csv" --calendar-file "$CALENDAR" \
     --output-prefix "$OUT/long" >> "$LOG" 2>&1
