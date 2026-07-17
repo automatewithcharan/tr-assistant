@@ -54,6 +54,38 @@ def test_broad_rank_checkpoint_stats_distinguishes_diagnostic_and_full(tmp_path,
     assert not complete["real_orders_allowed"]
 
 
+def test_eventual_runner_classifier_stats_reads_stressed_final_only(tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "DATA", tmp_path)
+    root = tmp_path / "eventual_runner_current_505"
+    root.mkdir()
+    (root / "classifier_status.json").write_text(
+        json.dumps(
+            {
+                "strategy": "walk_forward_eventual_10pct_runner_classifier",
+                "capital_reuse": "exact_exit_bar_unleveraged",
+                "final_goal_contract_passed": False,
+                "selected": {
+                    "selection_gate_passed": True,
+                    "stress_final_avg_daily_pnl": 1250.0,
+                    "stress_final_mean_lower_95_pnl": -450.0,
+                    "stress_final_goal_hit_pct": 4.0,
+                    "threshold": 0.8,
+                    "slots": 1,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    stats = dashboard.eventual_runner_classifier_stats()
+    assert stats["available"]
+    assert stats["selection_gate_passed"]
+    assert stats["stress_final_avg_pnl"] == 1250.0
+    assert stats["stress_final_lower95_pnl"] == -450.0
+    assert not stats["final_goal_contract_passed"]
+    assert not stats["paper_promotion_allowed"]
+    assert not stats["real_orders_allowed"]
+
+
 def test_ranked_confirmation_stats_reports_losses_and_pause(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(dashboard, "DATA", tmp_path)
     root = tmp_path / "ranked_confirmation_paper"

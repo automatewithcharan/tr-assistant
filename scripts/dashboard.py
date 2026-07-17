@@ -407,6 +407,25 @@ def broad_rank_checkpoint_stats():
     }
 
 
+def eventual_runner_classifier_stats():
+    status = load_json(DATA / "eventual_runner_current_505" / "classifier_status.json", {})
+    selected = status.get("selected", {}) if isinstance(status, dict) else {}
+    return {
+        "available": bool(status and selected),
+        "strategy": str(status.get("strategy") or "eventual 10% runner"),
+        "capital_reuse": str(status.get("capital_reuse") or "pending exact replay"),
+        "selection_gate_passed": bool(selected.get("selection_gate_passed", False)),
+        "final_goal_contract_passed": bool(status.get("final_goal_contract_passed", False)),
+        "stress_final_avg_pnl": float(selected.get("stress_final_avg_daily_pnl") or 0.0),
+        "stress_final_lower95_pnl": float(selected.get("stress_final_mean_lower_95_pnl") or 0.0),
+        "stress_final_goal_hit_pct": float(selected.get("stress_final_goal_hit_pct") or 0.0),
+        "threshold": float(selected.get("threshold") or 0.0),
+        "slots": int(selected.get("slots") or 0),
+        "paper_promotion_allowed": False,
+        "real_orders_allowed": False,
+    }
+
+
 # ---------------------------------------------------------------- paper lanes
 
 def lane_stats(path, label, closed_filter, ret_field="net_return_pct"):
@@ -529,6 +548,7 @@ def render():
     ignition_registry = ignition_registry_stats()
     broad_backfill = broad_backfill_stats()
     broad_rank = broad_rank_checkpoint_stats()
+    runner_classifier = eventual_runner_classifier_stats()
 
     tot_inv = sum(r["invested"] for r in positions)
     tot_val = sum(r["value"] for r in positions)
@@ -841,6 +861,22 @@ def render():
     Acquisition and checkpoints cannot enable paper or real orders.
   </div>"""
 
+    runner_classifier_class = "gain" if runner_classifier["stress_final_avg_pnl"] > 0 else "loss"
+    runner_classifier_html = f"""
+  <h2>Eventual-runner classifier</h2>
+  <div class="summary">
+    <span>Status <span class="big">{'EVALUATED' if runner_classifier['available'] else 'PENDING'}</span></span>
+    <span>Stress final <span class="big {runner_classifier_class}">{money(runner_classifier['stress_final_avg_pnl'])}/day</span></span>
+    <span>Lower 95% <span class="big {runner_classifier_class}">{money(runner_classifier['stress_final_lower95_pnl'])}/day</span></span>
+    <span>Goal days <span class="big">{runner_classifier['stress_final_goal_hit_pct']:.1f}%</span></span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    Prior-only 10% runner label; 60-minute +1.5%/-1.0% contract; {escape(runner_classifier['capital_reuse'])}.
+    Selection gate: <b>{'PASS' if runner_classifier['selection_gate_passed'] else 'NO'}</b>;
+    untouched Rs 10,000 contract: <b>{'PASS' if runner_classifier['final_goal_contract_passed'] else 'NO'}</b>;
+    paper promotion: <b>NO</b>; real orders: <b>NO</b>.
+  </div>"""
+
     tot_cls = "gain" if tot_pnl >= 0 else "loss"
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
@@ -901,6 +937,7 @@ def render():
 {exit_contract_html}
 {micro_html}
 {ignition_html}
+{runner_classifier_html}
 {backfill_html}
 {gate_html}
 {watch_html}
