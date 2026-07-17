@@ -4,6 +4,8 @@ from scripts.research_rank_acceleration_registry import (
     RULES,
     add_rank_acceleration,
     daily_returns,
+    evaluate_registry,
+    period_metrics,
     replay_short_returns,
     rule_pool,
 )
@@ -74,6 +76,42 @@ def test_daily_returns_include_cash_days_and_stress_only_trade_days():
     )
     assert daily.loc[0, "daily_return_pct"] == 0.4
     assert daily.loc[1, "daily_return_pct"] == 0.0
+
+
+def test_period_metrics_reports_conservative_lower_confidence_bound():
+    daily = pd.DataFrame(
+        {
+            "trades": [1, 1, 1, 1],
+            "daily_return_pct": [1.0, 1.0, 1.0, 1.0],
+        }
+    )
+    metrics = period_metrics(daily, "test", 400_000.0)
+    assert metrics["test_avg_daily_pnl"] == 4_000.0
+    assert metrics["test_mean_lower_95_pnl"] == 4_000.0
+
+
+def test_configuration_selection_does_not_use_final_period_outcomes():
+    dates = pd.bdate_range("2025-01-01", periods=200).strftime("%Y-%m-%d").tolist()
+    rows = []
+    for index, date in enumerate(dates):
+        good = 0.5 if index < 150 else -5.0
+        leak = -0.5 if index < 150 else 10.0
+        rows.extend(
+            [
+                {**_row(date, "AAA", 570, 0.4, 0.4), "return__good": good, "return__leak": leak},
+                {**_row(date, "AAA", 585, 0.9, 0.8), "return__good": good, "return__leak": leak},
+            ]
+        )
+    frame = pd.DataFrame(rows).drop(columns=["return__test"])
+    summary, _ = evaluate_registry(
+        frame,
+        dates,
+        warmup_days=0,
+        return_columns=["return__good", "return__leak"],
+    )
+    selected = summary.iloc[0]
+    assert selected["contract"] == "good"
+    assert selected["final_avg_daily_return_pct"] < 0.0
 
 
 def test_short_replay_uses_adverse_entry_and_sixty_minute_path(tmp_path):

@@ -157,12 +157,19 @@ def daily_returns(
 
 def period_metrics(daily: pd.DataFrame, prefix: str, capital: float) -> dict[str, Any]:
     values = pd.to_numeric(daily["daily_return_pct"], errors="coerce").fillna(0.0)
+    mean = float(values.mean())
+    if len(values) > 1:
+        mean_lower_95 = mean - 1.96 * float(values.std(ddof=1)) / np.sqrt(len(values))
+    else:
+        mean_lower_95 = mean
     return {
         f"{prefix}_days": int(len(daily)),
         f"{prefix}_trade_days": int((daily["trades"] > 0).sum()),
         f"{prefix}_trades": int(daily["trades"].sum()),
-        f"{prefix}_avg_daily_return_pct": round(float(values.mean()), 6),
-        f"{prefix}_avg_daily_pnl": round(float(values.mean()) * capital / 100.0, 2),
+        f"{prefix}_avg_daily_return_pct": round(mean, 6),
+        f"{prefix}_avg_daily_pnl": round(mean * capital / 100.0, 2),
+        f"{prefix}_mean_lower_95_pct": round(mean_lower_95, 6),
+        f"{prefix}_mean_lower_95_pnl": round(mean_lower_95 * capital / 100.0, 2),
         f"{prefix}_positive_day_pct": round(float((values > 0.0).mean() * 100.0), 2),
         f"{prefix}_goal_hit_pct": round(float((values >= 2.5).mean() * 100.0), 2),
         f"{prefix}_worst_day_pct": round(float(values.min()), 6),
@@ -383,6 +390,13 @@ def main() -> int:
         f"return__{selected_contract}",
         selected_top_k,
     )
+    final_goal_evidence_passed = bool(
+        selected["selection_gate_passed"]
+        and selected["stress_final_trade_days"] >= 30
+        and selected["stress_final_mean_lower_95_pnl"] >= 10_000.0
+        and selected["stress_final_goal_hit_pct"] >= 50.0
+        and selected["stress_final_worst_day_pct"] > -1.5
+    )
 
     prefix = Path(args.output_prefix)
     prefix.parent.mkdir(parents=True, exist_ok=True)
@@ -401,6 +415,15 @@ def main() -> int:
         "selected_contract": selected_contract,
         "selected_top_k": selected_top_k,
         "selection_gate_passed": bool(selected["selection_gate_passed"]),
+        "final_goal_evidence_passed": final_goal_evidence_passed,
+        "goal_contract": {
+            "capital": float(args.capital),
+            "net_daily_pnl": 10_000.0,
+            "minimum_stress_final_trade_days": 30,
+            "minimum_stress_final_goal_hit_pct": 50.0,
+            "minimum_stress_final_mean_lower_95_pnl": 10_000.0,
+            "minimum_stress_final_worst_day_pct": -1.5,
+        },
         "selected_metrics": selected,
         "evidence_accepted": False,
         "paper_promotion_allowed": False,

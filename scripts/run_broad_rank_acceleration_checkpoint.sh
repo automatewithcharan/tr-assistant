@@ -85,6 +85,8 @@ status = {
     "mapped_symbols": int(mapped),
     "long_selection_gate_passed": bool(long_status.get("selection_gate_passed", False)),
     "short_selection_gate_passed": bool(short_status.get("selection_gate_passed", False)),
+    "long_final_goal_evidence_passed": bool(long_status.get("final_goal_evidence_passed", False)),
+    "short_final_goal_evidence_passed": bool(short_status.get("final_goal_evidence_passed", False)),
     "evidence_accepted": False,
     "paper_promotion_allowed": False,
     "real_orders_allowed": False,
