@@ -13,6 +13,9 @@ import numpy as np
 import pandas as pd
 import joblib
 from scipy.stats import t as student_t
+from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.impute import SimpleImputer
+from sklearn.pipeline import Pipeline
 
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -20,7 +23,6 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from pkscreener.classes.IntradayEventEngine import CAUSAL_RICH_EVENT_FEATURES, EVENT_TYPES  # noqa: E402
-from scripts.walk_forward_live_event_ranker import _model  # noqa: E402
 
 
 DEFAULT_HISTORICAL = "results/Data/causal_grid_family_target_pipeline_input.csv"
@@ -29,6 +31,26 @@ DEFAULT_LIVE_GLOB = (
     "intraday_event_shadow/outcomes_*.csv"
 )
 DEFAULT_OUTPUT = "results/Data/historical_event_model_live_holdout"
+
+
+def _model() -> Pipeline:
+    """Return the exact estimator used by the frozen historical family ranker."""
+    return Pipeline(
+        [
+            ("imputer", SimpleImputer(strategy="median")),
+            (
+                "model",
+                HistGradientBoostingClassifier(
+                    max_iter=80,
+                    learning_rate=0.05,
+                    max_leaf_nodes=12,
+                    min_samples_leaf=40,
+                    l2_regularization=0.8,
+                    random_state=42,
+                ),
+            ),
+        ]
+    )
 
 
 def _truthy(series: pd.Series) -> pd.Series:
