@@ -337,8 +337,24 @@ def frozen_microstructure_stats():
         "selection_avg_pnl": float(selection.get("avg_daily_pnl") or 0.0),
         "stress_avg_pnl": float(stress.get("avg_daily_pnl") or 0.0),
         "stress_lower95": float(stress.get("lower_95_pct") or 0.0),
+        "selection_rejected": bool(status.get("selection_rejected", False)),
         "accepted": bool(status.get("accepted", False)),
         "paper_promotion_allowed": bool(status.get("paper_promotion_allowed", False)),
+        "real_orders_allowed": False,
+    }
+
+
+def ignition_registry_stats():
+    status = load_json(DATA / "live_microstructure_ignition" / "status.json", {})
+    frozen = status.get("frozen_configs", []) or []
+    return {
+        "selection_end": str(status.get("selection_end") or "n/a"),
+        "forward_start": str(status.get("forward_start") or "n/a"),
+        "selection_sessions": int(status.get("selection_sessions") or 0),
+        "forward_sessions": int(status.get("forward_sessions") or 0),
+        "frozen_configs": len(frozen),
+        "selection_rejected": bool(status.get("selection_rejected", False)),
+        "paper_promotion_allowed": False,
         "real_orders_allowed": False,
     }
 
@@ -479,6 +495,7 @@ def render():
     historical_transfer = historical_transfer_stats()
     exit_contracts = event_exit_contract_stats()
     frozen_micro = frozen_microstructure_stats()
+    ignition_registry = ignition_registry_stats()
     broad_backfill = broad_backfill_stats()
 
     tot_inv = sum(r["invested"] for r in positions)
@@ -742,13 +759,14 @@ def render():
   </div>"""
 
     micro_class = "gain" if frozen_micro["stress_avg_pnl"] > 0 else "loss"
+    micro_badge = "SELECTION REJECTED" if frozen_micro["selection_rejected"] else "FORWARD ONLY"
     micro_html = f"""
   <h2>Frozen live microstructure selector</h2>
   <div class="summary">
     <span>Forward sessions <span class="big">{frozen_micro['forward_sessions']}/{frozen_micro['minimum_sessions']}</span></span>
     <span>Forward candidates <span class="big">{frozen_micro['candidates']}</span></span>
     <span>Selection reference <span class="big">{money(frozen_micro['selection_avg_pnl'])}/day</span></span>
-    <span class="badge red">FORWARD ONLY</span>
+    <span class="badge red">{micro_badge}</span>
   </div>
   <div class="updated" style="margin-top:6px">
     Frozen rule: <b>{escape(frozen_micro['selector'])}</b> / {escape(frozen_micro['contract'])};
@@ -757,6 +775,20 @@ def render():
     lower confidence bound {frozen_micro['stress_lower95']:+.3f}%.
     Accepted: <b>{'YES' if frozen_micro['accepted'] else 'NO'}</b>;
     paper promotion: <b>NO</b>; real orders: <b>NO</b>.
+  </div>"""
+
+    ignition_html = f"""
+  <h2>Early pre-runner ignition registry</h2>
+  <div class="summary">
+    <span>Selection sessions <span class="big">{ignition_registry['selection_sessions']}</span></span>
+    <span>Forward sessions <span class="big">{ignition_registry['forward_sessions']}</span></span>
+    <span>Frozen configurations <span class="big">{ignition_registry['frozen_configs']}</span></span>
+    <span class="badge red">{'SELECTION REJECTED' if ignition_registry['selection_rejected'] else 'RESEARCH ONLY'}</span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    True early window: +0.5% to +3.0%, executable spread, liquid tape, and one earliest ranked candidate.
+    Selection ended {escape(ignition_registry['selection_end'])}; untouched period starts {escape(ignition_registry['forward_start'])}.
+    Paper promotion: <b>NO</b>; real orders: <b>NO</b>.
   </div>"""
 
     backfill_html = f"""
@@ -832,6 +864,7 @@ def render():
 {transfer_html}
 {exit_contract_html}
 {micro_html}
+{ignition_html}
 {backfill_html}
 {gate_html}
 {watch_html}

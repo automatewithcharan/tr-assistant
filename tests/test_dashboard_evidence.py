@@ -287,7 +287,23 @@ def test_frozen_microstructure_and_backfill_status(tmp_path: Path, monkeypatch):
                 "forward": {"sessions": 3, "candidates": 5},
                 "forward_stress": {"avg_daily_pnl": 120.0, "lower_95_pct": -0.4},
                 "minimum_forward_sessions": 20,
+                "selection_rejected": True,
                 "accepted": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    ignition = tmp_path / "live_microstructure_ignition"
+    ignition.mkdir()
+    (ignition / "status.json").write_text(
+        json.dumps(
+            {
+                "selection_end": "2026-07-16",
+                "forward_start": "2026-07-17",
+                "selection_sessions": 9,
+                "forward_sessions": 1,
+                "frozen_configs": [],
+                "selection_rejected": True,
             }
         ),
         encoding="utf-8",
@@ -309,9 +325,14 @@ def test_frozen_microstructure_and_backfill_status(tmp_path: Path, monkeypatch):
     )
 
     micro = dashboard.frozen_microstructure_stats()
+    ignition_status = dashboard.ignition_registry_stats()
     backfill = dashboard.broad_backfill_stats()
     assert micro["forward_sessions"] == 3
     assert micro["selection_avg_pnl"] == 647.72
+    assert micro["selection_rejected"]
     assert not micro["real_orders_allowed"]
+    assert ignition_status["selection_sessions"] == 9
+    assert ignition_status["selection_rejected"]
+    assert not ignition_status["real_orders_allowed"]
     assert backfill["cached"] == 505
     assert round(backfill["coverage_pct"], 2) == 17.09
