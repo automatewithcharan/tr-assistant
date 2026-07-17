@@ -68,6 +68,11 @@ nice -n 10 "$PYTHON" scripts/backtest_fixed_time_leader_rank.py \
     --top-k 1,2 --workers "$WORKERS" --progress-every 100 --warmup-days 76 \
     >> "$LOG" 2>&1
 
+nice -n 10 "$PYTHON" scripts/audit_top_gainer_early_recall.py \
+    --data-dir "$DATA_DIR" --candidates "$OUT/fixed_time_candidates.csv" \
+    --output-prefix "$OUT/top_gainer_recall" --workers "$WORKERS" \
+    >> "$LOG" 2>&1
+
 nice -n 10 "$PYTHON" scripts/research_rank_acceleration_registry.py \
     --input "$OUT/fixed_time_candidates.csv" --calendar-file "$CALENDAR" \
     --output-prefix "$OUT/long" >> "$LOG" 2>&1
