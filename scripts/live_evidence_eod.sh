@@ -113,6 +113,10 @@ run_event_shadow_rebuild() {
         --root "$rebuilt/intraday_event_shadow" \
         --output-dir "$rebuilt/exit_contracts" \
         >>"$LOG" 2>&1 || true
+    "$PYTHON" "$REPO/scripts/assess_event_shadow_candidate_selectors.py" \
+        --root "$rebuilt/intraday_event_shadow" \
+        --output-dir "$rebuilt/candidate_selectors" \
+        >>"$LOG" 2>&1 || true
 }
 
 if [ -f "$OUTPUT_ROOT/status.json" ]; then
