@@ -41,9 +41,11 @@ RULES = (
     IgnitionRule("depth_surge", 0.10, 2.0, min_bs_surge=1.50, surge_lookback=2),
     IgnitionRule("pure_accel", 0.35, 1.2),
 )
+SELECTION_END = "2026-07-16"
+FORWARD_START = "2026-07-17"
 
 
-def build_ignition_candidates(tape: pd.DataFrame, max_per_day: int = 3) -> pd.DataFrame:
+def build_ignition_candidates(tape: pd.DataFrame, max_per_day: int = 1) -> pd.DataFrame:
     data = tape.copy().sort_values(["Date", "Symbol", "When"])
     if data.empty:
         return pd.DataFrame()
@@ -59,13 +61,17 @@ def build_ignition_candidates(tape: pd.DataFrame, max_per_day: int = 3) -> pd.Da
     ).dt.total_seconds()
     data["AccelerationPct"] = data["DayChangePct"] - data["DayChangeTwoSnapshotsAgo"]
 
+    minute = data["When"].dt.hour * 60 + data["When"].dt.minute
     base = (
         data["SecondsAcrossSnapshots"].between(60.0, 240.0)
+        & minute.between(9 * 60 + 18, 14 * 60 + 30)
         & data["SpreadOk"]
+        & data["BestBid"].gt(0.0)
+        & data["BestAsk"].gt(data["BestBid"])
         & data["SpreadBps"].between(0.01, 20.0)
         & data["LastPrice"].ge(50.0)
-        & data["TradedValue"].ge(50_000_000.0)
-        & data["DayChangePct"].between(1.0, 8.0)
+        & data["TradedValue"].ge(30_000_000.0)
+        & data["DayChangePct"].between(0.5, 3.0)
         & data["PullbackFromHighPct"].le(0.35)
     )
     parts = []
@@ -154,7 +160,7 @@ def main() -> int:
     parser.add_argument("--input", default="results/Data/live_feature_recorder/live_features_20*.csv")
     parser.add_argument("--minute-cache-glob", default="results/Data/kite_history_backfill/minute/*")
     parser.add_argument("--output-dir", default="results/Data/live_microstructure_ignition")
-    parser.add_argument("--max-per-day", type=int, default=3)
+    parser.add_argument("--max-per-day", type=int, default=1)
     parser.add_argument("--start-date", default="")
     parser.add_argument("--end-date", default="")
     args = parser.parse_args()
@@ -170,21 +176,46 @@ def main() -> int:
         candidates["Symbol"].astype(str).unique().tolist() if not candidates.empty else [],
     )
     outcomes = label_candidates(candidates, groups)
-    readiness = summarize(outcomes, tape["Date"].unique().tolist()) if not outcomes.empty else pd.DataFrame()
+    all_dates = sorted(tape["Date"].astype(str).unique().tolist())
+    selection_dates = [date for date in all_dates if date <= SELECTION_END]
+    forward_dates = [date for date in all_dates if date >= FORWARD_START]
+    selection_outcomes = outcomes[outcomes["Date"].astype(str) <= SELECTION_END].copy() if not outcomes.empty else pd.DataFrame()
+    readiness = (
+        summarize(selection_outcomes, selection_dates)
+        if not selection_outcomes.empty
+        else pd.DataFrame()
+    )
+    frozen_configs = set()
+    if not readiness.empty:
+        frozen_rows = readiness[readiness["ShadowCandidate"].astype(bool)]
+        frozen_configs = set(zip(frozen_rows["Rule"], frozen_rows["Contract"]))
+    forward_outcomes = pd.DataFrame()
+    if frozen_configs and not outcomes.empty:
+        config_keys = list(zip(outcomes["Rule"], outcomes["Contract"]))
+        forward_mask = outcomes["Date"].astype(str).ge(FORWARD_START) & pd.Series(
+            [key in frozen_configs for key in config_keys], index=outcomes.index
+        )
+        forward_outcomes = outcomes[forward_mask].copy()
 
     output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
     candidates.to_csv(output / "candidates.csv", index=False)
     outcomes.to_csv(output / "outcomes.csv", index=False)
     readiness.to_csv(output / "readiness.csv", index=False)
+    forward_outcomes.to_csv(output / "forward_outcomes.csv", index=False)
     status = {
         "evidence_type": "live_only_temporal_microstructure_ignition_research",
-        "sessions": int(tape["Date"].nunique()),
+        "selection_end": SELECTION_END,
+        "forward_start": FORWARD_START,
+        "selection_sessions": len(selection_dates),
+        "forward_sessions": len(forward_dates),
         "candidate_rows": int(len(candidates)),
         "selected_candidates": int(candidates["Selected"].sum()) if not candidates.empty else 0,
+        "frozen_configs": [f"{rule}|{contract}" for rule, contract in sorted(frozen_configs)],
+        "selection_rejected": not bool(frozen_configs),
         "shadow_candidates": int(readiness["ShadowCandidate"].sum()) if not readiness.empty else 0,
         "goal_evidence_passes": int(readiness["GoalEvidencePassed"].sum()) if not readiness.empty else 0,
-        "paper_promotion_allowed": bool(readiness["PaperPromotionAllowed"].any()) if not readiness.empty else False,
+        "paper_promotion_allowed": False,
         "real_orders_allowed": False,
         "rules": [asdict(rule) for rule in RULES],
     }

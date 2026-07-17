@@ -13,6 +13,8 @@ def _row(when, change, bs, *, stable=False):
         "BuyerSellerRatio": bs,
         "OrderBookStable": stable,
         "SpreadOk": True,
+        "BestBid": 99.95,
+        "BestAsk": 100.05,
         "SpreadBps": 5.0,
         "LastPrice": 100.0,
         "TradedValue": 100_000_000.0,
@@ -47,4 +49,27 @@ def test_ignition_rejects_wide_spread_even_with_acceleration():
     )
     tape.loc[tape.index[-1], "SpreadBps"] = 25.0
 
+    assert build_ignition_candidates(tape).empty
+
+
+def test_ignition_rejects_late_runner_above_three_percent():
+    tape = pd.DataFrame(
+        [
+            _row("2026-07-13 09:30:00", 2.7, 1.0),
+            _row("2026-07-13 09:31:00", 2.9, 1.2),
+            _row("2026-07-13 09:32:00", 3.3, 2.0),
+        ]
+    )
+    assert build_ignition_candidates(tape).empty
+
+
+def test_ignition_rejects_missing_executable_quote():
+    tape = pd.DataFrame(
+        [
+            _row("2026-07-13 09:30:00", 1.0, 1.0),
+            _row("2026-07-13 09:31:00", 1.1, 1.2),
+            _row("2026-07-13 09:32:00", 1.5, 2.0),
+        ]
+    )
+    tape.loc[tape.index[-1], ["BestBid", "BestAsk", "SpreadBps"]] = 0.0
     assert build_ignition_candidates(tape).empty

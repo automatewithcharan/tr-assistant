@@ -83,11 +83,12 @@ def load_feature_tape(
     data["Symbol"] = data["Symbol"].astype(str).str.strip().str.upper()
     for column in (
         "LastPrice", "DayChangePct", "PullbackFromHighPct", "BuyerSellerRatio",
-        "BuyerSellerMedianWindow", "SpreadBps", "SectorBreadthPct", "TradedValue",
+        "BuyerSellerMedianWindow", "BuyerSellerMinWindow", "BestBid", "BestAsk",
+        "SpreadBps", "SectorBreadthPct", "TradedValue",
     ):
         values = data[column] if column in data.columns else pd.Series(0.0, index=data.index)
         data[column] = pd.to_numeric(values, errors="coerce").fillna(0.0)
-    for column in ("MissedRunnerCandidate", "SpreadOk"):
+    for column in ("MissedRunnerCandidate", "OrderBookStable", "SpreadOk"):
         values = data[column] if column in data.columns else pd.Series(False, index=data.index)
         data[column] = values.apply(as_bool)
     minute = data["When"].dt.hour * 60 + data["When"].dt.minute
@@ -288,7 +289,9 @@ def summarize(
                 "PerformanceGatePassed": performance_gate,
                 "ShadowCandidate": shadow,
                 "GoalEvidencePassed": goal_pass,
-                "PaperPromotionAllowed": shadow,
+                # Research summaries never promote themselves. Promotion must
+                # come from a separately frozen untouched-forward registry.
+                "PaperPromotionAllowed": False,
                 "RealOrdersAllowed": False,
             }
         )
