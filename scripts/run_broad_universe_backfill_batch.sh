@@ -1,0 +1,64 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$REPO"
+
+PYTHON="$REPO/.venv/bin/python"
+[ -x "$PYTHON" ] || PYTHON="$REPO/venv/bin/python3"
+LOCK=/tmp/broad_universe_backfill.lock
+LOG="$REPO/results/Data/broad_universe_backfill.log"
+PREFIX="$REPO/results/Data/broad_universe_5minute_backfill"
+UNIVERSE="$REPO/results/Indices/NSE_BSE_COMBINED.csv"
+START="${BROAD_BACKFILL_START:-2024-05-30}"
+END="${BROAD_BACKFILL_END:-2026-05-29}"
+BATCH_SIZE="${BROAD_BACKFILL_BATCH_SIZE:-100}"
+BUCKET="${TRADE_ASSISTANT_ARCHIVE_BUCKET:-}"
+
+exec 9>"$LOCK"
+flock -n 9 || exit 0
+
+if [ -f "$REPO/.env.dev" ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . "$REPO/.env.dev"
+    set +a
+    BUCKET="${TRADE_ASSISTANT_ARCHIVE_BUCKET:-$BUCKET}"
+fi
+
+mkdir -p "$(dirname "$LOG")"
+echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] planning broad backfill" >> "$LOG"
+"$PYTHON" scripts/plan_broad_universe_backfill.py \
+    --universe "$UNIVERSE" --interval 5minute --start "$START" --end "$END" \
+    --batch-size "$BATCH_SIZE" --chunk-days 60 --out-prefix "$PREFIX" >> "$LOG" 2>&1
+
+BATCH_INDEX=$("$PYTHON" - "$PREFIX" <<'PY'
+import pandas as pd
+import sys
+manifest = pd.read_csv(sys.argv[1] + "_manifest.csv")
+pending = manifest[manifest["needs_fetch"].astype(str).str.lower().isin({"true", "1"})]
+print(int(pending["batch_index"].min()) if not pending.empty else -1)
+PY
+)
+
+if [ "$BATCH_INDEX" -lt 0 ]; then
+    echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] broad backfill already complete" >> "$LOG"
+    exit 0
+fi
+
+echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] starting batch $BATCH_INDEX" >> "$LOG"
+set +e
+"$PYTHON" scripts/kite_intraday_backfill.py \
+    --universe "$UNIVERSE" --limit 0 --start "$START" --end "$END" \
+    --intervals 5minute --chunk-days 60 --batch-size "$BATCH_SIZE" \
+    --batch-index "$BATCH_INDEX" --sleep 0.7 --out-prefix "$PREFIX" >> "$LOG" 2>&1
+BATCH_RC=$?
+set -e
+
+if [ -n "$BUCKET" ] && command -v gsutil >/dev/null 2>&1; then
+    RANGE_DIR="$REPO/results/Data/kite_history_backfill/5minute/${START}_${END}"
+    gsutil -q -m rsync -r "$RANGE_DIR" "$BUCKET/kite_history_backfill/5minute/${START}_${END}/" >> "$LOG" 2>&1
+fi
+
+echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] completed batch $BATCH_INDEX rc=$BATCH_RC" >> "$LOG"
+exit 0

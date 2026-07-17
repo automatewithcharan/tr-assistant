@@ -24,7 +24,6 @@ from scripts.kite_historical_backfill import (  # noqa: E402
     load_instruments,
     map_symbols,
 )
-from scripts.research_intraday_strategies_2y import load_universe  # noqa: E402
 
 RESULTS_DIR = REPO_ROOT / "results" / "Data"
 DEFAULT_UNIVERSE = RESULTS_DIR / "kite_backfill_2y_eligible_kite_complete_universe.csv"
@@ -35,6 +34,23 @@ SESSION_END = "15:30"
 
 def _normalise_symbol(symbol: str) -> str:
     return str(symbol or "").strip().upper()
+
+
+def load_backfill_universe(path: Path, limit: int = 0) -> list[str]:
+    """Load the exact ordered live universe; zero means no limit."""
+    frame = pd.read_csv(path)
+    column = next((name for name in ("Symbol", "symbol", "SYMBOL", "Stock") if name in frame.columns), None)
+    if column is None:
+        column = frame.columns[0]
+    symbols = []
+    seen = set()
+    for value in frame[column]:
+        symbol = _normalise_symbol(value)
+        if not symbol or symbol == "NAN" or symbol in seen:
+            continue
+        symbols.append(symbol)
+        seen.add(symbol)
+    return symbols[: int(limit)] if int(limit or 0) > 0 else symbols
 
 
 def _date_str(value: str | pd.Timestamp) -> str:
@@ -268,10 +284,24 @@ def mapped_records(symbols: Iterable[str], refresh_instruments: bool, client=Non
     return mapping.to_dict(orient="records")
 
 
+def select_record_batch(records: list[dict], batch_size: int, batch_index: int) -> list[dict]:
+    """Select a stable zero-based stock batch while always retaining NIFTY."""
+    size = max(0, int(batch_size or 0))
+    index = max(0, int(batch_index or 0))
+    if size <= 0:
+        return records
+    benchmark = [rec for rec in records if _normalise_symbol(rec.get("symbol")) == "NIFTY 50"]
+    stocks = [rec for rec in records if _normalise_symbol(rec.get("symbol")) != "NIFTY 50"]
+    start = index * size
+    return benchmark + stocks[start : start + size]
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Backfill Kite 5m/15m intraday data and audit completeness")
     parser.add_argument("--universe", default=str(DEFAULT_UNIVERSE))
     parser.add_argument("--limit", type=int, default=178)
+    parser.add_argument("--batch-size", type=int, default=0, help="Stable stock batch size; 0 processes the full selected universe.")
+    parser.add_argument("--batch-index", type=int, default=0, help="Zero-based batch index used with --batch-size.")
     parser.add_argument("--start", default="2024-05-13")
     parser.add_argument("--end", default="2026-05-12")
     parser.add_argument("--intervals", nargs="+", default=["5minute", "15minute"])
@@ -292,9 +322,19 @@ def main() -> int:
         print(f"Kite unavailable: {kite_reason}")
         return 2
     client = build_client() if kite_ok and not args.dry_run else None
-    symbols = load_universe(Path(args.universe), args.limit)
+    symbols = load_backfill_universe(Path(args.universe), args.limit)
     records = mapped_records(symbols, bool(args.refresh_instruments), client=client)
-    pd.DataFrame(records).to_csv(out_prefix.with_name(out_prefix.name + "_instrument_map.csv"), index=False)
+    full_record_count = len(records)
+    records = select_record_batch(records, args.batch_size, args.batch_index)
+    if args.batch_size > 0 and len(records) <= 1:
+        print(
+            f"Requested batch {args.batch_index} is empty for {max(0, full_record_count - 1)} stocks "
+            f"with batch size {args.batch_size}."
+        )
+        return 0
+    batch_suffix = f"_batch_{args.batch_index:04d}" if args.batch_size > 0 else ""
+    batch_prefix = out_prefix.with_name(out_prefix.name + batch_suffix)
+    pd.DataFrame(records).to_csv(batch_prefix.with_name(batch_prefix.name + "_instrument_map.csv"), index=False)
 
     interval_gates = {}
     all_audits = []
@@ -341,14 +381,14 @@ def main() -> int:
                 print(f"  {interval}: audited {idx}/{len(records)}; complete-ish stocks={complete}", flush=True)
 
         interval_df = pd.DataFrame(interval_rows)
-        interval_df.to_csv(out_prefix.with_name(out_prefix.name + f"_{interval}_audit.csv"), index=False)
+        interval_df.to_csv(batch_prefix.with_name(batch_prefix.name + f"_{interval}_audit.csv"), index=False)
         stock_df = interval_df[~interval_df["symbol"].eq("NIFTY 50")]
         complete_count = int(stock_df["status"].isin(["complete", "warning"]).sum())
         complete_pct = complete_count / max(1, len(stock_df)) * 100.0
         nifty_complete = bool(interval_df[interval_df["symbol"].eq("NIFTY 50")]["status"].isin(["complete", "warning"]).any())
         gate_pass = complete_pct >= float(args.min_symbol_complete_pct) and nifty_complete
         eligible = stock_df[stock_df["status"].isin(["complete", "warning"])]["symbol"].tolist()
-        pd.DataFrame({"symbol": eligible}).to_csv(out_prefix.with_name(out_prefix.name + f"_{interval}_complete_universe.csv"), index=False)
+        pd.DataFrame({"symbol": eligible}).to_csv(batch_prefix.with_name(batch_prefix.name + f"_{interval}_complete_universe.csv"), index=False)
         interval_gates[interval] = {
             "interval": interval,
             "start": _date_str(args.start),
@@ -367,11 +407,14 @@ def main() -> int:
         "kite_session_reason": kite_reason,
         "requested_start": _date_str(args.start),
         "requested_end": _date_str(args.end),
+        "batch_size": int(args.batch_size),
+        "batch_index": int(args.batch_index),
+        "full_selected_symbols": max(0, full_record_count - 1),
         "intervals": interval_gates,
         "all_gates_pass": all(v["gate_pass"] for v in interval_gates.values()),
     }
-    pd.DataFrame(all_audits).to_csv(out_prefix.with_name(out_prefix.name + "_audit.csv"), index=False)
-    out_prefix.with_name(out_prefix.name + "_quality_gate.json").write_text(json.dumps(gate, indent=2), encoding="utf-8")
+    pd.DataFrame(all_audits).to_csv(batch_prefix.with_name(batch_prefix.name + "_audit.csv"), index=False)
+    batch_prefix.with_name(batch_prefix.name + "_quality_gate.json").write_text(json.dumps(gate, indent=2), encoding="utf-8")
     print(json.dumps(gate, indent=2))
     return 0 if gate["all_gates_pass"] else 1
 
