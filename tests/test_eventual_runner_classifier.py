@@ -97,4 +97,5 @@ def test_registry_uses_exact_unleveraged_reuse_and_keeps_orders_off():
     )
     assert not summary.empty
     assert set(summary["capital_reuse"]) == {"exact_exit_bar_unleveraged"}
+    assert "stress_selection_block_floor_pct" in summary.columns
     assert not summary["real_orders_allowed"].any()

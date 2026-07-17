@@ -266,12 +266,22 @@ def evaluate_registry(
                     stress_period = stress_daily[stress_daily["date"].isin(dates)]
                     row.update(period_metrics(stress_period, f"stress_{name}", capital))
                 block_values = []
+                stress_block_values = []
                 for index, dates in enumerate(blocks, start=1):
                     value = float(
                         daily[daily["date"].isin(dates)]["daily_return_pct"].mean()
                     )
+                    stress_value = float(
+                        stress_daily[stress_daily["date"].isin(dates)][
+                            "daily_return_pct"
+                        ].mean()
+                    )
                     row[f"block_{index}_avg_daily_return_pct"] = round(value, 6)
+                    row[f"stress_block_{index}_avg_daily_return_pct"] = round(
+                        stress_value, 6
+                    )
                     block_values.append(value)
+                    stress_block_values.append(stress_value)
                 executed = trades[trades["executed"].eq(True)] if not trades.empty else trades
                 row["selected_runner_precision_pct"] = round(
                     float(executed["eventual_runner_label"].mean() * 100.0)
@@ -280,13 +290,16 @@ def evaluate_registry(
                     2,
                 )
                 row["selection_block_floor_pct"] = round(min(block_values), 6)
+                row["stress_selection_block_floor_pct"] = round(
+                    min(stress_block_values), 6
+                )
                 row["sample_gate_passed"] = bool(
                     row["train_trade_days"] >= 60
                     and row["validation_trade_days"] >= 30
                 )
                 row["selection_gate_passed"] = bool(
                     row["sample_gate_passed"]
-                    and row["selection_block_floor_pct"] > 0.0
+                    and row["stress_selection_block_floor_pct"] > 0.0
                     and row["stress_train_avg_daily_return_pct"] > 0.0
                     and row["stress_validation_avg_daily_return_pct"] > 0.0
                 )
@@ -299,7 +312,7 @@ def evaluate_registry(
         [
             "selection_gate_passed",
             "sample_gate_passed",
-            "selection_block_floor_pct",
+            "stress_selection_block_floor_pct",
             "stress_validation_avg_daily_return_pct",
         ],
         ascending=False,
