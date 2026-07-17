@@ -319,6 +319,47 @@ def event_exit_contract_stats():
     }
 
 
+def frozen_microstructure_stats():
+    status = load_json(
+        DATA / "live_feature_recorder" / "frozen_microstructure_selector_status.json",
+        {},
+    )
+    selection = status.get("selection", {}) or {}
+    forward = status.get("forward", {}) or {}
+    stress = status.get("forward_stress", {}) or {}
+    return {
+        "selector": str(status.get("selector") or "none"),
+        "contract": str(status.get("contract") or "none"),
+        "forward_start": str(status.get("forward_start") or "n/a"),
+        "forward_sessions": int(forward.get("sessions") or 0),
+        "minimum_sessions": int(status.get("minimum_forward_sessions") or 20),
+        "candidates": int(forward.get("candidates") or 0),
+        "selection_avg_pnl": float(selection.get("avg_daily_pnl") or 0.0),
+        "stress_avg_pnl": float(stress.get("avg_daily_pnl") or 0.0),
+        "stress_lower95": float(stress.get("lower_95_pct") or 0.0),
+        "accepted": bool(status.get("accepted", False)),
+        "paper_promotion_allowed": bool(status.get("paper_promotion_allowed", False)),
+        "real_orders_allowed": False,
+    }
+
+
+def broad_backfill_stats():
+    summary = load_json(DATA / "broad_universe_5minute_backfill_summary.json", {})
+    mapped = int(summary.get("mapped_symbols") or 0)
+    cached = int(summary.get("exact_range_cache_files") or 0)
+    return {
+        "universe": int(summary.get("universe_symbols") or 0),
+        "mapped": mapped,
+        "cached": cached,
+        "remaining": int(summary.get("needs_fetch_symbols") or 0),
+        "api_calls": int(summary.get("estimated_api_calls") or 0),
+        "coverage_pct": cached / mapped * 100.0 if mapped else 0.0,
+        "estimated_total_gb": float(summary.get("estimated_total_range_bytes") or 0.0) / 1024**3,
+        "start": str(summary.get("start") or "n/a"),
+        "end": str(summary.get("end") or "n/a"),
+    }
+
+
 # ---------------------------------------------------------------- paper lanes
 
 def lane_stats(path, label, closed_filter, ret_field="net_return_pct"):
@@ -437,6 +478,8 @@ def render():
     event_shadow = event_shadow_readiness_stats()
     historical_transfer = historical_transfer_stats()
     exit_contracts = event_exit_contract_stats()
+    frozen_micro = frozen_microstructure_stats()
+    broad_backfill = broad_backfill_stats()
 
     tot_inv = sum(r["invested"] for r in positions)
     tot_val = sum(r["value"] for r in positions)
@@ -698,6 +741,38 @@ def render():
     Paper promotion: <b>NO</b>; real orders: <b>NO</b>.
   </div>"""
 
+    micro_class = "gain" if frozen_micro["stress_avg_pnl"] > 0 else "loss"
+    micro_html = f"""
+  <h2>Frozen live microstructure selector</h2>
+  <div class="summary">
+    <span>Forward sessions <span class="big">{frozen_micro['forward_sessions']}/{frozen_micro['minimum_sessions']}</span></span>
+    <span>Forward candidates <span class="big">{frozen_micro['candidates']}</span></span>
+    <span>Selection reference <span class="big">{money(frozen_micro['selection_avg_pnl'])}/day</span></span>
+    <span class="badge red">FORWARD ONLY</span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    Frozen rule: <b>{escape(frozen_micro['selector'])}</b> / {escape(frozen_micro['contract'])};
+    untouched evidence starts {escape(frozen_micro['forward_start'])}.
+    Stressed forward result: <span class="{micro_class}">{money(frozen_micro['stress_avg_pnl'])}/day</span>,
+    lower confidence bound {frozen_micro['stress_lower95']:+.3f}%.
+    Accepted: <b>{'YES' if frozen_micro['accepted'] else 'NO'}</b>;
+    paper promotion: <b>NO</b>; real orders: <b>NO</b>.
+  </div>"""
+
+    backfill_html = f"""
+  <h2>Broad five-minute research history</h2>
+  <div class="summary">
+    <span>Cached <span class="big">{broad_backfill['cached']}/{broad_backfill['mapped']}</span></span>
+    <span>Coverage <span class="big">{broad_backfill['coverage_pct']:.1f}%</span></span>
+    <span>Remaining <span class="big">{broad_backfill['remaining']}</span></span>
+    <span>Estimated size <span class="big">{broad_backfill['estimated_total_gb']:.1f} GB</span></span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    Exact five-minute range {escape(broad_backfill['start'])} to {escape(broad_backfill['end'])};
+    live universe {broad_backfill['universe']} symbols, {broad_backfill['api_calls']:,} estimated API calls remaining.
+    Acquisition is research infrastructure only and cannot enable paper or real orders.
+  </div>"""
+
     tot_cls = "gain" if tot_pnl >= 0 else "loss"
     return f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
@@ -756,6 +831,8 @@ def render():
 {event_shadow_html}
 {transfer_html}
 {exit_contract_html}
+{micro_html}
+{backfill_html}
 {gate_html}
 {watch_html}
   <div class="updated" style="margin-top:18px">

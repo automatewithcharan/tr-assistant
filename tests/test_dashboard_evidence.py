@@ -271,3 +271,47 @@ def test_event_exit_contracts_keep_exploratory_and_forward_separate(tmp_path: Pa
     assert stats["exploratory_avg_pnl"] == 3767.09
     assert not stats["paper_promotion_allowed"]
     assert not stats["real_orders_allowed"]
+
+
+def test_frozen_microstructure_and_backfill_status(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(dashboard, "DATA", tmp_path)
+    recorder = tmp_path / "live_feature_recorder"
+    recorder.mkdir(parents=True)
+    (recorder / "frozen_microstructure_selector_status.json").write_text(
+        json.dumps(
+            {
+                "selector": "missed_stable_tight_sector",
+                "contract": "forward_horizon",
+                "forward_start": "2026-07-17",
+                "selection": {"avg_daily_pnl": 647.72},
+                "forward": {"sessions": 3, "candidates": 5},
+                "forward_stress": {"avg_daily_pnl": 120.0, "lower_95_pct": -0.4},
+                "minimum_forward_sessions": 20,
+                "accepted": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / "broad_universe_5minute_backfill_summary.json").write_text(
+        json.dumps(
+            {
+                "universe_symbols": 2990,
+                "mapped_symbols": 2955,
+                "exact_range_cache_files": 505,
+                "needs_fetch_symbols": 2450,
+                "estimated_api_calls": 31850,
+                "estimated_total_range_bytes": 6203927940,
+                "start": "2024-05-30",
+                "end": "2026-05-29",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    micro = dashboard.frozen_microstructure_stats()
+    backfill = dashboard.broad_backfill_stats()
+    assert micro["forward_sessions"] == 3
+    assert micro["selection_avg_pnl"] == 647.72
+    assert not micro["real_orders_allowed"]
+    assert backfill["cached"] == 505
+    assert round(backfill["coverage_pct"], 2) == 17.09
