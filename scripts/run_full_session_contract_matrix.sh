@@ -31,6 +31,15 @@ done
 run_contract() {
     local contract="$1"
     local prefix="$OUT/expected_return_${contract}"
+    # A matrix can take hours on the broad universe. Resume only from a
+    # complete, contract-matching artifact set; partial or stale outputs are
+    # rebuilt normally.
+    if "$PYTHON" scripts/validate_full_session_contract_artifact.py \
+        --prefix "$prefix" --contract "$contract"; then
+        echo "Skipping completed contract: $contract"
+        return 0
+    fi
+
     env OMP_NUM_THREADS="$THREADS_PER_JOB" MKL_NUM_THREADS=1 \
         OPENBLAS_NUM_THREADS=1 NUMEXPR_NUM_THREADS=1 \
         nice -n 10 "$PYTHON" scripts/walk_forward_eventual_runner_classifier.py \
