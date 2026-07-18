@@ -106,6 +106,11 @@ run_event_shadow_rebuild() {
         --input "$rebuilt/intraday_event_shadow/outcomes_*.csv" \
         --output-dir "$rebuilt/model_v1" \
         >>"$LOG" 2>&1 || true
+    "$PYTHON" "$REPO/scripts/audit_live_top_gainer_recorder_recall.py" \
+        --features "$REPO/results/Data/live_feature_recorder/live_features_20*.csv" \
+        --bars "$rebuilt/intraday_event_shadow/bars_20*.csv" \
+        --output-dir "$REPO/results/Data/live_top_gainer_recorder_recall" \
+        >>"$LOG" 2>&1 || true
     local frozen_bundle="$REPO/results/Data/research_models/historical_event_family_target.joblib"
     if [ -s "$frozen_bundle" ]; then
         "$PYTHON" "$REPO/scripts/evaluate_historical_event_model_live_holdout.py" \
