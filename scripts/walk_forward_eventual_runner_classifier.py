@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
 from scripts.research_rank_acceleration_registry import period_metrics, temporal_splits
 from scripts.select_causal_intraday_exit_grid import load_calendar_dates
 from scripts.simulate_causal_intraday_capital_reuse import simulate_calendar
+from scripts.backtest_fixed_time_leader_rank import BAR_PATH_FEATURES
 
 
 SNAPSHOT_FEATURES = [
@@ -148,6 +149,7 @@ def load_labeled_candidates(
     threshold_pct: float = 10.0,
     label_mode: str = "eventual_runner",
     exit_reason_column: str = "",
+    include_bar_path: bool = False,
 ) -> pd.DataFrame:
     candidates = pd.read_csv(candidate_path)
     required = {
@@ -162,6 +164,8 @@ def load_labeled_candidates(
     }
     if label_mode == "target_before_stop":
         required.add(exit_reason_column)
+    if include_bar_path:
+        required.update(BAR_PATH_FEATURES)
     missing = required - set(candidates.columns)
     if missing:
         raise ValueError(f"candidate input missing columns: {', '.join(sorted(missing))}")
@@ -175,6 +179,9 @@ def load_labeled_candidates(
     )
     for feature in SNAPSHOT_FEATURES:
         candidates[feature] = pd.to_numeric(candidates[feature], errors="coerce")
+    for feature in BAR_PATH_FEATURES:
+        if feature in candidates.columns:
+            candidates[feature] = pd.to_numeric(candidates[feature], errors="coerce")
     candidates = add_temporal_features(candidates)
     candidates = candidates.dropna(
         subset=["date", "symbol", "entry_time", exit_time_column, return_column]
@@ -629,7 +636,9 @@ def main() -> int:
     parser.add_argument("--daily-goal", type=float, default=10_000.0)
     parser.add_argument("--stress-cost-pct", type=float, default=0.10)
     parser.add_argument(
-        "--feature-set", choices=("snapshot", "temporal"), default="snapshot"
+        "--feature-set",
+        choices=("snapshot", "temporal", "bar_path"),
+        default="snapshot",
     )
     args = parser.parse_args()
     frame = load_labeled_candidates(
@@ -640,6 +649,7 @@ def main() -> int:
         args.runner_threshold,
         args.label_mode,
         args.exit_reason_column,
+        include_bar_path=args.feature_set == "bar_path",
     )
     calendar = load_calendar_dates(args.calendar_file)
     label_column = (
@@ -647,7 +657,12 @@ def main() -> int:
         if args.label_mode == "target_before_stop"
         else "eventual_runner_label"
     )
-    model_features = FEATURES if args.feature_set == "temporal" else SNAPSHOT_FEATURES
+    if args.feature_set == "bar_path":
+        model_features = [*FEATURES, *BAR_PATH_FEATURES]
+    elif args.feature_set == "temporal":
+        model_features = FEATURES
+    else:
+        model_features = SNAPSHOT_FEATURES
     scored = score_walk_forward(
         frame,
         calendar,
@@ -725,7 +740,12 @@ def main() -> int:
         "model_features": list(model_features),
         "temporal_feature_availability": (
             "same_symbol_same_session_prior_qualifying_scans_only"
-            if args.feature_set == "temporal"
+            if args.feature_set in {"temporal", "bar_path"}
+            else "not_used"
+        ),
+        "bar_path_feature_availability": (
+            "completed_bars_through_signal_bar_only"
+            if args.feature_set == "bar_path"
             else "not_used"
         ),
         "selection_uses_final_period": False,

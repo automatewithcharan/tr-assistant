@@ -114,6 +114,14 @@ nice -n 10 "$PYTHON" scripts/walk_forward_eventual_runner_classifier.py \
 
 nice -n 10 "$PYTHON" scripts/walk_forward_eventual_runner_classifier.py \
     --candidates "$OUT/fixed_time_candidates.csv" \
+    --runner-events "$OUT/top_gainer_recall_events.csv" \
+    --calendar-file "$CALENDAR" \
+    --output-prefix "$OUT/eventual_runner_bar_path_classifier" \
+    --feature-set bar_path --capital "$CAPITAL" --daily-goal "$DAILY_GOAL" \
+    --stress-cost-pct "$STRESS_COST_PCT" >> "$LOG" 2>&1
+
+nice -n 10 "$PYTHON" scripts/walk_forward_eventual_runner_classifier.py \
+    --candidates "$OUT/fixed_time_candidates.csv" \
     --calendar-file "$CALENDAR" --output-prefix "$OUT/direct_target_classifier" \
     --label-mode target_before_stop --capital "$CAPITAL" \
     --daily-goal "$DAILY_GOAL" --stress-cost-pct "$STRESS_COST_PCT" \
@@ -124,6 +132,14 @@ nice -n 10 "$PYTHON" scripts/walk_forward_eventual_runner_classifier.py \
     --calendar-file "$CALENDAR" \
     --output-prefix "$OUT/direct_target_temporal_classifier" \
     --label-mode target_before_stop --feature-set temporal \
+    --capital "$CAPITAL" --daily-goal "$DAILY_GOAL" \
+    --stress-cost-pct "$STRESS_COST_PCT" >> "$LOG" 2>&1
+
+nice -n 10 "$PYTHON" scripts/walk_forward_eventual_runner_classifier.py \
+    --candidates "$OUT/fixed_time_candidates.csv" \
+    --calendar-file "$CALENDAR" \
+    --output-prefix "$OUT/direct_target_bar_path_classifier" \
+    --label-mode target_before_stop --feature-set bar_path \
     --capital "$CAPITAL" --daily-goal "$DAILY_GOAL" \
     --stress-cost-pct "$STRESS_COST_PCT" >> "$LOG" 2>&1
 

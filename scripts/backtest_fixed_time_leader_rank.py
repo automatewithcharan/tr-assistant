@@ -91,6 +91,95 @@ def turnover_gate_values(
     raise ValueError(f"unsupported turnover mode: {config.turnover_mode}")
 
 
+BAR_PATH_FEATURES = [
+    "return_1bar_pct",
+    "return_2bar_pct",
+    "return_6bar_pct",
+    "realized_volatility_6bar_pct",
+    "directional_efficiency_6bar",
+    "signal_close_location",
+    "signal_body_pct",
+    "signal_upper_wick_pct",
+    "green_bar_fraction_6",
+    "volume_persistence_3bar",
+    "recent_volume_share",
+    "vwap_slope_3bar_pct",
+    "breakout_prior_6bar_pct",
+    "opening_range_breakout_pct",
+]
+
+
+def causal_bar_path_features(
+    day: pd.DataFrame,
+    signal_index: int,
+    cumulative_volume: np.ndarray,
+    vwap: np.ndarray,
+) -> dict[str, float]:
+    """Summarize the completed path through the signal bar only."""
+    closes = day["close"].to_numpy(dtype=float)[: signal_index + 1]
+    opens = day["open"].to_numpy(dtype=float)[: signal_index + 1]
+    highs = day["high"].to_numpy(dtype=float)[: signal_index + 1]
+    lows = day["low"].to_numpy(dtype=float)[: signal_index + 1]
+    volumes = day["volume"].to_numpy(dtype=float)[: signal_index + 1]
+
+    def trailing_return(bars: int) -> float:
+        prior_index = len(closes) - 1 - bars
+        if prior_index < 0 or closes[prior_index] <= 0:
+            return 0.0
+        return (closes[-1] / closes[prior_index] - 1.0) * 100.0
+
+    returns = np.diff(closes[-7:]) / closes[-7:-1] * 100.0 if len(closes) >= 2 else np.array([])
+    net_move = abs(float(closes[-1] - closes[max(0, len(closes) - 7)]))
+    path_distance = float(np.abs(np.diff(closes[-7:])).sum()) if len(closes) >= 2 else 0.0
+    candle_range = float(highs[-1] - lows[-1])
+    close_location = (closes[-1] - lows[-1]) / candle_range if candle_range > 0 else 0.5
+    body_pct = (closes[-1] / opens[-1] - 1.0) * 100.0 if opens[-1] > 0 else 0.0
+    upper_wick_pct = (
+        (highs[-1] - max(opens[-1], closes[-1])) / closes[-1] * 100.0
+        if closes[-1] > 0
+        else 0.0
+    )
+    recent_start = max(0, len(closes) - 6)
+    green_fraction = float(np.mean(closes[recent_start:] > opens[recent_start:]))
+    recent_three = volumes[max(0, len(volumes) - 3) :]
+    preceding_three = volumes[max(0, len(volumes) - 6) : max(0, len(volumes) - 3)]
+    prior_volume = float(preceding_three.mean()) if len(preceding_three) else 0.0
+    volume_persistence = float(recent_three.mean()) / prior_volume if prior_volume > 0 else 0.0
+    cumulative_at_signal = float(cumulative_volume[signal_index])
+    recent_volume_share = float(recent_three.sum()) / cumulative_at_signal if cumulative_at_signal > 0 else 0.0
+    vwap_prior_index = signal_index - 3
+    vwap_slope = (
+        (float(vwap[signal_index]) / float(vwap[vwap_prior_index]) - 1.0) * 100.0
+        if vwap_prior_index >= 0 and float(vwap[vwap_prior_index]) > 0
+        else 0.0
+    )
+    prior_highs = highs[max(0, len(highs) - 7) : -1]
+    prior_high = float(prior_highs.max()) if len(prior_highs) else float(highs[-1])
+    breakout = (closes[-1] / prior_high - 1.0) * 100.0 if prior_high > 0 else 0.0
+    opening_range_high = float(highs[: min(3, len(highs))].max())
+    opening_breakout = (
+        (closes[-1] / opening_range_high - 1.0) * 100.0
+        if opening_range_high > 0
+        else 0.0
+    )
+    return {
+        "return_1bar_pct": trailing_return(1),
+        "return_2bar_pct": trailing_return(2),
+        "return_6bar_pct": trailing_return(6),
+        "realized_volatility_6bar_pct": float(np.std(returns)) if len(returns) else 0.0,
+        "directional_efficiency_6bar": net_move / path_distance if path_distance > 0 else 0.0,
+        "signal_close_location": float(close_location),
+        "signal_body_pct": float(body_pct),
+        "signal_upper_wick_pct": float(upper_wick_pct),
+        "green_bar_fraction_6": green_fraction,
+        "volume_persistence_3bar": float(volume_persistence),
+        "recent_volume_share": float(recent_volume_share),
+        "vwap_slope_3bar_pct": float(vwap_slope),
+        "breakout_prior_6bar_pct": float(breakout),
+        "opening_range_breakout_pct": float(opening_breakout),
+    }
+
+
 @dataclass(frozen=True)
 class LeaderContract:
     horizon_minutes: int
@@ -376,6 +465,12 @@ def _process_symbol_file(
             )
             if outcomes is None:
                 continue
+            path_features = causal_bar_path_features(
+                day,
+                signal_index,
+                cumulative_volume,
+                vwap,
+            )
             rows.append(
                 {
                     "date": str(date),
@@ -400,6 +495,10 @@ def _process_symbol_file(
                     "pullback_pct": round(pullback, 6),
                     "vwap_distance_pct": round(vwap_distance, 6),
                     "recent_return_3bar_pct": round(recent_return, 6),
+                    **{
+                        name: round(float(value), 6)
+                        for name, value in path_features.items()
+                    },
                     "candidate_availability": "fixed_completed_bar_cross_section_then_next_bar_open",
                     **outcomes,
                 }
@@ -742,6 +841,8 @@ def main() -> int:
         "stops": list(stops),
         "top_k": list(top_ks),
         "feature_availability": "completed_signal_bar_and_prior_sessions_only",
+        "bar_path_features": list(BAR_PATH_FEATURES),
+        "bar_path_feature_availability": "completed_bars_through_signal_bar_only",
         "candidate_availability": "fixed_completed_bar_cross_section_then_next_bar_open",
         "prior_volume_baseline_sessions": config.volume_baseline_sessions,
         "entry_slippage_bps": config.entry_slippage_bps,
