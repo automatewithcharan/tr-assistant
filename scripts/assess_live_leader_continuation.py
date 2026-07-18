@@ -42,6 +42,8 @@ MOVE_BINS = (0.5, 1.0, 2.0, 3.0, 5.000001)
 MOVE_LABELS = ("0.5-1", "1-2", "2-3", "3-5")
 EARLIEST_SIGNAL_MINUTE = 9 * 60 + 18
 LATEST_SIGNAL_MINUTE = 14 * 60 + 15
+EXPLORATORY_RULE_DEFINED_ON = "2026-07-18"
+FROZEN_FORWARD_START = "2026-07-20"
 
 
 def load_reconstructed_bars(
@@ -143,6 +145,11 @@ def build_candidates(tape: pd.DataFrame) -> pd.DataFrame:
     candidates = candidates.drop_duplicates(
         ["Date", "Symbol", "MoveBand"], keep="first"
     ).reset_index(drop=True)
+    candidates["ExtensionAccelerationCohort"] = (
+        candidates["MoveBand"].astype(str).eq("3-5")
+        & candidates["MoveAccelerationPct"].ge(0.2)
+        & candidates["BuyerSellerSurge"].ge(1.0)
+    )
     candidates["UsesFutureRunnerLabel"] = False
     candidates["PaperPromotionAllowed"] = False
     candidates["RealOrdersAllowed"] = False
@@ -212,54 +219,97 @@ def _lower95(values: pd.Series) -> float:
     return float(numeric.mean() - 1.645 * numeric.std(ddof=1) / math.sqrt(len(numeric)))
 
 
-def summarize(outcomes: pd.DataFrame, session_dates: list[str]) -> pd.DataFrame:
+def summarize(
+    outcomes: pd.DataFrame,
+    session_dates: list[str],
+    forward_start: str = FROZEN_FORWARD_START,
+) -> pd.DataFrame:
     if outcomes is None or outcomes.empty:
         return pd.DataFrame()
-    dates = sorted({str(date) for date in session_dates})
+    all_dates = sorted({str(date) for date in session_dates})
     rows = []
-    for (band, contract), group in outcomes.groupby(["MoveBand", "Contract"], observed=True):
-        available = group[group["OutcomeAvailable"].fillna(False).astype(bool)].copy()
-        daily_values = (
-            pd.to_numeric(available["NetReturnPct"], errors="coerce")
-            .groupby(available["Date"].astype(str))
-            .mean()
-        )
-        daily = pd.Series(0.0, index=dates, dtype=float)
-        daily.loc[daily.index.intersection(daily_values.index)] = daily_values.loc[
-            daily.index.intersection(daily_values.index)
+    phases = (
+        ("retrospective", [date for date in all_dates if date < forward_start]),
+        ("frozen_forward", [date for date in all_dates if date >= forward_start]),
+    )
+    for phase, dates in phases:
+        if not dates:
+            continue
+        phase_outcomes = outcomes[outcomes["Date"].astype(str).isin(dates)].copy()
+        cohort_groups = [
+            ("move_band", str(band), str(contract), group)
+            for (band, contract), group in phase_outcomes.groupby(
+                ["MoveBand", "Contract"], observed=True
+            )
         ]
-        target_hits = available["ExitReason"].astype(str).str.startswith("target")
-        rows.append(
-            {
-                "MoveBand": str(band),
-                "Contract": str(contract),
-                "Sessions": len(dates),
-                "Candidates": int(len(group)),
-                "Evaluated": int(len(available)),
-                "CoveragePct": round(len(available) / len(group) * 100.0, 2)
-                if len(group)
-                else 0.0,
-                "TargetHitPct": round(float(target_hits.mean() * 100.0), 2)
-                if len(available)
-                else 0.0,
-                "AvgNetReturnPct": round(
-                    float(pd.to_numeric(available["NetReturnPct"], errors="coerce").mean()), 4
-                )
-                if len(available)
-                else 0.0,
-                "AvgDailyEqualReturnPct": round(float(daily.mean()), 4),
-                "Lower95DailyEqualReturnPct": round(_lower95(daily), 4),
-                "PositiveSessionPct": round(float((daily > 0).mean() * 100.0), 2),
-                "EvidenceAccepted": False,
-                "PaperPromotionAllowed": False,
-                "RealOrdersAllowed": False,
-            }
+        extension = phase_outcomes[
+            phase_outcomes.get(
+                "ExtensionAccelerationCohort",
+                pd.Series(False, index=phase_outcomes.index),
+            ).fillna(False).astype(bool)
+        ]
+        cohort_groups.extend(
+            ("extension_acceleration", "3-5", str(contract), group)
+            for contract, group in extension.groupby("Contract", sort=True)
         )
+        for cohort, band, contract, group in cohort_groups:
+            available = group[
+                group["OutcomeAvailable"].fillna(False).astype(bool)
+            ].copy()
+            daily_values = (
+                pd.to_numeric(available["NetReturnPct"], errors="coerce")
+                .groupby(available["Date"].astype(str))
+                .mean()
+            )
+            daily = pd.Series(0.0, index=dates, dtype=float)
+            overlap = daily.index.intersection(daily_values.index)
+            daily.loc[overlap] = daily_values.loc[overlap]
+            target_hits = available["ExitReason"].astype(str).str.startswith("target")
+            rows.append(
+                {
+                    "EvidencePhase": phase,
+                    "Cohort": cohort,
+                    "MoveBand": str(band),
+                    "Contract": str(contract),
+                    "Sessions": len(dates),
+                    "Candidates": int(len(group)),
+                    "Evaluated": int(len(available)),
+                    "CoveragePct": round(len(available) / len(group) * 100.0, 2)
+                    if len(group)
+                    else 0.0,
+                    "TargetHitPct": round(float(target_hits.mean() * 100.0), 2)
+                    if len(available)
+                    else 0.0,
+                    "AvgNetReturnPct": round(
+                        float(
+                            pd.to_numeric(
+                                available["NetReturnPct"], errors="coerce"
+                            ).mean()
+                        ),
+                        4,
+                    )
+                    if len(available)
+                    else 0.0,
+                    "AvgDailyEqualReturnPct": round(float(daily.mean()), 4),
+                    "Lower95DailyEqualReturnPct": round(_lower95(daily), 4),
+                    "PositiveSessionPct": round(
+                        float((daily > 0).mean() * 100.0), 2
+                    ),
+                    "EvidenceAccepted": False,
+                    "PaperPromotionAllowed": False,
+                    "RealOrdersAllowed": False,
+                }
+            )
     result = pd.DataFrame(rows)
     if not result.empty:
         result.sort_values(
-            ["Lower95DailyEqualReturnPct", "AvgDailyEqualReturnPct"],
-            ascending=[False, False],
+            [
+                "EvidencePhase",
+                "Lower95DailyEqualReturnPct",
+                "AvgDailyEqualReturnPct",
+                "Cohort",
+            ],
+            ascending=[True, False, False, True],
             inplace=True,
         )
     return result
@@ -328,6 +378,21 @@ def main() -> int:
         "evaluated_candidate_states": int(len(evaluated_states)),
         "evaluated_contract_outcomes": int(len(available_outcomes)),
         "move_bands": list(MOVE_LABELS),
+        "exploratory_rule_defined_on": EXPLORATORY_RULE_DEFINED_ON,
+        "frozen_forward_start": FROZEN_FORWARD_START,
+        "extension_acceleration_rule": {
+            "move_band": "3-5",
+            "min_move_acceleration_pct": 0.2,
+            "min_buyer_seller_surge": 1.0,
+        },
+        "forward_candidate_states": int(
+            evaluable_candidates[
+                evaluable_candidates["Date"].astype(str).ge(FROZEN_FORWARD_START)
+                & evaluable_candidates["ExtensionAccelerationCohort"].fillna(False).astype(bool)
+            ][["Date", "Symbol", "MoveBand"]].drop_duplicates().shape[0]
+        )
+        if not evaluable_candidates.empty
+        else 0,
         "uses_future_runner_labels": False,
         "evidence_accepted": False,
         "paper_promotion_allowed": False,
