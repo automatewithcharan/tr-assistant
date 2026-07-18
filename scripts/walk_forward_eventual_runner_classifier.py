@@ -24,7 +24,7 @@ from scripts.select_causal_intraday_exit_grid import load_calendar_dates
 from scripts.simulate_causal_intraday_capital_reuse import simulate_calendar
 
 
-FEATURES = [
+SNAPSHOT_FEATURES = [
     "signal_minute",
     "move_from_open_pct",
     "day_change_pct",
@@ -48,6 +48,52 @@ FEATURES = [
     "pullback_quality_rank",
     "vwap_quality_rank",
 ]
+
+TEMPORAL_SOURCES = [
+    "move_from_open_pct",
+    "day_change_pct",
+    "relative_strength_pct",
+    "cum_volume_ratio",
+    "volume_acceleration",
+    "range_position",
+    "pullback_pct",
+    "vwap_distance_pct",
+    "recent_return_3bar_pct",
+    "move_rank",
+    "volume_rank",
+    "acceleration_rank",
+    "relative_strength_rank",
+    "range_rank",
+    "turnover_rank",
+    "sector_breadth_rank",
+]
+TEMPORAL_FEATURES = [
+    "has_prior_candidate_state",
+    "candidate_scans_seen",
+    "minutes_since_prior_candidate",
+    *[f"delta_{source}" for source in TEMPORAL_SOURCES],
+]
+FEATURES = [*SNAPSHOT_FEATURES, *TEMPORAL_FEATURES]
+
+
+def add_temporal_features(frame: pd.DataFrame) -> pd.DataFrame:
+    """Add same-session backward deltas without consulting future scans."""
+    output = frame.copy()
+    output["_input_order"] = np.arange(len(output))
+    output.sort_values(
+        ["date", "symbol", "signal_minute", "_input_order"], inplace=True
+    )
+    grouped = output.groupby(["date", "symbol"], sort=False)
+    prior_minute = grouped["signal_minute"].shift(1)
+    output["has_prior_candidate_state"] = prior_minute.notna().astype(float)
+    output["candidate_scans_seen"] = grouped.cumcount().astype(float) + 1.0
+    output["minutes_since_prior_candidate"] = output["signal_minute"] - prior_minute
+    for source in TEMPORAL_SOURCES:
+        output[f"delta_{source}"] = output[source] - grouped[source].shift(1)
+    output.sort_values("_input_order", inplace=True)
+    output.drop(columns=["_input_order"], inplace=True)
+    output.reset_index(drop=True, inplace=True)
+    return output
 
 
 def build_runner_labels(
@@ -112,7 +158,7 @@ def load_labeled_candidates(
         "signal_turnover",
         return_column,
         exit_time_column,
-        *[feature for feature in FEATURES if feature != "log_signal_turnover"],
+        *[feature for feature in SNAPSHOT_FEATURES if feature != "log_signal_turnover"],
     }
     if label_mode == "target_before_stop":
         required.add(exit_reason_column)
@@ -127,8 +173,9 @@ def load_labeled_candidates(
     candidates["log_signal_turnover"] = np.log1p(
         pd.to_numeric(candidates["signal_turnover"], errors="coerce").clip(lower=0.0)
     )
-    for feature in FEATURES:
+    for feature in SNAPSHOT_FEATURES:
         candidates[feature] = pd.to_numeric(candidates[feature], errors="coerce")
+    candidates = add_temporal_features(candidates)
     candidates = candidates.dropna(
         subset=["date", "symbol", "entry_time", exit_time_column, return_column]
     ).copy()
@@ -170,6 +217,7 @@ def score_walk_forward(
     retrain_every_days: int = 10,
     min_samples_leaf: int = 40,
     label_column: str = "eventual_runner_label",
+    features: list[str] | tuple[str, ...] = SNAPSHOT_FEATURES,
 ) -> pd.DataFrame:
     if label_column not in frame.columns:
         raise ValueError(f"training label missing: {label_column}")
@@ -207,7 +255,7 @@ def score_walk_forward(
             )
             model = _model(min_samples_leaf)
             model.fit(
-                train[FEATURES],
+                train[list(features)],
                 train[label_column],
                 model__sample_weight=weights,
             )
@@ -215,7 +263,7 @@ def score_walk_forward(
             trained_through = prior_dates[-1]
         scored_day = day.copy()
         scored_day["runner_probability"] = model.predict_proba(
-            scored_day[FEATURES]
+            scored_day[list(features)]
         )[:, 1]
         scored_day["model_trained_through"] = trained_through
         scored.append(scored_day)
@@ -580,6 +628,9 @@ def main() -> int:
     parser.add_argument("--capital", type=float, default=400_000.0)
     parser.add_argument("--daily-goal", type=float, default=10_000.0)
     parser.add_argument("--stress-cost-pct", type=float, default=0.10)
+    parser.add_argument(
+        "--feature-set", choices=("snapshot", "temporal"), default="snapshot"
+    )
     args = parser.parse_args()
     frame = load_labeled_candidates(
         args.candidates,
@@ -596,7 +647,13 @@ def main() -> int:
         if args.label_mode == "target_before_stop"
         else "eventual_runner_label"
     )
-    scored = score_walk_forward(frame, calendar, label_column=label_column)
+    model_features = FEATURES if args.feature_set == "temporal" else SNAPSHOT_FEATURES
+    scored = score_walk_forward(
+        frame,
+        calendar,
+        label_column=label_column,
+        features=model_features,
+    )
     if scored.empty:
         raise RuntimeError("eventual-runner classifier produced no scored rows")
     summary, artifacts = evaluate_registry(
@@ -664,6 +721,13 @@ def main() -> int:
         "strategy": f"walk_forward_{args.label_mode}_classifier",
         "label_mode": args.label_mode,
         "training_label": label_column,
+        "feature_set": args.feature_set,
+        "model_features": list(model_features),
+        "temporal_feature_availability": (
+            "same_symbol_same_session_prior_qualifying_scans_only"
+            if args.feature_set == "temporal"
+            else "not_used"
+        ),
         "selection_uses_final_period": False,
         "label_available_only_after_session": True,
         "capital_reuse": "exact_exit_bar_unleveraged",
