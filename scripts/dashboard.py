@@ -359,6 +359,66 @@ def ignition_registry_stats():
     }
 
 
+def leader_discovery_stats():
+    recall = load_json(DATA / "live_top_gainer_recorder_recall" / "status.json", {})
+    recall_rows = recall.get("summary", []) if isinstance(recall, dict) else []
+    ten_pct = next(
+        (
+            row
+            for row in recall_rows
+            if float(row.get("RunnerThresholdPct") or 0.0) == 10.0
+        ),
+        {},
+    )
+    continuation = load_json(DATA / "live_leader_continuation" / "status.json", {})
+    rows = load_csv_rows(DATA / "live_leader_continuation" / "summary.csv")
+
+    def number(row, field):
+        try:
+            return float(row.get(field) or 0.0)
+        except Exception:
+            return 0.0
+
+    def extension_row(phase):
+        return next(
+            (
+                row
+                for row in rows
+                if row.get("EvidencePhase") == phase
+                and row.get("Cohort") == "extension_acceleration"
+                and row.get("Contract") == "t1.0_s1.0"
+            ),
+            {},
+        )
+
+    retrospective = extension_row("retrospective")
+    forward = extension_row("frozen_forward")
+    return {
+        "recall_sessions": int(recall.get("sessions") or 0),
+        "runner_events_10": int(number(ten_pct, "RunnerEvents")),
+        "seen_before_10_pct": number(ten_pct, "FeatureSeenBeforeCrossPct"),
+        "band_0_5_to_3_recall": number(ten_pct, "Band0_5To3RecallPct"),
+        "band_0_5_to_5_recall": number(ten_pct, "Band0_5To5RecallPct"),
+        "median_lead_minutes": number(ten_pct, "MedianLeadMinutes"),
+        "forward_start": str(continuation.get("frozen_forward_start") or "n/a"),
+        "evaluated_states": int(continuation.get("evaluated_candidate_states") or 0),
+        "forward_states": int(continuation.get("forward_candidate_states") or 0),
+        "retrospective_evaluated": int(number(retrospective, "Evaluated")),
+        "retrospective_target_hit_pct": number(retrospective, "TargetHitPct"),
+        "retrospective_avg_return_pct": number(retrospective, "AvgNetReturnPct"),
+        "retrospective_lower95_pct": number(
+            retrospective, "Lower95DailyEqualReturnPct"
+        ),
+        "forward_evaluated": int(number(forward, "Evaluated")),
+        "forward_target_hit_pct": number(forward, "TargetHitPct"),
+        "forward_avg_return_pct": number(forward, "AvgNetReturnPct"),
+        "forward_lower95_pct": number(forward, "Lower95DailyEqualReturnPct"),
+        "evidence_accepted": False,
+        "paper_promotion_allowed": False,
+        "real_orders_allowed": False,
+    }
+
+
 def broad_backfill_stats():
     summary = load_json(DATA / "broad_universe_5minute_backfill_summary.json", {})
     mapped = int(summary.get("mapped_symbols") or 0)
@@ -601,6 +661,7 @@ def render():
     exit_contracts = event_exit_contract_stats()
     frozen_micro = frozen_microstructure_stats()
     ignition_registry = ignition_registry_stats()
+    leader_discovery = leader_discovery_stats()
     broad_backfill = broad_backfill_stats()
     broad_rank = broad_rank_checkpoint_stats()
     runner_classifier = eventual_runner_classifier_stats()
@@ -899,6 +960,32 @@ def render():
     Paper promotion: <b>NO</b>; real orders: <b>NO</b>.
   </div>"""
 
+    leader_forward_class = (
+        "gain" if leader_discovery["forward_avg_return_pct"] > 0 else "loss"
+    )
+    leader_html = f"""
+  <h2>Leader discovery and continuation</h2>
+  <div class="summary">
+    <span>10% runner events <span class="big">{leader_discovery['runner_events_10']}</span></span>
+    <span>Seen before 10% <span class="big">{leader_discovery['seen_before_10_pct']:.1f}%</span></span>
+    <span>Median lead <span class="big">{leader_discovery['median_lead_minutes']:.0f} min</span></span>
+    <span>Forward states <span class="big">{leader_discovery['forward_states']}</span></span>
+    <span class="badge red">FORWARD ONLY</span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    Recorder recall was {leader_discovery['band_0_5_to_3_recall']:.1f}% in the +0.5%-3% band and
+    {leader_discovery['band_0_5_to_5_recall']:.1f}% through +5%.
+    The post-hoc +3%-5% acceleration/B/S rule had {leader_discovery['retrospective_evaluated']} retrospective states,
+    {leader_discovery['retrospective_target_hit_pct']:.1f}% target hits,
+    {leader_discovery['retrospective_avg_return_pct']:+.3f}% mean net, and
+    {leader_discovery['retrospective_lower95_pct']:+.3f}% lower daily bound.
+    Untouched evidence starts {escape(leader_discovery['forward_start'])}:
+    {leader_discovery['forward_evaluated']} evaluated,
+    <span class="{leader_forward_class}">{leader_discovery['forward_avg_return_pct']:+.3f}% mean net</span>,
+    lower bound {leader_discovery['forward_lower95_pct']:+.3f}%.
+    Evidence accepted: <b>NO</b>; paper promotion: <b>NO</b>; real orders: <b>NO</b>.
+  </div>"""
+
     backfill_html = f"""
   <h2>Broad five-minute research history</h2>
   <div class="summary">
@@ -1022,6 +1109,7 @@ def render():
 {exit_contract_html}
 {micro_html}
 {ignition_html}
+{leader_html}
 {runner_classifier_html}
 {direct_classifier_html}
 {backfill_html}
