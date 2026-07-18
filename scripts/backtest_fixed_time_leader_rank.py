@@ -38,7 +38,7 @@ DEFAULT_DATA_DIR = "results/Data/kite_history_backfill/5minute/2024-05-30_2026-0
 DEFAULT_CALENDAR = f"{DEFAULT_DATA_DIR}/NIFTY 50.csv"
 DEFAULT_OUTPUT = "results/Data/fixed_time_leader_rank_v1"
 
-_WORKER_BENCHMARK: dict[pd.Timestamp, float] = {}
+_WORKER_BENCHMARK: dict[pd.Timestamp, dict[str, float]] = {}
 _WORKER_CONFIG = None
 _WORKER_CONTRACTS = None
 
@@ -108,6 +108,16 @@ BAR_PATH_FEATURES = [
     "vwap_slope_3bar_pct",
     "breakout_prior_6bar_pct",
     "opening_range_breakout_pct",
+]
+
+MARKET_REGIME_FEATURES = [
+    "benchmark_return_1bar_pct",
+    "benchmark_return_3bar_pct",
+    "benchmark_range_pct",
+    "benchmark_vwap_distance_pct",
+    "benchmark_prior_day_return_pct",
+    "benchmark_prior_5d_return_pct",
+    "benchmark_prior_20d_volatility_pct",
 ]
 
 
@@ -249,18 +259,85 @@ def build_contracts(
     ]
 
 
-def _load_benchmark(path: str) -> dict[pd.Timestamp, float]:
+def _load_benchmark(path: str) -> dict[pd.Timestamp, dict[str, float]]:
+    """Build causal same-bar and prior-session Nifty context."""
     frame = pd.read_csv(path, parse_dates=["datetime"]).sort_values("datetime")
-    output: dict[pd.Timestamp, float] = {}
+    for column in ("open", "high", "low", "close", "volume"):
+        frame[column] = pd.to_numeric(frame[column], errors="coerce").fillna(0.0)
+    output: dict[pd.Timestamp, dict[str, float]] = {}
     frame["date"] = frame["datetime"].dt.date.astype(str)
+    prior_closes: list[float] = []
+    prior_returns: list[float] = []
     for _, day in frame.groupby("date", sort=True):
+        day = day.sort_values("datetime").reset_index(drop=True)
         day_open = float(day.iloc[0]["open"])
         if day_open <= 0:
             continue
-        moves = (pd.to_numeric(day["close"], errors="coerce") / day_open - 1.0) * 100.0
-        for timestamp, move in zip(day["datetime"], moves):
-            if pd.notna(move):
-                output[pd.Timestamp(timestamp)] = float(move)
+        closes = day["close"].to_numpy(dtype=float)
+        highs = day["high"].to_numpy(dtype=float)
+        lows = day["low"].to_numpy(dtype=float)
+        volumes = day["volume"].to_numpy(dtype=float)
+        cumulative_volume = np.cumsum(volumes)
+        typical = (highs + lows + closes) / 3.0
+        cumulative_value = np.cumsum(typical * volumes)
+        vwap = np.divide(
+            cumulative_value,
+            cumulative_volume,
+            out=np.zeros(len(day), dtype=float),
+            where=cumulative_volume > 0,
+        )
+        high_so_far = np.maximum.accumulate(highs)
+        low_so_far = np.minimum.accumulate(lows)
+        prior_day_return = prior_returns[-1] if prior_returns else 0.0
+        prior_5d_return = (
+            (prior_closes[-1] / prior_closes[-6] - 1.0) * 100.0
+            if len(prior_closes) >= 6 and prior_closes[-6] > 0
+            else 0.0
+        )
+        prior_20d_volatility = (
+            float(np.std(prior_returns[-20:])) if prior_returns else 0.0
+        )
+        for index, timestamp in enumerate(day["datetime"]):
+            close = float(closes[index])
+            if close <= 0:
+                continue
+            move = (close / day_open - 1.0) * 100.0
+            return_1bar = (
+                (close / float(closes[index - 1]) - 1.0) * 100.0
+                if index >= 1 and closes[index - 1] > 0
+                else 0.0
+            )
+            return_3bar = (
+                (close / float(closes[index - 3]) - 1.0) * 100.0
+                if index >= 3 and closes[index - 3] > 0
+                else 0.0
+            )
+            range_pct = (
+                (float(high_so_far[index]) - float(low_so_far[index])) / day_open
+                * 100.0
+            )
+            vwap_distance = (
+                (close / float(vwap[index]) - 1.0) * 100.0
+                if vwap[index] > 0
+                else 0.0
+            )
+            output[pd.Timestamp(timestamp)] = {
+                "benchmark_move_pct": float(move),
+                "benchmark_return_1bar_pct": float(return_1bar),
+                "benchmark_return_3bar_pct": float(return_3bar),
+                "benchmark_range_pct": float(range_pct),
+                "benchmark_vwap_distance_pct": float(vwap_distance),
+                "benchmark_prior_day_return_pct": float(prior_day_return),
+                "benchmark_prior_5d_return_pct": float(prior_5d_return),
+                "benchmark_prior_20d_volatility_pct": float(prior_20d_volatility),
+            }
+        final_close = float(closes[-1]) if len(closes) else 0.0
+        if final_close > 0:
+            if prior_closes and prior_closes[-1] > 0:
+                prior_returns.append(
+                    (final_close / prior_closes[-1] - 1.0) * 100.0
+                )
+            prior_closes.append(final_close)
     return output
 
 
@@ -330,7 +407,7 @@ def _simulate_contracts(
 
 def _process_symbol_file(
     path_text: str,
-    benchmark: dict[pd.Timestamp, float],
+    benchmark: dict[pd.Timestamp, dict[str, float] | float],
     config: FixedLeaderConfig,
     contracts: list[LeaderContract],
 ) -> list[dict]:
@@ -420,7 +497,18 @@ def _process_symbol_file(
             move_from_open = (signal_price / day_open - 1.0) * 100.0
             day_change = (signal_price / previous_close - 1.0) * 100.0
             gap_pct = (day_open / previous_close - 1.0) * 100.0
-            benchmark_move = float(benchmark[timestamp])
+            benchmark_value = benchmark[timestamp]
+            if isinstance(benchmark_value, dict):
+                benchmark_context = {
+                    feature: float(benchmark_value.get(feature, 0.0))
+                    for feature in ["benchmark_move_pct", *MARKET_REGIME_FEATURES]
+                }
+            else:
+                benchmark_context = {
+                    "benchmark_move_pct": float(benchmark_value),
+                    **{feature: 0.0 for feature in MARKET_REGIME_FEATURES},
+                }
+            benchmark_move = benchmark_context["benchmark_move_pct"]
             relative_strength = move_from_open - benchmark_move
             intraday_range = float(high_so_far[signal_index] - low_so_far[signal_index])
             range_position = (
@@ -496,6 +584,10 @@ def _process_symbol_file(
                     "day_change_pct": round(day_change, 6),
                     "gap_pct": round(gap_pct, 6),
                     "benchmark_move_pct": round(benchmark_move, 6),
+                    **{
+                        feature: round(float(benchmark_context[feature]), 6)
+                        for feature in MARKET_REGIME_FEATURES
+                    },
                     "relative_strength_pct": round(relative_strength, 6),
                     "cum_volume_ratio": round(cumulative_volume_ratio, 6),
                     "volume_acceleration": round(volume_acceleration, 6),
@@ -520,7 +612,7 @@ def _process_symbol_file(
 
 
 def _init_worker(
-    benchmark: dict[pd.Timestamp, float],
+    benchmark: dict[pd.Timestamp, dict[str, float]],
     config: FixedLeaderConfig,
     contracts: list[LeaderContract],
 ) -> None:
@@ -875,6 +967,8 @@ def main() -> int:
         "feature_availability": "completed_signal_bar_and_prior_sessions_only",
         "bar_path_features": list(BAR_PATH_FEATURES),
         "bar_path_feature_availability": "completed_bars_through_signal_bar_only",
+        "market_regime_features": list(MARKET_REGIME_FEATURES),
+        "market_regime_feature_availability": "completed_benchmark_bar_and_prior_sessions_only",
         "candidate_availability": "fixed_completed_bar_cross_section_then_next_bar_open",
         "prior_volume_baseline_sessions": config.volume_baseline_sessions,
         "entry_slippage_bps": config.entry_slippage_bps,

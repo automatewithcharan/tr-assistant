@@ -14,6 +14,7 @@ CAPITAL="${FULL_SESSION_CAPITAL:-500000}"
 DAILY_GOAL="${FULL_SESSION_DAILY_GOAL:-10000}"
 MAX_PARALLEL="${FULL_SESSION_CONTRACT_PARALLEL:-8}"
 THREADS_PER_JOB="${FULL_SESSION_CONTRACT_THREADS:-4}"
+FEATURE_SET="${FULL_SESSION_FEATURE_SET:-bar_path}"
 
 mkdir -p "$OUT/logs"
 
@@ -35,7 +36,7 @@ run_contract() {
     # complete, contract-matching artifact set; partial or stale outputs are
     # rebuilt normally.
     if "$PYTHON" scripts/validate_full_session_contract_artifact.py \
-        --prefix "$prefix" --contract "$contract"; then
+        --prefix "$prefix" --contract "$contract" --feature-set "$FEATURE_SET"; then
         echo "Skipping completed contract: $contract"
         return 0
     fi
@@ -45,7 +46,7 @@ run_contract() {
         nice -n 10 "$PYTHON" scripts/walk_forward_eventual_runner_classifier.py \
         --candidates "$CANDIDATES" --calendar-file "$CALENDAR" \
         --output-prefix "$prefix" --label-mode expected_return \
-        --feature-set bar_path --return-column "return__${contract}" \
+        --feature-set "$FEATURE_SET" --return-column "return__${contract}" \
         --exit-time-column "exit_time__${contract}" \
         --exit-reason-column "exit__${contract}" \
         --capital "$CAPITAL" --daily-goal "$DAILY_GOAL" \

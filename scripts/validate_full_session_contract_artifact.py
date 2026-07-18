@@ -8,7 +8,11 @@ import json
 from pathlib import Path
 
 
-def is_complete_contract(prefix: Path, contract: str) -> bool:
+def is_complete_contract(
+    prefix: Path,
+    contract: str,
+    feature_set: str = "bar_path",
+) -> bool:
     status_path = prefix.with_name(prefix.name + "_status.json")
     required = (
         status_path,
@@ -24,7 +28,7 @@ def is_complete_contract(prefix: Path, contract: str) -> bool:
     return bool(
         all(path.is_file() and path.stat().st_size > 0 for path in required)
         and payload.get("label_mode") == "expected_return"
-        and payload.get("feature_set") == "bar_path"
+        and payload.get("feature_set") == feature_set
         and payload.get("return_column") == f"return__{contract}"
         and payload.get("exit_time_column") == f"exit_time__{contract}"
         and payload.get("exit_reason_column") == f"exit__{contract}"
@@ -38,8 +42,13 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--prefix", required=True, type=Path)
     parser.add_argument("--contract", required=True)
+    parser.add_argument("--feature-set", default="bar_path")
     args = parser.parse_args()
-    return 0 if is_complete_contract(args.prefix, args.contract) else 1
+    return (
+        0
+        if is_complete_contract(args.prefix, args.contract, args.feature_set)
+        else 1
+    )
 
 
 if __name__ == "__main__":

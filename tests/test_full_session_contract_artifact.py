@@ -4,10 +4,10 @@ from pathlib import Path
 from scripts.validate_full_session_contract_artifact import is_complete_contract
 
 
-def _write_artifacts(prefix: Path, contract: str) -> None:
+def _write_artifacts(prefix: Path, contract: str, feature_set: str = "bar_path") -> None:
     payload = {
         "label_mode": "expected_return",
-        "feature_set": "bar_path",
+        "feature_set": feature_set,
         "return_column": f"return__{contract}",
         "exit_time_column": f"exit_time__{contract}",
         "exit_reason_column": f"exit__{contract}",
@@ -31,6 +31,10 @@ def test_complete_contract_requires_matching_safe_artifacts(tmp_path):
 
     assert is_complete_contract(prefix, contract)
     assert not is_complete_contract(prefix, "h60_target_1.5_stop_0.7")
+    assert not is_complete_contract(prefix, contract, "bar_path_regime")
+
+    _write_artifacts(prefix, contract, feature_set="bar_path_regime")
+    assert is_complete_contract(prefix, contract, "bar_path_regime")
 
 
 def test_complete_contract_rejects_missing_or_live_enabled_output(tmp_path):

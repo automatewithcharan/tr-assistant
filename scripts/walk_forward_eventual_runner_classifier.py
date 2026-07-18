@@ -22,7 +22,10 @@ if str(ROOT) not in sys.path:
 from scripts.research_rank_acceleration_registry import period_metrics, temporal_splits
 from scripts.select_causal_intraday_exit_grid import load_calendar_dates
 from scripts.simulate_causal_intraday_capital_reuse import simulate_calendar
-from scripts.backtest_fixed_time_leader_rank import BAR_PATH_FEATURES
+from scripts.backtest_fixed_time_leader_rank import (
+    BAR_PATH_FEATURES,
+    MARKET_REGIME_FEATURES,
+)
 
 
 SNAPSHOT_FEATURES = [
@@ -150,6 +153,7 @@ def load_labeled_candidates(
     label_mode: str = "eventual_runner",
     exit_reason_column: str = "",
     include_bar_path: bool = False,
+    include_market_regime: bool = False,
 ) -> pd.DataFrame:
     candidates = pd.read_csv(candidate_path)
     required = {
@@ -166,6 +170,8 @@ def load_labeled_candidates(
         required.add(exit_reason_column)
     if include_bar_path:
         required.update(BAR_PATH_FEATURES)
+    if include_market_regime:
+        required.update(MARKET_REGIME_FEATURES)
     missing = required - set(candidates.columns)
     if missing:
         raise ValueError(f"candidate input missing columns: {', '.join(sorted(missing))}")
@@ -180,6 +186,9 @@ def load_labeled_candidates(
     for feature in SNAPSHOT_FEATURES:
         candidates[feature] = pd.to_numeric(candidates[feature], errors="coerce")
     for feature in BAR_PATH_FEATURES:
+        if feature in candidates.columns:
+            candidates[feature] = pd.to_numeric(candidates[feature], errors="coerce")
+    for feature in MARKET_REGIME_FEATURES:
         if feature in candidates.columns:
             candidates[feature] = pd.to_numeric(candidates[feature], errors="coerce")
     candidates = add_temporal_features(candidates)
@@ -679,7 +688,7 @@ def main() -> int:
     parser.add_argument("--stress-cost-pct", type=float, default=0.10)
     parser.add_argument(
         "--feature-set",
-        choices=("snapshot", "temporal", "bar_path"),
+        choices=("snapshot", "temporal", "bar_path", "bar_path_regime"),
         default="snapshot",
     )
     args = parser.parse_args()
@@ -691,7 +700,8 @@ def main() -> int:
         args.runner_threshold,
         args.label_mode,
         args.exit_reason_column,
-        include_bar_path=args.feature_set == "bar_path",
+        include_bar_path=args.feature_set in {"bar_path", "bar_path_regime"},
+        include_market_regime=args.feature_set == "bar_path_regime",
     )
     calendar = load_calendar_dates(args.calendar_file)
     if args.label_mode == "target_before_stop":
@@ -701,7 +711,9 @@ def main() -> int:
     else:
         label_column = "eventual_runner_label"
     objective = "regression" if args.label_mode == "expected_return" else "classification"
-    if args.feature_set == "bar_path":
+    if args.feature_set == "bar_path_regime":
+        model_features = [*FEATURES, *BAR_PATH_FEATURES, *MARKET_REGIME_FEATURES]
+    elif args.feature_set == "bar_path":
         model_features = [*FEATURES, *BAR_PATH_FEATURES]
     elif args.feature_set == "temporal":
         model_features = FEATURES
@@ -797,7 +809,12 @@ def main() -> int:
         ),
         "bar_path_feature_availability": (
             "completed_bars_through_signal_bar_only"
-            if args.feature_set == "bar_path"
+            if args.feature_set in {"bar_path", "bar_path_regime"}
+            else "not_used"
+        ),
+        "market_regime_feature_availability": (
+            "completed_benchmark_bar_and_prior_sessions_only"
+            if args.feature_set == "bar_path_regime"
             else "not_used"
         ),
         "selection_uses_final_period": False,
