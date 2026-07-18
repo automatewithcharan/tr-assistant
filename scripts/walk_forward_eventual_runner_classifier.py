@@ -11,7 +11,7 @@ from typing import Any
 
 import numpy as np
 import pandas as pd
-from sklearn.ensemble import HistGradientBoostingClassifier
+from sklearn.ensemble import HistGradientBoostingClassifier, HistGradientBoostingRegressor
 from sklearn.impute import SimpleImputer
 from sklearn.pipeline import Pipeline
 
@@ -188,6 +188,9 @@ def load_labeled_candidates(
     ).copy()
     if label_mode == "target_before_stop":
         return build_target_before_stop_labels(candidates, exit_reason_column)
+    if label_mode == "expected_return":
+        candidates["expected_return_label"] = candidates[return_column]
+        return candidates
     if not event_path:
         raise ValueError("runner event input is required for eventual-runner labels")
     events = pd.read_csv(event_path)
@@ -214,6 +217,26 @@ def _model(min_samples_leaf: int = 40) -> Pipeline:
     )
 
 
+def _regression_model(min_samples_leaf: int = 40) -> Pipeline:
+    return Pipeline(
+        [
+            ("imputer", SimpleImputer(strategy="median")),
+            (
+                "model",
+                HistGradientBoostingRegressor(
+                    loss="squared_error",
+                    max_iter=80,
+                    learning_rate=0.04,
+                    max_leaf_nodes=12,
+                    min_samples_leaf=int(min_samples_leaf),
+                    l2_regularization=3.0,
+                    random_state=42,
+                ),
+            ),
+        ]
+    )
+
+
 def score_walk_forward(
     frame: pd.DataFrame,
     calendar_dates: list[str],
@@ -225,6 +248,7 @@ def score_walk_forward(
     min_samples_leaf: int = 40,
     label_column: str = "eventual_runner_label",
     features: list[str] | tuple[str, ...] = SNAPSHOT_FEATURES,
+    objective: str = "classification",
 ) -> pd.DataFrame:
     if label_column not in frame.columns:
         raise ValueError(f"training label missing: {label_column}")
@@ -245,22 +269,26 @@ def score_walk_forward(
             if not parts:
                 continue
             train = pd.concat(parts, ignore_index=True)
-            positives = int(train[label_column].sum())
-            negatives = int(len(train) - positives)
-            if (
-                len(train) < int(min_train_rows)
-                or positives < int(min_positive_rows)
-                or negatives <= 0
-            ):
+            if len(train) < int(min_train_rows):
                 continue
             day_counts = train.groupby("date")["symbol"].transform("count").clip(lower=1)
-            positive_boost = min(50.0, negatives / max(1.0, positives))
-            weights = (1.0 / day_counts.to_numpy(dtype=float)) * np.where(
-                train[label_column].to_numpy(dtype=int) == 1,
-                positive_boost,
-                1.0,
-            )
-            model = _model(min_samples_leaf)
+            weights = 1.0 / day_counts.to_numpy(dtype=float)
+            if objective == "classification":
+                positives = int(train[label_column].sum())
+                negatives = int(len(train) - positives)
+                if positives < int(min_positive_rows) or negatives <= 0:
+                    continue
+                positive_boost = min(50.0, negatives / max(1.0, positives))
+                weights = weights * np.where(
+                    train[label_column].to_numpy(dtype=int) == 1,
+                    positive_boost,
+                    1.0,
+                )
+                model = _model(min_samples_leaf)
+            elif objective == "regression":
+                model = _regression_model(min_samples_leaf)
+            else:
+                raise ValueError(f"unsupported objective: {objective}")
             model.fit(
                 train[list(features)],
                 train[label_column],
@@ -269,9 +297,14 @@ def score_walk_forward(
             trained_index = index
             trained_through = prior_dates[-1]
         scored_day = day.copy()
-        scored_day["runner_probability"] = model.predict_proba(
-            scored_day[list(features)]
-        )[:, 1]
+        if objective == "classification":
+            scored_day["runner_probability"] = model.predict_proba(
+                scored_day[list(features)]
+            )[:, 1]
+        else:
+            scored_day["runner_probability"] = model.predict(
+                scored_day[list(features)]
+            )
         scored_day["model_trained_through"] = trained_through
         scored.append(scored_day)
     return pd.concat(scored, ignore_index=True) if scored else pd.DataFrame()
@@ -534,11 +567,20 @@ def evaluate_registry(
                         if not trades.empty
                         else trades
                     )
-                    row["selected_label_precision_pct"] = round(
-                        float(executed["selection_label"].mean() * 100.0)
+                    selected_label_mean = (
+                        float(executed["selection_label"].mean())
                         if not executed.empty
-                        else 0.0,
-                        2,
+                        else 0.0
+                    )
+                    row["selected_label_precision_pct"] = (
+                        round(selected_label_mean * 100.0, 2)
+                        if label_column != "expected_return_label"
+                        else 0.0
+                    )
+                    row["selected_expected_return_mean_pct"] = (
+                        round(selected_label_mean, 6)
+                        if label_column == "expected_return_label"
+                        else 0.0
                     )
                     row["label_column"] = label_column
                     row["selected_runner_precision_pct"] = (
@@ -628,7 +670,7 @@ def main() -> int:
     parser.add_argument("--exit-reason-column", default="exit__h60_target_1.5_stop_1")
     parser.add_argument(
         "--label-mode",
-        choices=("eventual_runner", "target_before_stop"),
+        choices=("eventual_runner", "target_before_stop", "expected_return"),
         default="eventual_runner",
     )
     parser.add_argument("--runner-threshold", type=float, default=10.0)
@@ -652,11 +694,13 @@ def main() -> int:
         include_bar_path=args.feature_set == "bar_path",
     )
     calendar = load_calendar_dates(args.calendar_file)
-    label_column = (
-        "target_before_stop_label"
-        if args.label_mode == "target_before_stop"
-        else "eventual_runner_label"
-    )
+    if args.label_mode == "target_before_stop":
+        label_column = "target_before_stop_label"
+    elif args.label_mode == "expected_return":
+        label_column = "expected_return_label"
+    else:
+        label_column = "eventual_runner_label"
+    objective = "regression" if args.label_mode == "expected_return" else "classification"
     if args.feature_set == "bar_path":
         model_features = [*FEATURES, *BAR_PATH_FEATURES]
     elif args.feature_set == "temporal":
@@ -668,6 +712,7 @@ def main() -> int:
         calendar,
         label_column=label_column,
         features=model_features,
+        objective=objective,
     )
     if scored.empty:
         raise RuntimeError("eventual-runner classifier produced no scored rows")
@@ -680,6 +725,9 @@ def main() -> int:
         args.daily_goal,
         stress_cost_pct=args.stress_cost_pct,
         label_column=label_column,
+        thresholds=(0.0, 0.05, 0.10, 0.20, 0.30)
+        if objective == "regression"
+        else (0.5, 0.6, 0.7, 0.8, 0.9),
     )
     opportunity_summary, opportunity_daily = evaluate_opportunity_bounds(
         scored,
@@ -736,6 +784,7 @@ def main() -> int:
         "strategy": f"walk_forward_{args.label_mode}_classifier",
         "label_mode": args.label_mode,
         "training_label": label_column,
+        "model_objective": objective,
         "feature_set": args.feature_set,
         "model_features": list(model_features),
         "temporal_feature_availability": (
