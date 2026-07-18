@@ -304,6 +304,16 @@ def main() -> int:
         slippage_bps=max(0.0, float(args.slippage_bps)),
     )
     summary = summarize(outcomes, session_dates)
+    available_outcomes = (
+        outcomes[outcomes["OutcomeAvailable"].fillna(False).astype(bool)].copy()
+        if not outcomes.empty
+        else pd.DataFrame()
+    )
+    evaluated_states = (
+        available_outcomes[["Date", "Symbol", "MoveBand"]].drop_duplicates()
+        if not available_outcomes.empty
+        else pd.DataFrame()
+    )
 
     output = Path(args.output_dir)
     output.mkdir(parents=True, exist_ok=True)
@@ -315,9 +325,8 @@ def main() -> int:
         "sessions": len(session_dates),
         "candidate_rows_all_recorder_sessions": int(len(candidates)),
         "candidate_rows_rebuilt_sessions": int(len(evaluable_candidates)),
-        "evaluated_outcomes": int(outcomes.get("OutcomeAvailable", pd.Series(dtype=bool)).sum())
-        if not outcomes.empty
-        else 0,
+        "evaluated_candidate_states": int(len(evaluated_states)),
+        "evaluated_contract_outcomes": int(len(available_outcomes)),
         "move_bands": list(MOVE_LABELS),
         "uses_future_runner_labels": False,
         "evidence_accepted": False,
