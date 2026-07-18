@@ -51,6 +51,8 @@ class FixedLeaderConfig:
     volume_baseline_sessions: int = 20
     min_price: float = 50.0
     min_signal_turnover: float = 30_000_000.0
+    turnover_mode: str = "absolute"
+    min_signal_turnover_floor: float = 5_000_000.0
     min_move_from_open_pct: float = 0.30
     max_move_from_open_pct: float = 3.50
     min_day_change_pct: float = 0.30
@@ -65,6 +67,28 @@ class FixedLeaderConfig:
     max_vwap_distance_pct: float = 1.50
     entry_slippage_bps: float = 5.0
     additional_cost_pct: float = 0.15
+
+
+def projected_daily_turnover(signal_turnover: float, signal_minute: int) -> float:
+    """Project causal cumulative turnover over the 375-minute NSE session."""
+    completed_minutes = max(5, int(signal_minute) - (9 * 60 + 15) + 5)
+    return float(signal_turnover) * (375.0 / min(375, completed_minutes))
+
+
+def turnover_gate_values(
+    signal_turnover: float,
+    signal_minute: int,
+    config: FixedLeaderConfig,
+) -> tuple[bool, float]:
+    projected = projected_daily_turnover(signal_turnover, signal_minute)
+    if config.turnover_mode == "absolute":
+        return signal_turnover >= config.min_signal_turnover, projected
+    if config.turnover_mode == "projected_daily":
+        return (
+            signal_turnover >= config.min_signal_turnover_floor
+            and projected >= config.min_signal_turnover
+        ), projected
+    raise ValueError(f"unsupported turnover mode: {config.turnover_mode}")
 
 
 @dataclass(frozen=True)
@@ -323,11 +347,14 @@ def _process_symbol_file(
                 else 0.0
             )
             signal_turnover = float(cumulative_turnover[signal_index])
+            turnover_passed, projected_turnover = turnover_gate_values(
+                signal_turnover, signal_minute, config
+            )
 
             qualifies = (
                 history_count >= config.min_history_sessions
                 and signal_price >= config.min_price
-                and signal_turnover >= config.min_signal_turnover
+                and turnover_passed
                 and config.min_move_from_open_pct <= move_from_open <= config.max_move_from_open_pct
                 and config.min_day_change_pct <= day_change <= config.max_day_change_pct
                 and abs(gap_pct) <= config.max_abs_gap_pct
@@ -367,6 +394,8 @@ def _process_symbol_file(
                     "volume_acceleration": round(volume_acceleration, 6),
                     "history_sessions": int(history_count),
                     "signal_turnover": round(signal_turnover, 2),
+                    "projected_daily_turnover": round(projected_turnover, 2),
+                    "turnover_mode": config.turnover_mode,
                     "range_position": round(range_position, 6),
                     "pullback_pct": round(pullback, 6),
                     "vwap_distance_pct": round(vwap_distance, 6),
@@ -639,6 +668,12 @@ def main() -> int:
     parser.add_argument("--min-history-sessions", type=int, default=10)
     parser.add_argument("--volume-baseline-sessions", type=int, default=20)
     parser.add_argument("--min-signal-turnover", type=float, default=30_000_000.0)
+    parser.add_argument(
+        "--turnover-mode",
+        choices=("absolute", "projected_daily"),
+        default="absolute",
+    )
+    parser.add_argument("--min-signal-turnover-floor", type=float, default=5_000_000.0)
     parser.add_argument("--min-move-from-open-pct", type=float, default=0.30)
     parser.add_argument("--max-move-from-open-pct", type=float, default=3.50)
     parser.add_argument("--min-day-change-pct", type=float, default=0.30)
@@ -661,6 +696,8 @@ def main() -> int:
         min_history_sessions=args.min_history_sessions,
         volume_baseline_sessions=args.volume_baseline_sessions,
         min_signal_turnover=args.min_signal_turnover,
+        turnover_mode=args.turnover_mode,
+        min_signal_turnover_floor=args.min_signal_turnover_floor,
         min_move_from_open_pct=args.min_move_from_open_pct,
         max_move_from_open_pct=args.max_move_from_open_pct,
         min_day_change_pct=args.min_day_change_pct,
@@ -709,6 +746,9 @@ def main() -> int:
         "prior_volume_baseline_sessions": config.volume_baseline_sessions,
         "entry_slippage_bps": config.entry_slippage_bps,
         "additional_cost_pct": config.additional_cost_pct,
+        "turnover_mode": config.turnover_mode,
+        "minimum_projected_daily_turnover": config.min_signal_turnover,
+        "minimum_causal_turnover_floor": config.min_signal_turnover_floor,
         "selection_uses_final_period": False,
         "historical_research_gate_count": int(summary["research_gate_passed"].sum()),
         "evidence_accepted": False,
