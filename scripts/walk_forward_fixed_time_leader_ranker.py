@@ -21,6 +21,7 @@ if str(ROOT) not in sys.path:
 
 from scripts.select_causal_intraday_exit_grid import load_calendar_dates
 from scripts.research_rank_acceleration_registry import period_metrics
+from scripts.backtest_fixed_time_leader_rank import BAR_PATH_FEATURES
 
 
 DEFAULT_INPUT = "results/Data/fixed_time_leader_rank_v1_candidates.csv"
@@ -30,7 +31,7 @@ DEFAULT_CALENDAR = (
 DEFAULT_OUTPUT = "results/Data/fixed_time_leader_ranker_v1"
 DEFAULT_CONTRACT = "h60_target_1.5_stop_0.7"
 
-MODEL_FEATURES = [
+SNAPSHOT_MODEL_FEATURES = [
     "move_from_open_pct",
     "day_change_pct",
     "gap_pct",
@@ -53,6 +54,7 @@ MODEL_FEATURES = [
     "pullback_quality_rank",
     "vwap_quality_rank",
 ]
+MODEL_FEATURES = [*SNAPSHOT_MODEL_FEATURES, *BAR_PATH_FEATURES]
 
 
 def _model() -> Pipeline:
@@ -75,7 +77,12 @@ def _model() -> Pipeline:
     )
 
 
-def load_candidates(path: str, signal_minute: int, contract: str) -> pd.DataFrame:
+def load_candidates(
+    path: str,
+    signal_minute: int,
+    contract: str,
+    features: list[str] | tuple[str, ...] = SNAPSHOT_MODEL_FEATURES,
+) -> pd.DataFrame:
     frame = pd.read_csv(path)
     return_column = f"return__{contract}"
     required = {
@@ -85,7 +92,7 @@ def load_candidates(path: str, signal_minute: int, contract: str) -> pd.DataFram
         "signal_time",
         "signal_turnover",
         return_column,
-        *[feature for feature in MODEL_FEATURES if feature != "log_signal_turnover"],
+        *[feature for feature in features if feature != "log_signal_turnover"],
     }
     missing = required - set(frame.columns)
     if missing:
@@ -98,7 +105,7 @@ def load_candidates(path: str, signal_minute: int, contract: str) -> pd.DataFram
         pd.to_numeric(frame["signal_turnover"], errors="coerce").clip(lower=0.0)
     )
     frame["trade_return_pct"] = pd.to_numeric(frame[return_column], errors="coerce")
-    for column in MODEL_FEATURES:
+    for column in features:
         frame[column] = pd.to_numeric(frame[column], errors="coerce")
     return frame.dropna(
         subset=["date", "symbol", "signal_time", "trade_return_pct"]
@@ -113,6 +120,7 @@ def score_walk_forward(
     min_train_rows: int = 500,
     retrain_every_days: int = 5,
     progress_every: int = 25,
+    features: list[str] | tuple[str, ...] = SNAPSHOT_MODEL_FEATURES,
 ) -> pd.DataFrame:
     groups = {date: group.copy() for date, group in frame.groupby("date", sort=False)}
     date_position = {date: index for index, date in enumerate(calendar_dates)}
@@ -138,13 +146,13 @@ def score_walk_forward(
             sample_weight = 1.0 / counts.to_numpy(dtype=float)
             model = _model()
             model.fit(
-                train[MODEL_FEATURES],
+                train[list(features)],
                 train["trade_return_pct"],
                 model__sample_weight=sample_weight,
             )
             trained_index = index
         day = day.copy()
-        day["expected_return_pct"] = model.predict(day[MODEL_FEATURES])
+        day["expected_return_pct"] = model.predict(day[list(features)])
         day["model_trained_through"] = prior_dates[-1]
         day["calendar_index"] = date_position[date]
         scored.append(day)
@@ -336,11 +344,22 @@ def main() -> int:
     parser.add_argument("--capital", type=float, default=500_000.0)
     parser.add_argument("--daily-goal", type=float, default=10_000.0)
     parser.add_argument("--progress-every", type=int, default=25)
+    parser.add_argument(
+        "--feature-set", choices=("snapshot", "bar_path"), default="snapshot"
+    )
     args = parser.parse_args()
 
     hour, minute = [int(value) for value in args.signal_time.split(":", 1)]
     signal_minute = hour * 60 + minute
-    candidates = load_candidates(args.input, signal_minute, args.contract)
+    model_features = (
+        MODEL_FEATURES if args.feature_set == "bar_path" else SNAPSHOT_MODEL_FEATURES
+    )
+    candidates = load_candidates(
+        args.input,
+        signal_minute,
+        args.contract,
+        features=model_features,
+    )
     calendar = load_calendar_dates(args.calendar_file)
     scored = score_walk_forward(
         candidates,
@@ -350,6 +369,7 @@ def main() -> int:
         min_train_rows=args.min_train_rows,
         retrain_every_days=args.retrain_every_days,
         progress_every=args.progress_every,
+        features=model_features,
     )
     if scored.empty:
         raise RuntimeError("walk-forward fixed-time ranker produced no predictions")
@@ -407,7 +427,8 @@ def main() -> int:
     )
     metadata = {
         "model": "hist_gradient_boosting_expected_return_equal_day_weighted",
-        "features": MODEL_FEATURES,
+        "features": list(model_features),
+        "feature_set": args.feature_set,
         "signal_time": args.signal_time,
         "contract": args.contract,
         "candidate_availability": "fixed_completed_bar_cross_section_then_next_bar_open",

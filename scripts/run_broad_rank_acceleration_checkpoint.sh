@@ -165,6 +165,12 @@ for SIGNAL_TIME in 09:30 09:45 10:00 10:30; do
         --signal-time "$SIGNAL_TIME" --contract h60_target_1.5_stop_1 \
         --capital "$CAPITAL" --daily-goal "$DAILY_GOAL" \
         --stress-cost-pct "$STRESS_COST_PCT" >> "$LOG" 2>&1
+    nice -n 10 "$PYTHON" scripts/walk_forward_fixed_time_leader_ranker.py \
+        --input "$OUT/fixed_time_candidates.csv" --calendar-file "$CALENDAR" \
+        --output-prefix "$OUT/expected_return_bar_path_${SIGNAL_KEY}" \
+        --signal-time "$SIGNAL_TIME" --contract h60_target_1.5_stop_1 \
+        --feature-set bar_path --capital "$CAPITAL" --daily-goal "$DAILY_GOAL" \
+        --stress-cost-pct "$STRESS_COST_PCT" >> "$LOG" 2>&1
 done
 
 "$PYTHON" scripts/select_expected_return_ranker_registry.py \
