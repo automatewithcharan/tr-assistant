@@ -171,6 +171,19 @@ done
     --glob "$OUT/expected_return_*_selected.json" \
     --output-prefix "$OUT/expected_return_registry" >> "$LOG" 2>&1
 
+"$PYTHON" scripts/select_broad_strategy_registry.py \
+    --capital "$CAPITAL" --output-prefix "$OUT/strategy_family" \
+    --status "eventual_snapshot=$OUT/eventual_runner_classifier_status.json" \
+    --status "eventual_temporal=$OUT/eventual_runner_temporal_classifier_status.json" \
+    --status "eventual_bar_path=$OUT/eventual_runner_bar_path_classifier_status.json" \
+    --status "direct_snapshot=$OUT/direct_target_classifier_status.json" \
+    --status "direct_temporal=$OUT/direct_target_temporal_classifier_status.json" \
+    --status "direct_bar_path=$OUT/direct_target_bar_path_classifier_status.json" \
+    --status "rank_acceleration_long=$OUT/long_status.json" \
+    --status "rank_acceleration_short=$OUT/short_status.json" \
+    --status "expected_return=$OUT/expected_return_registry_status.json" \
+    >> "$LOG" 2>&1
+
 "$PYTHON" scripts/build_broad_rank_checkpoint_status.py \
     --output-dir "$OUT" --status "$STATUS" --milestone "$MILESTONE" \
     --cached-symbols "$CACHED" --mapped-symbols "$MAPPED" >> "$LOG" 2>&1
