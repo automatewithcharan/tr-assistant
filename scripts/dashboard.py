@@ -371,6 +371,7 @@ def leader_discovery_stats():
         {},
     )
     continuation = load_json(DATA / "live_leader_continuation" / "status.json", {})
+    opportunity = continuation.get("clairvoyant_opportunity_bound", {}) or {}
     rows = load_csv_rows(DATA / "live_leader_continuation" / "summary.csv")
     snapshot_rows = load_csv_rows(
         DATA / "live_leader_continuation" / "snapshot_summary.csv"
@@ -431,6 +432,12 @@ def leader_discovery_stats():
         "selection_rejected": bool(
             continuation.get("extension_acceleration_selection_rejected", True)
         ),
+        "opportunity_contract": str(opportunity.get("Contract") or "none"),
+        "opportunity_avg_pnl": number(opportunity, "AvgPerfectOneSlotPnl"),
+        "opportunity_lower95_pnl": number(
+            opportunity, "Lower95PerfectOneSlotPnl"
+        ),
+        "opportunity_goal_hit_pct": number(opportunity, "GoalHitPct"),
         "forward_evaluated": int(number(forward, "Evaluated")),
         "forward_target_hit_pct": number(forward, "TargetHitPct"),
         "forward_avg_return_pct": number(forward, "AvgNetReturnPct"),
@@ -1007,6 +1014,10 @@ def render():
     lower daily bound {leader_discovery['snapshot_lower95_pct']:+.3f}%.
     Recording after {escape(leader_discovery['forward_start'])} remains diagnostic only.
     Evidence accepted: <b>NO</b>; paper promotion: <b>NO</b>; real orders: <b>NO</b>.
+    Clairvoyant one-slot ceiling ({escape(leader_discovery['opportunity_contract'])}, future-known outcomes):
+    {money(leader_discovery['opportunity_avg_pnl'])}/day, lower 95%
+    {money(leader_discovery['opportunity_lower95_pnl'])}/day, goal sessions
+    {leader_discovery['opportunity_goal_hit_pct']:.1f}%; this bound is never tradeable.
   </div>"""
 
     backfill_html = f"""

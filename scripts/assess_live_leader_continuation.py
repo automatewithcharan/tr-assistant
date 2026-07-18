@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import bisect
 import glob
 import json
 import math
@@ -424,6 +425,100 @@ def summarize(
     return result
 
 
+def build_clairvoyant_opportunity_bound(
+    outcomes: pd.DataFrame,
+    session_dates: list[str],
+    *,
+    ticket: float = 50_000.0,
+    daily_goal: float = 10_000.0,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Maximum positive-return interval schedule using future outcomes."""
+    if outcomes is None or outcomes.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    dates = sorted({str(date) for date in session_dates})
+    prepared = outcomes.copy()
+    prepared["EntryWhen"] = pd.to_datetime(prepared["EntryWhen"], errors="coerce")
+    prepared["ExitWhen"] = pd.to_datetime(prepared["ExitWhen"], errors="coerce")
+    prepared["NetReturnPct"] = pd.to_numeric(
+        prepared["NetReturnPct"], errors="coerce"
+    )
+    prepared = prepared[
+        prepared["OutcomeAvailable"].fillna(False).astype(bool)
+        & prepared["EntryWhen"].notna()
+        & prepared["ExitWhen"].notna()
+        & prepared["NetReturnPct"].gt(0.0)
+    ]
+    daily_rows = []
+    for contract in sorted(outcomes["Contract"].astype(str).unique()):
+        contract_rows = prepared[prepared["Contract"].astype(str).eq(contract)]
+        for date in dates:
+            day = (
+                contract_rows[contract_rows["Date"].astype(str).eq(date)]
+                .sort_values(["ExitWhen", "EntryWhen", "Symbol"])
+                .reset_index(drop=True)
+            )
+            ends = day["ExitWhen"].tolist()
+            best = [0.0]
+            for index, row in day.iterrows():
+                prior = bisect.bisect_right(
+                    ends, pd.Timestamp(row["EntryWhen"]), 0, index
+                )
+                pnl = float(row["NetReturnPct"]) * float(ticket) / 100.0
+                best.append(max(best[-1], best[prior] + pnl))
+            daily_rows.append(
+                {
+                    "Date": date,
+                    "Contract": contract,
+                    "PerfectOneSlotPnl": round(best[-1], 2),
+                    "AllPositiveNoCapacityPnl": round(
+                        float(day["NetReturnPct"].sum()) * float(ticket) / 100.0,
+                        2,
+                    ),
+                    "PositiveStates": int(len(day)),
+                    "Ticket": float(ticket),
+                    "DailyGoal": float(daily_goal),
+                    "UsesFutureOutcomes": True,
+                    "PaperPromotionAllowed": False,
+                    "RealOrdersAllowed": False,
+                }
+            )
+    daily = pd.DataFrame(daily_rows)
+    summary_rows = []
+    for contract, group in daily.groupby("Contract", sort=True):
+        pnl = pd.to_numeric(group["PerfectOneSlotPnl"], errors="coerce").fillna(0.0)
+        summary_rows.append(
+            {
+                "Contract": str(contract),
+                "Sessions": int(len(group)),
+                "AvgPerfectOneSlotPnl": round(float(pnl.mean()), 2),
+                "Lower95PerfectOneSlotPnl": round(_lower95(pnl), 2),
+                "GoalHitPct": round(float((pnl >= float(daily_goal)).mean() * 100.0), 2),
+                "MaxPerfectOneSlotPnl": round(float(pnl.max()), 2),
+                "AvgAllPositiveNoCapacityPnl": round(
+                    float(
+                        pd.to_numeric(
+                            group["AllPositiveNoCapacityPnl"], errors="coerce"
+                        ).mean()
+                    ),
+                    2,
+                ),
+                "UsesFutureOutcomes": True,
+                "DiagnosticOnly": True,
+                "EvidenceAccepted": False,
+                "PaperPromotionAllowed": False,
+                "RealOrdersAllowed": False,
+            }
+        )
+    summary = pd.DataFrame(summary_rows)
+    if not summary.empty:
+        summary.sort_values(
+            ["AvgPerfectOneSlotPnl", "Lower95PerfectOneSlotPnl"],
+            ascending=[False, False],
+            inplace=True,
+        )
+    return daily, summary
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -442,6 +537,8 @@ def main() -> int:
     parser.add_argument("--horizon-minutes", type=int, default=60)
     parser.add_argument("--fee-pct", type=float, default=0.10)
     parser.add_argument("--slippage-bps", type=float, default=5.0)
+    parser.add_argument("--ticket", type=float, default=50_000.0)
+    parser.add_argument("--daily-goal", type=float, default=10_000.0)
     args = parser.parse_args()
 
     tape = load_feature_tape(args.features)
@@ -465,6 +562,12 @@ def main() -> int:
         slippage_bps=max(0.0, float(args.slippage_bps)),
     )
     summary = summarize(outcomes, session_dates)
+    opportunity_daily, opportunity_summary = build_clairvoyant_opportunity_bound(
+        outcomes,
+        session_dates,
+        ticket=max(1.0, float(args.ticket)),
+        daily_goal=max(1.0, float(args.daily_goal)),
+    )
     snapshot_outcomes = label_candidates_from_snapshots(
         candidates,
         tape,
@@ -510,6 +613,10 @@ def main() -> int:
     summary.to_csv(output / "summary.csv", index=False)
     snapshot_outcomes.to_csv(output / "snapshot_outcomes.csv", index=False)
     snapshot_summary.to_csv(output / "snapshot_summary.csv", index=False)
+    opportunity_daily.to_csv(output / "opportunity_bound_daily.csv", index=False)
+    opportunity_summary.to_csv(
+        output / "opportunity_bound_summary.csv", index=False
+    )
     available_snapshot_outcomes = (
         snapshot_outcomes[
             snapshot_outcomes["OutcomeAvailable"].fillna(False).astype(bool)
@@ -550,6 +657,12 @@ def main() -> int:
             if extension_selection_rejected
             else "selection gates passed; forward evidence still required"
         ),
+        "clairvoyant_opportunity_bound": (
+            opportunity_summary.iloc[0].to_dict()
+            if not opportunity_summary.empty
+            else {}
+        ),
+        "opportunity_bound_uses_future_outcomes": True,
         "forward_candidate_states": int(
             evaluable_candidates[
                 evaluable_candidates["Date"].astype(str).ge(FROZEN_FORWARD_START)
