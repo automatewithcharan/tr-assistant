@@ -19,15 +19,25 @@ FEATURE_SET="${FULL_SESSION_FEATURE_SET:-bar_path}"
 mkdir -p "$OUT/logs"
 
 contracts=()
-for target in 0.5 0.7 1 1.5; do
-    for stop in 0.5 0.7 1 1.5; do
-        if [ "$SIDE" = "short" ]; then
-            contracts+=("h60_short_target_${target}_stop_${stop}")
-        else
-            contracts+=("h60_target_${target}_stop_${stop}")
+if [ -n "${FULL_SESSION_CONTRACTS:-}" ]; then
+    IFS=',' read -r -a contracts <<<"$FULL_SESSION_CONTRACTS"
+    for contract in "${contracts[@]}"; do
+        if [[ ! "$contract" =~ ^h60(_short)?_target_(0\.5|0\.7|1|1\.5)_stop_(0\.5|0\.7|1|1\.5)$ ]]; then
+            echo "Unsupported full-session contract: $contract" >&2
+            exit 2
         fi
     done
-done
+else
+    for target in 0.5 0.7 1 1.5; do
+        for stop in 0.5 0.7 1 1.5; do
+            if [ "$SIDE" = "short" ]; then
+                contracts+=("h60_short_target_${target}_stop_${stop}")
+            else
+                contracts+=("h60_target_${target}_stop_${stop}")
+            fi
+        done
+    done
+fi
 
 run_contract() {
     local contract="$1"
