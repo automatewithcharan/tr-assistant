@@ -38,7 +38,8 @@ def summarize(
         and fetch_errors == 0
         and bool(audit_counts)
     )
-    cached = int(summary.get("exact_range_cache_files") or 0)
+    present = int(summary.get("exact_range_cache_files") or 0)
+    cached = int(summary.get("quality_eligible_cache_files", present) or 0)
     mapped = int(summary.get("mapped_symbols") or 0)
     remaining = int(summary.get("needs_fetch_symbols") or 0)
     status = {
@@ -49,6 +50,8 @@ def summarize(
         "sync_rc": int(sync_rc),
         "successful": successful,
         "cached_symbols": cached,
+        "present_cache_files": present,
+        "quality_rejected_cache_files": int(summary.get("quality_rejected_cache_files") or 0),
         "mapped_symbols": mapped,
         "remaining_symbols": remaining,
         "coverage_pct": round(cached / mapped * 100.0, 2) if mapped else 0.0,

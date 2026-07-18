@@ -399,6 +399,25 @@ def _worker(path_text: str) -> list[dict]:
     )
 
 
+def candidate_files(data_dir: str, universe_file: str = "") -> list[Path]:
+    files = [
+        path
+        for path in sorted(Path(data_dir).glob("*.csv"))
+        if path.stem.upper() != "NIFTY 50"
+    ]
+    if not universe_file:
+        return files
+    universe = pd.read_csv(universe_file)
+    if universe.empty:
+        raise ValueError(f"quality universe is empty: {universe_file}")
+    symbol_column = next(
+        (name for name in ("symbol", "Symbol", "SYMBOL", "Stock") if name in universe.columns),
+        universe.columns[0],
+    )
+    eligible = set(universe[symbol_column].astype(str).str.strip().str.upper())
+    return [path for path in files if path.stem.strip().upper() in eligible]
+
+
 def build_candidates(
     data_dir: str,
     calendar_file: str,
@@ -407,13 +426,10 @@ def build_candidates(
     workers: int,
     progress_every: int,
     limit_symbols: int = 0,
+    universe_file: str = "",
 ) -> pd.DataFrame:
     benchmark = _load_benchmark(calendar_file)
-    files = [
-        path
-        for path in sorted(Path(data_dir).glob("*.csv"))
-        if path.stem.upper() != "NIFTY 50"
-    ]
+    files = candidate_files(data_dir, universe_file)
     if limit_symbols:
         files = files[: int(limit_symbols)]
     rows: list[dict] = []
@@ -618,6 +634,7 @@ def main() -> int:
     parser.add_argument("--workers", type=int, default=8)
     parser.add_argument("--progress-every", type=int, default=50)
     parser.add_argument("--limit-symbols", type=int, default=0)
+    parser.add_argument("--universe-file", default="")
     parser.add_argument("--warmup-days", type=int, default=80)
     parser.add_argument("--min-history-sessions", type=int, default=10)
     parser.add_argument("--volume-baseline-sessions", type=int, default=20)
@@ -661,6 +678,7 @@ def main() -> int:
         args.workers,
         args.progress_every,
         args.limit_symbols,
+        args.universe_file,
     )
     if candidates.empty:
         raise RuntimeError("no fixed-time leader candidates")
@@ -697,6 +715,7 @@ def main() -> int:
         "paper_promotion_allowed": False,
         "real_orders_allowed": False,
         "universe_caveat": "current_cached_universe_survivorship_bias",
+        "quality_universe_file": args.universe_file,
     }
     prefix.with_name(prefix.name + "_metadata.json").write_text(
         json.dumps(metadata, indent=2), encoding="utf-8"

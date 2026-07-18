@@ -32,8 +32,8 @@ def existing_file_stats(directory: Path) -> tuple[int, int]:
     return len(sizes), sum(sizes)
 
 
-def retry_symbols_from_audits(prefix: Path, interval: str) -> set[str]:
-    """Return symbols whose latest batch audit recorded a fetch error."""
+def latest_statuses_from_audits(prefix: Path, interval: str) -> dict[str, str]:
+    """Return each symbol's status from its most recently modified batch audit."""
     latest: dict[str, tuple[float, str]] = {}
     pattern = f"{prefix.name}_batch_*_{interval}_audit.csv"
     for path in prefix.parent.glob(pattern):
@@ -48,7 +48,16 @@ def retry_symbols_from_audits(prefix: Path, interval: str) -> set[str]:
                 continue
             if symbol not in latest or modified >= latest[symbol][0]:
                 latest[symbol] = (modified, str(row.get("status", "")).strip().lower())
-    return {symbol for symbol, (_, status) in latest.items() if status == "fetch_error"}
+    return {symbol: status for symbol, (_, status) in latest.items()}
+
+
+def retry_symbols_from_audits(prefix: Path, interval: str) -> set[str]:
+    """Return symbols whose latest batch audit recorded a fetch error."""
+    return {
+        symbol
+        for symbol, status in latest_statuses_from_audits(prefix, interval).items()
+        if status == "fetch_error"
+    }
 
 
 def build_plan(
@@ -60,6 +69,7 @@ def build_plan(
     batch_size: int,
     chunk_days: int,
     retry_symbols: set[str] | None = None,
+    latest_audit_statuses: dict[str, str] | None = None,
 ) -> tuple[pd.DataFrame, dict]:
     mapping = map_symbols(symbols, instruments)
     range_dir = cache_path("__PLAN__", interval, start, end).parent
@@ -72,10 +82,16 @@ def build_plan(
     size = max(1, int(batch_size))
     rows = []
     retry_symbols = retry_symbols or set()
+    latest_audit_statuses = latest_audit_statuses or {}
+    eligible_statuses = {"complete", "warning", "listing_limited"}
     for position, rec in enumerate(mapping.to_dict(orient="records")):
         symbol = str(rec.get("symbol", "")).strip().upper()
         path = range_dir / f"{symbol}.csv"
         present = path.exists() and path.stat().st_size > 0
+        audit_status = latest_audit_statuses.get(symbol, "")
+        quality_eligible = bool(
+            present and (not audit_status or audit_status in eligible_statuses)
+        )
         rows.append(
             {
                 **rec,
@@ -83,6 +99,8 @@ def build_plan(
                 "batch_index": position // size,
                 "cache_present": present,
                 "cache_bytes": path.stat().st_size if present else 0,
+                "latest_audit_status": audit_status or "not_audited",
+                "quality_eligible": quality_eligible,
                 "needs_fetch": rec.get("status") == "mapped" and (not present or symbol in retry_symbols),
                 "cache_path": str(path),
             }
@@ -96,6 +114,10 @@ def build_plan(
         "mapped_symbols": mapped,
         "unmapped_symbols": int(len(symbols) - mapped),
         "exact_range_cache_files": int(manifest["cache_present"].sum()),
+        "quality_eligible_cache_files": int(manifest["quality_eligible"].sum()),
+        "quality_rejected_cache_files": int(
+            (manifest["cache_present"] & ~manifest["quality_eligible"]).sum()
+        ),
         "needs_fetch_symbols": needs_fetch,
         "batch_size": size,
         "batches": int(math.ceil(len(symbols) / size)),
@@ -128,7 +150,10 @@ def main() -> int:
     instruments = load_instruments(client=None, refresh=False)
     prefix = Path(args.out_prefix)
     prefix.parent.mkdir(parents=True, exist_ok=True)
-    retry_symbols = retry_symbols_from_audits(prefix, args.interval)
+    latest_audit_statuses = latest_statuses_from_audits(prefix, args.interval)
+    retry_symbols = {
+        symbol for symbol, status in latest_audit_statuses.items() if status == "fetch_error"
+    }
     manifest, summary = build_plan(
         symbols,
         instruments,
@@ -138,9 +163,13 @@ def main() -> int:
         args.batch_size,
         args.chunk_days,
         retry_symbols=retry_symbols,
+        latest_audit_statuses=latest_audit_statuses,
     )
     summary["fetch_error_retry_symbols"] = len(retry_symbols)
     manifest.to_csv(prefix.with_name(prefix.name + "_manifest.csv"), index=False)
+    manifest.loc[manifest["quality_eligible"], ["symbol"]].to_csv(
+        prefix.with_name(prefix.name + "_quality_eligible_universe.csv"), index=False
+    )
     prefix.with_name(prefix.name + "_summary.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
     commands = []
     for batch_index in range(int(summary["batches"])):

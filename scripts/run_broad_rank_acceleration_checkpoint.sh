@@ -14,6 +14,7 @@ LOG="$REPO/results/Data/broad_rank_acceleration/checkpoint.log"
 SUMMARY="$REPO/results/Data/broad_universe_5minute_backfill_summary.json"
 DATA_DIR="$REPO/results/Data/kite_history_backfill/5minute/2024-05-30_2026-05-29"
 CALENDAR="$DATA_DIR/NIFTY 50.csv"
+QUALITY_UNIVERSE="$REPO/results/Data/broad_universe_5minute_backfill_quality_eligible_universe.csv"
 WORKERS="${BROAD_RANK_WORKERS:-$(nproc)}"
 case "$WORKERS" in
     ''|*[!0-9]*) WORKERS="$(nproc)" ;;
@@ -35,12 +36,12 @@ exec 8>>"$BACKFILL_LOCK"
 flock -n 8 || exit 0
 mkdir -p "$(dirname "$LOG")"
 
-if [ ! -s "$SUMMARY" ] || [ ! -s "$CALENDAR" ]; then
+if [ ! -s "$SUMMARY" ] || [ ! -s "$CALENDAR" ] || [ ! -s "$QUALITY_UNIVERSE" ]; then
     echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] waiting for summary/calendar" >> "$LOG"
     exit 0
 fi
 
-CACHED=$($PYTHON -c 'import json,sys; print(int(json.load(open(sys.argv[1])).get("exact_range_cache_files", 0)))' "$SUMMARY")
+CACHED=$($PYTHON -c 'import json,sys; d=json.load(open(sys.argv[1])); print(int(d.get("quality_eligible_cache_files", d.get("exact_range_cache_files", 0))))' "$SUMMARY")
 MAPPED=$($PYTHON -c 'import json,sys; print(int(json.load(open(sys.argv[1])).get("mapped_symbols", 0)))' "$SUMMARY")
 MILESTONE=0
 for value in 1000 2000 2900; do
@@ -66,6 +67,7 @@ echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] starting checkpoint=$MILESTONE cached=$C
 
 nice -n 10 "$PYTHON" scripts/backtest_fixed_time_leader_rank.py \
     --data-dir "$DATA_DIR" --calendar-file "$CALENDAR" \
+    --universe-file "$QUALITY_UNIVERSE" \
     --output-prefix "$OUT/fixed_time" \
     --signal-times 09:30,09:45,10:00,10:30 \
     --horizons 60 --targets 0.5,0.7,1.0,1.5 --stops 0.5,0.7,1.0,1.5 \
