@@ -783,6 +783,9 @@ def main() -> int:
     status = {
         "strategy": f"walk_forward_{args.label_mode}_classifier",
         "label_mode": args.label_mode,
+        "return_column": args.return_column,
+        "exit_time_column": args.exit_time_column,
+        "exit_reason_column": args.exit_reason_column,
         "training_label": label_column,
         "model_objective": objective,
         "feature_set": args.feature_set,
