@@ -396,6 +396,13 @@ def main() -> int:
         f"return__{selected_contract}",
         selected_top_k,
     )
+    stress_final_daily = daily_returns(
+        pools[selected_rule],
+        splits["final"],
+        f"return__{selected_contract}",
+        selected_top_k,
+        extra_cost_pct=args.stress_cost_pct,
+    )
     final_goal_evidence_passed = bool(
         selected["selection_gate_passed"]
         and selected["stress_final_trade_days"] >= 30
@@ -408,6 +415,9 @@ def main() -> int:
     prefix.parent.mkdir(parents=True, exist_ok=True)
     summary.to_csv(prefix.with_name(prefix.name + "_summary.csv"), index=False)
     final_daily.to_csv(prefix.with_name(prefix.name + "_selected_final_daily.csv"), index=False)
+    stress_final_daily.to_csv(
+        prefix.with_name(prefix.name + "_selected_stress_final_daily.csv"), index=False
+    )
     pools[selected_rule].to_csv(
         prefix.with_name(prefix.name + "_selected_candidates.csv"), index=False
     )

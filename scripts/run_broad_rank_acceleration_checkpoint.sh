@@ -18,6 +18,7 @@ QUALITY_UNIVERSE="$REPO/results/Data/broad_universe_5minute_backfill_quality_eli
 WORKERS="${BROAD_RANK_WORKERS:-$(nproc)}"
 CAPITAL="${BROAD_RANK_CAPITAL:-500000}"
 DAILY_GOAL="${BROAD_RANK_DAILY_GOAL:-10000}"
+STRESS_COST_PCT="${BROAD_RANK_STRESS_COST_PCT:-0.10}"
 case "$WORKERS" in
     ''|*[!0-9]*) WORKERS="$(nproc)" ;;
 esac
@@ -67,6 +68,7 @@ printf '%s\n' "$CACHED" > "$OUT/coverage_at_start.txt"
 printf '%s\n' "$MAPPED" > "$OUT/mapped_at_start.txt"
 printf '%s\n' "$CAPITAL" > "$OUT/starting_capital.txt"
 printf '%s\n' "$DAILY_GOAL" > "$OUT/daily_goal.txt"
+printf '%s\n' "$STRESS_COST_PCT" > "$OUT/stress_cost_pct.txt"
 git rev-parse HEAD > "$OUT/code_commit_at_start.txt"
 sha256sum "$QUALITY_UNIVERSE" | awk '{print $1}' > "$OUT/quality_universe_sha256.txt"
 sha256sum "$CALENDAR" | awk '{print $1}' > "$OUT/calendar_sha256.txt"
@@ -88,30 +90,54 @@ nice -n 10 "$PYTHON" scripts/audit_top_gainer_early_recall.py \
     --output-prefix "$OUT/top_gainer_recall" --workers "$WORKERS" \
     >> "$LOG" 2>&1
 
+nice -n 10 "$PYTHON" scripts/audit_runner_filter_funnel.py \
+    --data-dir "$DATA_DIR" --runner-events "$OUT/top_gainer_recall_events.csv" \
+    --calendar-file "$CALENDAR" --universe-file "$QUALITY_UNIVERSE" \
+    --output-prefix "$OUT/runner_filter_funnel" --workers "$WORKERS" \
+    >> "$LOG" 2>&1
+
 nice -n 10 "$PYTHON" scripts/walk_forward_eventual_runner_classifier.py \
     --candidates "$OUT/fixed_time_candidates.csv" \
     --runner-events "$OUT/top_gainer_recall_events.csv" \
     --calendar-file "$CALENDAR" --output-prefix "$OUT/eventual_runner_classifier" \
     --capital "$CAPITAL" --daily-goal "$DAILY_GOAL" \
+    --stress-cost-pct "$STRESS_COST_PCT" \
     >> "$LOG" 2>&1
 
 nice -n 10 "$PYTHON" scripts/walk_forward_eventual_runner_classifier.py \
     --candidates "$OUT/fixed_time_candidates.csv" \
     --calendar-file "$CALENDAR" --output-prefix "$OUT/direct_target_classifier" \
     --label-mode target_before_stop --capital "$CAPITAL" \
-    --daily-goal "$DAILY_GOAL" >> "$LOG" 2>&1
+    --daily-goal "$DAILY_GOAL" --stress-cost-pct "$STRESS_COST_PCT" \
+    >> "$LOG" 2>&1
 
 nice -n 10 "$PYTHON" scripts/research_rank_acceleration_registry.py \
     --input "$OUT/fixed_time_candidates.csv" --calendar-file "$CALENDAR" \
     --output-prefix "$OUT/long" --capital "$CAPITAL" \
-    --daily-goal "$DAILY_GOAL" >> "$LOG" 2>&1
+    --daily-goal "$DAILY_GOAL" --stress-cost-pct "$STRESS_COST_PCT" \
+    >> "$LOG" 2>&1
 
 nice -n 10 "$PYTHON" scripts/research_rank_acceleration_registry.py \
     --side short --input "$OUT/fixed_time_candidates.csv" \
     --calendar-file "$CALENDAR" --data-dir "$DATA_DIR" \
     --output-prefix "$OUT/short" --horizon-minutes 60 \
     --capital "$CAPITAL" --daily-goal "$DAILY_GOAL" \
+    --stress-cost-pct "$STRESS_COST_PCT" \
     >> "$LOG" 2>&1
+
+for SIGNAL_TIME in 09:30 09:45 10:00 10:30; do
+    SIGNAL_KEY="${SIGNAL_TIME/:/}"
+    nice -n 10 "$PYTHON" scripts/walk_forward_fixed_time_leader_ranker.py \
+        --input "$OUT/fixed_time_candidates.csv" --calendar-file "$CALENDAR" \
+        --output-prefix "$OUT/expected_return_${SIGNAL_KEY}" \
+        --signal-time "$SIGNAL_TIME" --contract h60_target_1.5_stop_1 \
+        --capital "$CAPITAL" --daily-goal "$DAILY_GOAL" \
+        --stress-cost-pct "$STRESS_COST_PCT" >> "$LOG" 2>&1
+done
+
+"$PYTHON" scripts/select_expected_return_ranker_registry.py \
+    --glob "$OUT/expected_return_*_selected.json" \
+    --output-prefix "$OUT/expected_return_registry" >> "$LOG" 2>&1
 
 "$PYTHON" scripts/build_broad_rank_checkpoint_status.py \
     --output-dir "$OUT" --status "$STATUS" --milestone "$MILESTONE" \

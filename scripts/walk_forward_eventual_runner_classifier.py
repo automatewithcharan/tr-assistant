@@ -523,6 +523,45 @@ def evaluate_registry(
     return summary.reset_index(drop=True), artifacts
 
 
+def rebuild_selected_stress_artifacts(
+    scored: pd.DataFrame,
+    calendar_dates: list[str],
+    selected: dict[str, Any],
+    return_column: str,
+    exit_time_column: str,
+    capital: float,
+    daily_goal: float,
+    stress_cost_pct: float,
+    label_column: str,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Rebuild the chosen path with the declared extra stress cost."""
+    allowed_minutes = tuple(
+        int(value)
+        for value in str(selected["signal_minutes"]).split(",")
+        if str(value).strip()
+    )
+    window = scored[scored["signal_minute"].isin(allowed_minutes)].copy()
+    chosen = select_candidates(
+        window,
+        float(selected["threshold"]),
+        int(selected["top_per_signal"]),
+    )
+    chosen["selection_label"] = chosen[label_column]
+    scored_dates = [
+        date for date in calendar_dates if date >= str(scored["date"].min())
+    ]
+    return simulate_calendar(
+        chosen,
+        scored_dates,
+        capital,
+        int(selected["slots"]),
+        return_column,
+        exit_time_column,
+        daily_goal,
+        extra_cost_pct=stress_cost_pct,
+    )
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--candidates", required=True)
@@ -540,6 +579,7 @@ def main() -> int:
     parser.add_argument("--runner-threshold", type=float, default=10.0)
     parser.add_argument("--capital", type=float, default=400_000.0)
     parser.add_argument("--daily-goal", type=float, default=10_000.0)
+    parser.add_argument("--stress-cost-pct", type=float, default=0.10)
     args = parser.parse_args()
     frame = load_labeled_candidates(
         args.candidates,
@@ -566,6 +606,7 @@ def main() -> int:
         args.exit_time_column,
         args.capital,
         args.daily_goal,
+        stress_cost_pct=args.stress_cost_pct,
         label_column=label_column,
     )
     opportunity_summary, opportunity_daily = evaluate_opportunity_bounds(
@@ -574,7 +615,7 @@ def main() -> int:
         args.return_column,
         args.capital,
         args.daily_goal,
-        stress_cost_pct=0.10,
+        stress_cost_pct=args.stress_cost_pct,
     )
     selected = summary.iloc[0].to_dict()
     key = (
@@ -584,11 +625,28 @@ def main() -> int:
         int(selected["slots"]),
     )
     daily, trades = artifacts[key]
+    stress_daily, stress_trades = rebuild_selected_stress_artifacts(
+        scored,
+        calendar,
+        selected,
+        args.return_column,
+        args.exit_time_column,
+        args.capital,
+        args.daily_goal,
+        args.stress_cost_pct,
+        label_column,
+    )
     prefix = Path(args.output_prefix)
     prefix.parent.mkdir(parents=True, exist_ok=True)
     summary.to_csv(prefix.with_name(prefix.name + "_summary.csv"), index=False)
     daily.to_csv(prefix.with_name(prefix.name + "_selected_daily.csv"), index=False)
     trades.to_csv(prefix.with_name(prefix.name + "_selected_trades.csv"), index=False)
+    stress_daily.to_csv(
+        prefix.with_name(prefix.name + "_selected_stress_daily.csv"), index=False
+    )
+    stress_trades.to_csv(
+        prefix.with_name(prefix.name + "_selected_stress_trades.csv"), index=False
+    )
     opportunity_summary.to_csv(
         prefix.with_name(prefix.name + "_opportunity_bound_summary.csv"), index=False
     )
@@ -609,6 +667,7 @@ def main() -> int:
         "selection_uses_final_period": False,
         "label_available_only_after_session": True,
         "capital_reuse": "exact_exit_bar_unleveraged",
+        "stress_extra_cost_pct": float(args.stress_cost_pct),
         "optimistic_opportunity_bound": opportunity_summary.to_dict(orient="records"),
         "opportunity_bound_uses_future_outcomes": True,
         "opportunity_bound_can_promote_strategy": False,

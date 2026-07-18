@@ -55,6 +55,12 @@ def build_status(
     direct_classifier_status = load_optional_status(
         output_dir / "direct_target_classifier_status.json"
     )
+    runner_filter_funnel_status = load_optional_status(
+        output_dir / "runner_filter_funnel_status.json"
+    )
+    expected_return_registry_status = load_optional_status(
+        output_dir / "expected_return_registry_status.json"
+    )
     cached = max(0, int(cached_symbols))
     mapped = max(0, int(mapped_symbols))
     coverage_ratio = cached / mapped if mapped else 0.0
@@ -85,6 +91,7 @@ def build_status(
         ),
         "starting_capital": load_optional_text(output_dir / "starting_capital.txt"),
         "daily_goal": load_optional_text(output_dir / "daily_goal.txt"),
+        "stress_cost_pct": load_optional_text(output_dir / "stress_cost_pct.txt"),
     }
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -116,6 +123,8 @@ def build_status(
         "short_status": short_status,
         "eventual_runner_classifier_status": classifier_status,
         "direct_target_classifier_status": direct_classifier_status,
+        "runner_filter_funnel_status": runner_filter_funnel_status,
+        "expected_return_registry_status": expected_return_registry_status,
     }
 
 
