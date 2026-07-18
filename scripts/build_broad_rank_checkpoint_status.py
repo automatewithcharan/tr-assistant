@@ -83,6 +83,8 @@ def build_status(
         "fixed_time_candidates_sha256": sha256_file(
             output_dir / "fixed_time_candidates.csv"
         ),
+        "starting_capital": load_optional_text(output_dir / "starting_capital.txt"),
+        "daily_goal": load_optional_text(output_dir / "daily_goal.txt"),
     }
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),

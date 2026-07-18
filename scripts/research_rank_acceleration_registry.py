@@ -346,6 +346,7 @@ def main() -> int:
     parser.add_argument("--output-prefix", default=DEFAULT_OUTPUT)
     parser.add_argument("--warmup-days", type=int, default=76)
     parser.add_argument("--capital", type=float, default=400_000.0)
+    parser.add_argument("--daily-goal", type=float, default=10_000.0)
     parser.add_argument("--stress-cost-pct", type=float, default=0.10)
     parser.add_argument("--side", choices=["long", "short"], default="long")
     parser.add_argument("--data-dir", default="")
@@ -398,7 +399,7 @@ def main() -> int:
     final_goal_evidence_passed = bool(
         selected["selection_gate_passed"]
         and selected["stress_final_trade_days"] >= 30
-        and selected["stress_final_mean_lower_95_pnl"] >= 10_000.0
+        and selected["stress_final_mean_lower_95_pnl"] >= args.daily_goal
         and selected["stress_final_goal_hit_pct"] >= 50.0
         and selected["stress_final_worst_day_pct"] > -1.5
     )
@@ -423,10 +424,10 @@ def main() -> int:
         "final_goal_evidence_passed": final_goal_evidence_passed,
         "goal_contract": {
             "capital": float(args.capital),
-            "net_daily_pnl": 10_000.0,
+            "net_daily_pnl": float(args.daily_goal),
             "minimum_stress_final_trade_days": 30,
             "minimum_stress_final_goal_hit_pct": 50.0,
-            "minimum_stress_final_mean_lower_95_pnl": 10_000.0,
+            "minimum_stress_final_mean_lower_95_pnl": float(args.daily_goal),
             "minimum_stress_final_worst_day_pct": -1.5,
         },
         "selected_metrics": selected,
