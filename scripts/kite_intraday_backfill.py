@@ -219,6 +219,9 @@ def fetch_symbol(
     return merged, "; ".join(errors[:5])
 
 
+COMPLETE_AUDIT_STATUSES = {"complete", "warning", "listing_limited"}
+
+
 def audit_intraday(symbol: str, df: pd.DataFrame, interval: str, start: str, end: str, expected_days: Optional[set[pd.Timestamp]], fetch_error: str = "") -> dict:
     if df is None or df.empty:
         return {
@@ -230,6 +233,9 @@ def audit_intraday(symbol: str, df: pd.DataFrame, interval: str, start: str, end
             "end": "",
             "day_coverage_pct": 0.0,
             "bar_coverage_pct": 0.0,
+            "available_day_coverage_pct": 0.0,
+            "available_bar_coverage_pct": 0.0,
+            "history_scope": "missing",
             "missing_days": 0,
             "duplicates": 0,
             "bad_ohlc": 0,
@@ -247,13 +253,25 @@ def audit_intraday(symbol: str, df: pd.DataFrame, interval: str, start: str, end
     day_coverage = len(dates & required) / len(required) * 100.0 if required else 0.0
     expected_rows = max(1, len(required) * bars_per_day(interval))
     bar_coverage = len(work) / expected_rows * 100.0 if required else 0.0
+    first_date = work["datetime"].min().normalize()
+    available_required = {d for d in required if d >= first_date}
+    available_missing = sorted(available_required - dates) if available_required else []
+    available_day_coverage = (
+        len(dates & available_required) / len(available_required) * 100.0
+        if available_required
+        else 0.0
+    )
+    available_expected_rows = max(1, len(available_required) * bars_per_day(interval))
+    available_bar_coverage = len(work) / available_expected_rows * 100.0 if available_required else 0.0
     duplicates = int(work["datetime"].duplicated().sum())
     bad_ohlc = int(((work["high"] < work[["open", "close", "low"]].max(axis=1)) | (work["low"] > work[["open", "close", "high"]].min(axis=1))).sum())
     zero_volume = int((work["volume"].fillna(0) <= 0).sum())
     issues = []
-    if work["datetime"].min().normalize() > pd.Timestamp(start) + pd.Timedelta(days=10):
+    late_start = first_date > pd.Timestamp(start) + pd.Timedelta(days=10)
+    early_end = work["datetime"].max().normalize() < pd.Timestamp(end) - pd.Timedelta(days=10)
+    if late_start:
         issues.append("late start")
-    if work["datetime"].max().normalize() < pd.Timestamp(end) - pd.Timedelta(days=10):
+    if early_end:
         issues.append("early end")
     if missing:
         issues.append(f"missing_days={len(missing)}")
@@ -268,6 +286,18 @@ def audit_intraday(symbol: str, df: pd.DataFrame, interval: str, start: str, end
     status = "complete" if not issues else "warning"
     if day_coverage < 95.0 or bar_coverage < 85.0 or "late start" in issues or "early end" in issues or fetch_error:
         status = "incomplete" if not fetch_error else "fetch_error"
+    listing_limited = (
+        late_start
+        and not early_end
+        and not fetch_error
+        and len(available_required) >= 20
+        and available_day_coverage >= 95.0
+        and available_bar_coverage >= 85.0
+        and len(available_missing) <= max(2, int(len(available_required) * 0.05))
+    )
+    if listing_limited:
+        status = "listing_limited"
+        issues.append(f"listing_limited_start={first_date.date()}")
     return {
         "symbol": symbol,
         "interval": interval,
@@ -277,6 +307,9 @@ def audit_intraday(symbol: str, df: pd.DataFrame, interval: str, start: str, end
         "end": str(work["datetime"].max()),
         "day_coverage_pct": round(day_coverage, 2),
         "bar_coverage_pct": round(bar_coverage, 2),
+        "available_day_coverage_pct": round(available_day_coverage, 2),
+        "available_bar_coverage_pct": round(available_bar_coverage, 2),
+        "history_scope": "listing_limited" if listing_limited else "requested_range",
         "missing_days": len(missing),
         "duplicates": duplicates,
         "bad_ohlc": bad_ohlc,
@@ -358,7 +391,7 @@ def main() -> int:
                 continue
             cached = read_cache(symbol, interval, args.start, args.end)
             pre_audit = audit_intraday(symbol, cached, interval, args.start, args.end, expected_days)
-            should_fetch = not args.dry_run and (args.force or pre_audit["status"] not in {"complete", "warning"})
+            should_fetch = not args.dry_run and (args.force or pre_audit["status"] not in COMPLETE_AUDIT_STATUSES)
             fetch_error = ""
             if should_fetch:
                 fetched, fetch_error = fetch_symbol(
@@ -384,17 +417,17 @@ def main() -> int:
             all_audits.append(audit)
             if idx % 10 == 0:
                 stock_rows = [r for r in interval_rows if r["symbol"] != "NIFTY 50"]
-                complete = sum(1 for r in stock_rows if r["status"] in {"complete", "warning"})
+                complete = sum(1 for r in stock_rows if r["status"] in COMPLETE_AUDIT_STATUSES)
                 print(f"  {interval}: audited {idx}/{len(records)}; complete-ish stocks={complete}", flush=True)
 
         interval_df = pd.DataFrame(interval_rows)
         interval_df.to_csv(batch_prefix.with_name(batch_prefix.name + f"_{interval}_audit.csv"), index=False)
         stock_df = interval_df[~interval_df["symbol"].eq("NIFTY 50")]
-        complete_count = int(stock_df["status"].isin(["complete", "warning"]).sum())
+        complete_count = int(stock_df["status"].isin(COMPLETE_AUDIT_STATUSES).sum())
         complete_pct = complete_count / max(1, len(stock_df)) * 100.0
-        nifty_complete = bool(interval_df[interval_df["symbol"].eq("NIFTY 50")]["status"].isin(["complete", "warning"]).any())
+        nifty_complete = bool(interval_df[interval_df["symbol"].eq("NIFTY 50")]["status"].isin(COMPLETE_AUDIT_STATUSES).any())
         gate_pass = complete_pct >= float(args.min_symbol_complete_pct) and nifty_complete
-        eligible = stock_df[stock_df["status"].isin(["complete", "warning"])]["symbol"].tolist()
+        eligible = stock_df[stock_df["status"].isin(COMPLETE_AUDIT_STATUSES)]["symbol"].tolist()
         pd.DataFrame({"symbol": eligible}).to_csv(batch_prefix.with_name(batch_prefix.name + f"_{interval}_complete_universe.csv"), index=False)
         interval_gates[interval] = {
             "interval": interval,
@@ -406,7 +439,8 @@ def main() -> int:
             "nifty_complete": nifty_complete,
             "gate_pass": gate_pass,
             "min_symbol_complete_pct": float(args.min_symbol_complete_pct),
-            "incomplete_symbols": stock_df[~stock_df["status"].isin(["complete", "warning"])]["symbol"].tolist(),
+            "listing_limited_symbols": stock_df[stock_df["status"].eq("listing_limited")]["symbol"].tolist(),
+            "incomplete_symbols": stock_df[~stock_df["status"].isin(COMPLETE_AUDIT_STATUSES)]["symbol"].tolist(),
         }
 
     gate = {
