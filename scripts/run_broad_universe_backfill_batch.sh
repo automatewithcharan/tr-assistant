@@ -13,6 +13,7 @@ UNIVERSE="$REPO/results/Indices/NSE_BSE_COMBINED.csv"
 START="${BROAD_BACKFILL_START:-2024-05-30}"
 END="${BROAD_BACKFILL_END:-2026-05-29}"
 BATCH_SIZE="${BROAD_BACKFILL_BATCH_SIZE:-100}"
+REQUEST_SLEEP="${BROAD_BACKFILL_REQUEST_SLEEP:-0.4}"
 BUCKET="${TRADE_ASSISTANT_ARCHIVE_BUCKET:-}"
 
 (umask 000; : >>"$LOCK")
@@ -63,7 +64,7 @@ set +e
 "$PYTHON" scripts/kite_intraday_backfill.py \
     --universe "$UNIVERSE" --limit 0 --start "$START" --end "$END" \
     --intervals 5minute --chunk-days 60 --batch-size "$BATCH_SIZE" \
-    --batch-index "$BATCH_INDEX" --sleep 0.7 --out-prefix "$PREFIX" >> "$LOG" 2>&1
+    --batch-index "$BATCH_INDEX" --sleep "$REQUEST_SLEEP" --out-prefix "$PREFIX" >> "$LOG" 2>&1
 BATCH_RC=$?
 set -e
 
