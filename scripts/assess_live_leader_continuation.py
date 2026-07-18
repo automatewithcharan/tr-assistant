@@ -19,10 +19,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.assess_live_runner_fade import load_feature_tape
-from scripts.evaluate_live_microstructure_tape import (
-    executable_outcome,
-    minute_candle_outcome,
-)
+from scripts.evaluate_live_microstructure_tape import executable_outcome
 
 
 @dataclass(frozen=True)
@@ -159,19 +156,88 @@ def build_candidates(tape: pd.DataFrame) -> pd.DataFrame:
     return candidates
 
 
-def _complete_window(
+def five_minute_bar_outcome(
     candles: pd.DataFrame | None,
     signal_when: pd.Timestamp,
+    target_pct: float,
+    stop_pct: float,
     horizon_minutes: int,
-) -> pd.DataFrame | None:
+    fee_pct: float,
+    slippage_bps: float,
+) -> dict:
+    """Enter at the next untouched five-minute open with conservative exits."""
     if candles is None or candles.empty:
-        return None
-    timestamps = set(pd.to_datetime(candles["datetime"], errors="coerce").dropna())
-    expected_entry = signal_when.floor("min") + pd.Timedelta(minutes=1)
-    expected_last = (signal_when + pd.Timedelta(minutes=horizon_minutes)).floor("min")
-    if expected_entry not in timestamps or max(timestamps) < expected_last:
-        return None
-    return candles
+        return {"OutcomeAvailable": False}
+    signal_when = pd.Timestamp(signal_when)
+    signal_floor = signal_when.floor("min")
+    cutoff = signal_when + pd.Timedelta(minutes=int(horizon_minutes))
+    future = candles[
+        (candles["datetime"] > signal_floor) & (candles["datetime"] <= cutoff)
+    ].copy()
+    if future.empty:
+        return {"OutcomeAvailable": False}
+    entry_when = pd.Timestamp(future.iloc[0]["datetime"])
+    if entry_when - signal_floor > pd.Timedelta(minutes=5):
+        return {"OutcomeAvailable": False}
+    required_last = cutoff.floor("5min")
+    if pd.Timestamp(future["datetime"].max()) < required_last:
+        return {"OutcomeAvailable": False}
+
+    slip = float(slippage_bps) / 10_000.0
+    entry = float(future.iloc[0]["open"]) * (1.0 + slip)
+    if entry <= 0:
+        return {"OutcomeAvailable": False}
+    target = entry * (1.0 + float(target_pct) / 100.0)
+    stop = entry * (1.0 - float(stop_pct) / 100.0)
+    reason = "horizon"
+    exit_price = float(future.iloc[-1]["close"]) * (1.0 - slip)
+    exit_when = pd.Timestamp(future.iloc[-1]["datetime"])
+    for bar in future.itertuples(index=False):
+        open_price = float(bar.open)
+        high = float(bar.high)
+        low = float(bar.low)
+        when = pd.Timestamp(bar.datetime)
+        if open_price <= stop:
+            reason = "stop_gap"
+            exit_price = open_price * (1.0 - slip)
+            exit_when = when
+            break
+        if open_price >= target:
+            reason = "target_gap"
+            exit_price = target
+            exit_when = when
+            break
+        stop_hit = low <= stop
+        target_hit = high >= target
+        if stop_hit:
+            reason = "stop_first_same_bar" if target_hit else "stop"
+            exit_price = stop * (1.0 - slip)
+            exit_when = when
+            break
+        if target_hit:
+            reason = "target"
+            exit_price = target
+            exit_when = when
+            break
+    gross = (exit_price - entry) / entry * 100.0
+    return {
+        "OutcomeAvailable": True,
+        "OutcomeSource": "reconstructed_5minute_next_untouched_open",
+        "EntryAsk": round(entry, 4),
+        "EntryWhen": entry_when,
+        "ExitPrice": round(exit_price, 4),
+        "ExitWhen": exit_when,
+        "ExitReason": reason,
+        "GrossReturnPct": round(gross, 6),
+        "NetReturnPct": round(gross - float(fee_pct), 6),
+        "MfePct": round(
+            (float(future["high"].max()) - entry) / entry * 100.0, 6
+        ),
+        "MaePct": round(
+            (float(future["low"].min()) - entry) / entry * 100.0, 6
+        ),
+        "FutureSnapshots": int(len(future)),
+    }
 
 
 def label_candidates(
@@ -185,13 +251,11 @@ def label_candidates(
     rows = []
     for candidate in candidates.to_dict(orient="records"):
         signal_when = pd.Timestamp(candidate["When"])
-        candles = _complete_window(
-            candle_groups.get((str(candidate["Date"]), str(candidate["Symbol"]))),
-            signal_when,
-            horizon_minutes,
+        candles = candle_groups.get(
+            (str(candidate["Date"]), str(candidate["Symbol"]))
         )
         for contract in CONTRACTS:
-            outcome = minute_candle_outcome(
+            outcome = five_minute_bar_outcome(
                 candles,
                 signal_when,
                 target_pct=contract.target_pct,

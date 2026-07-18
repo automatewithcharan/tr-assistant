@@ -997,9 +997,11 @@ def render():
   <div class="updated" style="margin-top:6px">
     Recorder recall was {leader_discovery['band_0_5_to_3_recall']:.1f}% in the +0.5%-3% band and
     {leader_discovery['band_0_5_to_5_recall']:.1f}% through +5%.
-    The strict reconstructed-minute subset had only {leader_discovery['retrospective_evaluated']} evaluated states
-    and appeared positive at {leader_discovery['retrospective_avg_return_pct']:+.3f}% mean net.
-    The broader executable ask-to-bid replay covered {leader_discovery['snapshot_evaluated']} states and rejected it:
+    The corrected next-untouched five-minute replay covered {leader_discovery['retrospective_evaluated']} acceleration states
+    and rejected the rule at {leader_discovery['retrospective_target_hit_pct']:.1f}% target hits,
+    {leader_discovery['retrospective_avg_return_pct']:+.3f}% mean net, and
+    {leader_discovery['retrospective_lower95_pct']:+.3f}% lower daily bound.
+    The executable ask-to-bid replay independently covered {leader_discovery['snapshot_evaluated']} states:
     {leader_discovery['snapshot_target_hit_pct']:.1f}% target hits,
     <span class="{leader_snapshot_class}">{leader_discovery['snapshot_avg_return_pct']:+.3f}% mean net</span>,
     lower daily bound {leader_discovery['snapshot_lower95_pct']:+.3f}%.
