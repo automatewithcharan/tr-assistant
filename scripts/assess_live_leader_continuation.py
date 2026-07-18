@@ -19,7 +19,10 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.assess_live_runner_fade import load_feature_tape
-from scripts.evaluate_live_microstructure_tape import minute_candle_outcome
+from scripts.evaluate_live_microstructure_tape import (
+    executable_outcome,
+    minute_candle_outcome,
+)
 
 
 @dataclass(frozen=True)
@@ -212,6 +215,48 @@ def label_candidates(
     return pd.DataFrame(rows)
 
 
+def label_candidates_from_snapshots(
+    candidates: pd.DataFrame,
+    tape: pd.DataFrame,
+    *,
+    horizon_minutes: int = 60,
+    fee_pct: float = 0.10,
+) -> pd.DataFrame:
+    """Evaluate observed ask entries against later observed executable bids."""
+    if candidates is None or candidates.empty or "RowId" not in candidates.columns:
+        return pd.DataFrame()
+    groups = {
+        (str(date), str(symbol)): group.copy()
+        for (date, symbol), group in tape.groupby(["Date", "Symbol"], sort=False)
+    }
+    rows = []
+    for candidate in candidates.to_dict(orient="records"):
+        group = groups.get((str(candidate["Date"]), str(candidate["Symbol"])))
+        for contract in CONTRACTS:
+            outcome = executable_outcome(
+                group,
+                int(candidate["RowId"]),
+                target_pct=contract.target_pct,
+                stop_pct=contract.stop_pct,
+                horizon_minutes=horizon_minutes,
+                fee_pct=fee_pct,
+            ) if group is not None else {"OutcomeAvailable": False}
+            rows.append(
+                {
+                    **candidate,
+                    "Contract": contract.name,
+                    "TargetPct": contract.target_pct,
+                    "StopPct": contract.stop_pct,
+                    "HorizonMinutes": horizon_minutes,
+                    "FeePct": fee_pct,
+                    "SlippageBps": 0.0,
+                    "OutcomeSource": "live_snapshot_observed_ask_to_bid",
+                    **outcome,
+                }
+            )
+    return pd.DataFrame(rows)
+
+
 def _lower95(values: pd.Series) -> float:
     numeric = pd.to_numeric(values, errors="coerce").dropna()
     if len(numeric) <= 1:
@@ -336,6 +381,8 @@ def main() -> int:
     args = parser.parse_args()
 
     tape = load_feature_tape(args.features)
+    tape = tape.reset_index(drop=True)
+    tape["RowId"] = np.arange(len(tape), dtype=int)
     candidates = build_candidates(tape)
     groups, session_dates = load_reconstructed_bars(
         args.bars,
@@ -354,6 +401,33 @@ def main() -> int:
         slippage_bps=max(0.0, float(args.slippage_bps)),
     )
     summary = summarize(outcomes, session_dates)
+    snapshot_outcomes = label_candidates_from_snapshots(
+        candidates,
+        tape,
+        horizon_minutes=max(1, int(args.horizon_minutes)),
+        fee_pct=max(0.0, float(args.fee_pct)),
+    )
+    snapshot_dates = sorted(tape["Date"].astype(str).unique().tolist())
+    snapshot_summary = summarize(snapshot_outcomes, snapshot_dates)
+    snapshot_extension = snapshot_summary[
+        snapshot_summary["EvidencePhase"].eq("retrospective")
+        & snapshot_summary["Cohort"].eq("extension_acceleration")
+        & snapshot_summary["Contract"].eq("t1.0_s1.0")
+    ]
+    snapshot_extension_row = (
+        snapshot_extension.iloc[0].to_dict() if not snapshot_extension.empty else {}
+    )
+    extension_selection_rejected = bool(
+        not snapshot_extension_row
+        or int(snapshot_extension_row.get("Evaluated", 0) or 0) < 30
+        or float(snapshot_extension_row.get("AvgNetReturnPct", 0.0) or 0.0) <= 0.0
+        or float(
+            snapshot_extension_row.get("Lower95DailyEqualReturnPct", 0.0) or 0.0
+        )
+        <= 0.0
+        or float(snapshot_extension_row.get("PositiveSessionPct", 0.0) or 0.0)
+        < 55.0
+    )
     available_outcomes = (
         outcomes[outcomes["OutcomeAvailable"].fillna(False).astype(bool)].copy()
         if not outcomes.empty
@@ -370,6 +444,21 @@ def main() -> int:
     candidates.to_csv(output / "candidates.csv", index=False)
     outcomes.to_csv(output / "outcomes.csv", index=False)
     summary.to_csv(output / "summary.csv", index=False)
+    snapshot_outcomes.to_csv(output / "snapshot_outcomes.csv", index=False)
+    snapshot_summary.to_csv(output / "snapshot_summary.csv", index=False)
+    available_snapshot_outcomes = (
+        snapshot_outcomes[
+            snapshot_outcomes["OutcomeAvailable"].fillna(False).astype(bool)
+        ].copy()
+        if not snapshot_outcomes.empty
+        else pd.DataFrame()
+    )
+    evaluated_snapshot_states = (
+        available_snapshot_outcomes[["Date", "Symbol", "MoveBand"]]
+        .drop_duplicates()
+        if not available_snapshot_outcomes.empty
+        else pd.DataFrame()
+    )
     status = {
         "evidence_type": "live_only_temporal_leader_continuation_research",
         "sessions": len(session_dates),
@@ -377,6 +466,9 @@ def main() -> int:
         "candidate_rows_rebuilt_sessions": int(len(evaluable_candidates)),
         "evaluated_candidate_states": int(len(evaluated_states)),
         "evaluated_contract_outcomes": int(len(available_outcomes)),
+        "snapshot_sessions": len(snapshot_dates),
+        "evaluated_snapshot_candidate_states": int(len(evaluated_snapshot_states)),
+        "evaluated_snapshot_contract_outcomes": int(len(available_snapshot_outcomes)),
         "move_bands": list(MOVE_LABELS),
         "exploratory_rule_defined_on": EXPLORATORY_RULE_DEFINED_ON,
         "frozen_forward_start": FROZEN_FORWARD_START,
@@ -385,6 +477,15 @@ def main() -> int:
             "min_move_acceleration_pct": 0.2,
             "min_buyer_seller_surge": 1.0,
         },
+        "extension_acceleration_selection_rejected": extension_selection_rejected,
+        "extension_acceleration_selection_source": (
+            "live_snapshot_observed_ask_to_bid"
+        ),
+        "extension_acceleration_rejection_reason": (
+            "Ten-session executable snapshot replay failed sample/performance gates"
+            if extension_selection_rejected
+            else "selection gates passed; forward evidence still required"
+        ),
         "forward_candidate_states": int(
             evaluable_candidates[
                 evaluable_candidates["Date"].astype(str).ge(FROZEN_FORWARD_START)

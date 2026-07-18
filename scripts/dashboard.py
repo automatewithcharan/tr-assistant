@@ -372,6 +372,9 @@ def leader_discovery_stats():
     )
     continuation = load_json(DATA / "live_leader_continuation" / "status.json", {})
     rows = load_csv_rows(DATA / "live_leader_continuation" / "summary.csv")
+    snapshot_rows = load_csv_rows(
+        DATA / "live_leader_continuation" / "snapshot_summary.csv"
+    )
 
     def number(row, field):
         try:
@@ -393,6 +396,16 @@ def leader_discovery_stats():
 
     retrospective = extension_row("retrospective")
     forward = extension_row("frozen_forward")
+    snapshot_retrospective = next(
+        (
+            row
+            for row in snapshot_rows
+            if row.get("EvidencePhase") == "retrospective"
+            and row.get("Cohort") == "extension_acceleration"
+            and row.get("Contract") == "t1.0_s1.0"
+        ),
+        {},
+    )
     return {
         "recall_sessions": int(recall.get("sessions") or 0),
         "runner_events_10": int(number(ten_pct, "RunnerEvents")),
@@ -408,6 +421,15 @@ def leader_discovery_stats():
         "retrospective_avg_return_pct": number(retrospective, "AvgNetReturnPct"),
         "retrospective_lower95_pct": number(
             retrospective, "Lower95DailyEqualReturnPct"
+        ),
+        "snapshot_evaluated": int(number(snapshot_retrospective, "Evaluated")),
+        "snapshot_target_hit_pct": number(snapshot_retrospective, "TargetHitPct"),
+        "snapshot_avg_return_pct": number(snapshot_retrospective, "AvgNetReturnPct"),
+        "snapshot_lower95_pct": number(
+            snapshot_retrospective, "Lower95DailyEqualReturnPct"
+        ),
+        "selection_rejected": bool(
+            continuation.get("extension_acceleration_selection_rejected", True)
         ),
         "forward_evaluated": int(number(forward, "Evaluated")),
         "forward_target_hit_pct": number(forward, "TargetHitPct"),
@@ -960,8 +982,8 @@ def render():
     Paper promotion: <b>NO</b>; real orders: <b>NO</b>.
   </div>"""
 
-    leader_forward_class = (
-        "gain" if leader_discovery["forward_avg_return_pct"] > 0 else "loss"
+    leader_snapshot_class = (
+        "gain" if leader_discovery["snapshot_avg_return_pct"] > 0 else "loss"
     )
     leader_html = f"""
   <h2>Leader discovery and continuation</h2>
@@ -970,19 +992,18 @@ def render():
     <span>Seen before 10% <span class="big">{leader_discovery['seen_before_10_pct']:.1f}%</span></span>
     <span>Median lead <span class="big">{leader_discovery['median_lead_minutes']:.0f} min</span></span>
     <span>Forward states <span class="big">{leader_discovery['forward_states']}</span></span>
-    <span class="badge red">FORWARD ONLY</span>
+    <span class="badge red">{'SELECTION REJECTED' if leader_discovery['selection_rejected'] else 'FORWARD ONLY'}</span>
   </div>
   <div class="updated" style="margin-top:6px">
     Recorder recall was {leader_discovery['band_0_5_to_3_recall']:.1f}% in the +0.5%-3% band and
     {leader_discovery['band_0_5_to_5_recall']:.1f}% through +5%.
-    The post-hoc +3%-5% acceleration/B/S rule had {leader_discovery['retrospective_evaluated']} retrospective states,
-    {leader_discovery['retrospective_target_hit_pct']:.1f}% target hits,
-    {leader_discovery['retrospective_avg_return_pct']:+.3f}% mean net, and
-    {leader_discovery['retrospective_lower95_pct']:+.3f}% lower daily bound.
-    Untouched evidence starts {escape(leader_discovery['forward_start'])}:
-    {leader_discovery['forward_evaluated']} evaluated,
-    <span class="{leader_forward_class}">{leader_discovery['forward_avg_return_pct']:+.3f}% mean net</span>,
-    lower bound {leader_discovery['forward_lower95_pct']:+.3f}%.
+    The strict reconstructed-minute subset had only {leader_discovery['retrospective_evaluated']} evaluated states
+    and appeared positive at {leader_discovery['retrospective_avg_return_pct']:+.3f}% mean net.
+    The broader executable ask-to-bid replay covered {leader_discovery['snapshot_evaluated']} states and rejected it:
+    {leader_discovery['snapshot_target_hit_pct']:.1f}% target hits,
+    <span class="{leader_snapshot_class}">{leader_discovery['snapshot_avg_return_pct']:+.3f}% mean net</span>,
+    lower daily bound {leader_discovery['snapshot_lower95_pct']:+.3f}%.
+    Recording after {escape(leader_discovery['forward_start'])} remains diagnostic only.
     Evidence accepted: <b>NO</b>; paper promotion: <b>NO</b>; real orders: <b>NO</b>.
   </div>"""
 
