@@ -91,9 +91,17 @@ def _legacy_cache_path(symbol: str, interval: str) -> Path:
 def kite_session_status() -> tuple[bool, str]:
     try:
         manager = KiteConnectSessionManager()
-        if manager._get_saved_access_token() and manager.api_key:
-            return True, f"Kite session available via {manager.session_file_path}"
-        return False, "Kite API key/access token not available"
+        token = manager._get_saved_access_token()
+        if not token or not manager.api_key:
+            return False, "Kite API key/access token not available"
+        client = manager._build_client()
+        try:
+            profile = client.profile()
+        except Exception as exc:
+            return False, f"Kite access token rejected: {exc}"
+        user_id = profile.get("user_id") if isinstance(profile, dict) else ""
+        suffix = f" for {user_id}" if user_id else ""
+        return True, f"Kite session validated via {manager.session_file_path}{suffix}"
     except Exception as exc:
         return False, f"Kite session unavailable: {exc}"
 
