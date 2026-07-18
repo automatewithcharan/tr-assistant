@@ -9,6 +9,7 @@ BASE="${FULL_SESSION_OUTPUT_DIR:-results/Data/broad_rank_acceleration/checkpoint
 CANDIDATES="${FULL_SESSION_CANDIDATES:-$BASE/candidates_candidates.csv}"
 CALENDAR="${FULL_SESSION_CALENDAR:-results/Data/kite_history_backfill/5minute/2024-05-30_2026-05-29/NIFTY 50.csv}"
 OUT="${FULL_SESSION_CONTRACT_OUTPUT_DIR:-$BASE/contract_matrix}"
+SIDE="${FULL_SESSION_SIDE:-long}"
 CAPITAL="${FULL_SESSION_CAPITAL:-500000}"
 DAILY_GOAL="${FULL_SESSION_DAILY_GOAL:-10000}"
 MAX_PARALLEL="${FULL_SESSION_CONTRACT_PARALLEL:-8}"
@@ -19,7 +20,11 @@ mkdir -p "$OUT/logs"
 contracts=()
 for target in 0.5 0.7 1 1.5; do
     for stop in 0.5 0.7 1 1.5; do
-        contracts+=("h60_target_${target}_stop_${stop}")
+        if [ "$SIDE" = "short" ]; then
+            contracts+=("h60_short_target_${target}_stop_${stop}")
+        else
+            contracts+=("h60_target_${target}_stop_${stop}")
+        fi
     done
 done
 

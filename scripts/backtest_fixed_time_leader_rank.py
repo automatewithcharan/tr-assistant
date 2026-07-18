@@ -62,6 +62,8 @@ class FixedLeaderConfig:
     min_volume_acceleration: float = 0.50
     min_relative_strength_pct: float = 0.20
     min_range_position: float = 0.65
+    max_range_position: float = 1.00
+    min_pullback_pct: float = 0.00
     max_pullback_pct: float = 0.80
     min_vwap_distance_pct: float = 0.00
     max_vwap_distance_pct: float = 1.50
@@ -185,11 +187,13 @@ class LeaderContract:
     horizon_minutes: int
     target_pct: float
     stop_pct: float
+    side: str = "long"
 
     @property
     def key(self) -> str:
+        side = "_short" if self.side == "short" else ""
         return (
-            f"h{self.horizon_minutes}_target_{self.target_pct:g}"
+            f"h{self.horizon_minutes}{side}_target_{self.target_pct:g}"
             f"_stop_{self.stop_pct:g}"
         )
 
@@ -233,9 +237,12 @@ def build_contracts(
     horizons: tuple[int, ...],
     targets: tuple[float, ...],
     stops: tuple[float, ...],
+    side: str = "long",
 ) -> list[LeaderContract]:
+    if side not in {"long", "short"}:
+        raise ValueError(f"unsupported side: {side}")
     return [
-        LeaderContract(horizon, target, stop)
+        LeaderContract(horizon, target, stop, side)
         for horizon in horizons
         for target in targets
         for stop in stops
@@ -274,7 +281,12 @@ def _simulate_contracts(
     contracts: list[LeaderContract],
     config: FixedLeaderConfig,
 ) -> dict[str, Any] | None:
-    adjusted_entry = raw_entry_price * (1.0 + config.entry_slippage_bps / 10_000.0)
+    sides = {contract.side for contract in contracts}
+    if len(sides) != 1:
+        raise ValueError("all contracts in one simulation must use the same side")
+    side = next(iter(sides))
+    slippage = config.entry_slippage_bps / 10_000.0
+    adjusted_entry = raw_entry_price * (1.0 - slippage if side == "short" else 1.0 + slippage)
     output: dict[str, Any] = {
         "raw_entry_price": round(raw_entry_price, 6),
         "entry_price_after_slippage": round(adjusted_entry, 6),
@@ -288,7 +300,7 @@ def _simulate_contracts(
         if final_index >= len(day):
             return None
         grid = [
-            ExitContract(contract.target_pct, contract.stop_pct, "long")
+            ExitContract(contract.target_pct, contract.stop_pct, contract.side)
             for contract in horizon_contracts
         ]
         gross, codes, exit_indices = first_touch_grid_with_indices(
@@ -450,8 +462,8 @@ def _process_symbol_file(
                 and cumulative_volume_ratio >= config.min_cum_volume_ratio
                 and volume_acceleration >= config.min_volume_acceleration
                 and relative_strength >= config.min_relative_strength_pct
-                and range_position >= config.min_range_position
-                and pullback <= config.max_pullback_pct
+                and config.min_range_position <= range_position <= config.max_range_position
+                and config.min_pullback_pct <= pullback <= config.max_pullback_pct
                 and config.min_vwap_distance_pct <= vwap_distance <= config.max_vwap_distance_pct
             )
             if not qualifies:
@@ -778,6 +790,16 @@ def main() -> int:
     parser.add_argument("--min-day-change-pct", type=float, default=0.30)
     parser.add_argument("--max-day-change-pct", type=float, default=5.00)
     parser.add_argument("--min-cum-volume-ratio", type=float, default=1.00)
+    parser.add_argument("--side", choices=("long", "short"), default="long")
+    parser.add_argument("--max-abs-gap-pct", type=float, default=3.00)
+    parser.add_argument("--min-volume-acceleration", type=float, default=0.50)
+    parser.add_argument("--min-relative-strength-pct", type=float, default=0.20)
+    parser.add_argument("--min-range-position", type=float, default=0.65)
+    parser.add_argument("--max-range-position", type=float, default=1.00)
+    parser.add_argument("--min-pullback-pct", type=float, default=0.00)
+    parser.add_argument("--max-pullback-pct", type=float, default=0.80)
+    parser.add_argument("--min-vwap-distance-pct", type=float, default=0.00)
+    parser.add_argument("--max-vwap-distance-pct", type=float, default=1.50)
     parser.add_argument("--entry-slippage-bps", type=float, default=5.0)
     parser.add_argument("--additional-cost-pct", type=float, default=0.15)
     args = parser.parse_args()
@@ -801,11 +823,20 @@ def main() -> int:
         max_move_from_open_pct=args.max_move_from_open_pct,
         min_day_change_pct=args.min_day_change_pct,
         max_day_change_pct=args.max_day_change_pct,
+        max_abs_gap_pct=args.max_abs_gap_pct,
         min_cum_volume_ratio=args.min_cum_volume_ratio,
+        min_volume_acceleration=args.min_volume_acceleration,
+        min_relative_strength_pct=args.min_relative_strength_pct,
+        min_range_position=args.min_range_position,
+        max_range_position=args.max_range_position,
+        min_pullback_pct=args.min_pullback_pct,
+        max_pullback_pct=args.max_pullback_pct,
+        min_vwap_distance_pct=args.min_vwap_distance_pct,
+        max_vwap_distance_pct=args.max_vwap_distance_pct,
         entry_slippage_bps=args.entry_slippage_bps,
         additional_cost_pct=args.additional_cost_pct,
     )
-    contracts = build_contracts(horizons, targets, stops)
+    contracts = build_contracts(horizons, targets, stops, side=args.side)
     candidates = build_candidates(
         args.data_dir,
         args.calendar_file,
@@ -833,6 +864,7 @@ def main() -> int:
     summary.to_csv(prefix.with_name(prefix.name + "_summary.csv"), index=False)
     metadata = {
         "strategy": "fixed_time_cross_sectional_leader_rank_v1",
+        "side": args.side,
         "signal_times": [
             f"{minute // 60:02d}:{minute % 60:02d}" for minute in signal_minutes
         ],
