@@ -362,11 +362,14 @@ def ignition_registry_stats():
 def broad_backfill_stats():
     summary = load_json(DATA / "broad_universe_5minute_backfill_summary.json", {})
     mapped = int(summary.get("mapped_symbols") or 0)
-    cached = int(summary.get("exact_range_cache_files") or 0)
+    present = int(summary.get("exact_range_cache_files") or 0)
+    cached = int(summary.get("quality_eligible_cache_files", present) or 0)
     return {
         "universe": int(summary.get("universe_symbols") or 0),
         "mapped": mapped,
         "cached": cached,
+        "present": present,
+        "rejected": int(summary.get("quality_rejected_cache_files") or 0),
         "remaining": int(summary.get("needs_fetch_symbols") or 0),
         "api_calls": int(summary.get("estimated_api_calls") or 0),
         "coverage_pct": cached / mapped * 100.0 if mapped else 0.0,
@@ -899,8 +902,10 @@ def render():
     backfill_html = f"""
   <h2>Broad five-minute research history</h2>
   <div class="summary">
-    <span>Cached <span class="big">{broad_backfill['cached']}/{broad_backfill['mapped']}</span></span>
+    <span>Eligible <span class="big">{broad_backfill['cached']}/{broad_backfill['mapped']}</span></span>
     <span>Coverage <span class="big">{broad_backfill['coverage_pct']:.1f}%</span></span>
+    <span>Physical files <span class="big">{broad_backfill['present']}</span></span>
+    <span>Rejected <span class="big">{broad_backfill['rejected']}</span></span>
     <span>Remaining <span class="big">{broad_backfill['remaining']}</span></span>
     <span>Estimated size <span class="big">{broad_backfill['estimated_total_gb']:.1f} GB</span></span>
   </div>

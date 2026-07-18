@@ -445,6 +445,8 @@ def test_frozen_microstructure_and_backfill_status(tmp_path: Path, monkeypatch):
                 "universe_symbols": 2990,
                 "mapped_symbols": 2955,
                 "exact_range_cache_files": 505,
+                "quality_eligible_cache_files": 503,
+                "quality_rejected_cache_files": 2,
                 "needs_fetch_symbols": 2450,
                 "estimated_api_calls": 31850,
                 "estimated_total_range_bytes": 6203927940,
@@ -465,5 +467,7 @@ def test_frozen_microstructure_and_backfill_status(tmp_path: Path, monkeypatch):
     assert ignition_status["selection_sessions"] == 9
     assert ignition_status["selection_rejected"]
     assert not ignition_status["real_orders_allowed"]
-    assert backfill["cached"] == 505
-    assert round(backfill["coverage_pct"], 2) == 17.09
+    assert backfill["cached"] == 503
+    assert backfill["present"] == 505
+    assert backfill["rejected"] == 2
+    assert round(backfill["coverage_pct"], 2) == 17.02
