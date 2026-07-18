@@ -63,6 +63,11 @@ fi
 mkdir -p "$OUT"
 printf '%s\n' "$CACHED" > "$OUT/coverage_at_start.txt"
 printf '%s\n' "$MAPPED" > "$OUT/mapped_at_start.txt"
+git rev-parse HEAD > "$OUT/code_commit_at_start.txt"
+sha256sum "$QUALITY_UNIVERSE" | awk '{print $1}' > "$OUT/quality_universe_sha256.txt"
+sha256sum "$CALENDAR" | awk '{print $1}' > "$OUT/calendar_sha256.txt"
+cp "$SUMMARY" "$OUT/backfill_summary_at_start.json"
+date -u +'%Y-%m-%dT%H:%M:%SZ' > "$OUT/started_at_utc.txt"
 echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] starting checkpoint=$MILESTONE cached=$CACHED mapped=$MAPPED" >> "$LOG"
 
 nice -n 10 "$PYTHON" scripts/backtest_fixed_time_leader_rank.py \

@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 from datetime import datetime, timezone
@@ -24,6 +25,20 @@ def load_status(path: Path) -> dict[str, Any]:
 
 def load_optional_status(path: Path) -> dict[str, Any]:
     return load_status(path) if path.exists() and path.stat().st_size > 0 else {}
+
+
+def load_optional_text(path: Path) -> str:
+    return path.read_text(encoding="utf-8").strip() if path.exists() else ""
+
+
+def sha256_file(path: Path) -> str:
+    if not path.exists() or not path.is_file():
+        return ""
+    digest = hashlib.sha256()
+    with path.open("rb") as handle:
+        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
 
 def build_status(
@@ -55,6 +70,20 @@ def build_status(
     direct_classifier_goal = bool(
         direct_classifier_status.get("final_goal_contract_passed", False)
     )
+    provenance = {
+        "code_commit": load_optional_text(output_dir / "code_commit_at_start.txt"),
+        "started_at_utc": load_optional_text(output_dir / "started_at_utc.txt"),
+        "quality_universe_sha256": load_optional_text(
+            output_dir / "quality_universe_sha256.txt"
+        ),
+        "calendar_sha256": load_optional_text(output_dir / "calendar_sha256.txt"),
+        "backfill_summary_sha256": sha256_file(
+            output_dir / "backfill_summary_at_start.json"
+        ),
+        "fixed_time_candidates_sha256": sha256_file(
+            output_dir / "fixed_time_candidates.csv"
+        ),
+    }
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
         "milestone": int(milestone),
@@ -80,6 +109,7 @@ def build_status(
         "real_orders_allowed": False,
         "forward_validation_required": True,
         "universe_caveat": "current_live_universe_not_point_in_time_membership",
+        "provenance": provenance,
         "long_status": long_status,
         "short_status": short_status,
         "eventual_runner_classifier_status": classifier_status,
