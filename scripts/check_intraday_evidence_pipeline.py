@@ -9,7 +9,7 @@ import json
 import os
 import shutil
 import subprocess
-from datetime import datetime, timezone
+from datetime import datetime, time, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -103,6 +103,10 @@ def assess(
     data = root / "results" / "Data"
     env = load_env(root / ".env.dev")
     checks: list[dict[str, Any]] = []
+    weekday = now.weekday() < 5
+    live_market = weekday and time(9, 15) <= now.time() <= time(15, 30)
+    service_required = weekday and time(8, 45) <= now.time() <= time(15, 30)
+    eod_due = weekday and now.time() >= time(16, 10)
 
     unsafe = {
         key: env.get(key, "0")
@@ -117,7 +121,8 @@ def assess(
         if is_truthy(env.get(key, "0"))
     }
     checks.append(check("real_orders_disabled", not unsafe, "all auto-order flags are off" if not unsafe else f"unsafe flags: {unsafe}"))
-    checks.append(check("trade_service_active", service_active, "trade-assistant.service active" if service_active else "trade-assistant.service inactive"))
+    service_ok = service_active or not service_required
+    checks.append(check("trade_service_active", service_ok, "trade-assistant.service active" if service_active else "service inactive outside required collection window"))
     checks.append(check("start_timer_enabled", start_timer_enabled, "08:45 IST weekday start enabled" if start_timer_enabled else "trade-assistant.timer not enabled"))
     checks.append(check("prewarm_timer_enabled", prewarm_timer_enabled, "08:30 IST weekday prewarm enabled" if prewarm_timer_enabled else "prewarm timer not enabled"))
     checks.append(check("disk_headroom", disk_free_gb >= 10.0 and disk_used_pct < 85.0, f"{disk_free_gb:.1f} GB free, {disk_used_pct:.1f}% used"))
@@ -158,7 +163,7 @@ def assess(
     )
     ticker_age = (now - ticker_at).total_seconds() if ticker_at else float("inf")
     ticker_ok = bool(ticker.get("connected")) and ticker_age <= 180 and int(ticker.get("snapshot_symbols") or 0) >= 2500
-    checks.append(check("live_ticks_fresh", ticker_ok, f"connected={bool(ticker.get('connected'))}, symbols={int(ticker.get('snapshot_symbols') or 0)}, age={ticker_age:.0f}s"))
+    checks.append(check("live_ticks_fresh", ticker_ok or not live_market, f"connected={bool(ticker.get('connected'))}, symbols={int(ticker.get('snapshot_symbols') or 0)}, age={ticker_age:.0f}s" + ("" if live_market else "; freshness not required outside live market")))
 
     recorder = load_json(data / "live_feature_recorder/full_universe_rank_status.json")
     recorder_at = parse_ist(recorder.get("recorded_at"))
@@ -173,7 +178,7 @@ def assess(
         and float(recorder.get("interval_seconds") or 0) <= 60
         and recorder_safe
     )
-    checks.append(check("rank_recorder_fresh", recorder_ok, f"universe={int(recorder.get('universe_size') or 0)}, rows={int(recorder.get('rows_this_snapshot') or 0)}, age={recorder_age:.0f}s, paper_only={recorder_safe}"))
+    checks.append(check("rank_recorder_fresh", recorder_ok or not live_market, f"universe={int(recorder.get('universe_size') or 0)}, rows={int(recorder.get('rows_this_snapshot') or 0)}, age={recorder_age:.0f}s, paper_only={recorder_safe}" + ("" if live_market else "; freshness not required outside live market")))
 
     observers = {
         "exact_ask_bid_observer": ("full_universe_rank_paper/status.json", "recording_exact_ask_to_bid_paper_outcomes", None, None),
@@ -188,7 +193,7 @@ def assess(
         count_ok = count_key is None or int(status.get(count_key) or 0) == expected_count
         passed = status.get("status") == expected_status and str(status.get("date")) == now.strftime("%Y-%m-%d") and age <= 180 and safe and count_ok
         count_detail = f", {count_key}={status.get(count_key)}" if count_key else ""
-        checks.append(check(name, passed, f"age={age:.0f}s, paper_only={safe}{count_detail}"))
+        checks.append(check(name, passed or not live_market, f"age={age:.0f}s, paper_only={safe}{count_detail}" + ("" if live_market else "; freshness not required outside live market")))
 
     matrix_counts = {
         "contracts": dict_assignment_size(root / "pkscreener/classes/FullUniverseRankContractMatrixObserver.py", "CONTRACTS"),
@@ -199,10 +204,28 @@ def assess(
     matrix_ok = matrix_counts == {"contracts": 9, "variants": 6, "gates": 9, "selectors": 4}
     checks.append(check("predeclared_search_space", matrix_ok, "9 exit contracts, 6 timing variants, 9 feature gates, 4 selectors declared" if matrix_ok else "one or more predeclared matrices are incomplete"))
 
+    eod = load_json(
+        data / "live_feature_recorder" / "eod" / now.strftime("%Y-%m-%d") / "status.json"
+    )
+    eod_status = str(eod.get("status") or "")
+    eod_ok = eod_status.startswith("complete")
+    checks.append(
+        check(
+            "today_eod_evidence",
+            eod_ok or not eod_due,
+            (
+                f"today EOD status={eod_status or 'missing'}"
+                if eod_due
+                else "EOD evidence not due until 16:10 IST"
+            ),
+        )
+    )
+
     failures = [item for item in checks if item["critical"] and not item["passed"]]
     return {
         "status": "ready_for_next_full_session" if not failures else "operational_issues_detected",
         "checked_at": now.isoformat(timespec="seconds"),
+        "market_phase": "live" if live_market else ("post_close" if now.time() > time(15, 30) else "pre_open"),
         "strategy_accepted": False,
         "paper_promotion_allowed": False,
         "real_orders_allowed": False,

@@ -75,3 +75,41 @@ def test_stale_observer_blocks_readiness(tmp_path):
     result = run(root, now)
     assert result["status"] == "operational_issues_detected"
     assert not next(item for item in result["checks"] if item["name"] == "exact_ask_bid_observer")["passed"]
+
+
+def test_post_close_stale_feeds_are_expected_when_eod_completed(tmp_path):
+    root, _ = fixture_root(tmp_path)
+    now = datetime(2026, 7, 23, 16, 15, tzinfo=IST)
+    write(
+        root / "results/Data/live_feature_recorder/eod/2026-07-23/status.json",
+        {"status": "complete"},
+    )
+    result = assess(
+        root,
+        now,
+        cron_text="5 10 * * 1-5 /repo/scripts/live_evidence_eod.sh",
+        service_active=False,
+        start_timer_enabled=True,
+        prewarm_timer_enabled=True,
+        disk_free_gb=60,
+        disk_used_pct=36,
+    )
+    assert result["status"] == "ready_for_next_full_session"
+    assert result["market_phase"] == "post_close"
+
+
+def test_post_close_missing_eod_is_an_operational_issue(tmp_path):
+    root, _ = fixture_root(tmp_path)
+    now = datetime(2026, 7, 23, 16, 15, tzinfo=IST)
+    result = assess(
+        root,
+        now,
+        cron_text="5 10 * * 1-5 /repo/scripts/live_evidence_eod.sh",
+        service_active=False,
+        start_timer_enabled=True,
+        prewarm_timer_enabled=True,
+        disk_free_gb=60,
+        disk_used_pct=36,
+    )
+    assert result["status"] == "operational_issues_detected"
+    assert not next(item for item in result["checks"] if item["name"] == "today_eod_evidence")["passed"]
