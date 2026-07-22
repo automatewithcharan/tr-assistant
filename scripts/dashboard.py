@@ -381,6 +381,10 @@ def leader_discovery_stats():
     live_paper = load_json(
         DATA / "frozen_microstructure_paper" / "status.json", {}
     )
+    reclaim = load_json(
+        DATA / "leader_pullback_reclaim_audit" / "status.json", {}
+    )
+    reclaim_stress = reclaim.get("goal_stress", {}) or {}
     ranker_model = ranker.get("live_model", {}) or {}
     prediction_paths = sorted(
         (DATA / "frozen_microstructure_paper").glob("predictions_20*.csv")
@@ -487,6 +491,16 @@ def leader_discovery_stats():
         "live_paper_trades": int(live_paper.get("trades") or 0),
         "live_paper_closed": int(live_paper.get("closed_trades") or 0),
         "live_paper_net_pnl": number(live_paper, "net_pnl"),
+        "reclaim_status": str(reclaim.get("status") or "pending"),
+        "reclaim_sessions": int(number(reclaim_stress, "sessions")),
+        "reclaim_trades": int(number(reclaim_stress, "trades")),
+        "reclaim_stress_avg_pnl": number(reclaim_stress, "avg_daily_pnl"),
+        "reclaim_stress_lower95_pct": number(reclaim_stress, "lower_95_pct"),
+        "reclaim_positive_session_pct": number(
+            reclaim_stress, "positive_session_pct"
+        ),
+        "reclaim_goal_hit_pct": number(reclaim_stress, "goal_hit_pct"),
+        "reclaim_accepted": bool(reclaim.get("accepted", False)),
         "evidence_accepted": False,
         "paper_promotion_allowed": False,
         "real_orders_allowed": False,
@@ -1099,6 +1113,25 @@ def render():
     Timestamped live paper decisions for {escape(leader_discovery['live_paper_date'])};
     model trained only through {escape(leader_discovery['live_paper_model_through'])}.
     Predictions are recorded before outcomes, use observed asks and bids, and cannot send alerts or broker orders.
+  </div>"""
+
+    reclaim_class = (
+        "gain" if leader_discovery["reclaim_stress_avg_pnl"] > 0 else "loss"
+    )
+    leader_html += f"""
+  <div class="summary" style="margin-top:10px">
+    <span>Pullback/reclaim <span class="big">{escape(leader_discovery['reclaim_status'])}</span></span>
+    <span>Sessions <span class="big">{leader_discovery['reclaim_sessions']}</span></span>
+    <span>Trades <span class="big">{leader_discovery['reclaim_trades']}</span></span>
+    <span>Stressed P&amp;L <span class="big {reclaim_class}">{money(leader_discovery['reclaim_stress_avg_pnl'])}/day</span></span>
+    <span>Positive days <span class="big">{leader_discovery['reclaim_positive_session_pct']:.1f}%</span></span>
+    <span>Goal days <span class="big">{leader_discovery['reclaim_goal_hit_pct']:.1f}%</span></span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    Existing ignition watch followed by a healthy pullback and reclaim, ranked only by information visible in each minute.
+    Stressed lower 95% bound {leader_discovery['reclaim_stress_lower95_pct']:+.3f}%.
+    Accepted: <b>{'YES' if leader_discovery['reclaim_accepted'] else 'NO'}</b>;
+    real orders: <b>NO</b>.
   </div>"""
 
     backfill_html = f"""

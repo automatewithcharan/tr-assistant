@@ -142,6 +142,14 @@ run_event_shadow_rebuild() {
         >>"$LOG" 2>&1 || true
 }
 
+run_pullback_reclaim_audit() {
+    "$PYTHON" "$REPO/scripts/assess_leader_pullback_reclaim.py" \
+        --output-dir "$REPO/results/Data/leader_pullback_reclaim_audit" \
+        --capital 500000 \
+        --daily-goal 10000 \
+        >>"$LOG" 2>&1 || true
+}
+
 if [ -f "$OUTPUT_ROOT/status.json" ]; then
     existing_status=$("$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status", ""))' "$OUTPUT_ROOT/status.json" 2>/dev/null || true)
     if [[ "$existing_status" == complete* ]]; then
@@ -149,6 +157,7 @@ if [ -f "$OUTPUT_ROOT/status.json" ]; then
         run_ranked_replay
         run_live_microstructure_research
         run_event_shadow_rebuild
+        run_pullback_reclaim_audit
         exit 0
     fi
 fi
@@ -194,5 +203,6 @@ run_readiness
 run_ranked_replay
 run_live_microstructure_research
 run_event_shadow_rebuild
+run_pullback_reclaim_audit
 echo "[$(date -u +'%Y-%m-%d %H:%M:%S UTC')] live evidence EOD finished rc=$RC $SUMMARY" >>"$LOG"
 exit "$RC"

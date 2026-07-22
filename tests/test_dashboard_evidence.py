@@ -36,6 +36,41 @@ def test_leader_dashboard_reports_ready_prior_session_artifact(tmp_path, monkeyp
     assert stats["live_paper_predictions"] == 0
 
 
+def test_leader_dashboard_reports_pullback_reclaim_rejection(tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "DATA", tmp_path)
+    root = tmp_path / "leader_pullback_reclaim_audit"
+    root.mkdir(parents=True)
+    (root / "status.json").write_text(
+        json.dumps(
+            {
+                "status": "rejected_current_rule",
+                "goal_stress": {
+                    "sessions": 7,
+                    "trades": 26,
+                    "avg_daily_pnl": -8163.46,
+                    "lower_95_pct": -3.32837,
+                    "positive_session_pct": 14.29,
+                    "goal_hit_pct": 0.0,
+                },
+                "accepted": False,
+                "real_orders_allowed": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    stats = dashboard.leader_discovery_stats()
+
+    assert stats["reclaim_status"] == "rejected_current_rule"
+    assert stats["reclaim_sessions"] == 7
+    assert stats["reclaim_trades"] == 26
+    assert stats["reclaim_stress_avg_pnl"] == -8163.46
+    assert stats["reclaim_stress_lower95_pct"] == -3.32837
+    assert stats["reclaim_positive_session_pct"] == 14.29
+    assert stats["reclaim_goal_hit_pct"] == 0.0
+    assert not stats["reclaim_accepted"]
+
+
 def test_broad_rank_checkpoint_stats_distinguishes_diagnostic_and_full(tmp_path, monkeypatch):
     monkeypatch.setattr(dashboard, "DATA", tmp_path)
     first = tmp_path / "broad_rank_acceleration" / "checkpoint_1000"
