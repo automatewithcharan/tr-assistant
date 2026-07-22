@@ -287,6 +287,58 @@ def test_leader_dashboard_reports_contract_matrix_and_capital_gate(
     assert not stats["contract_strategy_accepted"]
 
 
+def test_leader_dashboard_reports_entry_timing_matrix_and_gate(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(dashboard, "DATA", tmp_path)
+    live = tmp_path / "full_universe_rank_entry_timing"
+    live.mkdir(parents=True)
+    (live / "status.json").write_text(
+        json.dumps(
+            {
+                "status": "recording_exact_entry_timing_matrix",
+                "variants": 6,
+                "entry_labels": 20,
+                "waiting": 40,
+                "open_positions": 25,
+                "fills": 50,
+                "nonfills": 5,
+                "closed_positions": 25,
+            }
+        ),
+        encoding="utf-8",
+    )
+    judge = tmp_path / "full_universe_rank_entry_strategy"
+    judge.mkdir(parents=True)
+    (judge / "status.json").write_text(
+        json.dumps(
+            {
+                "status": "collecting_entry_timing_forward_sessions",
+                "eligible_sessions": 12,
+                "selection_sessions_required": 12,
+                "frozen_selection": {
+                    "variant": "dip_0_50",
+                    "selector": "rank_first",
+                },
+                "forward": {"sessions": 2, "trades": 8, "avg_daily_pnl": 4100},
+                "accepted": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    stats = dashboard.leader_discovery_stats()
+
+    assert stats["entry_timing_status"] == "recording_exact_entry_timing_matrix"
+    assert stats["entry_timing_variants"] == 6
+    assert stats["entry_timing_fills"] == 50
+    assert stats["entry_timing_nonfills"] == 5
+    assert stats["entry_strategy_sessions"] == 12
+    assert stats["entry_strategy_combination"] == "dip_0_50 / rank_first"
+    assert stats["entry_strategy_forward_avg_pnl"] == 4100
+    assert not stats["entry_strategy_accepted"]
+
+
 def test_broad_rank_checkpoint_stats_distinguishes_diagnostic_and_full(tmp_path, monkeypatch):
     monkeypatch.setattr(dashboard, "DATA", tmp_path)
     first = tmp_path / "broad_rank_acceleration" / "checkpoint_1000"

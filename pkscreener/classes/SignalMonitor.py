@@ -29,6 +29,7 @@ from PKDevTools.classes.log import default_logger
 from pkscreener.classes.ActionableReport import ActionableReportRunner
 from pkscreener.classes.AnomalyDetector import VolumeAnomalyDetector
 from pkscreener.classes.FullUniverseRankContractMatrixObserver import FullUniverseRankContractMatrixObserver
+from pkscreener.classes.FullUniverseRankEntryTimingObserver import FullUniverseRankEntryTimingObserver
 from pkscreener.classes.FullUniverseRankPaperObserver import FullUniverseRankPaperObserver
 from pkscreener.classes.LiveFeatureRecorder import LiveFeatureRecorder
 from pkscreener.classes.IntradayEventShadowRecorder import IntradayEventShadowRecorder
@@ -209,6 +210,9 @@ class SignalMonitorRunner:
         self.enable_full_rank_contract_matrix = self._env_truthy(
             "SIGNALMONITOR_ENABLE_FULL_RANK_CONTRACT_MATRIX", "1"
         )
+        self.enable_full_rank_entry_timing = self._env_truthy(
+            "SIGNALMONITOR_ENABLE_FULL_RANK_ENTRY_TIMING", "1"
+        )
         self.enable_intraday_goal_mode = str(os.environ.get("SIGNALMONITOR_INTRADAY_GOAL_MODE", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
         self.goal_selector_file = str(os.environ.get("SIGNALMONITOR_GOAL_SELECTOR_FILE", "") or "").strip()
         self.goal_selector_validated = self._goal_selector_is_validated(self.goal_selector_file)
@@ -305,6 +309,18 @@ class SignalMonitorRunner:
                 stress_pct=float(os.environ.get("SIGNALMONITOR_FULL_RANK_PAPER_STRESS_PCT", "0.10") or 0.10),
             )
             if self.enable_live_feature_recorder and self.enable_full_rank_contract_matrix
+            else None
+        )
+        self._full_rank_entry_timing = (
+            FullUniverseRankEntryTimingObserver(
+                output_dir=self.output_dir,
+                capital=float(os.environ.get("SIGNALMONITOR_FULL_RANK_PAPER_CAPITAL", "500000") or 500000),
+                target_pct=float(os.environ.get("SIGNALMONITOR_FULL_RANK_PAPER_TARGET_PCT", "1.5") or 1.5),
+                stop_pct=float(os.environ.get("SIGNALMONITOR_FULL_RANK_PAPER_STOP_PCT", "1.0") or 1.0),
+                horizon_minutes=float(os.environ.get("SIGNALMONITOR_FULL_RANK_PAPER_HORIZON_MINUTES", "60") or 60),
+                stress_pct=float(os.environ.get("SIGNALMONITOR_FULL_RANK_PAPER_STRESS_PCT", "0.10") or 0.10),
+            )
+            if self.enable_live_feature_recorder and self.enable_full_rank_entry_timing
             else None
         )
         self._last_discord_heartbeat_ts = 0.0
@@ -4278,6 +4294,21 @@ class SignalMonitorRunner:
             except Exception as exc:
                 default_logger().debug(
                     f"Full-rank contract matrix failed: {exc}", exc_info=True
+                )
+        entry_timing = getattr(self, "_full_rank_entry_timing", None)
+        if entry_timing is not None and getattr(self, "enable_full_rank_entry_timing", False):
+            try:
+                timing_events = entry_timing.process(paper_events, ticks, now=self.run_at)
+                fills = sum(event.get("event") == "entry_filled" for event in timing_events)
+                exits = sum(event.get("event") == "timing_exit" for event in timing_events)
+                if fills or exits:
+                    OutputControls().printOutput(
+                        f"  [+] Full-rank entry timing: {fills} exact paper fill(s), "
+                        f"{exits} exit(s) (no orders)"
+                    )
+            except Exception as exc:
+                default_logger().debug(
+                    f"Full-rank entry timing failed: {exc}", exc_info=True
                 )
         self._run_frozen_microstructure_paper_lane(rows_df, ticks)
 

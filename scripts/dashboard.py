@@ -410,6 +410,13 @@ def leader_discovery_stats():
         DATA / "full_universe_rank_contract_strategy" / "status.json", {}
     )
     contract_forward = contract_strategy.get("forward", {}) or {}
+    entry_timing = load_json(
+        DATA / "full_universe_rank_entry_timing" / "status.json", {}
+    )
+    entry_strategy = load_json(
+        DATA / "full_universe_rank_entry_strategy" / "status.json", {}
+    )
+    entry_forward = entry_strategy.get("forward", {}) or {}
     full_rank_forward = full_rank_strategy.get("forward_stress", {}) or {}
     ranker_model = ranker.get("live_model", {}) or {}
     prediction_paths = sorted(
@@ -667,6 +674,33 @@ def leader_discovery_stats():
         "contract_strategy_forward_trades": int(number(contract_forward, "trades")),
         "contract_strategy_forward_avg_pnl": number(contract_forward, "avg_daily_pnl"),
         "contract_strategy_accepted": bool(contract_strategy.get("accepted", False)),
+        "entry_timing_status": str(
+            entry_timing.get("status") or "awaiting live entry timing"
+        ),
+        "entry_timing_variants": int(number(entry_timing, "variants")),
+        "entry_timing_labels": int(number(entry_timing, "entry_labels")),
+        "entry_timing_waiting": int(number(entry_timing, "waiting")),
+        "entry_timing_positions": int(number(entry_timing, "open_positions")),
+        "entry_timing_fills": int(number(entry_timing, "fills")),
+        "entry_timing_nonfills": int(number(entry_timing, "nonfills")),
+        "entry_timing_closed": int(number(entry_timing, "closed_positions")),
+        "entry_strategy_status": str(
+            entry_strategy.get("status") or "awaiting EOD entry judge"
+        ),
+        "entry_strategy_sessions": int(number(entry_strategy, "eligible_sessions")),
+        "entry_strategy_required": int(
+            number(entry_strategy, "selection_sessions_required") or 12
+        ),
+        "entry_strategy_combination": " / ".join(
+            value for value in (
+                str((entry_strategy.get("frozen_selection", {}) or {}).get("variant") or ""),
+                str((entry_strategy.get("frozen_selection", {}) or {}).get("selector") or ""),
+            ) if value
+        ) or "not frozen",
+        "entry_strategy_forward_sessions": int(number(entry_forward, "sessions")),
+        "entry_strategy_forward_trades": int(number(entry_forward, "trades")),
+        "entry_strategy_forward_avg_pnl": number(entry_forward, "avg_daily_pnl"),
+        "entry_strategy_accepted": bool(entry_strategy.get("accepted", False)),
         "evidence_accepted": False,
         "paper_promotion_allowed": False,
         "real_orders_allowed": False,
@@ -1284,6 +1318,29 @@ def render():
     The judge tests them with the same four causal entry orderings and one reusable Rs 500,000 slot.
     Selection and untouched-forward gates remain separate. Accepted: <b>{'YES' if leader_discovery['contract_strategy_accepted'] else 'NO'}</b>;
     alerts: <b>NO</b>; real orders: <b>NO</b>.
+  </div>"""
+
+    entry_forward_class = (
+        "gain" if leader_discovery["entry_strategy_forward_avg_pnl"] > 0 else "loss"
+    )
+    leader_html += f"""
+  <div class="summary" style="margin-top:10px">
+    <span>Entry timing <span class="big">{escape(leader_discovery['entry_timing_status'])}</span></span>
+    <span>Variants <span class="big">{leader_discovery['entry_timing_variants']}</span></span>
+    <span>Signals <span class="big">{leader_discovery['entry_timing_labels']}</span></span>
+    <span>Waiting/open <span class="big">{leader_discovery['entry_timing_waiting']}/{leader_discovery['entry_timing_positions']}</span></span>
+    <span>Filled/unfilled <span class="big">{leader_discovery['entry_timing_fills']}/{leader_discovery['entry_timing_nonfills']}</span></span>
+    <span>Closed <span class="big">{leader_discovery['entry_timing_closed']}</span></span>
+    <span>Judge <span class="big">{escape(leader_discovery['entry_strategy_status'])}</span></span>
+    <span>Selection sessions <span class="big">{leader_discovery['entry_strategy_sessions']}/{leader_discovery['entry_strategy_required']}</span></span>
+    <span>Frozen combination <span class="big">{escape(leader_discovery['entry_strategy_combination'])}</span></span>
+    <span>Forward P&amp;L <span class="big {entry_forward_class}">{money(leader_discovery['entry_strategy_forward_avg_pnl'])}/day</span></span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    Six exact timing variants compare -0.25%, -0.5% and -1% dip limits, +0.25% and +0.5% confirmation,
+    and a -0.5% pullback followed by a +0.25% reclaim. Unfilled entries remain in the denominator.
+    One reusable Rs 500,000 slot and the 12-selection/20-forward gates still apply.
+    Accepted: <b>{'YES' if leader_discovery['entry_strategy_accepted'] else 'NO'}</b>; real orders: <b>NO</b>.
   </div>"""
 
     migration_diagnostic_class = (
