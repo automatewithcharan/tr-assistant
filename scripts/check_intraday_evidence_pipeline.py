@@ -138,6 +138,7 @@ def assess(
         "scripts/assess_full_rank_opportunity_ceiling.py",
         "scripts/project_intraday_capital_growth.py",
         "scripts/live_evidence_eod.sh",
+        "scripts/check_intraday_eod_evidence.py",
     ]
     missing = [value for value in required_files if not (root / value).is_file()]
     checks.append(check("required_code_present", not missing, "all evidence components present" if not missing else "missing: " + ", ".join(missing)))
@@ -150,6 +151,7 @@ def assess(
         "run_full_rank_feature_gates",
         "run_full_rank_opportunity_ceiling",
         "run_intraday_capital_growth",
+        "run_eod_integrity",
     ]
     absent_calls = [value for value in required_eod_calls if eod_script.count(value) < 2]
     checks.append(check("eod_judges_wired", not absent_calls, "all exact judges run after close" if not absent_calls else "missing calls: " + ", ".join(absent_calls)))
@@ -204,11 +206,12 @@ def assess(
     matrix_ok = matrix_counts == {"contracts": 9, "variants": 6, "gates": 9, "selectors": 4}
     checks.append(check("predeclared_search_space", matrix_ok, "9 exit contracts, 6 timing variants, 9 feature gates, 4 selectors declared" if matrix_ok else "one or more predeclared matrices are incomplete"))
 
-    eod = load_json(
-        data / "live_feature_recorder" / "eod" / now.strftime("%Y-%m-%d") / "status.json"
-    )
+    eod = load_json(data / "intraday_evidence_pipeline" / "eod_latest.json")
     eod_status = str(eod.get("status") or "")
-    eod_ok = eod_status.startswith("complete")
+    eod_ok = (
+        str(eod.get("date") or "") == now.strftime("%Y-%m-%d")
+        and eod_status.startswith("complete_")
+    )
     checks.append(
         check(
             "today_eod_evidence",

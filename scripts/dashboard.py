@@ -365,6 +365,7 @@ def ignition_registry_stats():
 
 def evidence_pipeline_stats():
     status = load_json(DATA / "intraday_evidence_pipeline" / "status.json", {})
+    eod = load_json(DATA / "intraday_evidence_pipeline" / "eod_latest.json", {})
     checks = status.get("checks", []) if isinstance(status, dict) else []
     failed = [item for item in checks if not item.get("passed", False)]
     return {
@@ -375,6 +376,11 @@ def evidence_pipeline_stats():
         "issues": [str(item.get("detail") or item.get("name") or "unknown issue") for item in failed],
         "real_orders_allowed": bool(status.get("real_orders_allowed", False)),
         "strategy_accepted": bool(status.get("strategy_accepted", False)),
+        "eod_status": str(eod.get("status") or "not run today"),
+        "eod_date": str(eod.get("date") or "n/a"),
+        "eod_refreshed": int(eod.get("artifacts_refreshed") or 0),
+        "eod_required": int(eod.get("artifacts_required") or 9),
+        "eod_session_eligible": bool(eod.get("session_evidence_eligible", False)),
     }
 
 
@@ -1102,6 +1108,8 @@ def render():
     <span>Checks <span class="big">{evidence_pipeline['passed']}/{evidence_pipeline['total']}</span></span>
     <span>Strategy accepted <span class="big">NO</span></span>
     <span>Real orders <span class="big">NO</span></span>
+    <span>EOD <span class="big">{escape(evidence_pipeline['eod_status'])}</span></span>
+    <span>EOD artifacts <span class="big">{evidence_pipeline['eod_refreshed']}/{evidence_pipeline['eod_required']}</span></span>
   </div>
   <div class="updated" style="margin-top:6px">
     Checked {escape(evidence_pipeline['checked_at'])}. Issues: {escape(pipeline_issues)}.

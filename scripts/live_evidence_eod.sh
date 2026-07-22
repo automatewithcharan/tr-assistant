@@ -246,6 +246,35 @@ run_pipeline_readiness() {
         >>"$LOG" 2>&1 || true
 }
 
+run_eod_integrity() {
+    "$PYTHON" "$REPO/scripts/check_intraday_eod_evidence.py" \
+        --date "$DATE" --allow-issues >>"$LOG" 2>&1 || true
+}
+
+send_eod_integrity_summary() {
+    local integrity="$REPO/results/Data/intraday_evidence_pipeline/eod_latest.json"
+    if [ ! -s "$integrity" ]; then
+        send_discord "Intraday EOD evidence needs attention for $DATE | integrity manifest missing | no orders enabled"
+        return
+    fi
+    local report
+    report=$("$PYTHON" -c '
+import json, sys
+s = json.load(open(sys.argv[1]))
+print(
+    f"status={s.get('"'"'status'"'"', '"'"'missing'"'"')} "
+    f"artifacts={s.get('"'"'artifacts_refreshed'"'"', 0)}/{s.get('"'"'artifacts_required'"'"', 0)} "
+    f"session_eligible={s.get('"'"'session_evidence_eligible'"'"', False)} "
+    f"issues={len(s.get('"'"'issues'"'"', []))}"
+)
+' "$integrity" 2>/dev/null || echo "status=unreadable")
+    if [[ "$report" == status=complete_* ]]; then
+        send_discord "Intraday EOD evidence processed for $DATE | $report | research only, no broker orders"
+    else
+        send_discord "Intraday EOD evidence needs attention for $DATE | $report | see $LOG"
+    fi
+}
+
 if [ -f "$OUTPUT_ROOT/status.json" ]; then
     existing_status=$("$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status", ""))' "$OUTPUT_ROOT/status.json" 2>/dev/null || true)
     if [[ "$existing_status" == complete* ]]; then
@@ -262,7 +291,9 @@ if [ -f "$OUTPUT_ROOT/status.json" ]; then
         run_full_rank_opportunity_ceiling
         run_intraday_capital_growth
         run_pullback_reclaim_audit
+        run_eod_integrity
         run_pipeline_readiness
+        send_eod_integrity_summary
         exit 0
     fi
 fi
@@ -299,11 +330,6 @@ else
     SUMMARY="status file missing"
 fi
 
-if [ "$RC" -eq 0 ]; then
-    send_discord "Live evidence EOD complete for $DATE | $SUMMARY | research only, no broker orders"
-else
-    send_discord "Live evidence EOD needs attention for $DATE | rc=$RC | $SUMMARY | see $LOG"
-fi
 run_readiness
 run_ranked_replay
 run_live_microstructure_research
@@ -317,6 +343,8 @@ run_full_rank_feature_gates
 run_full_rank_opportunity_ceiling
 run_intraday_capital_growth
 run_pullback_reclaim_audit
+run_eod_integrity
 run_pipeline_readiness
+send_eod_integrity_summary
 echo "[$(date -u +'%Y-%m-%d %H:%M:%S UTC')] live evidence EOD finished rc=$RC $SUMMARY" >>"$LOG"
 exit "$RC"
