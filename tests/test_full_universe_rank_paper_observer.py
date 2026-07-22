@@ -1,4 +1,5 @@
 import json
+import csv
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -118,6 +119,30 @@ def test_state_reload_preserves_active_and_prevents_duplicate(tmp_path):
     assert len(restarted.active) == 1
     entries = pd.read_csv(restarted._entries_path(start))
     assert len(entries) == 1
+
+
+def test_entry_ledger_widens_old_same_day_schema_atomically(tmp_path):
+    observer = FullUniverseRankPaperObserver(str(tmp_path))
+    now = datetime(2026, 7, 22, 9, 20)
+    path = observer._entries_path(now)
+    path.parent.mkdir(parents=True)
+    old_columns = [
+        column for column in observer.ENTRY_COLUMNS
+        if column not in {"Sector", "UniverseSize", "OpenChangePct"}
+    ]
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(old_columns)
+        writer.writerow(["OLD" if column == "Symbol" else "" for column in old_columns])
+
+    observer.process(_rows(), {"AAA": _tick()}, now=now)
+
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        saved_rows = list(csv.reader(handle))
+    assert saved_rows[0] == observer.ENTRY_COLUMNS
+    assert {len(row) for row in saved_rows} == {len(observer.ENTRY_COLUMNS)}
+    saved = pd.read_csv(path)
+    assert saved["Symbol"].tolist() == ["OLD", "AAA"]
 
 
 def test_eod_closes_open_event_and_component_has_no_broker_path(tmp_path):

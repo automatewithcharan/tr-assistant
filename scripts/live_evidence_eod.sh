@@ -165,6 +165,18 @@ run_full_universe_rank_strategy() {
         >>"$LOG" 2>&1 || true
 }
 
+run_exact_full_rank_strategy() {
+    "$PYTHON" "$REPO/scripts/assess_exact_full_rank_paper.py" \
+        --entry-glob "$REPO/results/Data/full_universe_rank_paper/entries_20*.csv" \
+        --outcome-glob "$REPO/results/Data/full_universe_rank_paper/outcomes_20*.csv" \
+        --raw-glob "$REPO/results/Data/live_feature_recorder/live_features_20*.csv" \
+        --output-dir "$REPO/results/Data/full_universe_rank_exact_strategy" \
+        --capital 500000 --daily-goal 10000 \
+        --max-trades 10 --selection-sessions 12 --forward-sessions 20 \
+        --min-snapshots 300 \
+        >>"$LOG" 2>&1 || true
+}
+
 run_pullback_reclaim_audit() {
     "$PYTHON" "$REPO/scripts/assess_leader_pullback_reclaim.py" \
         --output-dir "$REPO/results/Data/leader_pullback_reclaim_audit" \
@@ -182,6 +194,7 @@ if [ -f "$OUTPUT_ROOT/status.json" ]; then
         run_event_shadow_rebuild
         run_rank_migration_audit
         run_full_universe_rank_strategy
+        run_exact_full_rank_strategy
         run_pullback_reclaim_audit
         exit 0
     fi
@@ -230,6 +243,7 @@ run_live_microstructure_research
 run_event_shadow_rebuild
 run_rank_migration_audit
 run_full_universe_rank_strategy
+run_exact_full_rank_strategy
 run_pullback_reclaim_audit
 echo "[$(date -u +'%Y-%m-%d %H:%M:%S UTC')] live evidence EOD finished rc=$RC $SUMMARY" >>"$LOG"
 exit "$RC"

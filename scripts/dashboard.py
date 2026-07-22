@@ -399,6 +399,10 @@ def leader_discovery_stats():
     full_rank_paper = load_json(
         DATA / "full_universe_rank_paper" / "status.json", {}
     )
+    full_rank_exact = load_json(
+        DATA / "full_universe_rank_exact_strategy" / "status.json", {}
+    )
+    full_rank_exact_forward = full_rank_exact.get("forward", {}) or {}
     full_rank_forward = full_rank_strategy.get("forward_stress", {}) or {}
     ranker_model = ranker.get("live_model", {}) or {}
     prediction_paths = sorted(
@@ -602,6 +606,34 @@ def leader_discovery_stats():
         "full_rank_paper_closed": int(number(full_rank_paper, "closed")),
         "full_rank_paper_wins": int(number(full_rank_paper, "wins")),
         "full_rank_paper_net_pnl": number(full_rank_paper, "net_pnl"),
+        "full_rank_exact_status": str(
+            full_rank_exact.get("status") or "awaiting EOD exact-capital judge"
+        ),
+        "full_rank_exact_sessions": int(
+            number(full_rank_exact, "eligible_exact_sessions")
+        ),
+        "full_rank_exact_required": int(
+            number(full_rank_exact, "selection_sessions_required") or 12
+        ),
+        "full_rank_exact_partial": int(
+            number(full_rank_exact, "partial_or_incomplete_sessions")
+        ),
+        "full_rank_exact_labels": int(number(full_rank_exact, "entry_labels")),
+        "full_rank_exact_closed": int(number(full_rank_exact, "closed_labels")),
+        "full_rank_exact_selector": str(
+            (full_rank_exact.get("frozen_selection", {}) or {}).get("selector")
+            or "not frozen"
+        ),
+        "full_rank_exact_forward_sessions": int(
+            number(full_rank_exact_forward, "sessions")
+        ),
+        "full_rank_exact_forward_trades": int(
+            number(full_rank_exact_forward, "trades")
+        ),
+        "full_rank_exact_forward_avg_pnl": number(
+            full_rank_exact_forward, "avg_daily_pnl"
+        ),
+        "full_rank_exact_accepted": bool(full_rank_exact.get("accepted", False)),
         "evidence_accepted": False,
         "paper_promotion_allowed": False,
         "real_orders_allowed": False,
@@ -1274,6 +1306,26 @@ def render():
     Updated {escape(leader_discovery['full_rank_paper_updated_at'])}. Entry is the displayed ask and every exit is the displayed bid,
     with +1.5%/-1.0%, a 60-minute timeout, and another 0.10% stress charge.
     This labels all buyable rank cohorts for research; alerts: <b>NO</b>; real orders: <b>NO</b>.
+  </div>"""
+
+    full_rank_exact_class = (
+        "gain" if leader_discovery["full_rank_exact_forward_avg_pnl"] > 0 else "loss"
+    )
+    leader_html += f"""
+  <div class="summary" style="margin-top:10px">
+    <span>Exact-capital judge <span class="big">{escape(leader_discovery['full_rank_exact_status'])}</span></span>
+    <span>Selection sessions <span class="big">{leader_discovery['full_rank_exact_sessions']}/{leader_discovery['full_rank_exact_required']}</span></span>
+    <span>Partial sessions <span class="big">{leader_discovery['full_rank_exact_partial']}</span></span>
+    <span>Labels/closed <span class="big">{leader_discovery['full_rank_exact_labels']}/{leader_discovery['full_rank_exact_closed']}</span></span>
+    <span>Frozen selector <span class="big">{escape(leader_discovery['full_rank_exact_selector'])}</span></span>
+    <span>Forward <span class="big">{leader_discovery['full_rank_exact_forward_sessions']} sessions / {leader_discovery['full_rank_exact_forward_trades']} trades</span></span>
+    <span>Forward P&amp;L <span class="big {full_rank_exact_class}">{money(leader_discovery['full_rank_exact_forward_avg_pnl'])}/day</span></span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    One reusable unleveraged Rs 500,000 slot, exact entry/exit timestamps, and ten trades maximum.
+    Four causal selectors were fixed before the first complete session. The first 12 complete sessions may freeze one selector;
+    acceptance still requires 20 untouched forward sessions. Accepted: <b>{'YES' if leader_discovery['full_rank_exact_accepted'] else 'NO'}</b>;
+    real orders: <b>NO</b>.
   </div>"""
 
     live_paper_class = (

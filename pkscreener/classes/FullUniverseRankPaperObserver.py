@@ -5,6 +5,7 @@ intentionally broker-free: it writes research evidence and cannot place orders
 or send alerts.
 """
 
+import csv
 import json
 import os
 from datetime import datetime
@@ -22,13 +23,17 @@ class FullUniverseRankPaperObserver:
     """Persist ask-entry/bid-exit outcomes for predefined rank cohorts."""
 
     ENTRY_COLUMNS = [
-        "EventId", "Date", "EntryAt", "Symbol", "Cohort", "Source",
+        "EventId", "Date", "EntryAt", "Symbol", "Sector", "Cohort", "Source",
         "EntryAsk", "EntryBid", "EntrySpreadBps", "Quantity", "Capital",
         "TargetPrice", "StopPrice", "TargetPct", "StopPct", "HorizonMinutes",
-        "StressPct", "DayChangePct", "DayChangeRank", "PreviousDayChangeRank",
+        "StressPct", "OpenChangePct", "PullbackFromHighPct", "DayChangePct",
+        "UniverseSize", "DayChangeRank", "DayChangeRankPct", "PreviousDayChangeRank",
         "RankImprovement", "RankVelocityPerMinute", "DayChangeDeltaPct",
-        "TradedValue", "BuyerSellerRatio", "SectorBreadthPct",
-        "MarketBreadthPct", "RecordReason",
+        "EnteredTop100", "EnteredTop50", "RapidRankClimber", "Volume",
+        "TradedValue", "BuyQty", "SellQty", "BuyerSellerRatio",
+        "BuyerSellerMedianWindow", "BuyerSellerMinWindow", "OrderBookStable",
+        "SpreadOk", "SectorAvgChangePct", "SectorBreadthPct", "SectorTop2Count",
+        "SectorTop5Count", "MarketBreadthPct", "RecordReason",
     ]
     OUTCOME_COLUMNS = [
         "EventId", "Date", "EntryAt", "ExitAt", "Symbol", "Cohort", "Source",
@@ -132,6 +137,7 @@ class FullUniverseRankPaperObserver:
                 "EntryAt": now.strftime("%Y-%m-%d %H:%M:%S"),
                 "EntryTs": now.timestamp(),
                 "Symbol": symbol,
+                "Sector": str(row.get("Sector", "") or "UNKNOWN"),
                 "Cohort": cohort,
                 "Source": source,
                 "EntryAsk": round(ask, 2),
@@ -145,15 +151,32 @@ class FullUniverseRankPaperObserver:
                 "StopPct": self.stop_pct,
                 "HorizonMinutes": self.horizon_minutes,
                 "StressPct": self.stress_pct,
+                "OpenChangePct": round(self._number(row.get("OpenChangePct")), 3),
+                "PullbackFromHighPct": round(self._number(row.get("PullbackFromHighPct")), 3),
                 "DayChangePct": round(day_change, 3),
+                "UniverseSize": int(self._number(row.get("UniverseSize"))),
                 "DayChangeRank": int(self._number(row.get("DayChangeRank"))),
+                "DayChangeRankPct": round(self._number(row.get("DayChangeRankPct")), 3),
                 "PreviousDayChangeRank": int(self._number(row.get("PreviousDayChangeRank"))),
                 "RankImprovement": int(self._number(row.get("RankImprovement"))),
                 "RankVelocityPerMinute": round(self._number(row.get("RankVelocityPerMinute")), 3),
                 "DayChangeDeltaPct": round(self._number(row.get("DayChangeDeltaPct")), 3),
+                "EnteredTop100": self._truthy(row.get("EnteredTop100")),
+                "EnteredTop50": self._truthy(row.get("EnteredTop50")),
+                "RapidRankClimber": self._truthy(row.get("RapidRankClimber")),
+                "Volume": int(self._number(row.get("Volume"))),
                 "TradedValue": round(traded_value, 2),
+                "BuyQty": int(self._number(row.get("BuyQty"))),
+                "SellQty": int(self._number(row.get("SellQty"))),
                 "BuyerSellerRatio": round(self._number(row.get("BuyerSellerRatio")), 3),
+                "BuyerSellerMedianWindow": round(self._number(row.get("BuyerSellerMedianWindow")), 3),
+                "BuyerSellerMinWindow": round(self._number(row.get("BuyerSellerMinWindow")), 3),
+                "OrderBookStable": self._truthy(row.get("OrderBookStable")),
+                "SpreadOk": self._truthy(row.get("SpreadOk")),
+                "SectorAvgChangePct": round(self._number(row.get("SectorAvgChangePct")), 3),
                 "SectorBreadthPct": round(self._number(row.get("SectorBreadthPct")), 3),
+                "SectorTop2Count": int(self._number(row.get("SectorTop2Count"))),
+                "SectorTop5Count": int(self._number(row.get("SectorTop5Count"))),
                 "MarketBreadthPct": round(self._number(row.get("MarketBreadthPct")), 3),
                 "RecordReason": str(row.get("RecordReason", "") or ""),
             }
@@ -331,7 +354,39 @@ class FullUniverseRankPaperObserver:
         if not rows:
             return
         path.parent.mkdir(parents=True, exist_ok=True)
+        FullUniverseRankPaperObserver._ensure_csv_schema(path, columns)
         pd.DataFrame(rows, columns=columns).to_csv(path, mode="a", header=not path.exists(), index=False)
+
+    @staticmethod
+    def _ensure_csv_schema(path: Path, columns: List[str]) -> None:
+        """Atomically widen a same-day ledger after a code deployment."""
+        if not path.exists() or path.stat().st_size <= 0:
+            return
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.reader(handle)
+            old_header = next(reader, [])
+            if old_header == columns:
+                return
+            if not old_header or not set(old_header).issubset(set(columns)):
+                raise ValueError(f"unsupported paper ledger schema in {path}")
+            old_rows = list(reader)
+        widened = []
+        for values in old_rows:
+            if len(values) == len(old_header):
+                source = dict(zip(old_header, values))
+            elif len(values) == len(columns):
+                source = dict(zip(columns, values))
+            else:
+                raise ValueError(
+                    f"unsupported paper ledger row width {len(values)} in {path}"
+                )
+            widened.append([source.get(column, "") for column in columns])
+        temporary = path.with_suffix(path.suffix + ".schema_tmp")
+        with temporary.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(columns)
+            writer.writerows(widened)
+        os.replace(temporary, path)
 
     @staticmethod
     def _read_count(path: Path) -> int:

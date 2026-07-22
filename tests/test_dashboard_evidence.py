@@ -202,6 +202,42 @@ def test_leader_dashboard_reports_exact_full_rank_paper_ledger(
     assert stats["full_rank_paper_net_pnl"] == 2345.67
 
 
+def test_leader_dashboard_reports_exact_capital_strategy_gate(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(dashboard, "DATA", tmp_path)
+    root = tmp_path / "full_universe_rank_exact_strategy"
+    root.mkdir(parents=True)
+    (root / "status.json").write_text(
+        json.dumps(
+            {
+                "status": "collecting_exact_selection_sessions",
+                "eligible_exact_sessions": 3,
+                "selection_sessions_required": 12,
+                "partial_or_incomplete_sessions": 1,
+                "entry_labels": 140,
+                "closed_labels": 120,
+                "frozen_selection": {},
+                "forward": {"sessions": 0, "trades": 0, "avg_daily_pnl": 0.0},
+                "accepted": False,
+                "real_orders_allowed": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    stats = dashboard.leader_discovery_stats()
+
+    assert stats["full_rank_exact_status"] == "collecting_exact_selection_sessions"
+    assert stats["full_rank_exact_sessions"] == 3
+    assert stats["full_rank_exact_required"] == 12
+    assert stats["full_rank_exact_partial"] == 1
+    assert stats["full_rank_exact_labels"] == 140
+    assert stats["full_rank_exact_closed"] == 120
+    assert stats["full_rank_exact_selector"] == "not frozen"
+    assert not stats["full_rank_exact_accepted"]
+
+
 def test_broad_rank_checkpoint_stats_distinguishes_diagnostic_and_full(tmp_path, monkeypatch):
     monkeypatch.setattr(dashboard, "DATA", tmp_path)
     first = tmp_path / "broad_rank_acceleration" / "checkpoint_1000"
