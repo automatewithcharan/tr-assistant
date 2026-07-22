@@ -45,6 +45,9 @@ from scripts.kite_intraday_backfill import (
 
 DEFAULT_RECORDER_DIR = "results/Data/live_feature_recorder"
 DEFAULT_OUTPUT_DIR = "results/Data/live_feature_recorder/eod"
+PROMOTION_FEATURE_BUCKETS = {
+    "missed_stable_executable_known_sector",
+}
 
 
 def _local_naive(values: pd.Series) -> pd.Series:
@@ -228,6 +231,49 @@ def _coverage(outcomes: pd.DataFrame) -> tuple[int, int, int, float]:
     return total, eligible, evaluated, round(pct, 2)
 
 
+def _promotion_coverage(outcomes: pd.DataFrame) -> tuple[int, int, float]:
+    """Measure outcome coverage only for states that could reach promotion.
+
+    Broad feature snapshots and rejected lane decisions remain in the overall
+    diagnostic denominator. Sparse, untradeable symbols in those diagnostics
+    must not make a fully evaluated candidate day look operationally broken.
+    """
+    if outcomes is None or outcomes.empty:
+        return 0, 0, 0.0
+    eligible = (
+        boolean_series(outcomes["EvaluationEligible"])
+        if "EvaluationEligible" in outcomes.columns
+        else pd.Series(True, index=outcomes.index, dtype=bool)
+    )
+    buckets = outcomes.get(
+        "FeatureBucket", pd.Series("", index=outcomes.index, dtype=str)
+    ).fillna("").astype(str)
+    sources = outcomes.get(
+        "EvaluationSource", pd.Series("", index=outcomes.index, dtype=str)
+    ).fillna("").astype(str).str.lower()
+    decisions = outcomes.get(
+        "Decision", pd.Series("", index=outcomes.index, dtype=str)
+    ).fillna("").astype(str).str.lower()
+    bucket_decisions = buckets.str.split("|").str[2].fillna("").str.lower()
+    candidate = (
+        (sources.eq("live_feature") & buckets.isin(PROMOTION_FEATURE_BUCKETS))
+        | (
+            sources.eq("lane_decision")
+            & (decisions.eq("pass") | bucket_decisions.eq("pass"))
+        )
+    )
+    candidate_eligible = eligible & candidate
+    candidate_rows = int(candidate_eligible.sum())
+    available = (
+        boolean_series(outcomes["OutcomeAvailable"])
+        if "OutcomeAvailable" in outcomes.columns
+        else pd.Series(False, index=outcomes.index, dtype=bool)
+    )
+    evaluated = int((candidate_eligible & available).sum())
+    coverage = evaluated / candidate_rows * 100.0 if candidate_rows else 0.0
+    return candidate_rows, evaluated, round(coverage, 2)
+
+
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument(
@@ -316,12 +362,32 @@ def main() -> int:
         combined_evaluated / combined_total * 100.0 if combined_total else 0.0,
         2,
     )
+    feature_promotion_eligible, feature_promotion_evaluated, _ = _promotion_coverage(
+        feature_outcomes
+    )
+    decision_promotion_eligible, decision_promotion_evaluated, _ = _promotion_coverage(
+        decision_outcomes
+    )
+    promotion_eligible = feature_promotion_eligible + decision_promotion_eligible
+    promotion_evaluated = feature_promotion_evaluated + decision_promotion_evaluated
+    promotion_coverage = round(
+        promotion_evaluated / promotion_eligible * 100.0
+        if promotion_eligible
+        else 0.0,
+        2,
+    )
     gate_passed = bool(
-        combined_total > 0 and combined_coverage >= float(args.min_coverage_pct)
+        promotion_eligible == 0
+        or promotion_coverage >= float(args.min_coverage_pct)
+    )
+    status_name = (
+        "complete_no_promotion_candidates"
+        if promotion_eligible == 0
+        else ("complete" if gate_passed else "coverage_gate_failed")
     )
     status = {
         "date": date,
-        "status": "complete" if gate_passed else "coverage_gate_failed",
+        "status": status_name,
         "raw_feature_rows": int(len(features)),
         "raw_decision_rows": int(len(decisions)),
         "symbols": len(symbols),
@@ -339,6 +405,10 @@ def main() -> int:
         "decision_evaluated": decision_evaluated,
         "decision_coverage_pct": decision_coverage,
         "combined_coverage_pct": combined_coverage,
+        "coverage_gate_scope": "promotion_eligible_candidates",
+        "promotion_eligible": promotion_eligible,
+        "promotion_evaluated": promotion_evaluated,
+        "promotion_coverage_pct": promotion_coverage,
         "coverage_gate_passed": gate_passed,
         "horizon_minutes": int(args.horizon_minutes),
         "fee_pct": float(args.fee_pct),

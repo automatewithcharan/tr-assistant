@@ -192,7 +192,11 @@ def evidence_readiness_stats():
         "best_stress_return": number(best, "StressAvgDailyReturnPct"),
         "best_stress_pnl": number(best, "ProjectedStressDailyPnl"),
         "best_lower_bound": number(best, "StressReturnLower95Pct"),
-        "coverage": float(status.get("combined_coverage_pct") or 0.0),
+        "coverage": float(
+            status.get("promotion_coverage_pct")
+            if status.get("promotion_coverage_pct") is not None
+            else status.get("combined_coverage_pct") or 0.0
+        ),
         "coverage_passed": bool(status.get("coverage_gate_passed", False)),
         "evidence_accepted": False,
         "status_date": str(status.get("date") or status.get("end_date") or ""),

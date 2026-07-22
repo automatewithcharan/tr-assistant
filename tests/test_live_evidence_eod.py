@@ -4,6 +4,7 @@ import pandas as pd
 
 from scripts.run_live_evidence_eod import (
     _coverage,
+    _promotion_coverage,
     evidence_symbols,
     evaluate_stream,
     load_daily_evidence,
@@ -19,6 +20,41 @@ def test_coverage_parses_persisted_false_strings():
         }
     )
     assert _coverage(outcomes) == (2, 2, 1, 50.0)
+
+
+def test_promotion_coverage_excludes_diagnostics_and_rejections():
+    outcomes = pd.DataFrame(
+        [
+            {
+                "EvaluationSource": "live_feature",
+                "FeatureBucket": "stable_order_book",
+                "EvaluationEligible": True,
+                "OutcomeAvailable": False,
+            },
+            {
+                "EvaluationSource": "live_feature",
+                "FeatureBucket": "missed_stable_executable_known_sector",
+                "EvaluationEligible": True,
+                "OutcomeAvailable": True,
+            },
+            {
+                "EvaluationSource": "lane_decision",
+                "FeatureBucket": "leader|screen|reject|liquidity",
+                "Decision": "reject",
+                "EvaluationEligible": True,
+                "OutcomeAvailable": False,
+            },
+            {
+                "EvaluationSource": "lane_decision",
+                "FeatureBucket": "leader|screen|pass|candidate",
+                "Decision": "pass",
+                "EvaluationEligible": True,
+                "OutcomeAvailable": False,
+            },
+        ]
+    )
+
+    assert _promotion_coverage(outcomes) == (2, 1, 50.0)
 
 
 def test_load_daily_evidence_and_symbol_union(tmp_path):

@@ -116,6 +116,12 @@ run_event_shadow_rebuild() {
         --bars "$rebuilt/intraday_event_shadow/bars_20*.csv" \
         --output-dir "$REPO/results/Data/live_leader_continuation" \
         >>"$LOG" 2>&1 || true
+    "$PYTHON" "$REPO/scripts/walk_forward_live_microstructure_ranker.py" \
+        --input "$REPO/results/Data/live_leader_continuation/snapshot_outcomes.csv" \
+        --output-prefix "$REPO/results/Data/live_leader_continuation/frozen_ranker" \
+        --contract t1.5_s1.0 --frozen-through 2026-07-21 \
+        --forward-start 2026-07-22 --capital 500000 --daily-goal 10000 \
+        >>"$LOG" 2>&1 || true
     local frozen_bundle="$REPO/results/Data/research_models/historical_event_family_target.joblib"
     if [ -s "$frozen_bundle" ]; then
         "$PYTHON" "$REPO/scripts/evaluate_historical_event_model_live_holdout.py" \
@@ -167,11 +173,11 @@ feature_evaluated = s.get("feature_evaluated", 0)
 feature_rows = s.get("feature_rows", 0)
 decision_evaluated = s.get("decision_evaluated", 0)
 decision_rows = s.get("decision_rows", 0)
-coverage = s.get("combined_coverage_pct", 0)
+coverage = s.get("promotion_coverage_pct", s.get("combined_coverage_pct", 0))
 print(
     f"status={status} symbols={symbols} "
     f"feature={feature_evaluated}/{feature_rows} "
-    f"decisions={decision_evaluated}/{decision_rows} coverage={coverage}%"
+    f"decisions={decision_evaluated}/{decision_rows} candidate_coverage={coverage}%"
 )
 ' "$STATUS_FILE" 2>/dev/null || echo "status=unreadable")
 else

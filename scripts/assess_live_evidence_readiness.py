@@ -6,10 +6,15 @@ from __future__ import annotations
 import argparse
 from glob import glob
 from pathlib import Path
+import sys
 from typing import Any
 
 import numpy as np
 import pandas as pd
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from scripts.evaluate_live_feature_outcomes import feature_bucket
 
@@ -92,11 +97,7 @@ def strategy_eligible_bucket(bucket_name: str) -> bool:
     parts = name.split("|")
     if len(parts) >= 3:
         return parts[2].strip().lower() == "pass"
-    return name in {
-        "missed_runner",
-        "missed_stable_depth",
-        "missed_stable_executable_known_sector",
-    }
+    return name == "missed_stable_executable_known_sector"
 
 
 def first_batch_rows(bucket: pd.DataFrame) -> pd.DataFrame:

@@ -146,19 +146,25 @@ def executable_outcome(
     stop_price = entry * (1.0 - float(stop_pct) / 100.0)
     reason = "horizon"
     gross = (float(exits[-1]) - entry) / entry * 100.0
-    for price in exits:
+    exit_when = pd.Timestamp(future.iloc[-1]["When"])
+    for observation in future.itertuples(index=False):
+        price = float(observation.BestBid)
         if float(price) <= stop_price:
             reason = "stop"
             gross = (float(price) - entry) / entry * 100.0
+            exit_when = pd.Timestamp(observation.When)
             break
         if float(price) >= target_price:
             reason = "target"
             gross = float(target_pct)
+            exit_when = pd.Timestamp(observation.When)
             break
     return {
         "OutcomeAvailable": True,
         "EntryAsk": round(entry, 4),
+        "EntryWhen": str(pd.Timestamp(ordered.iloc[index]["When"])),
         "ExitReason": reason,
+        "ExitWhen": str(exit_when),
         "GrossReturnPct": round(gross, 6),
         "NetReturnPct": round(gross - float(fee_pct), 6),
         "MfePct": round((float(np.max(exits)) - entry) / entry * 100.0, 6),

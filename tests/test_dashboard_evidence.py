@@ -260,6 +260,25 @@ def test_evidence_readiness_stats_uses_best_stressed_candidate(tmp_path: Path, m
     assert stats["goal_passes"] == 0
 
 
+def test_evidence_readiness_prefers_candidate_coverage(tmp_path: Path, monkeypatch):
+    monkeypatch.setattr(dashboard, "DATA", tmp_path)
+    root = tmp_path / "live_feature_recorder"
+    root.mkdir(parents=True)
+    pd.DataFrame().to_csv(root / "evidence_readiness.csv", index=False)
+    status_root = root / "eod" / "2026-07-21"
+    status_root.mkdir(parents=True)
+    (status_root / "status.json").write_text(
+        '{"date":"2026-07-21","combined_coverage_pct":70.0,'
+        '"promotion_coverage_pct":98.5,"coverage_gate_passed":true}',
+        encoding="utf-8",
+    )
+
+    stats = dashboard.evidence_readiness_stats()
+
+    assert stats["coverage"] == 98.5
+    assert stats["coverage_passed"]
+
+
 def test_ranked_replay_readiness_reports_accumulated_rejection(tmp_path: Path, monkeypatch):
     monkeypatch.setattr(dashboard, "DATA", tmp_path)
     root = tmp_path / "ranked_confirmation_replay"

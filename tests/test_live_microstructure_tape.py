@@ -22,6 +22,7 @@ def test_executable_outcome_buys_ask_and_sells_future_bid():
     outcome = executable_outcome(group, 1, target_pct=0.5, stop_pct=0.5, horizon_minutes=30, fee_pct=0.05)
     assert outcome["ExitReason"] == "target"
     assert outcome["EntryAsk"] == 100.1
+    assert outcome["ExitWhen"] == "2026-01-02 09:32:00"
     assert outcome["NetReturnPct"] == 0.45
 
 
