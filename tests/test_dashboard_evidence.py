@@ -71,6 +71,63 @@ def test_leader_dashboard_reports_pullback_reclaim_rejection(tmp_path, monkeypat
     assert not stats["reclaim_accepted"]
 
 
+def test_leader_dashboard_reports_rank_migration_and_full_universe_recorder(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(dashboard, "DATA", tmp_path)
+    migration = tmp_path / "live_rank_migration"
+    migration.mkdir(parents=True)
+    (migration / "status.json").write_text(
+        json.dumps(
+            {
+                "status": "collecting_forward_evidence",
+                "diagnostic_stress": {
+                    "sessions": 4,
+                    "trades": 9,
+                    "avg_daily_pnl": 1367.57,
+                    "lower_95_pct": -0.596931,
+                },
+                "forward_stress": {
+                    "sessions": 1,
+                    "trades": 2,
+                    "avg_daily_pnl": 500.0,
+                    "lower_95_pct": -0.2,
+                    "goal_hit_pct": 0.0,
+                },
+                "accepted": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    recorder = tmp_path / "live_feature_recorder"
+    recorder.mkdir()
+    (recorder / "full_universe_rank_status.json").write_text(
+        json.dumps(
+            {
+                "status": "recording_full_universe_rank",
+                "recorded_at": "2026-07-22 12:00:00",
+                "universe_size": 2990,
+                "rows_this_snapshot": 75,
+                "rapid_rank_climbers_this_snapshot": 3,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    stats = dashboard.leader_discovery_stats()
+
+    assert stats["rank_migration_status"] == "collecting_forward_evidence"
+    assert stats["rank_migration_diagnostic_trades"] == 9
+    assert stats["rank_migration_diagnostic_avg_pnl"] == 1367.57
+    assert stats["rank_migration_forward_sessions"] == 1
+    assert stats["rank_migration_forward_trades"] == 2
+    assert not stats["rank_migration_accepted"]
+    assert stats["full_rank_recorder_status"] == "recording_full_universe_rank"
+    assert stats["full_rank_universe"] == 2990
+    assert stats["full_rank_rows"] == 75
+    assert stats["full_rank_rapid"] == 3
+
+
 def test_broad_rank_checkpoint_stats_distinguishes_diagnostic_and_full(tmp_path, monkeypatch):
     monkeypatch.setattr(dashboard, "DATA", tmp_path)
     first = tmp_path / "broad_rank_acceleration" / "checkpoint_1000"

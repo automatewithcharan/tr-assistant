@@ -385,6 +385,14 @@ def leader_discovery_stats():
         DATA / "leader_pullback_reclaim_audit" / "status.json", {}
     )
     reclaim_stress = reclaim.get("goal_stress", {}) or {}
+    rank_migration = load_json(
+        DATA / "live_rank_migration" / "status.json", {}
+    )
+    rank_migration_diagnostic = rank_migration.get("diagnostic_stress", {}) or {}
+    rank_migration_forward = rank_migration.get("forward_stress", {}) or {}
+    full_rank_recorder = load_json(
+        DATA / "live_feature_recorder" / "full_universe_rank_status.json", {}
+    )
     ranker_model = ranker.get("live_model", {}) or {}
     prediction_paths = sorted(
         (DATA / "frozen_microstructure_paper").glob("predictions_20*.csv")
@@ -501,6 +509,48 @@ def leader_discovery_stats():
         ),
         "reclaim_goal_hit_pct": number(reclaim_stress, "goal_hit_pct"),
         "reclaim_accepted": bool(reclaim.get("accepted", False)),
+        "rank_migration_status": str(
+            rank_migration.get("status") or "pending"
+        ),
+        "rank_migration_diagnostic_sessions": int(
+            number(rank_migration_diagnostic, "sessions")
+        ),
+        "rank_migration_diagnostic_trades": int(
+            number(rank_migration_diagnostic, "trades")
+        ),
+        "rank_migration_diagnostic_avg_pnl": number(
+            rank_migration_diagnostic, "avg_daily_pnl"
+        ),
+        "rank_migration_diagnostic_lower95_pct": number(
+            rank_migration_diagnostic, "lower_95_pct"
+        ),
+        "rank_migration_forward_sessions": int(
+            number(rank_migration_forward, "sessions")
+        ),
+        "rank_migration_forward_trades": int(
+            number(rank_migration_forward, "trades")
+        ),
+        "rank_migration_forward_avg_pnl": number(
+            rank_migration_forward, "avg_daily_pnl"
+        ),
+        "rank_migration_forward_lower95_pct": number(
+            rank_migration_forward, "lower_95_pct"
+        ),
+        "rank_migration_forward_goal_hit_pct": number(
+            rank_migration_forward, "goal_hit_pct"
+        ),
+        "rank_migration_accepted": bool(rank_migration.get("accepted", False)),
+        "full_rank_recorder_status": str(
+            full_rank_recorder.get("status") or "awaiting runtime restart"
+        ),
+        "full_rank_recorded_at": str(
+            full_rank_recorder.get("recorded_at") or "n/a"
+        ),
+        "full_rank_universe": int(number(full_rank_recorder, "universe_size")),
+        "full_rank_rows": int(number(full_rank_recorder, "rows_this_snapshot")),
+        "full_rank_rapid": int(
+            number(full_rank_recorder, "rapid_rank_climbers_this_snapshot")
+        ),
         "evidence_accepted": False,
         "paper_promotion_allowed": False,
         "real_orders_allowed": False,
@@ -1096,6 +1146,42 @@ def render():
     Stressed lower 95% bound {leader_discovery['ranker_stress_lower95_pct']:+.3f}%.
     Accepted: <b>{'YES' if leader_discovery['ranker_accepted'] else 'NO'}</b>;
     real orders: <b>NO</b>.
+  </div>"""
+
+    migration_diagnostic_class = (
+        "gain"
+        if leader_discovery["rank_migration_diagnostic_avg_pnl"] > 0
+        else "loss"
+    )
+    migration_forward_class = (
+        "gain" if leader_discovery["rank_migration_forward_avg_pnl"] > 0 else "loss"
+    )
+    leader_html += f"""
+  <div class="summary" style="margin-top:10px">
+    <span>Rank migration <span class="big">{escape(leader_discovery['rank_migration_status'])}</span></span>
+    <span>Diagnostic <span class="big">{leader_discovery['rank_migration_diagnostic_trades']} trades</span></span>
+    <span>Diagnostic P&amp;L <span class="big {migration_diagnostic_class}">{money(leader_discovery['rank_migration_diagnostic_avg_pnl'])}/day</span></span>
+    <span>Forward sessions <span class="big">{leader_discovery['rank_migration_forward_sessions']}</span></span>
+    <span>Forward trades <span class="big">{leader_discovery['rank_migration_forward_trades']}</span></span>
+    <span>Forward P&amp;L <span class="big {migration_forward_class}">{money(leader_discovery['rank_migration_forward_avg_pnl'])}/day</span></span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    Candidate-relative migration is frozen through 2026-07-21 and remains diagnostic until untouched evidence exists.
+    Diagnostic lower bound {leader_discovery['rank_migration_diagnostic_lower95_pct']:+.3f}%;
+    forward lower bound {leader_discovery['rank_migration_forward_lower95_pct']:+.3f}%;
+    forward goal sessions {leader_discovery['rank_migration_forward_goal_hit_pct']:.1f}%.
+    Accepted: <b>{'YES' if leader_discovery['rank_migration_accepted'] else 'NO'}</b>; real orders: <b>NO</b>.
+  </div>
+  <div class="summary" style="margin-top:10px">
+    <span>Full-universe recorder <span class="big">{escape(leader_discovery['full_rank_recorder_status'])}</span></span>
+    <span>Universe <span class="big">{leader_discovery['full_rank_universe']}</span></span>
+    <span>Rows/snapshot <span class="big">{leader_discovery['full_rank_rows']}</span></span>
+    <span>Rapid climbers <span class="big">{leader_discovery['full_rank_rapid']}</span></span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    Latest full-universe rank snapshot: {escape(leader_discovery['full_rank_recorded_at'])}.
+    The top 75 and rapid rank climbers are recorded once per minute before they need to cross 5%.
+    This recorder emits no Discord alerts and has no broker-order path.
   </div>"""
 
     live_paper_class = (

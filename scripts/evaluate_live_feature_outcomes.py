@@ -222,6 +222,41 @@ def feature_bucket(row: pd.Series) -> str:
     return "other"
 
 
+def rank_evidence_bucket(row: pd.Series) -> str:
+    """Describe a causal full-universe rank state without changing lane labels."""
+    rank = float(row.get("DayChangeRank", 0) or 0)
+    change = float(row.get("DayChangePct", 0) or 0)
+    rapid = as_bool(row.get("RapidRankClimber", False))
+    reason = str(row.get("RecordReason", "") or "")
+    in_pool = "full_universe_leader_pool" in reason
+    if rank <= 0 or not (rapid or in_pool):
+        return "no_rank_state"
+    if rank <= 10:
+        rank_band = "r001_010"
+    elif rank <= 25:
+        rank_band = "r011_025"
+    elif rank <= 50:
+        rank_band = "r026_050"
+    elif rank <= 75:
+        rank_band = "r051_075"
+    else:
+        rank_band = "r076_plus"
+    if change < 1.0:
+        move_band = "m0_5_1"
+    elif change < 2.0:
+        move_band = "m1_2"
+    elif change < 3.0:
+        move_band = "m2_3"
+    elif change < 5.0:
+        move_band = "m3_5"
+    elif change < 10.0:
+        move_band = "m5_10"
+    else:
+        move_band = "m10_plus"
+    prefix = "rapid" if rapid else "pool"
+    return f"{prefix}|{rank_band}|{move_band}"
+
+
 def _label(value: object, fallback: str) -> str:
     if value is None:
         return fallback
@@ -270,7 +305,10 @@ def dedupe_first_evidence_state(features: pd.DataFrame) -> pd.DataFrame:
         keys = ["Date", "Symbol", "Lane", "Stage", "Decision", "Reason"]
     else:
         frame["_FeatureBucket"] = frame.apply(feature_bucket, axis=1)
-        keys = ["Date", "Symbol", "_FeatureBucket"]
+        frame["RankEvidenceBucket"] = frame.apply(
+            rank_evidence_bucket, axis=1
+        )
+        keys = ["Date", "Symbol", "_FeatureBucket", "RankEvidenceBucket"]
     return frame.drop_duplicates(keys, keep="first").drop(
         columns=["_FeatureBucket"], errors="ignore"
     ).reset_index(drop=True)

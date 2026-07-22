@@ -6,6 +6,7 @@ it. This recorder captures those facts from Kite ticks without creating alerts
 or orders.
 """
 
+import json
 import os
 import statistics
 from datetime import datetime, timedelta
@@ -37,6 +38,16 @@ class LiveFeatureRecorder:
         "Open",
         "DayHigh",
         "DayChangePct",
+        "UniverseSize",
+        "DayChangeRank",
+        "DayChangeRankPct",
+        "PreviousDayChangeRank",
+        "RankImprovement",
+        "RankVelocityPerMinute",
+        "DayChangeDeltaPct",
+        "EnteredTop100",
+        "EnteredTop50",
+        "RapidRankClimber",
         "OpenChangePct",
         "PullbackFromHighPct",
         "Volume",
@@ -104,6 +115,9 @@ class LiveFeatureRecorder:
         min_stable_bs_ratio: float = 2.0,
         spread_ok_bps: float = 35.0,
         max_rows_per_cycle: int = 200,
+        leader_pool_size: int = 75,
+        rapid_rank_improvement: int = 25,
+        rapid_change_delta_pct: float = 0.15,
     ) -> None:
         self.output_dir = str(output_dir or "")
         self.interval_seconds = max(0.0, float(interval_seconds or 0.0))
@@ -112,8 +126,17 @@ class LiveFeatureRecorder:
         self.min_stable_bs_ratio = max(1.0, float(min_stable_bs_ratio or 2.0))
         self.spread_ok_bps = max(0.0, float(spread_ok_bps or 35.0))
         self.max_rows_per_cycle = max(1, int(max_rows_per_cycle or 200))
+        self.leader_pool_size = max(1, int(leader_pool_size or 75))
+        self.rapid_rank_improvement = max(
+            1, int(rapid_rank_improvement or 25)
+        )
+        self.rapid_change_delta_pct = max(
+            0.0, float(rapid_change_delta_pct or 0.15)
+        )
         self._last_record_ts = 0.0
         self._history: Dict[str, List[Dict[str, Any]]] = {}
+        self._rank_date = ""
+        self._rank_state: Dict[str, Dict[str, Any]] = {}
         self._decision_seen: Set[Tuple[str, str, str, str, str, str]] = set()
 
     def record(
@@ -139,9 +162,41 @@ class LiveFeatureRecorder:
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
             df.to_csv(path, mode="a", header=not path.exists(), index=False)
+            self._write_rank_status(df, now_dt)
         except Exception as exc:
             default_logger().debug(f"Could not append live feature recorder rows: {exc}", exc_info=True)
         return df
+
+    def _write_rank_status(self, frame: pd.DataFrame, now: datetime) -> None:
+        """Persist a cheap operational view without rereading the daily tape."""
+        status_path = (
+            Path(self.output_dir)
+            / "live_feature_recorder"
+            / "full_universe_rank_status.json"
+        )
+        rapid = (
+            int(frame["RapidRankClimber"].astype(bool).sum())
+            if "RapidRankClimber" in frame.columns
+            else 0
+        )
+        universe_size = (
+            int(pd.to_numeric(frame["UniverseSize"], errors="coerce").max())
+            if "UniverseSize" in frame.columns and not frame.empty
+            else 0
+        )
+        payload = {
+            "status": "recording_full_universe_rank",
+            "date": now.strftime("%Y-%m-%d"),
+            "recorded_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "universe_size": universe_size,
+            "rows_this_snapshot": int(len(frame)),
+            "rapid_rank_climbers_this_snapshot": rapid,
+            "leader_pool_size": int(self.leader_pool_size),
+            "interval_seconds": float(self.interval_seconds),
+            "alerts_allowed": False,
+            "real_orders_allowed": False,
+        }
+        status_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
 
     def record_decisions(
         self,
@@ -265,6 +320,23 @@ class LiveFeatureRecorder:
             for symbol, tick in ticks.items()
             if str(symbol).strip() and isinstance(tick, dict)
         }
+        day_key = now_dt.strftime("%Y-%m-%d")
+        if self._rank_date != day_key:
+            self._rank_date = day_key
+            self._rank_state = {}
+        ranked_symbols = []
+        for symbol, tick in normalized_ticks.items():
+            price = self._to_float(tick.get("last_price"))
+            if price <= 0:
+                continue
+            ranked_symbols.append((symbol, self._day_change_pct(tick)))
+        ranked_symbols.sort(key=lambda item: (-item[1], item[0]))
+        universe_size = len(ranked_symbols)
+        rank_map = {
+            symbol: rank
+            for rank, (symbol, _) in enumerate(ranked_symbols, start=1)
+        }
+        change_map = {symbol: change for symbol, change in ranked_symbols}
         sector_stats, market_breadth_pct = self._build_sector_stats(normalized_ticks)
         rows: List[Dict[str, Any]] = []
 
@@ -277,6 +349,49 @@ class LiveFeatureRecorder:
             day_open = self._to_float(tick.get("open"))
             day_high = self._to_float(tick.get("high"))
             day_change_pct = self._day_change_pct(tick)
+            day_change_rank = int(rank_map.get(symbol, 0) or 0)
+            day_change_rank_pct = (
+                (universe_size - day_change_rank + 1) * 100.0 / universe_size
+                if universe_size > 0 and day_change_rank > 0
+                else 0.0
+            )
+            prior_rank = self._rank_state.get(symbol, {})
+            previous_rank = int(prior_rank.get("rank", 0) or 0)
+            rank_improvement = (
+                previous_rank - day_change_rank
+                if previous_rank > 0 and day_change_rank > 0
+                else 0
+            )
+            day_change_delta_pct = (
+                day_change_pct - self._to_float(prior_rank.get("change"))
+                if previous_rank > 0
+                else 0.0
+            )
+            elapsed_minutes = 0.0
+            previous_when = prior_rank.get("when")
+            if isinstance(previous_when, datetime):
+                elapsed_minutes = max(
+                    (now_dt - previous_when).total_seconds() / 60.0, 1e-6
+                )
+            rank_velocity = (
+                rank_improvement / elapsed_minutes if elapsed_minutes > 0 else 0.0
+            )
+            entered_top100 = bool(
+                day_change_rank > 0
+                and day_change_rank <= 100
+                and previous_rank > 100
+            )
+            entered_top50 = bool(
+                day_change_rank > 0
+                and day_change_rank <= 50
+                and previous_rank > 50
+            )
+            rapid_rank_climber = bool(
+                previous_rank > 0
+                and rank_improvement >= self.rapid_rank_improvement
+                and day_change_delta_pct >= self.rapid_change_delta_pct
+                and 0.5 <= day_change_pct <= 5.0
+            )
             open_change_pct = self._pct_change(price, day_open)
             pullback_pct = ((day_high - price) / price * 100.0) if day_high > 0 and price > 0 else 0.0
             volume = self._to_float(tick.get("volume_traded"))
@@ -309,6 +424,14 @@ class LiveFeatureRecorder:
                 reasons.append("alerted_today")
             if day_change_pct >= 2.0 and int(sector_row.get("top2_count", 0) or 0) >= 2:
                 reasons.append("sector_leader_cluster")
+            if (
+                day_change_rank > 0
+                and day_change_rank <= self.leader_pool_size
+                and day_change_pct >= 0.5
+            ):
+                reasons.append("full_universe_leader_pool")
+            if rapid_rank_climber:
+                reasons.append("rapid_rank_climber")
             if not reasons:
                 continue
 
@@ -323,6 +446,16 @@ class LiveFeatureRecorder:
                     "Open": round(day_open, 2),
                     "DayHigh": round(day_high, 2),
                     "DayChangePct": round(day_change_pct, 3),
+                    "UniverseSize": universe_size,
+                    "DayChangeRank": day_change_rank,
+                    "DayChangeRankPct": round(day_change_rank_pct, 3),
+                    "PreviousDayChangeRank": previous_rank,
+                    "RankImprovement": rank_improvement,
+                    "RankVelocityPerMinute": round(rank_velocity, 3),
+                    "DayChangeDeltaPct": round(day_change_delta_pct, 3),
+                    "EnteredTop100": entered_top100,
+                    "EnteredTop50": entered_top50,
+                    "RapidRankClimber": rapid_rank_climber,
                     "OpenChangePct": round(open_change_pct, 3),
                     "PullbackFromHighPct": round(max(0.0, pullback_pct), 3),
                     "Volume": int(volume),
@@ -352,12 +485,22 @@ class LiveFeatureRecorder:
 
         rows.sort(
             key=lambda row: (
+                not bool(row["RapidRankClimber"]),
+                not bool(row["EnteredTop50"]),
                 not bool(row["MissedRunnerCandidate"]),
                 not bool(row["OrderBookStable"]),
-                -float(row["DayChangePct"]),
+                int(row["DayChangeRank"] or 999999),
                 str(row["Symbol"]),
             )
         )
+        self._rank_state = {
+            symbol: {
+                "rank": int(rank_map.get(symbol, 0) or 0),
+                "change": float(change_map.get(symbol, 0.0) or 0.0),
+                "when": now_dt,
+            }
+            for symbol in rank_map
+        }
         return rows[: self.max_rows_per_cycle]
 
     @staticmethod

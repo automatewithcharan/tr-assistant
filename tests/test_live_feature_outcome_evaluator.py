@@ -7,6 +7,7 @@ from scripts.evaluate_live_feature_outcomes import (
     evaluate_rows,
     evaluate_rows_from_minutes,
     feature_bucket,
+    rank_evidence_bucket,
     load_lane_decisions,
     load_live_features,
     load_symbol_days,
@@ -58,6 +59,18 @@ def test_feature_bucket_rejects_unknown_sector_as_confirmation():
         }
     )
     assert feature_bucket(row) == "missed_stable_depth"
+
+
+def test_rank_evidence_bucket_separates_rank_and_move_states():
+    row = pd.Series(
+        {
+            "DayChangeRank": 18,
+            "DayChangePct": 2.4,
+            "RapidRankClimber": True,
+            "RecordReason": "full_universe_leader_pool,rapid_rank_climber",
+        }
+    )
+    assert rank_evidence_bucket(row) == "rapid|r011_025|m2_3"
 
 
 def test_summary_excludes_persisted_false_outcome_strings():
@@ -477,3 +490,46 @@ def test_dedupe_ignores_stale_premarket_state():
     deduped = dedupe_first_evidence_state(pd.DataFrame(rows))
     assert len(deduped) == 1
     assert deduped.iloc[0]["When"] == pd.Timestamp("2026-07-06 09:16:00")
+
+
+def test_dedupe_keeps_first_occurrence_of_each_full_universe_rank_state():
+    rows = [
+        {
+            "When": pd.Timestamp("2026-07-06 09:20:00"),
+            "Date": "2026-07-06",
+            "Symbol": "AAA",
+            "LastPrice": 101.0,
+            "DayChangeRank": 60,
+            "DayChangePct": 0.8,
+            "RapidRankClimber": False,
+            "RecordReason": "full_universe_leader_pool",
+        },
+        {
+            "When": pd.Timestamp("2026-07-06 09:21:00"),
+            "Date": "2026-07-06",
+            "Symbol": "AAA",
+            "LastPrice": 101.1,
+            "DayChangeRank": 55,
+            "DayChangePct": 0.9,
+            "RapidRankClimber": False,
+            "RecordReason": "full_universe_leader_pool",
+        },
+        {
+            "When": pd.Timestamp("2026-07-06 09:25:00"),
+            "Date": "2026-07-06",
+            "Symbol": "AAA",
+            "LastPrice": 102.2,
+            "DayChangeRank": 20,
+            "DayChangePct": 2.2,
+            "RapidRankClimber": True,
+            "RecordReason": "full_universe_leader_pool,rapid_rank_climber",
+        },
+    ]
+
+    deduped = dedupe_first_evidence_state(pd.DataFrame(rows))
+
+    assert len(deduped) == 2
+    assert deduped["RankEvidenceBucket"].tolist() == [
+        "pool|r051_075|m0_5_1",
+        "rapid|r011_025|m2_3",
+    ]

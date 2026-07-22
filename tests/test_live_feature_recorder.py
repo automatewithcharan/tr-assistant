@@ -153,6 +153,47 @@ def test_record_persists_and_throttles(tmp_path):
     assert second.empty
     path = tmp_path / "live_feature_recorder" / "live_features_2026-07-03.csv"
     assert path.exists()
+    status_path = tmp_path / "live_feature_recorder" / "full_universe_rank_status.json"
+    assert status_path.exists()
+
+
+def test_full_universe_rank_pool_records_early_climber_before_five_percent(tmp_path):
+    recorder = LiveFeatureRecorder(
+        output_dir=str(tmp_path),
+        interval_seconds=0,
+        top_gainer_pct=50.0,
+        leader_pool_size=10,
+        rapid_rank_improvement=25,
+        rapid_change_delta_pct=0.15,
+        max_rows_per_cycle=20,
+    )
+    start = datetime(2026, 7, 3, 9, 20)
+    first_ticks = {
+        f"S{index:03d}": _tick(100.0 + index / 100.0, close=100.0)
+        for index in range(1, 121)
+    }
+    recorder.build_rows(first_ticks, alerted_symbols=set(), now=start)
+    second_ticks = dict(first_ticks)
+    second_ticks["S001"] = _tick(104.0, close=100.0)
+
+    rows = recorder.build_rows(
+        second_ticks,
+        alerted_symbols=set(),
+        now=start + timedelta(minutes=1),
+    )
+    climbed = next(row for row in rows if row["Symbol"] == "S001")
+
+    assert climbed["DayChangePct"] == 4.0
+    assert climbed["UniverseSize"] == 120
+    assert climbed["PreviousDayChangeRank"] == 120
+    assert climbed["DayChangeRank"] == 1
+    assert climbed["RankImprovement"] == 119
+    assert climbed["RankVelocityPerMinute"] == 119.0
+    assert climbed["EnteredTop100"] is True
+    assert climbed["EnteredTop50"] is True
+    assert climbed["RapidRankClimber"] is True
+    assert "rapid_rank_climber" in climbed["RecordReason"]
+    assert "full_universe_leader_pool" in climbed["RecordReason"]
 
 
 def test_record_decisions_persists_enriched_lane_journal(tmp_path):
