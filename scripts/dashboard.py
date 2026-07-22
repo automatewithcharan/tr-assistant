@@ -381,6 +381,7 @@ def leader_discovery_stats():
     live_paper = load_json(
         DATA / "frozen_microstructure_paper" / "status.json", {}
     )
+    ranker_model = ranker.get("live_model", {}) or {}
     prediction_paths = sorted(
         (DATA / "frozen_microstructure_paper").glob("predictions_20*.csv")
     ) if (DATA / "frozen_microstructure_paper").exists() else []
@@ -466,10 +467,17 @@ def leader_discovery_stats():
         "ranker_stress_lower95_pct": number(ranker_stress, "lower_95_pct"),
         "ranker_stress_goal_hit_pct": number(ranker_stress, "goal_hit_pct"),
         "ranker_accepted": bool(ranker.get("accepted", False)),
-        "live_paper_status": str(live_paper.get("status") or "awaiting artifact"),
-        "live_paper_date": str(live_paper.get("date") or "n/a"),
+        "live_paper_status": str(
+            live_paper.get("status")
+            or ("artifact ready" if ranker_model else "awaiting artifact")
+        ),
+        "live_paper_date": str(
+            live_paper.get("date") or ranker_model.get("valid_from") or "n/a"
+        ),
         "live_paper_model_through": str(
-            live_paper.get("model_trained_through") or "n/a"
+            live_paper.get("model_trained_through")
+            or ranker_model.get("trained_through")
+            or "n/a"
         ),
         "live_paper_predictions": len(live_predictions),
         "live_paper_max_score": max(

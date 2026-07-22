@@ -11,6 +11,31 @@ def test_money_formats_negative_rupees_conventionally():
     assert dashboard.money(1250) == "₹1,250"
 
 
+def test_leader_dashboard_reports_ready_prior_session_artifact(tmp_path, monkeypatch):
+    monkeypatch.setattr(dashboard, "DATA", tmp_path)
+    root = tmp_path / "live_leader_continuation"
+    root.mkdir(parents=True)
+    (root / "frozen_ranker_status.json").write_text(
+        json.dumps(
+            {
+                "status": "collecting_forward_evidence",
+                "live_model": {
+                    "trained_through": "2026-07-21",
+                    "valid_from": "2026-07-22",
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    stats = dashboard.leader_discovery_stats()
+
+    assert stats["live_paper_status"] == "artifact ready"
+    assert stats["live_paper_date"] == "2026-07-22"
+    assert stats["live_paper_model_through"] == "2026-07-21"
+    assert stats["live_paper_predictions"] == 0
+
+
 def test_broad_rank_checkpoint_stats_distinguishes_diagnostic_and_full(tmp_path, monkeypatch):
     monkeypatch.setattr(dashboard, "DATA", tmp_path)
     first = tmp_path / "broad_rank_acceleration" / "checkpoint_1000"
