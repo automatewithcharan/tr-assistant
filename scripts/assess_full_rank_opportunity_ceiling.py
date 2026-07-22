@@ -199,6 +199,7 @@ def evaluate_selector_gap(
     capital: float = 500_000.0,
     daily_goal: float = 10_000.0,
     max_trades: int = 10,
+    eligible_only: bool = True,
 ) -> pd.DataFrame:
     """Compare causal selectors with the future-known first-observation ceiling."""
     if not eligible_dates or events is None or events.empty or ceiling_daily.empty:
@@ -206,10 +207,15 @@ def evaluate_selector_gap(
     rows = []
     for contract in CONTRACTS:
         contract_events = events[events["Contract"].astype(str).eq(contract)].copy()
-        oracle = ceiling_daily[
-            ceiling_daily["eligible_full_session"]
-            & ceiling_daily["contract"].astype(str).eq(contract)
-        ][["date", "first_observation_one_slot_pnl"]].copy()
+        oracle_mask = (
+            ceiling_daily["contract"].astype(str).eq(contract)
+            & ceiling_daily["date"].astype(str).isin(eligible_dates)
+        )
+        if eligible_only:
+            oracle_mask &= ceiling_daily["eligible_full_session"]
+        oracle = ceiling_daily.loc[
+            oracle_mask, ["date", "first_observation_one_slot_pnl"]
+        ].copy()
         if oracle.empty:
             continue
         for selector in SELECTORS:
@@ -228,6 +234,7 @@ def evaluate_selector_gap(
             rows.append({
                 "contract": contract,
                 "selector": selector,
+                "session_scope": "eligible_full_session" if eligible_only else "partial_incomplete_diagnostic",
                 "sessions": int(len(comparison)),
                 "trades": int(pd.to_numeric(comparison["trades"], errors="coerce").fillna(0).sum()),
                 "avg_causal_pnl": round(float(causal_pnl.mean()), 2),
@@ -279,12 +286,24 @@ def run_audit(
         daily_goal=daily_goal,
         max_trades=max_trades,
     )
+    partial_dates = coverage.loc[~coverage["eligible"], "date"].astype(str).tolist() if not coverage.empty else []
+    partial_selector_gap = evaluate_selector_gap(
+        events,
+        daily,
+        partial_dates,
+        capital=capital,
+        daily_goal=daily_goal,
+        max_trades=max_trades,
+        eligible_only=False,
+    )
     daily.to_csv(output_dir / "daily.csv", index=False)
     summary.to_csv(output_dir / "summary.csv", index=False)
     selected.to_csv(output_dir / "selected_intervals.csv", index=False)
     selector_gap.to_csv(output_dir / "selector_gap.csv", index=False)
+    partial_selector_gap.to_csv(output_dir / "partial_selector_gap.csv", index=False)
     best = summary.iloc[0].to_dict() if not summary.empty else {}
     best_causal = selector_gap.iloc[0].to_dict() if not selector_gap.empty else {}
+    best_partial_causal = partial_selector_gap.iloc[0].to_dict() if not partial_selector_gap.empty else {}
     partial = daily[~daily["eligible_full_session"]].copy() if not daily.empty else pd.DataFrame()
     partial_best = {}
     if not partial.empty:
@@ -315,6 +334,14 @@ def run_audit(
         "partial_or_incomplete_sessions": int((~coverage["eligible"]).sum()) if not coverage.empty else 0,
         "best_eligible_contract": best,
         "best_causal_combination": best_causal,
+        "best_partial_causal_diagnostic": {
+            "contract": str(best_partial_causal.get("contract", "")),
+            "selector": str(best_partial_causal.get("selector", "")),
+            "avg_causal_pnl": round(float(best_partial_causal.get("avg_causal_pnl", 0.0) or 0.0), 2),
+            "avg_first_observation_ceiling_pnl": round(float(best_partial_causal.get("avg_first_observation_ceiling_pnl", 0.0) or 0.0), 2),
+            "opportunity_capture_pct": round(float(best_partial_causal.get("opportunity_capture_pct", 0.0) or 0.0), 2),
+            "excluded_from_evidence": True,
+        } if best_partial_causal else {},
         "best_partial_diagnostic": partial_best,
         "current_bottleneck": bottleneck,
         "uses_future_outcomes": True,

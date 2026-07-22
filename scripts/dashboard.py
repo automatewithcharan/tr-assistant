@@ -430,6 +430,10 @@ def leader_discovery_stats():
     )
     opportunity_best = opportunity_ceiling.get("best_eligible_contract", {}) or {}
     opportunity_causal = opportunity_ceiling.get("best_causal_combination", {}) or {}
+    opportunity_partial_causal = opportunity_ceiling.get(
+        "best_partial_causal_diagnostic", {}
+    ) or {}
+    opportunity_causal_display = opportunity_causal or opportunity_partial_causal
     opportunity_partial = opportunity_ceiling.get("best_partial_diagnostic", {}) or {}
     opportunity_display = opportunity_best or opportunity_partial
     entry_timing = load_json(
@@ -742,12 +746,12 @@ def leader_discovery_stats():
         ),
         "opportunity_causal_combination": " / ".join(
             value for value in (
-                str(opportunity_causal.get("contract") or ""),
-                str(opportunity_causal.get("selector") or ""),
+                str(opportunity_causal_display.get("contract") or ""),
+                str(opportunity_causal_display.get("selector") or ""),
             ) if value
         ) or "none",
-        "opportunity_causal_avg_pnl": number(opportunity_causal, "avg_causal_pnl"),
-        "opportunity_capture_pct": number(opportunity_causal, "opportunity_capture_pct"),
+        "opportunity_causal_avg_pnl": number(opportunity_causal_display, "avg_causal_pnl"),
+        "opportunity_capture_pct": number(opportunity_causal_display, "opportunity_capture_pct"),
         "entry_timing_status": str(
             entry_timing.get("status") or "awaiting live entry timing"
         ),

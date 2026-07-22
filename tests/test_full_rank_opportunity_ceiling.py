@@ -73,3 +73,14 @@ def test_selector_gap_distinguishes_causal_capture_from_ceiling():
     assert row["avg_causal_pnl"] == 4_500.0
     assert row["opportunity_capture_pct"] == 32.14
     assert not bool(row["evidence_accepted"])
+
+
+def test_partial_gap_is_explicitly_separate_and_non_promoting():
+    coverage = pd.DataFrame([{"date": "2026-07-23", "eligible": False}])
+    daily, _, _ = evaluate_ceiling(events(), coverage)
+    gap = evaluate_selector_gap(
+        events(), daily, ["2026-07-23"], eligible_only=False
+    )
+    assert not gap.empty
+    assert set(gap["session_scope"]) == {"partial_incomplete_diagnostic"}
+    assert not bool(gap["paper_promotion_allowed"].any())
