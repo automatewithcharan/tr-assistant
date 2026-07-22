@@ -374,6 +374,47 @@ def test_leader_dashboard_reports_feature_gate_strategy(
     assert not stats["feature_strategy_accepted"]
 
 
+def test_leader_dashboard_reports_capital_growth_without_claiming_validation(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(dashboard, "DATA", tmp_path)
+    root = tmp_path / "intraday_capital_growth"
+    root.mkdir(parents=True)
+    (root / "status.json").write_text(
+        json.dumps(
+            {
+                "status": "awaiting_validated_forward_strategy",
+                "initial_capital": 500000,
+                "monthly_contribution": 200000,
+                "daily_goal": 10000,
+                "initial_required_daily_return_pct": 2.0,
+                "first_month_required_return_at_or_below_1pct_without_trading_profit": 4,
+                "validated_strategy": {},
+                "capital_projection_allowed": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    pd.DataFrame(
+        [
+            {"scenario": "mathematical_0.00pct", "month": 12, "end_capital": 2900000},
+            {"scenario": "mathematical_0.50pct", "month": 12, "end_capital": 6000000},
+            {"scenario": "mathematical_1.00pct", "month": 12, "end_capital": 12000000},
+        ]
+    ).to_csv(root / "monthly_scenarios.csv", index=False)
+
+    stats = dashboard.leader_discovery_stats()
+
+    assert stats["capital_growth_status"] == "awaiting_validated_forward_strategy"
+    assert stats["capital_initial"] == 500000
+    assert stats["capital_monthly_addition"] == 200000
+    assert stats["capital_initial_required_pct"] == 2.0
+    assert stats["capital_one_pct_month"] == 4
+    assert stats["capital_validated_strategy"] == "none"
+    assert stats["capital_month12_no_edge"] == 2900000
+    assert not stats["capital_projection_allowed"]
+
+
 def test_broad_rank_checkpoint_stats_distinguishes_diagnostic_and_full(tmp_path, monkeypatch):
     monkeypatch.setattr(dashboard, "DATA", tmp_path)
     first = tmp_path / "broad_rank_acceleration" / "checkpoint_1000"

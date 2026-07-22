@@ -214,6 +214,15 @@ run_full_rank_feature_gates() {
         >>"$LOG" 2>&1 || true
 }
 
+run_intraday_capital_growth() {
+    "$PYTHON" "$REPO/scripts/project_intraday_capital_growth.py" \
+        --output-dir "$REPO/results/Data/intraday_capital_growth" \
+        --initial-capital 500000 --monthly-contribution 200000 \
+        --daily-goal 10000 --months 12 --trading-days 20 \
+        --minimum-forward-sessions 20 \
+        >>"$LOG" 2>&1 || true
+}
+
 run_pullback_reclaim_audit() {
     "$PYTHON" "$REPO/scripts/assess_leader_pullback_reclaim.py" \
         --output-dir "$REPO/results/Data/leader_pullback_reclaim_audit" \
@@ -235,6 +244,7 @@ if [ -f "$OUTPUT_ROOT/status.json" ]; then
         run_full_rank_contract_matrix
         run_full_rank_entry_timing
         run_full_rank_feature_gates
+        run_intraday_capital_growth
         run_pullback_reclaim_audit
         exit 0
     fi
@@ -287,6 +297,7 @@ run_exact_full_rank_strategy
 run_full_rank_contract_matrix
 run_full_rank_entry_timing
 run_full_rank_feature_gates
+run_intraday_capital_growth
 run_pullback_reclaim_audit
 echo "[$(date -u +'%Y-%m-%d %H:%M:%S UTC')] live evidence EOD finished rc=$RC $SUMMARY" >>"$LOG"
 exit "$RC"

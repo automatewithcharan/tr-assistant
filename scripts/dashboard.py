@@ -421,6 +421,12 @@ def leader_discovery_stats():
         DATA / "full_universe_rank_feature_strategy" / "status.json", {}
     )
     feature_forward = feature_strategy.get("forward", {}) or {}
+    capital_growth = load_json(
+        DATA / "intraday_capital_growth" / "status.json", {}
+    )
+    capital_scenarios = load_csv_rows(
+        DATA / "intraday_capital_growth" / "monthly_scenarios.csv"
+    )
     full_rank_forward = full_rank_strategy.get("forward_stress", {}) or {}
     ranker_model = ranker.get("live_model", {}) or {}
     prediction_paths = sorted(
@@ -451,6 +457,16 @@ def leader_discovery_stats():
             ),
             {},
         )
+
+    def scenario_end_capital(name):
+        matches = [
+            row for row in capital_scenarios
+            if str(row.get("scenario", "")) == name
+        ]
+        if not matches:
+            return 0.0
+        matches.sort(key=lambda row: number(row, "month"))
+        return number(matches[-1], "end_capital")
 
     retrospective = extension_row("retrospective")
     forward = extension_row("frozen_forward")
@@ -723,6 +739,31 @@ def leader_discovery_stats():
         "feature_strategy_forward_trades": int(number(feature_forward, "trades")),
         "feature_strategy_forward_avg_pnl": number(feature_forward, "avg_daily_pnl"),
         "feature_strategy_accepted": bool(feature_strategy.get("accepted", False)),
+        "capital_growth_status": str(
+            capital_growth.get("status") or "awaiting capital projection"
+        ),
+        "capital_initial": number(capital_growth, "initial_capital") or 500000.0,
+        "capital_monthly_addition": number(capital_growth, "monthly_contribution") or 200000.0,
+        "capital_daily_goal": number(capital_growth, "daily_goal") or 10000.0,
+        "capital_initial_required_pct": number(
+            capital_growth, "initial_required_daily_return_pct"
+        ) or 2.0,
+        "capital_one_pct_month": int(
+            number(
+                capital_growth,
+                "first_month_required_return_at_or_below_1pct_without_trading_profit",
+            ) or 0
+        ),
+        "capital_validated_strategy": str(
+            (capital_growth.get("validated_strategy", {}) or {}).get("name")
+            or "none"
+        ),
+        "capital_projection_allowed": bool(
+            capital_growth.get("capital_projection_allowed", False)
+        ),
+        "capital_month12_no_edge": scenario_end_capital("mathematical_0.00pct"),
+        "capital_month12_half_pct": scenario_end_capital("mathematical_0.50pct"),
+        "capital_month12_one_pct": scenario_end_capital("mathematical_1.00pct"),
         "evidence_accepted": False,
         "paper_promotion_allowed": False,
         "real_orders_allowed": False,
@@ -1318,6 +1359,23 @@ def render():
     Stressed lower 95% bound {leader_discovery['ranker_stress_lower95_pct']:+.3f}%.
     Accepted: <b>{'YES' if leader_discovery['ranker_accepted'] else 'NO'}</b>;
     real orders: <b>NO</b>.
+  </div>"""
+
+    leader_html += f"""
+  <div class="summary" style="margin-top:10px">
+    <span>Capital plan <span class="big">{escape(leader_discovery['capital_growth_status'])}</span></span>
+    <span>Starting capital <span class="big">{money(leader_discovery['capital_initial'])}</span></span>
+    <span>Monthly addition <span class="big">{money(leader_discovery['capital_monthly_addition'])}</span></span>
+    <span>Daily goal <span class="big">{money(leader_discovery['capital_daily_goal'])}</span></span>
+    <span>Required now <span class="big">{leader_discovery['capital_initial_required_pct']:.2f}%/day</span></span>
+    <span>Required <=1% <span class="big">month {leader_discovery['capital_one_pct_month'] or 'n/a'}</span></span>
+    <span>Validated strategy <span class="big">{escape(leader_discovery['capital_validated_strategy'])}</span></span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    Twelve-month mathematical end capitals after monthly contributions: no trading edge {money(leader_discovery['capital_month12_no_edge'])},
+    constant 0.5%/day {money(leader_discovery['capital_month12_half_pct'])}, constant 1%/day {money(leader_discovery['capital_month12_one_pct'])}.
+    These are arithmetic scenarios, not forecasts. Evidence-based compounding is
+    <b>{'ENABLED' if leader_discovery['capital_projection_allowed'] else 'DISABLED until a forward strategy is accepted'}</b>.
   </div>"""
 
     contract_forward_class = (
