@@ -91,6 +91,7 @@ def raw_session_coverage(
     *,
     min_snapshots: int = 300,
     latest_minute: int = 15 * 60 + 10,
+    max_gap_seconds: float = 150.0,
 ) -> pd.DataFrame:
     rows = []
     for path in _files(patterns):
@@ -111,6 +112,9 @@ def raw_session_coverage(
             snapshots = sorted(day["when"].dropna().unique().tolist())
             first = pd.Timestamp(snapshots[0])
             last = pd.Timestamp(snapshots[-1])
+            gaps = pd.Series(pd.to_datetime(snapshots)).diff().dt.total_seconds()
+            largest_gap = float(gaps.max()) if gaps.notna().any() else 0.0
+            continuity_ok = largest_gap <= float(max_gap_seconds)
             first_minute = first.hour * 60 + first.minute
             last_minute = last.hour * 60 + last.minute
             rows.append(
@@ -120,10 +124,13 @@ def raw_session_coverage(
                     "snapshots": len(snapshots),
                     "first_snapshot": str(first),
                     "last_snapshot": str(last),
+                    "max_gap_seconds": round(largest_gap, 3),
+                    "continuity_ok": bool(continuity_ok),
                     "full_session_eligible": bool(
                         first_minute <= 9 * 60 + 20
                         and last_minute >= int(latest_minute)
                         and len(snapshots) >= int(min_snapshots)
+                        and continuity_ok
                     ),
                 }
             )
@@ -131,7 +138,8 @@ def raw_session_coverage(
         return pd.DataFrame(
             columns=[
                 "date", "source", "snapshots", "first_snapshot",
-                "last_snapshot", "full_session_eligible",
+                "last_snapshot", "max_gap_seconds", "continuity_ok",
+                "full_session_eligible",
             ]
         )
     coverage = pd.DataFrame(rows).sort_values(["date", "source"])

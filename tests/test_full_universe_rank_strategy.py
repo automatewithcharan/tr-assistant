@@ -35,6 +35,29 @@ def test_raw_coverage_rejects_partial_and_accepts_complete_session(tmp_path):
     assert bool(by_date.loc["2026-07-22", "full_session_eligible"])
 
 
+def test_raw_coverage_rejects_mid_session_recorder_gap(tmp_path):
+    date = "2026-07-23"
+    first = _raw_rows(date, snapshots=180)
+    second_start = pd.Timestamp(f"{date} 12:26:00")
+    second = pd.DataFrame(
+        {
+            "When": [second_start + pd.Timedelta(minutes=index) for index in range(180)],
+            "DayChangeRank": [1] * 180,
+        }
+    )
+    pd.concat([first, second], ignore_index=True).to_csv(
+        tmp_path / f"live_features_{date}.csv", index=False
+    )
+
+    coverage = raw_session_coverage([str(tmp_path / "live_features_*.csv")])
+
+    row = coverage.iloc[0]
+    assert row["snapshots"] == 360
+    assert row["max_gap_seconds"] > 150
+    assert not bool(row["continuity_ok"])
+    assert not bool(row["full_session_eligible"])
+
+
 def test_rank_outcomes_keep_only_buyable_executable_rank_states(tmp_path):
     path = tmp_path / "live_features_rows.csv"
     base = {
