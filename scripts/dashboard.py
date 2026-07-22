@@ -417,6 +417,10 @@ def leader_discovery_stats():
         DATA / "full_universe_rank_entry_strategy" / "status.json", {}
     )
     entry_forward = entry_strategy.get("forward", {}) or {}
+    feature_strategy = load_json(
+        DATA / "full_universe_rank_feature_strategy" / "status.json", {}
+    )
+    feature_forward = feature_strategy.get("forward", {}) or {}
     full_rank_forward = full_rank_strategy.get("forward_stress", {}) or {}
     ranker_model = ranker.get("live_model", {}) or {}
     prediction_paths = sorted(
@@ -701,6 +705,24 @@ def leader_discovery_stats():
         "entry_strategy_forward_trades": int(number(entry_forward, "trades")),
         "entry_strategy_forward_avg_pnl": number(entry_forward, "avg_daily_pnl"),
         "entry_strategy_accepted": bool(entry_strategy.get("accepted", False)),
+        "feature_strategy_status": str(
+            feature_strategy.get("status") or "awaiting EOD feature-gate judge"
+        ),
+        "feature_strategy_gates": int(number(feature_strategy, "feature_gates")),
+        "feature_strategy_sessions": int(number(feature_strategy, "eligible_sessions")),
+        "feature_strategy_required": int(
+            number(feature_strategy, "selection_sessions_required") or 12
+        ),
+        "feature_strategy_combination": " / ".join(
+            value for value in (
+                str((feature_strategy.get("frozen_selection", {}) or {}).get("gate") or ""),
+                str((feature_strategy.get("frozen_selection", {}) or {}).get("selector") or ""),
+            ) if value
+        ) or "not frozen",
+        "feature_strategy_forward_sessions": int(number(feature_forward, "sessions")),
+        "feature_strategy_forward_trades": int(number(feature_forward, "trades")),
+        "feature_strategy_forward_avg_pnl": number(feature_forward, "avg_daily_pnl"),
+        "feature_strategy_accepted": bool(feature_strategy.get("accepted", False)),
         "evidence_accepted": False,
         "paper_promotion_allowed": False,
         "real_orders_allowed": False,
@@ -1341,6 +1363,25 @@ def render():
     and a -0.5% pullback followed by a +0.25% reclaim. Unfilled entries remain in the denominator.
     One reusable Rs 500,000 slot and the 12-selection/20-forward gates still apply.
     Accepted: <b>{'YES' if leader_discovery['entry_strategy_accepted'] else 'NO'}</b>; real orders: <b>NO</b>.
+  </div>"""
+
+    feature_forward_class = (
+        "gain" if leader_discovery["feature_strategy_forward_avg_pnl"] > 0 else "loss"
+    )
+    leader_html += f"""
+  <div class="summary" style="margin-top:10px">
+    <span>Feature gates <span class="big">{escape(leader_discovery['feature_strategy_status'])}</span></span>
+    <span>Gates <span class="big">{leader_discovery['feature_strategy_gates']}</span></span>
+    <span>Selection sessions <span class="big">{leader_discovery['feature_strategy_sessions']}/{leader_discovery['feature_strategy_required']}</span></span>
+    <span>Frozen combination <span class="big">{escape(leader_discovery['feature_strategy_combination'])}</span></span>
+    <span>Forward <span class="big">{leader_discovery['feature_strategy_forward_sessions']} sessions / {leader_discovery['feature_strategy_forward_trades']} trades</span></span>
+    <span>Forward P&amp;L <span class="big {feature_forward_class}">{money(leader_discovery['feature_strategy_forward_avg_pnl'])}/day</span></span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    Nine predeclared causal gates compare all buyable labels, rapid climbers, top-10/top-25 leaders,
+    early acceleration, sector rotation, stable buyer depth, tight high-turnover books, and balanced quality.
+    Each is capital-constrained and forward-frozen. Accepted: <b>{'YES' if leader_discovery['feature_strategy_accepted'] else 'NO'}</b>;
+    real orders: <b>NO</b>.
   </div>"""
 
     migration_diagnostic_class = (

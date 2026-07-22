@@ -339,6 +339,41 @@ def test_leader_dashboard_reports_entry_timing_matrix_and_gate(
     assert not stats["entry_strategy_accepted"]
 
 
+def test_leader_dashboard_reports_feature_gate_strategy(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(dashboard, "DATA", tmp_path)
+    root = tmp_path / "full_universe_rank_feature_strategy"
+    root.mkdir(parents=True)
+    (root / "status.json").write_text(
+        json.dumps(
+            {
+                "status": "collecting_feature_gate_forward_sessions",
+                "feature_gates": 9,
+                "eligible_sessions": 12,
+                "selection_sessions_required": 12,
+                "frozen_selection": {
+                    "gate": "sector_rotation",
+                    "selector": "balanced_rank_acceleration",
+                },
+                "forward": {"sessions": 4, "trades": 16, "avg_daily_pnl": 5200},
+                "accepted": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    stats = dashboard.leader_discovery_stats()
+
+    assert stats["feature_strategy_status"] == "collecting_feature_gate_forward_sessions"
+    assert stats["feature_strategy_gates"] == 9
+    assert stats["feature_strategy_sessions"] == 12
+    assert stats["feature_strategy_combination"] == "sector_rotation / balanced_rank_acceleration"
+    assert stats["feature_strategy_forward_sessions"] == 4
+    assert stats["feature_strategy_forward_avg_pnl"] == 5200
+    assert not stats["feature_strategy_accepted"]
+
+
 def test_broad_rank_checkpoint_stats_distinguishes_diagnostic_and_full(tmp_path, monkeypatch):
     monkeypatch.setattr(dashboard, "DATA", tmp_path)
     first = tmp_path / "broad_rank_acceleration" / "checkpoint_1000"
