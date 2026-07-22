@@ -429,6 +429,7 @@ def leader_discovery_stats():
         DATA / "full_universe_rank_opportunity_ceiling" / "status.json", {}
     )
     opportunity_best = opportunity_ceiling.get("best_eligible_contract", {}) or {}
+    opportunity_causal = opportunity_ceiling.get("best_causal_combination", {}) or {}
     opportunity_partial = opportunity_ceiling.get("best_partial_diagnostic", {}) or {}
     opportunity_display = opportunity_best or opportunity_partial
     entry_timing = load_json(
@@ -736,6 +737,17 @@ def leader_discovery_stats():
             opportunity_best, "first_observation_goal_hit_pct"
         ),
         "opportunity_ceiling_partial": bool(not opportunity_best and opportunity_partial),
+        "opportunity_bottleneck": str(
+            opportunity_ceiling.get("current_bottleneck") or "awaiting_complete_full_session"
+        ),
+        "opportunity_causal_combination": " / ".join(
+            value for value in (
+                str(opportunity_causal.get("contract") or ""),
+                str(opportunity_causal.get("selector") or ""),
+            ) if value
+        ) or "none",
+        "opportunity_causal_avg_pnl": number(opportunity_causal, "avg_causal_pnl"),
+        "opportunity_capture_pct": number(opportunity_causal, "opportunity_capture_pct"),
         "entry_timing_status": str(
             entry_timing.get("status") or "awaiting live entry timing"
         ),
@@ -1473,6 +1485,10 @@ def render():
     Future-known upper bound using each symbol's first observed ask, observed bid exits, one reusable Rs 500,000 slot,
     at most ten trades, and all nine fixed exit contracts. It diagnoses universe capacity versus selector quality;
     it is never tradeable and can never enable paper promotion or real orders.
+    Bottleneck: <b>{escape(leader_discovery['opportunity_bottleneck'])}</b>.
+    Best causal combination: {escape(leader_discovery['opportunity_causal_combination'])},
+    {money(leader_discovery['opportunity_causal_avg_pnl'])}/day and
+    {leader_discovery['opportunity_capture_pct']:.1f}% of the ceiling.
   </div>"""
 
     entry_forward_class = (
