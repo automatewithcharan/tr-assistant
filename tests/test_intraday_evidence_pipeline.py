@@ -22,6 +22,7 @@ def fixture_root(tmp_path: Path) -> tuple[Path, datetime]:
         "scripts/assess_full_rank_contract_matrix.py",
         "scripts/assess_full_rank_entry_timing.py",
         "scripts/project_intraday_capital_growth.py",
+        "scripts/assess_full_rank_opportunity_ceiling.py",
     ]
     for name in required:
         write(tmp_path / name, "# present\n")
@@ -29,7 +30,7 @@ def fixture_root(tmp_path: Path) -> tuple[Path, datetime]:
     write(tmp_path / "pkscreener/classes/FullUniverseRankEntryTimingObserver.py", "ENTRY_VARIANTS = {" + ",".join(f'\"v{i}\": {{\"mode\": \"dip\"}}' for i in range(6)) + "}")
     write(tmp_path / "scripts/assess_full_rank_feature_gates.py", "FEATURE_GATES = {" + ",".join(f'\"g{i}\": \"gate\"' for i in range(9)) + "}")
     write(tmp_path / "scripts/assess_exact_full_rank_paper.py", "SELECTORS = {" + ",".join(f'\"s{i}\": \"selector\"' for i in range(4)) + "}")
-    calls = ["run_exact_full_rank_strategy", "run_full_rank_contract_matrix", "run_full_rank_entry_timing", "run_full_rank_feature_gates", "run_intraday_capital_growth"]
+    calls = ["run_exact_full_rank_strategy", "run_full_rank_contract_matrix", "run_full_rank_entry_timing", "run_full_rank_feature_gates", "run_full_rank_opportunity_ceiling", "run_intraday_capital_growth"]
     write(tmp_path / "scripts/live_evidence_eod.sh", "\n".join(calls + calls))
     data = tmp_path / "results/Data"
     stamp = "2026-07-23 10:00:00"

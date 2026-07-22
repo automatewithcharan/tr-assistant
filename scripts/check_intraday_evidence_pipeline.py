@@ -130,6 +130,7 @@ def assess(
         "scripts/assess_full_rank_contract_matrix.py",
         "scripts/assess_full_rank_entry_timing.py",
         "scripts/assess_full_rank_feature_gates.py",
+        "scripts/assess_full_rank_opportunity_ceiling.py",
         "scripts/project_intraday_capital_growth.py",
         "scripts/live_evidence_eod.sh",
     ]
@@ -142,6 +143,7 @@ def assess(
         "run_full_rank_contract_matrix",
         "run_full_rank_entry_timing",
         "run_full_rank_feature_gates",
+        "run_full_rank_opportunity_ceiling",
         "run_intraday_capital_growth",
     ]
     absent_calls = [value for value in required_eod_calls if eod_script.count(value) < 2]

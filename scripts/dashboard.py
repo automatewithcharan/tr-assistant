@@ -425,6 +425,12 @@ def leader_discovery_stats():
         DATA / "full_universe_rank_contract_strategy" / "status.json", {}
     )
     contract_forward = contract_strategy.get("forward", {}) or {}
+    opportunity_ceiling = load_json(
+        DATA / "full_universe_rank_opportunity_ceiling" / "status.json", {}
+    )
+    opportunity_best = opportunity_ceiling.get("best_eligible_contract", {}) or {}
+    opportunity_partial = opportunity_ceiling.get("best_partial_diagnostic", {}) or {}
+    opportunity_display = opportunity_best or opportunity_partial
     entry_timing = load_json(
         DATA / "full_universe_rank_entry_timing" / "status.json", {}
     )
@@ -709,6 +715,27 @@ def leader_discovery_stats():
         "contract_strategy_forward_trades": int(number(contract_forward, "trades")),
         "contract_strategy_forward_avg_pnl": number(contract_forward, "avg_daily_pnl"),
         "contract_strategy_accepted": bool(contract_strategy.get("accepted", False)),
+        "opportunity_ceiling_status": str(
+            opportunity_ceiling.get("status") or "awaiting exact ceiling audit"
+        ),
+        "opportunity_ceiling_sessions": int(
+            number(opportunity_ceiling, "eligible_full_sessions")
+        ),
+        "opportunity_ceiling_contract": str(
+            opportunity_display.get("contract") or "none"
+        ),
+        "opportunity_ceiling_avg_pnl": number(
+            opportunity_best, "avg_first_observation_one_slot_pnl"
+        ) or number(
+            opportunity_partial, "first_observation_one_slot_pnl"
+        ),
+        "opportunity_ceiling_lower95_pnl": number(
+            opportunity_best, "lower95_first_observation_one_slot_pnl"
+        ),
+        "opportunity_ceiling_goal_hit_pct": number(
+            opportunity_best, "first_observation_goal_hit_pct"
+        ),
+        "opportunity_ceiling_partial": bool(not opportunity_best and opportunity_partial),
         "entry_timing_status": str(
             entry_timing.get("status") or "awaiting live entry timing"
         ),
@@ -1430,6 +1457,22 @@ def render():
     The judge tests them with the same four causal entry orderings and one reusable Rs 500,000 slot.
     Selection and untouched-forward gates remain separate. Accepted: <b>{'YES' if leader_discovery['contract_strategy_accepted'] else 'NO'}</b>;
     alerts: <b>NO</b>; real orders: <b>NO</b>.
+  </div>"""
+
+    leader_html += f"""
+  <div class="summary" style="margin-top:10px">
+    <span>Exact opportunity ceiling <span class="big">{escape(leader_discovery['opportunity_ceiling_status'])}</span></span>
+    <span>Eligible sessions <span class="big">{leader_discovery['opportunity_ceiling_sessions']}</span></span>
+    <span>Best contract <span class="big">{escape(leader_discovery['opportunity_ceiling_contract'])}</span></span>
+    <span>Perfect P&amp;L <span class="big">{money(leader_discovery['opportunity_ceiling_avg_pnl'])}/day</span></span>
+    <span>Lower 95% <span class="big">{money(leader_discovery['opportunity_ceiling_lower95_pnl'])}/day</span></span>
+    <span>Goal days <span class="big">{leader_discovery['opportunity_ceiling_goal_hit_pct']:.1f}%</span></span>
+    <span class="badge {'orange' if leader_discovery['opportunity_ceiling_partial'] else 'grey'}">{'PARTIAL, EXCLUDED' if leader_discovery['opportunity_ceiling_partial'] else 'FUTURE-KNOWN ONLY'}</span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    Future-known upper bound using each symbol's first observed ask, observed bid exits, one reusable Rs 500,000 slot,
+    at most ten trades, and all nine fixed exit contracts. It diagnoses universe capacity versus selector quality;
+    it is never tradeable and can never enable paper promotion or real orders.
   </div>"""
 
     entry_forward_class = (

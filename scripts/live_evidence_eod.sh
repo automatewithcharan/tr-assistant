@@ -214,6 +214,16 @@ run_full_rank_feature_gates() {
         >>"$LOG" 2>&1 || true
 }
 
+run_full_rank_opportunity_ceiling() {
+    "$PYTHON" "$REPO/scripts/assess_full_rank_opportunity_ceiling.py" \
+        --entry-glob "$REPO/results/Data/full_universe_rank_paper/entries_20*.csv" \
+        --outcome-glob "$REPO/results/Data/full_universe_rank_contract_matrix/outcomes_20*.csv" \
+        --raw-glob "$REPO/results/Data/live_feature_recorder/live_features_20*.csv" \
+        --output-dir "$REPO/results/Data/full_universe_rank_opportunity_ceiling" \
+        --capital 500000 --daily-goal 10000 --max-trades 10 --min-snapshots 300 \
+        >>"$LOG" 2>&1 || true
+}
+
 run_intraday_capital_growth() {
     "$PYTHON" "$REPO/scripts/project_intraday_capital_growth.py" \
         --output-dir "$REPO/results/Data/intraday_capital_growth" \
@@ -249,6 +259,7 @@ if [ -f "$OUTPUT_ROOT/status.json" ]; then
         run_full_rank_contract_matrix
         run_full_rank_entry_timing
         run_full_rank_feature_gates
+        run_full_rank_opportunity_ceiling
         run_intraday_capital_growth
         run_pullback_reclaim_audit
         run_pipeline_readiness
@@ -303,6 +314,7 @@ run_exact_full_rank_strategy
 run_full_rank_contract_matrix
 run_full_rank_entry_timing
 run_full_rank_feature_gates
+run_full_rank_opportunity_ceiling
 run_intraday_capital_growth
 run_pullback_reclaim_audit
 run_pipeline_readiness
