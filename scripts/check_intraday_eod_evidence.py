@@ -23,6 +23,7 @@ ARTIFACTS = {
     "exit_contract_matrix": "results/Data/full_universe_rank_contract_strategy/status.json",
     "entry_timing_matrix": "results/Data/full_universe_rank_entry_strategy/status.json",
     "feature_gate_matrix": "results/Data/full_universe_rank_feature_strategy/status.json",
+    "capital_allocation_matrix": "results/Data/full_universe_rank_capital_allocation/status.json",
     "opportunity_ceiling": "results/Data/full_universe_rank_opportunity_ceiling/status.json",
     "capital_growth": "results/Data/intraday_capital_growth/status.json",
     "runner_recall": "results/Data/live_top_gainer_recorder_recall/status.json",

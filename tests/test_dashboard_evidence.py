@@ -415,6 +415,47 @@ def test_leader_dashboard_reports_capital_growth_without_claiming_validation(
     assert not stats["capital_projection_allowed"]
 
 
+def test_leader_dashboard_reports_capital_allocation_without_promoting_partial(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(dashboard, "DATA", tmp_path)
+    root = tmp_path / "full_universe_rank_capital_allocation"
+    root.mkdir(parents=True)
+    (root / "status.json").write_text(
+        json.dumps(
+            {
+                "status": "collecting_capital_allocation_forward_sessions",
+                "predeclared_combinations": 144,
+                "eligible_sessions": 12,
+                "selection_sessions_required": 12,
+                "frozen_selection": {
+                    "contract": "t1_0_s0_5_h30",
+                    "selector": "acceleration_first",
+                    "slots": 3,
+                },
+                "forward": {"sessions": 4, "trades": 22, "avg_daily_pnl": 6100},
+                "best_partial_diagnostic": {
+                    "slots": 5,
+                    "avg_daily_pnl": 15000,
+                    "excluded_from_evidence": True,
+                },
+                "accepted": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    stats = dashboard.leader_discovery_stats()
+
+    assert stats["capital_allocation_combinations"] == 144
+    assert stats["capital_allocation_sessions"] == 12
+    assert stats["capital_allocation_combination"] == "t1_0_s0_5_h30 / acceleration_first / 3 slots"
+    assert stats["capital_allocation_forward_sessions"] == 4
+    assert stats["capital_allocation_forward_avg_pnl"] == 6100
+    assert stats["capital_allocation_partial_pnl"] == 15000
+    assert not stats["capital_allocation_accepted"]
+
+
 def test_broad_rank_checkpoint_stats_distinguishes_diagnostic_and_full(tmp_path, monkeypatch):
     monkeypatch.setattr(dashboard, "DATA", tmp_path)
     first = tmp_path / "broad_rank_acceleration" / "checkpoint_1000"

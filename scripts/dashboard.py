@@ -379,7 +379,7 @@ def evidence_pipeline_stats():
         "eod_status": str(eod.get("status") or "not run today"),
         "eod_date": str(eod.get("date") or "n/a"),
         "eod_refreshed": int(eod.get("artifacts_refreshed") or 0),
-        "eod_required": int(eod.get("artifacts_required") or 9),
+        "eod_required": int(eod.get("artifacts_required") or 10),
         "eod_session_eligible": bool(eod.get("session_evidence_eligible", False)),
     }
 
@@ -461,6 +461,13 @@ def leader_discovery_stats():
         DATA / "full_universe_rank_feature_strategy" / "status.json", {}
     )
     feature_forward = feature_strategy.get("forward", {}) or {}
+    capital_allocation = load_json(
+        DATA / "full_universe_rank_capital_allocation" / "status.json", {}
+    )
+    capital_allocation_forward = capital_allocation.get("forward", {}) or {}
+    capital_allocation_partial = capital_allocation.get(
+        "best_partial_diagnostic", {}
+    ) or {}
     capital_growth = load_json(
         DATA / "intraday_capital_growth" / "status.json", {}
     )
@@ -819,6 +826,47 @@ def leader_discovery_stats():
         "feature_strategy_forward_trades": int(number(feature_forward, "trades")),
         "feature_strategy_forward_avg_pnl": number(feature_forward, "avg_daily_pnl"),
         "feature_strategy_accepted": bool(feature_strategy.get("accepted", False)),
+        "capital_allocation_status": str(
+            capital_allocation.get("status") or "awaiting EOD allocation judge"
+        ),
+        "capital_allocation_combinations": int(
+            number(capital_allocation, "predeclared_combinations") or 144
+        ),
+        "capital_allocation_sessions": int(
+            number(capital_allocation, "eligible_sessions")
+        ),
+        "capital_allocation_required": int(
+            number(capital_allocation, "selection_sessions_required") or 12
+        ),
+        "capital_allocation_combination": " / ".join(
+            value for value in (
+                str((capital_allocation.get("frozen_selection", {}) or {}).get("contract") or ""),
+                str((capital_allocation.get("frozen_selection", {}) or {}).get("selector") or ""),
+                (
+                    f"{int(number(capital_allocation.get('frozen_selection', {}) or {}, 'slots'))} slots"
+                    if number(capital_allocation.get("frozen_selection", {}) or {}, "slots")
+                    else ""
+                ),
+            ) if value
+        ) or "not frozen",
+        "capital_allocation_forward_sessions": int(
+            number(capital_allocation_forward, "sessions")
+        ),
+        "capital_allocation_forward_trades": int(
+            number(capital_allocation_forward, "trades")
+        ),
+        "capital_allocation_forward_avg_pnl": number(
+            capital_allocation_forward, "avg_daily_pnl"
+        ),
+        "capital_allocation_partial_pnl": number(
+            capital_allocation_partial, "avg_daily_pnl"
+        ),
+        "capital_allocation_partial_slots": int(
+            number(capital_allocation_partial, "slots")
+        ),
+        "capital_allocation_accepted": bool(
+            capital_allocation.get("accepted", False)
+        ),
         "capital_growth_status": str(
             capital_growth.get("status") or "awaiting capital projection"
         ),
@@ -1513,6 +1561,27 @@ def render():
     The judge tests them with the same four causal entry orderings and one reusable Rs 500,000 slot.
     Selection and untouched-forward gates remain separate. Accepted: <b>{'YES' if leader_discovery['contract_strategy_accepted'] else 'NO'}</b>;
     alerts: <b>NO</b>; real orders: <b>NO</b>.
+  </div>"""
+
+    allocation_forward_class = (
+        "gain" if leader_discovery["capital_allocation_forward_avg_pnl"] > 0 else "loss"
+    )
+    leader_html += f"""
+  <div class="summary" style="margin-top:10px">
+    <span>Capital allocation <span class="big">{escape(leader_discovery['capital_allocation_status'])}</span></span>
+    <span>Fixed combinations <span class="big">{leader_discovery['capital_allocation_combinations']}</span></span>
+    <span>Selection sessions <span class="big">{leader_discovery['capital_allocation_sessions']}/{leader_discovery['capital_allocation_required']}</span></span>
+    <span>Frozen combination <span class="big">{escape(leader_discovery['capital_allocation_combination'])}</span></span>
+    <span>Forward <span class="big">{leader_discovery['capital_allocation_forward_sessions']} sessions / {leader_discovery['capital_allocation_forward_trades']} trades</span></span>
+    <span>Forward P&amp;L <span class="big {allocation_forward_class}">{money(leader_discovery['capital_allocation_forward_avg_pnl'])}/day</span></span>
+    <span class="badge orange">Partial diagnostic {leader_discovery['capital_allocation_partial_slots']} slots / {money(leader_discovery['capital_allocation_partial_pnl'])}</span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    The fixed allocation matrix compares one, two, three, and five concurrent equal-sized positions across all
+    nine exit contracts and four causal selectors. Total deployed capital never exceeds Rs 500,000, entries use
+    displayed asks, exits use displayed bids, and each symbol is traded at most once per day. Partial-session
+    figures are excluded. Accepted: <b>{'YES' if leader_discovery['capital_allocation_accepted'] else 'NO'}</b>;
+    real orders: <b>NO</b>.
   </div>"""
 
     leader_html += f"""
