@@ -143,7 +143,7 @@ run_event_shadow_rebuild() {
 
 if [ -f "$OUTPUT_ROOT/status.json" ]; then
     existing_status=$("$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status", ""))' "$OUTPUT_ROOT/status.json" 2>/dev/null || true)
-    if [ "$existing_status" = "complete" ]; then
+    if [[ "$existing_status" == complete* ]]; then
         run_readiness
         run_ranked_replay
         run_live_microstructure_research

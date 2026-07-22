@@ -375,6 +375,10 @@ def leader_discovery_stats():
         {},
     )
     continuation = load_json(DATA / "live_leader_continuation" / "status.json", {})
+    ranker = load_json(
+        DATA / "live_leader_continuation" / "frozen_ranker_status.json", {}
+    )
+    ranker_stress = ranker.get("forward_stress", {}) or {}
     opportunity = continuation.get("clairvoyant_opportunity_bound", {}) or {}
     rows = load_csv_rows(DATA / "live_leader_continuation" / "summary.csv")
     snapshot_rows = load_csv_rows(
@@ -446,6 +450,15 @@ def leader_discovery_stats():
         "forward_target_hit_pct": number(forward, "TargetHitPct"),
         "forward_avg_return_pct": number(forward, "AvgNetReturnPct"),
         "forward_lower95_pct": number(forward, "Lower95DailyEqualReturnPct"),
+        "ranker_status": str(ranker.get("status") or "pending"),
+        "ranker_contract": str(ranker.get("contract") or "none"),
+        "ranker_forward_start": str(ranker.get("forward_start") or "n/a"),
+        "ranker_forward_sessions": int(number(ranker_stress, "sessions")),
+        "ranker_forward_trades": int(number(ranker_stress, "trades")),
+        "ranker_stress_avg_pnl": number(ranker_stress, "avg_daily_pnl"),
+        "ranker_stress_lower95_pct": number(ranker_stress, "lower_95_pct"),
+        "ranker_stress_goal_hit_pct": number(ranker_stress, "goal_hit_pct"),
+        "ranker_accepted": bool(ranker.get("accepted", False)),
         "evidence_accepted": False,
         "paper_promotion_allowed": False,
         "real_orders_allowed": False,
@@ -996,6 +1009,9 @@ def render():
     leader_snapshot_class = (
         "gain" if leader_discovery["snapshot_avg_return_pct"] > 0 else "loss"
     )
+    leader_ranker_class = (
+        "gain" if leader_discovery["ranker_stress_avg_pnl"] > 0 else "loss"
+    )
     leader_html = f"""
   <h2>Leader discovery and continuation</h2>
   <div class="summary">
@@ -1022,6 +1038,22 @@ def render():
     {money(leader_discovery['opportunity_avg_pnl'])}/day, lower 95%
     {money(leader_discovery['opportunity_lower95_pnl'])}/day, goal sessions
     {leader_discovery['opportunity_goal_hit_pct']:.1f}%; this bound is never tradeable.
+  </div>"""
+
+    leader_html += f"""
+  <div class="summary" style="margin-top:10px">
+    <span>Frozen ranker <span class="big">{escape(leader_discovery['ranker_status'])}</span></span>
+    <span>Forward sessions <span class="big">{leader_discovery['ranker_forward_sessions']}</span></span>
+    <span>Forward trades <span class="big">{leader_discovery['ranker_forward_trades']}</span></span>
+    <span>Stressed P&amp;L <span class="big {leader_ranker_class}">{money(leader_discovery['ranker_stress_avg_pnl'])}/day</span></span>
+    <span>Goal days <span class="big">{leader_discovery['ranker_stress_goal_hit_pct']:.1f}%</span></span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    Prior-session-only {escape(leader_discovery['ranker_contract'])} microstructure ranker;
+    untouched evidence starts {escape(leader_discovery['ranker_forward_start'])}.
+    Stressed lower 95% bound {leader_discovery['ranker_stress_lower95_pct']:+.3f}%.
+    Accepted: <b>{'YES' if leader_discovery['ranker_accepted'] else 'NO'}</b>;
+    real orders: <b>NO</b>.
   </div>"""
 
     backfill_html = f"""
