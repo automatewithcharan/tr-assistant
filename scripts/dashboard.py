@@ -389,6 +389,14 @@ def leader_discovery_stats():
         ),
         {},
     )
+    five_pct = next(
+        (
+            row
+            for row in recall_rows
+            if float(row.get("RunnerThresholdPct") or 0.0) == 5.0
+        ),
+        {},
+    )
     continuation = load_json(DATA / "live_leader_continuation" / "status.json", {})
     ranker = load_json(
         DATA / "live_leader_continuation" / "frozen_ranker_status.json", {}
@@ -513,6 +521,14 @@ def leader_discovery_stats():
         "band_0_5_to_3_recall": number(ten_pct, "Band0_5To3RecallPct"),
         "band_0_5_to_5_recall": number(ten_pct, "Band0_5To5RecallPct"),
         "median_lead_minutes": number(ten_pct, "MedianLeadMinutes"),
+        "full_rank_recall_sessions": int(number(ten_pct, "FullRankEligibleSessions")),
+        "full_rank_runner_events_5": int(number(five_pct, "FullRankRunnerEvents")),
+        "full_rank_seen_before_5": number(five_pct, "FullRankSeenBeforeCrossPct"),
+        "full_rank_early_band_5": number(five_pct, "FullRankBand0_5To3RecallPct"),
+        "full_rank_runner_events_10": int(number(ten_pct, "FullRankRunnerEvents")),
+        "full_rank_seen_before_10": number(ten_pct, "FullRankSeenBeforeCrossPct"),
+        "full_rank_early_band_10": number(ten_pct, "FullRankBand0_5To3RecallPct"),
+        "full_rank_lead_10": number(ten_pct, "FullRankMedianLeadMinutes"),
         "forward_start": str(continuation.get("frozen_forward_start") or "n/a"),
         "evaluated_states": int(continuation.get("evaluated_candidate_states") or 0),
         "forward_states": int(continuation.get("forward_candidate_states") or 0),
@@ -1418,6 +1434,22 @@ def render():
     {money(leader_discovery['opportunity_avg_pnl'])}/day, lower 95%
     {money(leader_discovery['opportunity_lower95_pnl'])}/day, goal sessions
     {leader_discovery['opportunity_goal_hit_pct']:.1f}%; this bound is never tradeable.
+  </div>"""
+
+    leader_html += f"""
+  <div class="summary" style="margin-top:10px">
+    <span>Full-rank recall sessions <span class="big">{leader_discovery['full_rank_recall_sessions']}</span></span>
+    <span>5% runners <span class="big">{leader_discovery['full_rank_runner_events_5']}</span></span>
+    <span>Seen before 5% <span class="big">{leader_discovery['full_rank_seen_before_5']:.1f}%</span></span>
+    <span>Seen at 0.5-3% <span class="big">{leader_discovery['full_rank_early_band_5']:.1f}%</span></span>
+    <span>10% runners <span class="big">{leader_discovery['full_rank_runner_events_10']}</span></span>
+    <span>Seen before 10% <span class="big">{leader_discovery['full_rank_seen_before_10']:.1f}%</span></span>
+    <span>Seen at 0.5-3% <span class="big">{leader_discovery['full_rank_early_band_10']:.1f}%</span></span>
+    <span>Lead <span class="big">{leader_discovery['full_rank_lead_10']:.0f} min</span></span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    This denominator includes only sessions where the new full-universe rank recorder was active near the open.
+    Legacy selective-recorder history cannot inflate these recall figures. Future runner labels remain diagnostic only.
   </div>"""
 
     leader_html += f"""

@@ -29,6 +29,15 @@ def load_features(pattern: str) -> dict[str, pd.DataFrame]:
         frame["OpenChangePct"] = pd.to_numeric(
             frame["OpenChangePct"], errors="coerce"
         )
+        universe = pd.to_numeric(
+            frame.get("UniverseSize", pd.Series(np.nan, index=frame.index)),
+            errors="coerce",
+        )
+        rank = pd.to_numeric(
+            frame.get("DayChangeRank", pd.Series(np.nan, index=frame.index)),
+            errors="coerce",
+        )
+        frame["FullUniverseRankRecorder"] = universe.ge(2500) & rank.notna()
         frame = frame.dropna(subset=["When", "Symbol", "OpenChangePct"])
         for symbol, group in frame.groupby("Symbol", sort=False):
             date = str(group.iloc[0]["When"].date())
@@ -53,6 +62,16 @@ def audit_recall(
     path = Path(bar_pattern)
     rows = []
     counted_events: set[tuple[str, str, float]] = set()
+    full_rank_start_by_date: dict[str, pd.Timestamp] = {}
+    for group in feature_groups.values():
+        if "FullUniverseRankRecorder" not in group.columns:
+            continue
+        full_rank = group[group["FullUniverseRankRecorder"].fillna(False).astype(bool)]
+        for date, date_rows in full_rank.groupby(full_rank["When"].dt.date.astype(str)):
+            first = pd.Timestamp(date_rows["When"].min())
+            current = full_rank_start_by_date.get(str(date))
+            if current is None or first < current:
+                full_rank_start_by_date[str(date)] = first
     for file in sorted(path.parent.glob(path.name)):
         bars = pd.read_csv(file)
         required = {"symbol", "datetime", "open", "high", "close", "volume"}
@@ -66,6 +85,12 @@ def audit_recall(
         for symbol, day in bars.groupby("symbol", sort=False):
             day = day.sort_values("datetime").reset_index(drop=True)
             date = str(day.iloc[0]["datetime"].date())
+            first_bar_time = pd.Timestamp(day.iloc[0]["datetime"])
+            full_rank_start = full_rank_start_by_date.get(date)
+            full_rank_session_eligible = bool(
+                full_rank_start is not None
+                and full_rank_start <= first_bar_time + pd.Timedelta(minutes=5)
+            )
             day_open = float(day.iloc[0]["open"])
             turnover = float(
                 (day["volume"].fillna(0.0).clip(lower=0.0) * day["close"]).sum()
@@ -88,12 +113,32 @@ def audit_recall(
                     if not features.empty
                     else pd.DataFrame()
                 )
+                full_rank_before = (
+                    before[
+                        before.get(
+                            "FullUniverseRankRecorder",
+                            pd.Series(False, index=before.index),
+                        ).fillna(False).astype(bool)
+                    ].copy()
+                    if not before.empty
+                    else pd.DataFrame()
+                )
                 moves = (
                     before["OpenChangePct"]
                     if not before.empty
                     else pd.Series(dtype=float)
                 )
                 first_time = pd.Timestamp(before.iloc[0]["When"]) if not before.empty else pd.NaT
+                full_rank_moves = (
+                    full_rank_before["OpenChangePct"]
+                    if not full_rank_before.empty
+                    else pd.Series(dtype=float)
+                )
+                full_rank_first_time = (
+                    pd.Timestamp(full_rank_before.iloc[0]["When"])
+                    if not full_rank_before.empty
+                    else pd.NaT
+                )
                 rows.append(
                     {
                         "Date": date,
@@ -116,6 +161,25 @@ def audit_recall(
                             if pd.notna(first_time)
                             else np.nan
                         ),
+                        "FullRankSessionEligible": full_rank_session_eligible,
+                        "FullRankRecorderStart": full_rank_start,
+                        "FullRankFeatureSeenBeforeCross": bool(not full_rank_before.empty),
+                        "FullRankBand0_5To3Seen": bool(
+                            full_rank_moves.between(0.5, 3.0).any()
+                        ),
+                        "FullRankBand0_5To5Seen": bool(
+                            full_rank_moves.between(0.5, 5.0).any()
+                        ),
+                        "FullRankFirstFeatureTime": full_rank_first_time,
+                        "FullRankLeadMinutes": (
+                            round(
+                                (cross_time - full_rank_first_time).total_seconds()
+                                / 60.0,
+                                3,
+                            )
+                            if pd.notna(full_rank_first_time)
+                            else np.nan
+                        ),
                         "UsesFutureRunnerLabel": True,
                         "PaperPromotionAllowed": False,
                         "RealOrdersAllowed": False,
@@ -130,6 +194,12 @@ def summarize(events: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for threshold, group in events.groupby("RunnerThresholdPct", sort=True):
         seen = group[group["FeatureSeenBeforeCross"]]
+        full_rank = group[
+            group.get(
+                "FullRankSessionEligible", pd.Series(False, index=group.index)
+            ).fillna(False).astype(bool)
+        ]
+        full_rank_seen = full_rank[full_rank["FullRankFeatureSeenBeforeCross"]]
         count = len(group)
         rows.append(
             {
@@ -157,6 +227,20 @@ def summarize(events: pd.DataFrame) -> pd.DataFrame:
                 "MedianLeadMinutes": round(float(seen["LeadMinutes"].median()), 2)
                 if not seen.empty
                 else 0.0,
+                "FullRankEligibleSessions": int(full_rank["Date"].nunique()),
+                "FullRankRunnerEvents": int(len(full_rank)),
+                "FullRankSeenBeforeCrossPct": round(
+                    float(full_rank["FullRankFeatureSeenBeforeCross"].mean() * 100.0), 2
+                ) if not full_rank.empty else 0.0,
+                "FullRankBand0_5To3RecallPct": round(
+                    float(full_rank["FullRankBand0_5To3Seen"].mean() * 100.0), 2
+                ) if not full_rank.empty else 0.0,
+                "FullRankBand0_5To5RecallPct": round(
+                    float(full_rank["FullRankBand0_5To5Seen"].mean() * 100.0), 2
+                ) if not full_rank.empty else 0.0,
+                "FullRankMedianLeadMinutes": round(
+                    float(full_rank_seen["FullRankLeadMinutes"].median()), 2
+                ) if not full_rank_seen.empty else 0.0,
                 "UsesFutureRunnerLabel": True,
                 "EvidenceAccepted": False,
                 "PaperPromotionAllowed": False,
