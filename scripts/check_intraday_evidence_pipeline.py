@@ -168,6 +168,17 @@ def assess(
     ticker_age = (now - ticker_at).total_seconds() if ticker_at else float("inf")
     ticker_ok = bool(ticker.get("connected")) and ticker_age <= 180 and int(ticker.get("snapshot_symbols") or 0) >= 2500
     checks.append(check("live_ticks_fresh", ticker_ok or not live_market, f"connected={bool(ticker.get('connected'))}, symbols={int(ticker.get('snapshot_symbols') or 0)}, age={ticker_age:.0f}s" + ("" if live_market else "; freshness not required outside live market")))
+    ticker_started = parse_ist(ticker.get("started_at"), naive_zone=timezone.utc)
+    ticker_uptime = (now - ticker_started).total_seconds() if ticker_started else 0.0
+    ticker_continuous = ticker_uptime >= 300.0
+    checks.append(
+        check(
+            "ticker_stream_continuity",
+            ticker_continuous or not live_market,
+            f"current stream uptime={ticker_uptime / 60.0:.1f}m"
+            + ("" if live_market else "; continuity not required outside live market"),
+        )
+    )
 
     recorder = load_json(data / "live_feature_recorder/full_universe_rank_status.json")
     recorder_at = parse_ist(recorder.get("recorded_at"))

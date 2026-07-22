@@ -40,7 +40,7 @@ def fixture_root(tmp_path: Path) -> tuple[Path, datetime]:
     write(tmp_path / "scripts/live_evidence_eod.sh", "\n".join(calls + calls))
     data = tmp_path / "results/Data"
     stamp = "2026-07-23 10:00:00"
-    write(data / "kiteticker_all_status_latest.json", {"connected": True, "last_tick_at": stamp, "snapshot_symbols": 2860})
+    write(data / "kiteticker_all_status_latest.json", {"connected": True, "started_at": "2026-07-23 03:30:00", "last_tick_at": "2026-07-23 04:30:00", "snapshot_symbols": 2860})
     write(data / "live_feature_recorder/full_universe_rank_status.json", {"status": "recording_full_universe_rank", "date": "2026-07-23", "recorded_at": stamp, "universe_size": 2860, "rows_this_snapshot": 200, "interval_seconds": 60, "alerts_allowed": False, "real_orders_allowed": False})
     statuses = [
         ("full_universe_rank_paper/status.json", "recording_exact_ask_to_bid_paper_outcomes", {}),

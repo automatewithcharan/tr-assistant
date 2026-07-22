@@ -384,6 +384,9 @@ class AssistantRuntimeStore:
 class AssistantLiveSupervisor:
     """Background supervisor for live market worker processes."""
 
+    LIVE_RESTART_PREFIXES = ("pkscreener/",)
+    LIVE_RESTART_FILES = {"pkscreener.ini", "requirements.txt"}
+
     def __init__(self, config_manager, session_id: int) -> None:
         self.config_manager = config_manager
         self.session_id = int(session_id)
@@ -669,16 +672,59 @@ class AssistantLiveSupervisor:
         except Exception:
             return None
 
-    def _check_for_code_update(self) -> None:
-        """Restart all child processes when a new git commit is detected.
+    def _changed_paths(self, previous: str, current: str) -> Optional[List[str]]:
+        """Return committed paths between revisions, or None on uncertainty."""
+        try:
+            result = subprocess.run(
+                ["git", "diff", "--name-only", previous, current, "--"],
+                cwd=str(self.repo_root),
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode != 0:
+                return None
+            return [line.strip() for line in result.stdout.splitlines() if line.strip()]
+        except Exception:
+            return None
 
-        Also re-execs the supervisor itself so it picks up the new code too.
-        This solves the chicken-and-egg problem: the old supervisor can't run
-        new-code features until it restarts itself.
+    @classmethod
+    def _requires_live_worker_restart(cls, paths: Optional[List[str]]) -> bool:
+        """Conservatively classify whether a commit changes live worker code."""
+        if paths is None:
+            return True
+        return any(
+            path in cls.LIVE_RESTART_FILES
+            or any(path.startswith(prefix) for prefix in cls.LIVE_RESTART_PREFIXES)
+            for path in paths
+        )
+
+    def _check_for_code_update(self) -> None:
+        """Restart children only when a commit changes live worker code.
+
+        Research scripts, tests, documentation, and dashboard-only changes do
+        not justify interrupting the shared Kite stream during market hours.
         """
         current = self._read_git_head()
         if current and current != self._code_commit:
             prev_short = self._code_commit[:7] if self._code_commit else "unknown"
+            changed_paths = (
+                self._changed_paths(self._code_commit, current)
+                if self._code_commit
+                else None
+            )
+            if not self._requires_live_worker_restart(changed_paths):
+                self._code_commit = current
+                self.store.add_event(
+                    self.session_id,
+                    "info",
+                    "supervisor",
+                    (
+                        f"Non-live code updated ({prev_short} → {current[:7]}); "
+                        "ticker and workers kept running."
+                    ),
+                )
+                return
             self.store.add_event(
                 self.session_id,
                 "info",
