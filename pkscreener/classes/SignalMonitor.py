@@ -28,6 +28,7 @@ from PKDevTools.classes.log import default_logger
 
 from pkscreener.classes.ActionableReport import ActionableReportRunner
 from pkscreener.classes.AnomalyDetector import VolumeAnomalyDetector
+from pkscreener.classes.FullUniverseRankPaperObserver import FullUniverseRankPaperObserver
 from pkscreener.classes.LiveFeatureRecorder import LiveFeatureRecorder
 from pkscreener.classes.IntradayEventShadowRecorder import IntradayEventShadowRecorder
 from pkscreener.classes.PaperTradeTracker import PaperTradeTracker
@@ -201,6 +202,9 @@ class SignalMonitorRunner:
         self.enable_leader_ignition = self._env_truthy("SIGNALMONITOR_ENABLE_LEADER_IGNITION", "1")
         self.leader_ignition_discord_alerts = self._env_truthy("SIGNALMONITOR_LEADER_IGNITION_DISCORD", "0")
         self.enable_live_feature_recorder = self._env_truthy("SIGNALMONITOR_ENABLE_LIVE_FEATURE_RECORDER", "1")
+        self.enable_full_rank_paper_observer = self._env_truthy(
+            "SIGNALMONITOR_ENABLE_FULL_RANK_PAPER_OBSERVER", "1"
+        )
         self.enable_intraday_goal_mode = str(os.environ.get("SIGNALMONITOR_INTRADAY_GOAL_MODE", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
         self.goal_selector_file = str(os.environ.get("SIGNALMONITOR_GOAL_SELECTOR_FILE", "") or "").strip()
         self.goal_selector_validated = self._goal_selector_is_validated(self.goal_selector_file)
@@ -277,6 +281,18 @@ class SignalMonitorRunner:
                 rapid_change_delta_pct=float(os.environ.get("SIGNALMONITOR_LIVE_FEATURE_RAPID_CHANGE_DELTA_PCT", "0.15") or 0.15),
             )
             if self.enable_live_feature_recorder
+            else None
+        )
+        self._full_rank_paper_observer = (
+            FullUniverseRankPaperObserver(
+                output_dir=self.output_dir,
+                capital=float(os.environ.get("SIGNALMONITOR_FULL_RANK_PAPER_CAPITAL", "500000") or 500000),
+                target_pct=float(os.environ.get("SIGNALMONITOR_FULL_RANK_PAPER_TARGET_PCT", "1.5") or 1.5),
+                stop_pct=float(os.environ.get("SIGNALMONITOR_FULL_RANK_PAPER_STOP_PCT", "1.0") or 1.0),
+                horizon_minutes=float(os.environ.get("SIGNALMONITOR_FULL_RANK_PAPER_HORIZON_MINUTES", "60") or 60),
+                stress_pct=float(os.environ.get("SIGNALMONITOR_FULL_RANK_PAPER_STRESS_PCT", "0.10") or 0.10),
+            )
+            if self.enable_live_feature_recorder and self.enable_full_rank_paper_observer
             else None
         )
         self._last_discord_heartbeat_ts = 0.0
@@ -4223,6 +4239,21 @@ class SignalMonitorRunner:
                 f"  [+] Live feature recorder: saved {len(rows_df)} row(s) "
                 f"(missed runners {missed_count}, stable OB {stable_count})"
             )
+        observer = getattr(self, "_full_rank_paper_observer", None)
+        if observer is not None and getattr(self, "enable_full_rank_paper_observer", False):
+            try:
+                paper_events = observer.process(rows_df, ticks, now=self.run_at)
+                entries = sum(event.get("event") == "entry" for event in paper_events)
+                exits = sum(event.get("event") == "exit" for event in paper_events)
+                if entries or exits:
+                    OutputControls().printOutput(
+                        f"  [+] Full-rank exact paper observer: {entries} entr{'y' if entries == 1 else 'ies'}, "
+                        f"{exits} exit{'s' if exits != 1 else ''} (ask-to-bid, no orders)"
+                    )
+            except Exception as exc:
+                default_logger().debug(
+                    f"Full-rank paper observer failed: {exc}", exc_info=True
+                )
         self._run_frozen_microstructure_paper_lane(rows_df, ticks)
 
     def _run_frozen_microstructure_paper_lane(

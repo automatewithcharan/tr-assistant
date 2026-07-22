@@ -168,6 +168,40 @@ def test_leader_dashboard_reports_full_universe_rank_strategy_gate(
     assert not stats["full_rank_strategy_accepted"]
 
 
+def test_leader_dashboard_reports_exact_full_rank_paper_ledger(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(dashboard, "DATA", tmp_path)
+    root = tmp_path / "full_universe_rank_paper"
+    root.mkdir(parents=True)
+    (root / "status.json").write_text(
+        json.dumps(
+            {
+                "status": "recording_exact_ask_to_bid_paper_outcomes",
+                "updated_at": "2026-07-22 12:30:00",
+                "entries": 14,
+                "active": 3,
+                "closed": 11,
+                "wins": 7,
+                "net_pnl": 2345.67,
+                "paper_only": True,
+                "alerts_allowed": False,
+                "real_orders_allowed": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    stats = dashboard.leader_discovery_stats()
+
+    assert stats["full_rank_paper_status"] == "recording_exact_ask_to_bid_paper_outcomes"
+    assert stats["full_rank_paper_entries"] == 14
+    assert stats["full_rank_paper_active"] == 3
+    assert stats["full_rank_paper_closed"] == 11
+    assert stats["full_rank_paper_wins"] == 7
+    assert stats["full_rank_paper_net_pnl"] == 2345.67
+
+
 def test_broad_rank_checkpoint_stats_distinguishes_diagnostic_and_full(tmp_path, monkeypatch):
     monkeypatch.setattr(dashboard, "DATA", tmp_path)
     first = tmp_path / "broad_rank_acceleration" / "checkpoint_1000"

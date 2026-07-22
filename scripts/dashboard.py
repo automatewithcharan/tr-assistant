@@ -396,6 +396,9 @@ def leader_discovery_stats():
     full_rank_strategy = load_json(
         DATA / "full_universe_rank_strategy" / "status.json", {}
     )
+    full_rank_paper = load_json(
+        DATA / "full_universe_rank_paper" / "status.json", {}
+    )
     full_rank_forward = full_rank_strategy.get("forward_stress", {}) or {}
     ranker_model = ranker.get("live_model", {}) or {}
     prediction_paths = sorted(
@@ -588,6 +591,17 @@ def leader_discovery_stats():
         "full_rank_strategy_accepted": bool(
             full_rank_strategy.get("accepted", False)
         ),
+        "full_rank_paper_status": str(
+            full_rank_paper.get("status") or "awaiting live observer"
+        ),
+        "full_rank_paper_updated_at": str(
+            full_rank_paper.get("updated_at") or "n/a"
+        ),
+        "full_rank_paper_entries": int(number(full_rank_paper, "entries")),
+        "full_rank_paper_active": int(number(full_rank_paper, "active")),
+        "full_rank_paper_closed": int(number(full_rank_paper, "closed")),
+        "full_rank_paper_wins": int(number(full_rank_paper, "wins")),
+        "full_rank_paper_net_pnl": number(full_rank_paper, "net_pnl"),
         "evidence_accepted": False,
         "paper_promotion_allowed": False,
         "real_orders_allowed": False,
@@ -1242,6 +1256,24 @@ def render():
     ten trades maximum, 0.10% additional stress, 12 complete selection sessions, then 20 untouched forward sessions.
     Both raw recorder coverage and executable outcome coverage must pass.
     Accepted: <b>{'YES' if leader_discovery['full_rank_strategy_accepted'] else 'NO'}</b>; real orders: <b>NO</b>.
+  </div>"""
+
+    full_rank_paper_class = (
+        "gain" if leader_discovery["full_rank_paper_net_pnl"] > 0 else "loss"
+    )
+    leader_html += f"""
+  <div class="summary" style="margin-top:10px">
+    <span>Exact paper observer <span class="big">{escape(leader_discovery['full_rank_paper_status'])}</span></span>
+    <span>Entries <span class="big">{leader_discovery['full_rank_paper_entries']}</span></span>
+    <span>Active <span class="big">{leader_discovery['full_rank_paper_active']}</span></span>
+    <span>Closed <span class="big">{leader_discovery['full_rank_paper_closed']}</span></span>
+    <span>Winners <span class="big">{leader_discovery['full_rank_paper_wins']}</span></span>
+    <span>Net P&amp;L <span class="big {full_rank_paper_class}">{money(leader_discovery['full_rank_paper_net_pnl'])}</span></span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    Updated {escape(leader_discovery['full_rank_paper_updated_at'])}. Entry is the displayed ask and every exit is the displayed bid,
+    with +1.5%/-1.0%, a 60-minute timeout, and another 0.10% stress charge.
+    This labels all buyable rank cohorts for research; alerts: <b>NO</b>; real orders: <b>NO</b>.
   </div>"""
 
     live_paper_class = (
