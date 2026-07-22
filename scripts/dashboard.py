@@ -363,6 +363,21 @@ def ignition_registry_stats():
     }
 
 
+def evidence_pipeline_stats():
+    status = load_json(DATA / "intraday_evidence_pipeline" / "status.json", {})
+    checks = status.get("checks", []) if isinstance(status, dict) else []
+    failed = [item for item in checks if not item.get("passed", False)]
+    return {
+        "status": str(status.get("status") or "not checked"),
+        "checked_at": str(status.get("checked_at") or "n/a"),
+        "passed": int(status.get("checks_passed") or 0),
+        "total": int(status.get("checks_total") or 0),
+        "issues": [str(item.get("detail") or item.get("name") or "unknown issue") for item in failed],
+        "real_orders_allowed": bool(status.get("real_orders_allowed", False)),
+        "strategy_accepted": bool(status.get("strategy_accepted", False)),
+    }
+
+
 def leader_discovery_stats():
     recall = load_json(DATA / "live_top_gainer_recorder_recall" / "status.json", {})
     recall_rows = recall.get("summary", []) if isinstance(recall, dict) else []
@@ -1012,11 +1027,28 @@ def render():
     exit_contracts = event_exit_contract_stats()
     frozen_micro = frozen_microstructure_stats()
     ignition_registry = ignition_registry_stats()
+    evidence_pipeline = evidence_pipeline_stats()
     leader_discovery = leader_discovery_stats()
     broad_backfill = broad_backfill_stats()
     broad_rank = broad_rank_checkpoint_stats()
     runner_classifier = eventual_runner_classifier_stats()
     direct_classifier = direct_target_classifier_stats()
+
+    pipeline_ready = evidence_pipeline["status"] == "ready_for_next_full_session"
+    pipeline_issues = " | ".join(evidence_pipeline["issues"][:4]) or "none"
+    pipeline_html = f"""
+  <h2>Evidence pipeline operations</h2>
+  <div class="summary">
+    <span>Status <span class="big {'gain' if pipeline_ready else 'loss'}">{escape(evidence_pipeline['status'])}</span></span>
+    <span>Checks <span class="big">{evidence_pipeline['passed']}/{evidence_pipeline['total']}</span></span>
+    <span>Strategy accepted <span class="big">NO</span></span>
+    <span>Real orders <span class="big">NO</span></span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    Checked {escape(evidence_pipeline['checked_at'])}. Issues: {escape(pipeline_issues)}.
+    This panel validates timers, live-tick freshness, recorder cadence, exact observers, disk, EOD judges,
+    and hard-off order flags. Operational readiness is not evidence of profitability.
+  </div>"""
 
     tot_inv = sum(r["invested"] for r in positions)
     tot_val = sum(r["value"] for r in positions)
@@ -1670,6 +1702,7 @@ def render():
 <body>
   <h1>tr-assistant — status</h1>
   <div class="updated">updated {now} · auto-refreshes every 60s</div>
+{pipeline_html}
 
   <h2>Real positions (your money)</h2>
   <div class="summary">

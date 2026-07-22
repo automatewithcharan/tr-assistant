@@ -231,6 +231,11 @@ run_pullback_reclaim_audit() {
         >>"$LOG" 2>&1 || true
 }
 
+run_pipeline_readiness() {
+    "$PYTHON" "$REPO/scripts/check_intraday_evidence_pipeline.py" --allow-issues \
+        >>"$LOG" 2>&1 || true
+}
+
 if [ -f "$OUTPUT_ROOT/status.json" ]; then
     existing_status=$("$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status", ""))' "$OUTPUT_ROOT/status.json" 2>/dev/null || true)
     if [[ "$existing_status" == complete* ]]; then
@@ -246,6 +251,7 @@ if [ -f "$OUTPUT_ROOT/status.json" ]; then
         run_full_rank_feature_gates
         run_intraday_capital_growth
         run_pullback_reclaim_audit
+        run_pipeline_readiness
         exit 0
     fi
 fi
@@ -299,5 +305,6 @@ run_full_rank_entry_timing
 run_full_rank_feature_gates
 run_intraday_capital_growth
 run_pullback_reclaim_audit
+run_pipeline_readiness
 echo "[$(date -u +'%Y-%m-%d %H:%M:%S UTC')] live evidence EOD finished rc=$RC $SUMMARY" >>"$LOG"
 exit "$RC"
