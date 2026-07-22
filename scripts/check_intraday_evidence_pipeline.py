@@ -136,6 +136,7 @@ def assess(
         "scripts/assess_full_rank_entry_timing.py",
         "scripts/assess_full_rank_feature_gates.py",
         "scripts/assess_full_rank_capital_allocation.py",
+        "scripts/assess_full_rank_integrated_policies.py",
         "scripts/assess_full_rank_opportunity_ceiling.py",
         "scripts/project_intraday_capital_growth.py",
         "scripts/live_evidence_eod.sh",
@@ -151,6 +152,7 @@ def assess(
         "run_full_rank_entry_timing",
         "run_full_rank_feature_gates",
         "run_full_rank_capital_allocation",
+        "run_full_rank_integrated_policies",
         "run_full_rank_opportunity_ceiling",
         "run_intraday_capital_growth",
         "run_eod_integrity",
@@ -216,9 +218,10 @@ def assess(
         "gates": dict_assignment_size(root / "scripts/assess_full_rank_feature_gates.py", "FEATURE_GATES"),
         "selectors": dict_assignment_size(root / "scripts/assess_exact_full_rank_paper.py", "SELECTORS"),
         "slot_counts": 4 if "SLOT_COUNTS = (1, 2, 3, 5)" in (root / "scripts/assess_full_rank_capital_allocation.py").read_text(errors="ignore") else 0,
+        "integrated_policies": dict_assignment_size(root / "scripts/assess_full_rank_integrated_policies.py", "INTEGRATED_POLICIES"),
     }
-    matrix_ok = matrix_counts == {"contracts": 9, "variants": 6, "gates": 12, "selectors": 4, "slot_counts": 4}
-    checks.append(check("predeclared_search_space", matrix_ok, "9 exit contracts, 6 timing variants, 12 feature gates, 4 selectors, 4 capital slot counts declared" if matrix_ok else "one or more predeclared matrices are incomplete"))
+    matrix_ok = matrix_counts == {"contracts": 9, "variants": 6, "gates": 12, "selectors": 4, "slot_counts": 4, "integrated_policies": 10}
+    checks.append(check("predeclared_search_space", matrix_ok, "9 exit contracts, 6 timing variants, 12 feature gates, 4 selectors, 4 capital slot counts, 10 integrated policies declared" if matrix_ok else "one or more predeclared matrices are incomplete"))
 
     eod = load_json(data / "intraday_evidence_pipeline" / "eod_latest.json")
     eod_status = str(eod.get("status") or "")

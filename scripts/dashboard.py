@@ -379,7 +379,7 @@ def evidence_pipeline_stats():
         "eod_status": str(eod.get("status") or "not run today"),
         "eod_date": str(eod.get("date") or "n/a"),
         "eod_refreshed": int(eod.get("artifacts_refreshed") or 0),
-        "eod_required": int(eod.get("artifacts_required") or 10),
+        "eod_required": int(eod.get("artifacts_required") or 11),
         "eod_session_eligible": bool(eod.get("session_evidence_eligible", False)),
     }
 
@@ -468,6 +468,11 @@ def leader_discovery_stats():
     capital_allocation_partial = capital_allocation.get(
         "best_partial_diagnostic", {}
     ) or {}
+    integrated_policies = load_json(
+        DATA / "full_universe_rank_integrated_policies" / "status.json", {}
+    )
+    integrated_forward = integrated_policies.get("forward", {}) or {}
+    integrated_partial = integrated_policies.get("best_partial_diagnostic", {}) or {}
     capital_growth = load_json(
         DATA / "intraday_capital_growth" / "status.json", {}
     )
@@ -867,6 +872,24 @@ def leader_discovery_stats():
         "capital_allocation_accepted": bool(
             capital_allocation.get("accepted", False)
         ),
+        "integrated_policy_status": str(
+            integrated_policies.get("status") or "awaiting EOD integrated-policy judge"
+        ),
+        "integrated_policy_count": int(number(integrated_policies, "policies") or 10),
+        "integrated_policy_sessions": int(number(integrated_policies, "eligible_sessions")),
+        "integrated_policy_required": int(
+            number(integrated_policies, "selection_sessions_required") or 12
+        ),
+        "integrated_policy_frozen": str(
+            (integrated_policies.get("frozen_selection", {}) or {}).get("policy")
+            or "not frozen"
+        ),
+        "integrated_policy_forward_sessions": int(number(integrated_forward, "sessions")),
+        "integrated_policy_forward_trades": int(number(integrated_forward, "trades")),
+        "integrated_policy_forward_avg_pnl": number(integrated_forward, "avg_daily_pnl"),
+        "integrated_policy_partial_name": str(integrated_partial.get("policy") or "none"),
+        "integrated_policy_partial_pnl": number(integrated_partial, "avg_daily_pnl"),
+        "integrated_policy_accepted": bool(integrated_policies.get("accepted", False)),
         "capital_growth_status": str(
             capital_growth.get("status") or "awaiting capital projection"
         ),
@@ -1582,6 +1605,26 @@ def render():
     displayed asks, exits use displayed bids, and each symbol is traded at most once per day. Partial-session
     figures are excluded. Accepted: <b>{'YES' if leader_discovery['capital_allocation_accepted'] else 'NO'}</b>;
     real orders: <b>NO</b>.
+  </div>"""
+
+    integrated_forward_class = (
+        "gain" if leader_discovery["integrated_policy_forward_avg_pnl"] > 0 else "loss"
+    )
+    leader_html += f"""
+  <div class="summary" style="margin-top:10px">
+    <span>Integrated policies <span class="big">{escape(leader_discovery['integrated_policy_status'])}</span></span>
+    <span>Fixed policies <span class="big">{leader_discovery['integrated_policy_count']}</span></span>
+    <span>Selection sessions <span class="big">{leader_discovery['integrated_policy_sessions']}/{leader_discovery['integrated_policy_required']}</span></span>
+    <span>Frozen policy <span class="big">{escape(leader_discovery['integrated_policy_frozen'])}</span></span>
+    <span>Forward <span class="big">{leader_discovery['integrated_policy_forward_sessions']} sessions / {leader_discovery['integrated_policy_forward_trades']} trades</span></span>
+    <span>Forward P&amp;L <span class="big {integrated_forward_class}">{money(leader_discovery['integrated_policy_forward_avg_pnl'])}/day</span></span>
+    <span class="badge orange">Partial {escape(leader_discovery['integrated_policy_partial_name'])} / {money(leader_discovery['integrated_policy_partial_pnl'])}</span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    Ten complete policies bind time/feature gate, causal selector, exit contract, and capital allocation before
+    selection begins. This is the authoritative end-to-end strategy comparison; independently winning components
+    are not stitched together afterward. Partial figures are excluded. Accepted:
+    <b>{'YES' if leader_discovery['integrated_policy_accepted'] else 'NO'}</b>; real orders: <b>NO</b>.
   </div>"""
 
     leader_html += f"""

@@ -456,6 +456,43 @@ def test_leader_dashboard_reports_capital_allocation_without_promoting_partial(
     assert not stats["capital_allocation_accepted"]
 
 
+def test_leader_dashboard_reports_integrated_policy_forward_separately(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(dashboard, "DATA", tmp_path)
+    root = tmp_path / "full_universe_rank_integrated_policies"
+    root.mkdir(parents=True)
+    (root / "status.json").write_text(
+        json.dumps(
+            {
+                "status": "collecting_integrated_policy_forward_sessions",
+                "policies": 10,
+                "eligible_sessions": 12,
+                "selection_sessions_required": 12,
+                "frozen_selection": {"policy": "morning_acceleration"},
+                "forward": {"sessions": 3, "trades": 14, "avg_daily_pnl": 7200},
+                "best_partial_diagnostic": {
+                    "policy": "opening_fast_scalp",
+                    "avg_daily_pnl": 18000,
+                    "excluded_from_evidence": True,
+                },
+                "accepted": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    stats = dashboard.leader_discovery_stats()
+
+    assert stats["integrated_policy_count"] == 10
+    assert stats["integrated_policy_sessions"] == 12
+    assert stats["integrated_policy_frozen"] == "morning_acceleration"
+    assert stats["integrated_policy_forward_sessions"] == 3
+    assert stats["integrated_policy_forward_avg_pnl"] == 7200
+    assert stats["integrated_policy_partial_name"] == "opening_fast_scalp"
+    assert not stats["integrated_policy_accepted"]
+
+
 def test_broad_rank_checkpoint_stats_distinguishes_diagnostic_and_full(tmp_path, monkeypatch):
     monkeypatch.setattr(dashboard, "DATA", tmp_path)
     first = tmp_path / "broad_rank_acceleration" / "checkpoint_1000"
