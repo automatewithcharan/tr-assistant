@@ -36,6 +36,9 @@ FEATURE_GATES = {
     "stable_buyer_depth": "stable order book and current/window buyer-seller ratio >=1.2x",
     "tight_high_turnover": "spread <=10 bps and traded value >=Rs10Cr",
     "balanced_quality": "top75, <=3% move, <=0.8% pullback, <=15bps spread and B/S >=1x",
+    "opening_ranked": "09:15-10:15, top100, +0.5% to +4%, spread <=20bps",
+    "morning_acceleration": "09:15-11:15, rank improvement >=15, acceleration >=0.10%, move <=4%",
+    "afternoon_fresh_acceleration": "11:15-14:15, rank improvement >=25, acceleration >=0.15%, move <=3.5%, pullback <=1%",
 }
 
 
@@ -67,6 +70,12 @@ def apply_feature_gate(frame: pd.DataFrame, gate: str) -> pd.DataFrame:
     spread = _number(frame, "EntrySpreadBps", 9999)
     turnover = _number(frame, "TradedValue")
     pullback = _number(frame, "PullbackFromHighPct", 9999)
+    timestamp_values = frame.get(
+        "entry_time",
+        frame.get("EntryAt", pd.Series(pd.NaT, index=frame.index)),
+    )
+    timestamps = pd.to_datetime(timestamp_values, errors="coerce")
+    minute = timestamps.dt.hour * 60 + timestamps.dt.minute
     if gate == "rapid_rank_climber":
         mask = _truthy(frame, "RapidRankClimber")
     elif gate == "top_10":
@@ -81,6 +90,28 @@ def apply_feature_gate(frame: pd.DataFrame, gate: str) -> pd.DataFrame:
         mask = _truthy(frame, "OrderBookStable") & bs.ge(1.2) & bs_median.ge(1.2)
     elif gate == "tight_high_turnover":
         mask = spread.le(10.0) & turnover.ge(100_000_000.0)
+    elif gate == "opening_ranked":
+        mask = (
+            minute.between(9 * 60 + 15, 10 * 60 + 15)
+            & rank.between(1, 100)
+            & move.between(0.5, 4.0)
+            & spread.le(20.0)
+        )
+    elif gate == "morning_acceleration":
+        mask = (
+            minute.between(9 * 60 + 15, 11 * 60 + 15)
+            & improvement.ge(15)
+            & delta.ge(0.10)
+            & move.le(4.0)
+        )
+    elif gate == "afternoon_fresh_acceleration":
+        mask = (
+            minute.between(11 * 60 + 15, 14 * 60 + 15)
+            & improvement.ge(25)
+            & delta.ge(0.15)
+            & move.le(3.5)
+            & pullback.le(1.0)
+        )
     else:
         mask = (
             rank.between(1, 75)

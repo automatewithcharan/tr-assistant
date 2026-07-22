@@ -1571,8 +1571,9 @@ def render():
     <span>Forward P&amp;L <span class="big {feature_forward_class}">{money(leader_discovery['feature_strategy_forward_avg_pnl'])}/day</span></span>
   </div>
   <div class="updated" style="margin-top:6px">
-    Nine predeclared causal gates compare all buyable labels, rapid climbers, top-10/top-25 leaders,
-    early acceleration, sector rotation, stable buyer depth, tight high-turnover books, and balanced quality.
+    Twelve predeclared causal gates compare all buyable labels, rapid climbers, top-10/top-25 leaders,
+    early acceleration, sector rotation, stable buyer depth, tight high-turnover books, balanced quality,
+    opening leaders, morning acceleration, and fresh afternoon acceleration.
     Each is capital-constrained and forward-frozen. Accepted: <b>{'YES' if leader_discovery['feature_strategy_accepted'] else 'NO'}</b>;
     real orders: <b>NO</b>.
   </div>"""

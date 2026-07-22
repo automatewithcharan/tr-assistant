@@ -82,11 +82,18 @@ def test_predeclared_feature_gates_select_only_causal_rows():
     }
     frame = pd.DataFrame([good, weak])
 
-    assert len(FEATURE_GATES) == 9
+    assert len(FEATURE_GATES) == 12
     assert apply_feature_gate(frame, "all_buyable")["Symbol"].tolist() == ["GOOD", "WEAK"]
     for gate in FEATURE_GATES:
-        if gate != "all_buyable":
+        if gate not in {"all_buyable", "afternoon_fresh_acceleration"}:
             assert apply_feature_gate(frame, gate)["Symbol"].tolist() == ["GOOD"]
+    assert apply_feature_gate(frame, "afternoon_fresh_acceleration").empty
+
+    afternoon = pd.DataFrame([{**good, "EntryAt": "2026-07-22 12:00:00"}])
+    assert apply_feature_gate(afternoon, "afternoon_fresh_acceleration")["Symbol"].tolist() == ["GOOD"]
+
+    no_timestamp = pd.DataFrame([{key: value for key, value in good.items() if key != "EntryAt"}])
+    assert apply_feature_gate(no_timestamp, "opening_ranked").empty
 
 
 def test_feature_gate_selection_freezes_before_forward_loss(tmp_path):

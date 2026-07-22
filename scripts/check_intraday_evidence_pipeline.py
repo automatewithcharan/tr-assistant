@@ -203,8 +203,8 @@ def assess(
         "gates": dict_assignment_size(root / "scripts/assess_full_rank_feature_gates.py", "FEATURE_GATES"),
         "selectors": dict_assignment_size(root / "scripts/assess_exact_full_rank_paper.py", "SELECTORS"),
     }
-    matrix_ok = matrix_counts == {"contracts": 9, "variants": 6, "gates": 9, "selectors": 4}
-    checks.append(check("predeclared_search_space", matrix_ok, "9 exit contracts, 6 timing variants, 9 feature gates, 4 selectors declared" if matrix_ok else "one or more predeclared matrices are incomplete"))
+    matrix_ok = matrix_counts == {"contracts": 9, "variants": 6, "gates": 12, "selectors": 4}
+    checks.append(check("predeclared_search_space", matrix_ok, "9 exit contracts, 6 timing variants, 12 feature gates, 4 selectors declared" if matrix_ok else "one or more predeclared matrices are incomplete"))
 
     eod = load_json(data / "intraday_evidence_pipeline" / "eod_latest.json")
     eod_status = str(eod.get("status") or "")
