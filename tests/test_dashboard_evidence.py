@@ -132,6 +132,42 @@ def test_leader_dashboard_reports_rank_migration_and_full_universe_recorder(
     assert stats["full_rank_session_eligible"] is True
 
 
+def test_leader_dashboard_reports_full_universe_rank_strategy_gate(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(dashboard, "DATA", tmp_path)
+    root = tmp_path / "full_universe_rank_strategy"
+    root.mkdir(parents=True)
+    (root / "status.json").write_text(
+        json.dumps(
+            {
+                "status": "collecting_full_session_selection_evidence",
+                "eligible_full_sessions": 3,
+                "selection_sessions_required": 12,
+                "partial_sessions": 1,
+                "executable_rows": 420,
+                "forward_stress": {
+                    "sessions": 0,
+                    "trades": 0,
+                    "avg_daily_pnl": 0.0,
+                },
+                "accepted": False,
+                "real_orders_allowed": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    stats = dashboard.leader_discovery_stats()
+
+    assert stats["full_rank_strategy_status"] == "collecting_full_session_selection_evidence"
+    assert stats["full_rank_strategy_eligible_sessions"] == 3
+    assert stats["full_rank_strategy_required_sessions"] == 12
+    assert stats["full_rank_strategy_partial_sessions"] == 1
+    assert stats["full_rank_strategy_rows"] == 420
+    assert not stats["full_rank_strategy_accepted"]
+
+
 def test_broad_rank_checkpoint_stats_distinguishes_diagnostic_and_full(tmp_path, monkeypatch):
     monkeypatch.setattr(dashboard, "DATA", tmp_path)
     first = tmp_path / "broad_rank_acceleration" / "checkpoint_1000"

@@ -393,6 +393,10 @@ def leader_discovery_stats():
     full_rank_recorder = load_json(
         DATA / "live_feature_recorder" / "full_universe_rank_status.json", {}
     )
+    full_rank_strategy = load_json(
+        DATA / "full_universe_rank_strategy" / "status.json", {}
+    )
+    full_rank_forward = full_rank_strategy.get("forward_stress", {}) or {}
     ranker_model = ranker.get("live_model", {}) or {}
     prediction_paths = sorted(
         (DATA / "frozen_microstructure_paper").glob("predictions_20*.csv")
@@ -556,6 +560,33 @@ def leader_discovery_stats():
         "full_rank_rows": int(number(full_rank_recorder, "rows_this_snapshot")),
         "full_rank_rapid": int(
             number(full_rank_recorder, "rapid_rank_climbers_this_snapshot")
+        ),
+        "full_rank_strategy_status": str(
+            full_rank_strategy.get("status") or "awaiting EOD judge"
+        ),
+        "full_rank_strategy_eligible_sessions": int(
+            number(full_rank_strategy, "eligible_full_sessions")
+        ),
+        "full_rank_strategy_required_sessions": int(
+            number(full_rank_strategy, "selection_sessions_required") or 12
+        ),
+        "full_rank_strategy_partial_sessions": int(
+            number(full_rank_strategy, "partial_sessions")
+        ),
+        "full_rank_strategy_rows": int(
+            number(full_rank_strategy, "executable_rows")
+        ),
+        "full_rank_strategy_forward_sessions": int(
+            number(full_rank_forward, "sessions")
+        ),
+        "full_rank_strategy_forward_trades": int(
+            number(full_rank_forward, "trades")
+        ),
+        "full_rank_strategy_forward_avg_pnl": number(
+            full_rank_forward, "avg_daily_pnl"
+        ),
+        "full_rank_strategy_accepted": bool(
+            full_rank_strategy.get("accepted", False)
         ),
         "evidence_accepted": False,
         "paper_promotion_allowed": False,
@@ -1190,6 +1221,27 @@ def render():
     full-session evidence: <b>{'YES' if leader_discovery['full_rank_session_eligible'] else 'NO (partial session)'}</b>.
     The top 75 and rapid rank climbers are recorded once per minute before they need to cross 5%.
     This recorder emits no Discord alerts and has no broker-order path.
+  </div>"""
+
+    full_rank_forward_class = (
+        "gain"
+        if leader_discovery["full_rank_strategy_forward_avg_pnl"] > 0
+        else "loss"
+    )
+    leader_html += f"""
+  <div class="summary" style="margin-top:10px">
+    <span>Full-rank judge <span class="big">{escape(leader_discovery['full_rank_strategy_status'])}</span></span>
+    <span>Selection sessions <span class="big">{leader_discovery['full_rank_strategy_eligible_sessions']}/{leader_discovery['full_rank_strategy_required_sessions']}</span></span>
+    <span>Partial sessions <span class="big">{leader_discovery['full_rank_strategy_partial_sessions']}</span></span>
+    <span>Executable states <span class="big">{leader_discovery['full_rank_strategy_rows']}</span></span>
+    <span>Forward trades <span class="big">{leader_discovery['full_rank_strategy_forward_trades']}</span></span>
+    <span>Forward P&amp;L <span class="big {full_rank_forward_class}">{money(leader_discovery['full_rank_strategy_forward_avg_pnl'])}/day</span></span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    Fixed before collection: +1.5%/-1.0%, expected return at least +0.20%, one unleveraged Rs 500,000 slot,
+    ten trades maximum, 0.10% additional stress, 12 complete selection sessions, then 20 untouched forward sessions.
+    Both raw recorder coverage and executable outcome coverage must pass.
+    Accepted: <b>{'YES' if leader_discovery['full_rank_strategy_accepted'] else 'NO'}</b>; real orders: <b>NO</b>.
   </div>"""
 
     live_paper_class = (
