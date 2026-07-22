@@ -106,6 +106,8 @@ def test_leader_dashboard_reports_rank_migration_and_full_universe_recorder(
             {
                 "status": "recording_full_universe_rank",
                 "recorded_at": "2026-07-22 12:00:00",
+                "first_recorded_at": "2026-07-22 09:16:00",
+                "full_session_eligible": True,
                 "universe_size": 2990,
                 "rows_this_snapshot": 75,
                 "rapid_rank_climbers_this_snapshot": 3,
@@ -126,6 +128,8 @@ def test_leader_dashboard_reports_rank_migration_and_full_universe_recorder(
     assert stats["full_rank_universe"] == 2990
     assert stats["full_rank_rows"] == 75
     assert stats["full_rank_rapid"] == 3
+    assert stats["full_rank_first_recorded_at"] == "2026-07-22 09:16:00"
+    assert stats["full_rank_session_eligible"] is True
 
 
 def test_broad_rank_checkpoint_stats_distinguishes_diagnostic_and_full(tmp_path, monkeypatch):

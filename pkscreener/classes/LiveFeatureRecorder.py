@@ -223,10 +223,34 @@ class LiveFeatureRecorder:
             if "UniverseSize" in frame.columns and not frame.empty
             else 0
         )
+        existing = {}
+        if status_path.exists():
+            try:
+                existing = json.loads(status_path.read_text(encoding="utf-8"))
+            except Exception:
+                existing = {}
+        first_recorded_at = now.strftime("%Y-%m-%d %H:%M:%S")
+        if str(existing.get("date", "")) == now.strftime("%Y-%m-%d"):
+            first_recorded_at = str(
+                existing.get("first_recorded_at")
+                or existing.get("recorded_at")
+                or first_recorded_at
+            )
+        try:
+            first_time = datetime.strptime(
+                first_recorded_at, "%Y-%m-%d %H:%M:%S"
+            )
+            full_session_eligible = (
+                first_time.hour * 60 + first_time.minute <= 9 * 60 + 20
+            )
+        except Exception:
+            full_session_eligible = False
         payload = {
             "status": "recording_full_universe_rank",
             "date": now.strftime("%Y-%m-%d"),
             "recorded_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "first_recorded_at": first_recorded_at,
+            "full_session_eligible": full_session_eligible,
             "universe_size": universe_size,
             "rows_this_snapshot": int(len(frame)),
             "rapid_rank_climbers_this_snapshot": rapid,

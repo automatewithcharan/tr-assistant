@@ -546,6 +546,12 @@ def leader_discovery_stats():
         "full_rank_recorded_at": str(
             full_rank_recorder.get("recorded_at") or "n/a"
         ),
+        "full_rank_first_recorded_at": str(
+            full_rank_recorder.get("first_recorded_at") or "n/a"
+        ),
+        "full_rank_session_eligible": bool(
+            full_rank_recorder.get("full_session_eligible", False)
+        ),
         "full_rank_universe": int(number(full_rank_recorder, "universe_size")),
         "full_rank_rows": int(number(full_rank_recorder, "rows_this_snapshot")),
         "full_rank_rapid": int(
@@ -1180,6 +1186,8 @@ def render():
   </div>
   <div class="updated" style="margin-top:6px">
     Latest full-universe rank snapshot: {escape(leader_discovery['full_rank_recorded_at'])}.
+    First snapshot: {escape(leader_discovery['full_rank_first_recorded_at'])};
+    full-session evidence: <b>{'YES' if leader_discovery['full_rank_session_eligible'] else 'NO (partial session)'}</b>.
     The top 75 and rapid rank climbers are recorded once per minute before they need to cross 5%.
     This recorder emits no Discord alerts and has no broker-order path.
   </div>"""

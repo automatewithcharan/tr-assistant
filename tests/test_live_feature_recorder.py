@@ -1,4 +1,5 @@
 import csv
+import json
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
@@ -156,6 +157,29 @@ def test_record_persists_and_throttles(tmp_path):
     assert path.exists()
     status_path = tmp_path / "live_feature_recorder" / "full_universe_rank_status.json"
     assert status_path.exists()
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    assert status["first_recorded_at"] == "2026-07-03 09:20:00"
+    assert status["full_session_eligible"] is True
+
+
+def test_rank_status_marks_midday_start_as_partial_and_preserves_first_time(tmp_path):
+    recorder = LiveFeatureRecorder(
+        output_dir=str(tmp_path), interval_seconds=0, top_gainer_pct=0.5
+    )
+    ticks = {"AAA": _tick(101.0, close=100.0)}
+
+    recorder.record(
+        ticks, alerted_symbols=set(), now=datetime(2026, 7, 3, 12, 15)
+    )
+    recorder.record(
+        ticks, alerted_symbols=set(), now=datetime(2026, 7, 3, 12, 16)
+    )
+
+    status_path = tmp_path / "live_feature_recorder" / "full_universe_rank_status.json"
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    assert status["first_recorded_at"] == "2026-07-03 12:15:00"
+    assert status["recorded_at"] == "2026-07-03 12:16:00"
+    assert status["full_session_eligible"] is False
 
 
 def test_record_atomically_widens_old_same_day_schema(tmp_path):
