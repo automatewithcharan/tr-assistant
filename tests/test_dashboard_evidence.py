@@ -238,6 +238,55 @@ def test_leader_dashboard_reports_exact_capital_strategy_gate(
     assert not stats["full_rank_exact_accepted"]
 
 
+def test_leader_dashboard_reports_contract_matrix_and_capital_gate(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(dashboard, "DATA", tmp_path)
+    live = tmp_path / "full_universe_rank_contract_matrix"
+    live.mkdir(parents=True)
+    (live / "status.json").write_text(
+        json.dumps(
+            {
+                "status": "recording_exact_exit_contract_matrix",
+                "contracts": 9,
+                "entry_labels": 40,
+                "active_contracts": 250,
+                "closed_contracts": 110,
+            }
+        ),
+        encoding="utf-8",
+    )
+    judge = tmp_path / "full_universe_rank_contract_strategy"
+    judge.mkdir(parents=True)
+    (judge / "status.json").write_text(
+        json.dumps(
+            {
+                "status": "collecting_contract_forward_sessions",
+                "eligible_sessions": 12,
+                "selection_sessions_required": 12,
+                "frozen_selection": {
+                    "contract": "t1_0_s0_5_h30",
+                    "selector": "acceleration_first",
+                },
+                "forward": {"sessions": 3, "trades": 12, "avg_daily_pnl": 3200},
+                "accepted": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    stats = dashboard.leader_discovery_stats()
+
+    assert stats["contract_matrix_status"] == "recording_exact_exit_contract_matrix"
+    assert stats["contract_matrix_contracts"] == 9
+    assert stats["contract_matrix_active"] == 250
+    assert stats["contract_strategy_sessions"] == 12
+    assert stats["contract_strategy_combination"] == "t1_0_s0_5_h30 / acceleration_first"
+    assert stats["contract_strategy_forward_sessions"] == 3
+    assert stats["contract_strategy_forward_avg_pnl"] == 3200
+    assert not stats["contract_strategy_accepted"]
+
+
 def test_broad_rank_checkpoint_stats_distinguishes_diagnostic_and_full(tmp_path, monkeypatch):
     monkeypatch.setattr(dashboard, "DATA", tmp_path)
     first = tmp_path / "broad_rank_acceleration" / "checkpoint_1000"

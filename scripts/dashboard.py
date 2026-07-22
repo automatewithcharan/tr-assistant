@@ -403,6 +403,13 @@ def leader_discovery_stats():
         DATA / "full_universe_rank_exact_strategy" / "status.json", {}
     )
     full_rank_exact_forward = full_rank_exact.get("forward", {}) or {}
+    contract_matrix = load_json(
+        DATA / "full_universe_rank_contract_matrix" / "status.json", {}
+    )
+    contract_strategy = load_json(
+        DATA / "full_universe_rank_contract_strategy" / "status.json", {}
+    )
+    contract_forward = contract_strategy.get("forward", {}) or {}
     full_rank_forward = full_rank_strategy.get("forward_stress", {}) or {}
     ranker_model = ranker.get("live_model", {}) or {}
     prediction_paths = sorted(
@@ -634,6 +641,32 @@ def leader_discovery_stats():
             full_rank_exact_forward, "avg_daily_pnl"
         ),
         "full_rank_exact_accepted": bool(full_rank_exact.get("accepted", False)),
+        "contract_matrix_status": str(
+            contract_matrix.get("status") or "awaiting live contract matrix"
+        ),
+        "contract_matrix_contracts": int(number(contract_matrix, "contracts")),
+        "contract_matrix_entries": int(number(contract_matrix, "entry_labels")),
+        "contract_matrix_active": int(number(contract_matrix, "active_contracts")),
+        "contract_matrix_closed": int(number(contract_matrix, "closed_contracts")),
+        "contract_strategy_status": str(
+            contract_strategy.get("status") or "awaiting EOD contract judge"
+        ),
+        "contract_strategy_sessions": int(
+            number(contract_strategy, "eligible_sessions")
+        ),
+        "contract_strategy_required": int(
+            number(contract_strategy, "selection_sessions_required") or 12
+        ),
+        "contract_strategy_combination": " / ".join(
+            value for value in (
+                str((contract_strategy.get("frozen_selection", {}) or {}).get("contract") or ""),
+                str((contract_strategy.get("frozen_selection", {}) or {}).get("selector") or ""),
+            ) if value
+        ) or "not frozen",
+        "contract_strategy_forward_sessions": int(number(contract_forward, "sessions")),
+        "contract_strategy_forward_trades": int(number(contract_forward, "trades")),
+        "contract_strategy_forward_avg_pnl": number(contract_forward, "avg_daily_pnl"),
+        "contract_strategy_accepted": bool(contract_strategy.get("accepted", False)),
         "evidence_accepted": False,
         "paper_promotion_allowed": False,
         "real_orders_allowed": False,
@@ -1229,6 +1262,28 @@ def render():
     Stressed lower 95% bound {leader_discovery['ranker_stress_lower95_pct']:+.3f}%.
     Accepted: <b>{'YES' if leader_discovery['ranker_accepted'] else 'NO'}</b>;
     real orders: <b>NO</b>.
+  </div>"""
+
+    contract_forward_class = (
+        "gain" if leader_discovery["contract_strategy_forward_avg_pnl"] > 0 else "loss"
+    )
+    leader_html += f"""
+  <div class="summary" style="margin-top:10px">
+    <span>Exit matrix <span class="big">{escape(leader_discovery['contract_matrix_status'])}</span></span>
+    <span>Contracts <span class="big">{leader_discovery['contract_matrix_contracts']}</span></span>
+    <span>Entries <span class="big">{leader_discovery['contract_matrix_entries']}</span></span>
+    <span>Active/closed <span class="big">{leader_discovery['contract_matrix_active']}/{leader_discovery['contract_matrix_closed']}</span></span>
+    <span>Judge <span class="big">{escape(leader_discovery['contract_strategy_status'])}</span></span>
+    <span>Selection sessions <span class="big">{leader_discovery['contract_strategy_sessions']}/{leader_discovery['contract_strategy_required']}</span></span>
+    <span>Frozen combination <span class="big">{escape(leader_discovery['contract_strategy_combination'])}</span></span>
+    <span>Forward <span class="big">{leader_discovery['contract_strategy_forward_sessions']} sessions / {leader_discovery['contract_strategy_forward_trades']} trades</span></span>
+    <span>Forward P&amp;L <span class="big {contract_forward_class}">{money(leader_discovery['contract_strategy_forward_avg_pnl'])}/day</span></span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    Nine predeclared contracts cover 0.5% fast scalps through 5% runners, each using exact ask-to-bid execution.
+    The judge tests them with the same four causal entry orderings and one reusable Rs 500,000 slot.
+    Selection and untouched-forward gates remain separate. Accepted: <b>{'YES' if leader_discovery['contract_strategy_accepted'] else 'NO'}</b>;
+    alerts: <b>NO</b>; real orders: <b>NO</b>.
   </div>"""
 
     migration_diagnostic_class = (

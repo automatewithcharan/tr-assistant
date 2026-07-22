@@ -28,6 +28,7 @@ from PKDevTools.classes.log import default_logger
 
 from pkscreener.classes.ActionableReport import ActionableReportRunner
 from pkscreener.classes.AnomalyDetector import VolumeAnomalyDetector
+from pkscreener.classes.FullUniverseRankContractMatrixObserver import FullUniverseRankContractMatrixObserver
 from pkscreener.classes.FullUniverseRankPaperObserver import FullUniverseRankPaperObserver
 from pkscreener.classes.LiveFeatureRecorder import LiveFeatureRecorder
 from pkscreener.classes.IntradayEventShadowRecorder import IntradayEventShadowRecorder
@@ -205,6 +206,9 @@ class SignalMonitorRunner:
         self.enable_full_rank_paper_observer = self._env_truthy(
             "SIGNALMONITOR_ENABLE_FULL_RANK_PAPER_OBSERVER", "1"
         )
+        self.enable_full_rank_contract_matrix = self._env_truthy(
+            "SIGNALMONITOR_ENABLE_FULL_RANK_CONTRACT_MATRIX", "1"
+        )
         self.enable_intraday_goal_mode = str(os.environ.get("SIGNALMONITOR_INTRADAY_GOAL_MODE", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
         self.goal_selector_file = str(os.environ.get("SIGNALMONITOR_GOAL_SELECTOR_FILE", "") or "").strip()
         self.goal_selector_validated = self._goal_selector_is_validated(self.goal_selector_file)
@@ -293,6 +297,14 @@ class SignalMonitorRunner:
                 stress_pct=float(os.environ.get("SIGNALMONITOR_FULL_RANK_PAPER_STRESS_PCT", "0.10") or 0.10),
             )
             if self.enable_live_feature_recorder and self.enable_full_rank_paper_observer
+            else None
+        )
+        self._full_rank_contract_matrix = (
+            FullUniverseRankContractMatrixObserver(
+                output_dir=self.output_dir,
+                stress_pct=float(os.environ.get("SIGNALMONITOR_FULL_RANK_PAPER_STRESS_PCT", "0.10") or 0.10),
+            )
+            if self.enable_live_feature_recorder and self.enable_full_rank_contract_matrix
             else None
         )
         self._last_discord_heartbeat_ts = 0.0
@@ -4240,6 +4252,7 @@ class SignalMonitorRunner:
                 f"(missed runners {missed_count}, stable OB {stable_count})"
             )
         observer = getattr(self, "_full_rank_paper_observer", None)
+        paper_events = []
         if observer is not None and getattr(self, "enable_full_rank_paper_observer", False):
             try:
                 paper_events = observer.process(rows_df, ticks, now=self.run_at)
@@ -4253,6 +4266,18 @@ class SignalMonitorRunner:
             except Exception as exc:
                 default_logger().debug(
                     f"Full-rank paper observer failed: {exc}", exc_info=True
+                )
+        contract_matrix = getattr(self, "_full_rank_contract_matrix", None)
+        if contract_matrix is not None and getattr(self, "enable_full_rank_contract_matrix", False):
+            try:
+                contract_exits = contract_matrix.process(paper_events, ticks, now=self.run_at)
+                if contract_exits:
+                    OutputControls().printOutput(
+                        f"  [+] Full-rank contract matrix: {len(contract_exits)} exact paper exit(s) (no orders)"
+                    )
+            except Exception as exc:
+                default_logger().debug(
+                    f"Full-rank contract matrix failed: {exc}", exc_info=True
                 )
         self._run_frozen_microstructure_paper_lane(rows_df, ticks)
 
