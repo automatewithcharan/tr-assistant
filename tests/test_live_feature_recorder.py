@@ -1,3 +1,4 @@
+import csv
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
@@ -155,6 +156,41 @@ def test_record_persists_and_throttles(tmp_path):
     assert path.exists()
     status_path = tmp_path / "live_feature_recorder" / "full_universe_rank_status.json"
     assert status_path.exists()
+
+
+def test_record_atomically_widens_old_same_day_schema(tmp_path):
+    recorder = LiveFeatureRecorder(
+        output_dir=str(tmp_path), interval_seconds=0, top_gainer_pct=0.5
+    )
+    now = datetime(2026, 7, 3, 9, 20)
+    path = tmp_path / "live_feature_recorder" / "live_features_2026-07-03.csv"
+    path.parent.mkdir(parents=True)
+    old_columns = [
+        column
+        for column in recorder.COLUMNS
+        if column
+        not in {
+            "UniverseSize", "DayChangeRank", "DayChangeRankPct",
+            "PreviousDayChangeRank", "RankImprovement",
+            "RankVelocityPerMinute", "DayChangeDeltaPct", "EnteredTop100",
+            "EnteredTop50", "RapidRankClimber",
+        }
+    ]
+    with path.open("w", encoding="utf-8", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(old_columns)
+        writer.writerow(["old" if column == "Symbol" else "" for column in old_columns])
+
+    recorder.record(
+        {"AAA": _tick(101.0, close=100.0)}, alerted_symbols=set(), now=now
+    )
+
+    with path.open("r", encoding="utf-8", newline="") as handle:
+        rows = list(csv.reader(handle))
+    assert rows[0] == recorder.COLUMNS
+    assert {len(row) for row in rows} == {len(recorder.COLUMNS)}
+    saved = pd.read_csv(path)
+    assert saved["Symbol"].tolist() == ["old", "AAA"]
 
 
 def test_full_universe_rank_pool_records_early_climber_before_five_percent(tmp_path):

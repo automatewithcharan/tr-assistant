@@ -6,6 +6,7 @@ it. This recorder captures those facts from Kite ticks without creating alerts
 or orders.
 """
 
+import csv
 import json
 import os
 import statistics
@@ -161,11 +162,49 @@ class LiveFeatureRecorder:
         path = self._path_for(now_dt)
         try:
             path.parent.mkdir(parents=True, exist_ok=True)
+            self._ensure_feature_schema(path)
             df.to_csv(path, mode="a", header=not path.exists(), index=False)
             self._write_rank_status(df, now_dt)
         except Exception as exc:
             default_logger().debug(f"Could not append live feature recorder rows: {exc}", exc_info=True)
         return df
+
+    def _ensure_feature_schema(self, path: Path) -> None:
+        """Atomically widen an existing daily CSV when recorder fields change."""
+        if not path.exists() or path.stat().st_size <= 0:
+            return
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            reader = csv.reader(handle)
+            old_header = next(reader, [])
+            if old_header == self.COLUMNS:
+                return
+            if not old_header or not set(old_header).issubset(set(self.COLUMNS)):
+                raise ValueError(
+                    f"unsupported live feature schema in {path}: {old_header}"
+                )
+            raw_rows = list(reader)
+
+        migrated_rows = []
+        for row in raw_rows:
+            if len(row) == len(old_header):
+                source = dict(zip(old_header, row))
+            elif len(row) == len(self.COLUMNS):
+                # A process upgraded during the session may have appended the
+                # new row shape below the old header before this migration ran.
+                source = dict(zip(self.COLUMNS, row))
+            else:
+                raise ValueError(
+                    f"unsupported row width {len(row)} in {path}; expected "
+                    f"{len(old_header)} or {len(self.COLUMNS)}"
+                )
+            migrated_rows.append([source.get(column, "") for column in self.COLUMNS])
+
+        temporary = path.with_suffix(path.suffix + ".schema_tmp")
+        with temporary.open("w", encoding="utf-8", newline="") as handle:
+            writer = csv.writer(handle)
+            writer.writerow(self.COLUMNS)
+            writer.writerows(migrated_rows)
+        os.replace(temporary, path)
 
     def _write_rank_status(self, frame: pd.DataFrame, now: datetime) -> None:
         """Persist a cheap operational view without rereading the daily tape."""
