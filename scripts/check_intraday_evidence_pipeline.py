@@ -4,11 +4,12 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import json
 import os
 import shutil
 import subprocess
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -40,13 +41,13 @@ def load_env(path: Path) -> dict[str, str]:
     return values
 
 
-def parse_ist(value: Any) -> datetime | None:
+def parse_ist(value: Any, naive_zone=IST) -> datetime | None:
     text = str(value or "").strip()
     if not text:
         return None
     try:
         parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
-        return parsed.replace(tzinfo=IST) if parsed.tzinfo is None else parsed.astimezone(IST)
+        return parsed.replace(tzinfo=naive_zone).astimezone(IST) if parsed.tzinfo is None else parsed.astimezone(IST)
     except ValueError:
         return None
 
@@ -57,6 +58,21 @@ def is_truthy(value: Any) -> bool:
 
 def check(name: str, passed: bool, detail: str, critical: bool = True) -> dict[str, Any]:
     return {"name": name, "passed": bool(passed), "critical": critical, "detail": detail}
+
+
+def dict_assignment_size(path: Path, variable_name: str) -> int:
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except Exception:
+        return 0
+    for node in tree.body:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if not any(isinstance(target, ast.Name) and target.id == variable_name for target in targets):
+            continue
+        return len(node.value.keys) if isinstance(node.value, ast.Dict) else 0
+    return 0
 
 
 def _service_active(name: str) -> bool:
@@ -134,7 +150,10 @@ def assess(
     checks.append(check("eod_schedule_installed", cron_ok, "15:35 IST weekday EOD judge installed" if cron_ok else "EOD evidence cron missing"))
 
     ticker = load_json(data / "kiteticker_all_status_latest.json")
-    ticker_at = parse_ist(ticker.get("last_tick_at") or ticker.get("last_save_at"))
+    ticker_at = parse_ist(
+        ticker.get("last_tick_at") or ticker.get("last_save_at"),
+        naive_zone=timezone.utc,
+    )
     ticker_age = (now - ticker_at).total_seconds() if ticker_at else float("inf")
     ticker_ok = bool(ticker.get("connected")) and ticker_age <= 180 and int(ticker.get("snapshot_symbols") or 0) >= 2500
     checks.append(check("live_ticks_fresh", ticker_ok, f"connected={bool(ticker.get('connected'))}, symbols={int(ticker.get('snapshot_symbols') or 0)}, age={ticker_age:.0f}s"))
@@ -169,16 +188,13 @@ def assess(
         count_detail = f", {count_key}={status.get(count_key)}" if count_key else ""
         checks.append(check(name, passed, f"age={age:.0f}s, paper_only={safe}{count_detail}"))
 
-    source_contracts = (root / "pkscreener/classes/FullUniverseRankContractMatrixObserver.py").read_text(errors="ignore")
-    source_variants = (root / "pkscreener/classes/FullUniverseRankEntryTimingObserver.py").read_text(errors="ignore")
-    source_gates = (root / "scripts/assess_full_rank_feature_gates.py").read_text(errors="ignore")
-    source_selectors = (root / "scripts/assess_exact_full_rank_paper.py").read_text(errors="ignore")
-    matrix_ok = (
-        source_contracts.count('"t') >= 9
-        and source_variants.count('"mode"') == 6
-        and source_gates.count('": "') >= 9
-        and source_selectors.count('": "') >= 4
-    )
+    matrix_counts = {
+        "contracts": dict_assignment_size(root / "pkscreener/classes/FullUniverseRankContractMatrixObserver.py", "CONTRACTS"),
+        "variants": dict_assignment_size(root / "pkscreener/classes/FullUniverseRankEntryTimingObserver.py", "ENTRY_VARIANTS"),
+        "gates": dict_assignment_size(root / "scripts/assess_full_rank_feature_gates.py", "FEATURE_GATES"),
+        "selectors": dict_assignment_size(root / "scripts/assess_exact_full_rank_paper.py", "SELECTORS"),
+    }
+    matrix_ok = matrix_counts == {"contracts": 9, "variants": 6, "gates": 9, "selectors": 4}
     checks.append(check("predeclared_search_space", matrix_ok, "9 exit contracts, 6 timing variants, 9 feature gates, 4 selectors declared" if matrix_ok else "one or more predeclared matrices are incomplete"))
 
     failures = [item for item in checks if item["critical"] and not item["passed"]]
