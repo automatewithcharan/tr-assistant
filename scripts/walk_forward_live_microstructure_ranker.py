@@ -6,48 +6,27 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+import sys
 
 import numpy as np
 import pandas as pd
 from scipy.stats import t as student_t
-from sklearn.ensemble import HistGradientBoostingRegressor
-from sklearn.impute import SimpleImputer
-from sklearn.pipeline import Pipeline
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from pkscreener.classes.FrozenMicrostructureModel import (
+    CONTRACT,
+    MODEL_FEATURES,
+    build_model,
+    save_model_artifact,
+    train_prior_session_model,
+)
 
 
 FROZEN_THROUGH = "2026-07-21"
 FORWARD_START = "2026-07-22"
-CONTRACT = "t1.5_s1.0"
-MODEL_FEATURES = [
-    "signal_minute",
-    "DayChangePct",
-    "OpenChangePct",
-    "PullbackFromHighPct",
-    "log_traded_value",
-    "BuyerSellerRatio",
-    "BuyerSellerMedianWindow",
-    "BuyerSellerMinWindow",
-    "OrderBookStable",
-    "SpreadBps",
-    "SectorAvgChangePct",
-    "SectorBreadthPct",
-    "SectorTop2Count",
-    "SectorTop5Count",
-    "MarketBreadthPct",
-    "IsTopGainerNow",
-    "MissedRunnerCandidate",
-    "SnapshotSpanMinutes",
-    "MoveAccelerationPct",
-    "MoveVelocityPctPerMinute",
-    "BuyerSellerSurge",
-    "SectorRelativePct",
-    "band_0_5_1",
-    "band_1_2",
-    "band_2_3",
-    "band_3_5",
-]
-
-
 def _bool(values: pd.Series) -> pd.Series:
     return values.fillna("").astype(str).str.strip().str.lower().isin(
         {"1", "1.0", "true", "yes", "y", "on"}
@@ -101,26 +80,6 @@ def load_outcomes(path: str, contract: str = CONTRACT) -> pd.DataFrame:
     return frame.sort_values(["date", "signal_time", "symbol"]).reset_index(drop=True)
 
 
-def _model(min_samples_leaf: int = 30) -> Pipeline:
-    return Pipeline(
-        [
-            ("imputer", SimpleImputer(strategy="median")),
-            (
-                "model",
-                HistGradientBoostingRegressor(
-                    loss="squared_error",
-                    max_iter=80,
-                    learning_rate=0.04,
-                    max_leaf_nodes=10,
-                    min_samples_leaf=int(min_samples_leaf),
-                    l2_regularization=3.0,
-                    random_state=42,
-                ),
-            ),
-        ]
-    )
-
-
 def score_walk_forward(
     frame: pd.DataFrame,
     min_train_days: int = 8,
@@ -140,7 +99,7 @@ def score_walk_forward(
             continue
         day_counts = train.groupby("date")["symbol"].transform("count").clip(lower=1)
         weights = 1.0 / day_counts.to_numpy(dtype=float)
-        model = _model(min_samples_leaf=min_samples_leaf)
+        model = build_model(min_samples_leaf=min_samples_leaf)
         model.fit(
             train[MODEL_FEATURES],
             train["trade_return_pct"],
@@ -296,6 +255,11 @@ def main() -> int:
     parser.add_argument("--min-forward-sessions", type=int, default=20)
     parser.add_argument("--min-trade-sessions", type=int, default=15)
     parser.add_argument("--min-trades", type=int, default=30)
+    parser.add_argument(
+        "--model-output",
+        default="",
+        help="Optional paper-only model artifact trained through the latest completed session",
+    )
     args = parser.parse_args()
 
     prefix = Path(args.output_prefix)
@@ -360,6 +324,28 @@ def main() -> int:
         args.min_trades,
         args.daily_goal,
     )
+    model_metadata = None
+    if args.model_output and not outcomes.empty:
+        trained_through = str(outcomes["date"].max())
+        model, model_metadata = train_prior_session_model(
+            outcomes,
+            trained_through=trained_through,
+            contract=args.contract,
+            min_train_days=args.min_train_days,
+            min_train_rows=args.min_train_rows,
+        )
+        model_metadata.update(
+            {
+                "threshold": float(args.threshold),
+                "capital": float(args.capital),
+                "slots": int(args.slots),
+                "max_trades_per_day": int(args.max_trades_per_day),
+                "target_pct": 1.5,
+                "stop_pct": 1.0,
+                "fee_pct": 0.10,
+            }
+        )
+        save_model_artifact(args.model_output, model, model_metadata)
     status = {
         "evidence": "frozen_live_microstructure_expected_return_ranker",
         "status": "accepted" if passed else "collecting_forward_evidence",
@@ -386,6 +372,7 @@ def main() -> int:
         "accepted": passed,
         "paper_promotion_allowed": passed,
         "real_orders_allowed": False,
+        "live_model": model_metadata,
     }
     prefix.with_name(prefix.name + "_status.json").write_text(
         json.dumps(status, indent=2), encoding="utf-8"

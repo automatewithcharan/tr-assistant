@@ -378,6 +378,13 @@ def leader_discovery_stats():
     ranker = load_json(
         DATA / "live_leader_continuation" / "frozen_ranker_status.json", {}
     )
+    live_paper = load_json(
+        DATA / "frozen_microstructure_paper" / "status.json", {}
+    )
+    prediction_paths = sorted(
+        (DATA / "frozen_microstructure_paper").glob("predictions_20*.csv")
+    ) if (DATA / "frozen_microstructure_paper").exists() else []
+    live_predictions = load_csv_rows(prediction_paths[-1]) if prediction_paths else []
     ranker_stress = ranker.get("forward_stress", {}) or {}
     opportunity = continuation.get("clairvoyant_opportunity_bound", {}) or {}
     rows = load_csv_rows(DATA / "live_leader_continuation" / "summary.csv")
@@ -459,6 +466,19 @@ def leader_discovery_stats():
         "ranker_stress_lower95_pct": number(ranker_stress, "lower_95_pct"),
         "ranker_stress_goal_hit_pct": number(ranker_stress, "goal_hit_pct"),
         "ranker_accepted": bool(ranker.get("accepted", False)),
+        "live_paper_status": str(live_paper.get("status") or "awaiting artifact"),
+        "live_paper_date": str(live_paper.get("date") or "n/a"),
+        "live_paper_model_through": str(
+            live_paper.get("model_trained_through") or "n/a"
+        ),
+        "live_paper_predictions": len(live_predictions),
+        "live_paper_max_score": max(
+            (number(row, "expected_return_pct") for row in live_predictions),
+            default=0.0,
+        ),
+        "live_paper_trades": int(live_paper.get("trades") or 0),
+        "live_paper_closed": int(live_paper.get("closed_trades") or 0),
+        "live_paper_net_pnl": number(live_paper, "net_pnl"),
         "evidence_accepted": False,
         "paper_promotion_allowed": False,
         "real_orders_allowed": False,
@@ -1054,6 +1074,23 @@ def render():
     Stressed lower 95% bound {leader_discovery['ranker_stress_lower95_pct']:+.3f}%.
     Accepted: <b>{'YES' if leader_discovery['ranker_accepted'] else 'NO'}</b>;
     real orders: <b>NO</b>.
+  </div>"""
+
+    live_paper_class = (
+        "gain" if leader_discovery["live_paper_net_pnl"] > 0 else "loss"
+    )
+    leader_html += f"""
+  <div class="summary" style="margin-top:10px">
+    <span>Live shadow <span class="big">{escape(leader_discovery['live_paper_status'])}</span></span>
+    <span>Predictions <span class="big">{leader_discovery['live_paper_predictions']}</span></span>
+    <span>Max score <span class="big">{leader_discovery['live_paper_max_score']:+.3f}%</span></span>
+    <span>Paper trades <span class="big">{leader_discovery['live_paper_closed']}/{leader_discovery['live_paper_trades']}</span></span>
+    <span>Net P&amp;L <span class="big {live_paper_class}">{money(leader_discovery['live_paper_net_pnl'])}</span></span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    Timestamped live paper decisions for {escape(leader_discovery['live_paper_date'])};
+    model trained only through {escape(leader_discovery['live_paper_model_through'])}.
+    Predictions are recorded before outcomes, use observed asks and bids, and cannot send alerts or broker orders.
   </div>"""
 
     backfill_html = f"""

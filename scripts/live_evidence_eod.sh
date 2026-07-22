@@ -121,6 +121,7 @@ run_event_shadow_rebuild() {
         --output-prefix "$REPO/results/Data/live_leader_continuation/frozen_ranker" \
         --contract t1.5_s1.0 --frozen-through 2026-07-21 \
         --forward-start 2026-07-22 --capital 500000 --daily-goal 10000 \
+        --model-output "$REPO/results/Data/live_leader_continuation/frozen_ranker_live_model.joblib" \
         >>"$LOG" 2>&1 || true
     local frozen_bundle="$REPO/results/Data/research_models/historical_event_family_target.joblib"
     if [ -s "$frozen_bundle" ]; then

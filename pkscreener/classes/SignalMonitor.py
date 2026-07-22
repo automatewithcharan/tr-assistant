@@ -230,6 +230,20 @@ class SignalMonitorRunner:
         self.enable_ranked_confirmation_paper = self._env_truthy(
             "SIGNALMONITOR_ENABLE_RANKED_CONFIRMATION_PAPER", "0"
         )
+        self.enable_frozen_microstructure_paper = self._env_truthy(
+            "SIGNALMONITOR_ENABLE_FROZEN_MICROSTRUCTURE_PAPER", "0"
+        )
+        self.frozen_microstructure_model_path = str(
+            os.environ.get(
+                "SIGNALMONITOR_FROZEN_MICROSTRUCTURE_MODEL",
+                os.path.join(
+                    self.output_dir,
+                    "live_leader_continuation",
+                    "frozen_ranker_live_model.joblib",
+                ),
+            )
+            or ""
+        ).strip()
         self.enable_intraday_event_shadow = self._env_truthy(
             "SIGNALMONITOR_ENABLE_EVENT_SHADOW", "0"
         )
@@ -239,6 +253,7 @@ class SignalMonitorRunner:
         self._autotrade_candidates: Dict[str, Dict[str, Any]] = self._load_autotrade_state()
         self._autotrade_order_manager = None
         self._ranked_confirmation_paper_trader = None
+        self._frozen_microstructure_paper_trader = None
         self._intraday_event_shadow = (
             IntradayEventShadowRecorder(self.output_dir)
             if self.enable_intraday_event_shadow and self.use_live_kite
@@ -4205,6 +4220,65 @@ class SignalMonitorRunner:
                 f"  [+] Live feature recorder: saved {len(rows_df)} row(s) "
                 f"(missed runners {missed_count}, stable OB {stable_count})"
             )
+        self._run_frozen_microstructure_paper_lane(rows_df, ticks)
+
+    def _run_frozen_microstructure_paper_lane(
+        self,
+        feature_rows: pd.DataFrame,
+        ticks: Dict[str, Dict[str, Any]],
+    ) -> None:
+        """Record live predictions from a model frozen through the prior session."""
+        if not getattr(self, "enable_frozen_microstructure_paper", False):
+            return
+        model_path = str(getattr(self, "frozen_microstructure_model_path", "") or "")
+        if not model_path or not os.path.isfile(model_path):
+            return
+        if self._frozen_microstructure_paper_trader is None:
+            try:
+                from pkscreener.classes.FrozenMicrostructurePaperTrader import (
+                    FrozenMicrostructurePaperTrader,
+                )
+
+                self._frozen_microstructure_paper_trader = FrozenMicrostructurePaperTrader(
+                    output_dir=self.output_dir,
+                    model_path=model_path,
+                    capital=float(os.environ.get("SIGNALMONITOR_FROZEN_PAPER_CAPITAL", "500000") or 500000),
+                    threshold=float(os.environ.get("SIGNALMONITOR_FROZEN_PAPER_THRESHOLD", "0.20") or 0.20),
+                    max_trades_per_day=int(float(os.environ.get("SIGNALMONITOR_FROZEN_PAPER_MAX_TRADES", "10") or 10)),
+                )
+            except Exception as exc:
+                default_logger().warning(
+                    f"Frozen microstructure paper model failed to load: {exc}",
+                    exc_info=True,
+                )
+                return
+        try:
+            events = self._frozen_microstructure_paper_trader.process(
+                feature_rows,
+                ticks,
+                now=self.run_at,
+            )
+        except Exception as exc:
+            default_logger().warning(
+                f"Frozen microstructure paper lane failed: {exc}",
+                exc_info=True,
+            )
+            return
+        for event in events:
+            symbol = str(event.get("symbol", "") or "").upper()
+            if event.get("event") == "paper_entry":
+                OutputControls().printOutput(
+                    f"  [+] Frozen-ranker PAPER entry {symbol} @ "
+                    f"{self._to_float(event.get('entry_price')):.2f} | expected "
+                    f"{self._to_float(event.get('expected_return_pct')):+.3f}%"
+                )
+            elif event.get("event") == "paper_exit":
+                OutputControls().printOutput(
+                    f"  [+] Frozen-ranker PAPER exit {symbol} @ "
+                    f"{self._to_float(event.get('exit_price')):.2f} | "
+                    f"{event.get('exit_reason', '')} | net Rs "
+                    f"{self._to_float(event.get('net_pnl')):+.2f}"
+                )
 
     def _record_lane_decisions(self, lane: str, rows: List[Dict[str, Any]]) -> None:
         """Shadow-record pass/reject lane decisions with current live tick context."""
