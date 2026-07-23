@@ -12,11 +12,11 @@ from scripts.assess_full_universe_rank_strategy import (
 )
 
 
-def _raw_rows(date: str, first="09:16", snapshots=300):
+def _raw_rows(date: str, first="09:16", snapshots=1440):
     start = pd.Timestamp(f"{date} {first}:00")
     return pd.DataFrame(
         {
-            "When": [start + pd.Timedelta(minutes=index) for index in range(snapshots)],
+            "When": [start + pd.Timedelta(seconds=15 * index) for index in range(snapshots)],
             "DayChangeRank": [1] * snapshots,
             "RecorderGeneration": [5] * snapshots,
         }
@@ -27,7 +27,7 @@ def test_raw_coverage_rejects_partial_and_accepts_complete_session(tmp_path):
     partial = tmp_path / "live_features_2026-07-21.csv"
     complete = tmp_path / "live_features_2026-07-22.csv"
     _raw_rows("2026-07-21", first="12:00", snapshots=180).to_csv(partial, index=False)
-    _raw_rows("2026-07-22", snapshots=360).to_csv(complete, index=False)
+    _raw_rows("2026-07-22").to_csv(complete, index=False)
 
     coverage = raw_session_coverage([str(tmp_path / "live_features_*.csv")])
 
@@ -38,13 +38,13 @@ def test_raw_coverage_rejects_partial_and_accepts_complete_session(tmp_path):
 
 def test_raw_coverage_rejects_mid_session_recorder_gap(tmp_path):
     date = "2026-07-23"
-    first = _raw_rows(date, snapshots=180)
+    first = _raw_rows(date, snapshots=600)
     second_start = pd.Timestamp(f"{date} 12:26:00")
     second = pd.DataFrame(
         {
-            "When": [second_start + pd.Timedelta(minutes=index) for index in range(180)],
-            "DayChangeRank": [1] * 180,
-            "RecorderGeneration": [5] * 180,
+            "When": [second_start + pd.Timedelta(seconds=15 * index) for index in range(840)],
+            "DayChangeRank": [1] * 840,
+            "RecorderGeneration": [5] * 840,
         }
     )
     pd.concat([first, second], ignore_index=True).to_csv(
@@ -54,8 +54,8 @@ def test_raw_coverage_rejects_mid_session_recorder_gap(tmp_path):
     coverage = raw_session_coverage([str(tmp_path / "live_features_*.csv")])
 
     row = coverage.iloc[0]
-    assert row["snapshots"] == 360
-    assert row["max_gap_seconds"] > 150
+    assert row["snapshots"] == 1440
+    assert row["max_gap_seconds"] > 45
     assert not bool(row["continuity_ok"])
     assert not bool(row["full_session_eligible"])
 
@@ -85,7 +85,7 @@ def test_coverage_uses_only_latest_recorder_generation(tmp_path):
 
 def test_complete_older_generation_is_not_selection_eligible(tmp_path):
     path = tmp_path / "live_features_2026-07-22.csv"
-    frame = _raw_rows("2026-07-22", snapshots=360)
+    frame = _raw_rows("2026-07-22")
     frame["RecorderGeneration"] = 4
     frame.to_csv(path, index=False)
 
@@ -93,7 +93,34 @@ def test_complete_older_generation_is_not_selection_eligible(tmp_path):
 
     row = coverage.iloc[0]
     assert int(row["recorder_generation"]) == 4
-    assert int(row["snapshots"]) == 360
+    assert int(row["snapshots"]) == 1440
+    assert bool(row["continuity_ok"])
+    assert not bool(row["full_session_eligible"])
+
+
+def test_generation_five_requires_one_thousand_snapshots(tmp_path):
+    date = "2026-07-22"
+    timestamps = pd.date_range(
+        f"{date} 09:16:00",
+        f"{date} 15:15:00",
+        periods=999,
+    )
+    pd.DataFrame(
+        {
+            "When": timestamps,
+            "DayChangeRank": [1] * len(timestamps),
+            "RecorderGeneration": [5] * len(timestamps),
+        }
+    ).to_csv(tmp_path / f"live_features_{date}.csv", index=False)
+
+    coverage = raw_session_coverage(
+        [str(tmp_path / "live_features_*.csv")]
+    )
+
+    row = coverage.iloc[0]
+    assert int(row["snapshots"]) == 999
+    assert int(row["required_min_snapshots"]) == 1000
+    assert float(row["required_max_gap_seconds"]) == 45.0
     assert bool(row["continuity_ok"])
     assert not bool(row["full_session_eligible"])
 
@@ -190,7 +217,7 @@ def test_empty_replay_keeps_all_calendar_sessions():
 def test_audit_waits_for_twelve_complete_sessions_and_never_allows_orders(tmp_path):
     raw = tmp_path / "raw"
     raw.mkdir()
-    _raw_rows("2026-07-22", snapshots=360).to_csv(
+    _raw_rows("2026-07-22").to_csv(
         raw / "live_features_2026-07-22.csv", index=False
     )
     status = run_audit(
@@ -253,7 +280,7 @@ def test_audit_freezes_selection_once_then_scores_only_later_sessions(tmp_path):
     selection_dates = pd.bdate_range("2026-06-01", periods=12)
     for timestamp in selection_dates:
         date = timestamp.strftime("%Y-%m-%d")
-        _raw_rows(date, snapshots=360).to_csv(
+        _raw_rows(date).to_csv(
             raw / f"live_features_{date}.csv", index=False
         )
         all_outcomes.extend(_outcome_rows(date))
@@ -281,7 +308,7 @@ def test_audit_freezes_selection_once_then_scores_only_later_sessions(tmp_path):
     frozen_before = (output / "frozen_selection.json").read_text(encoding="utf-8")
 
     forward_date = pd.bdate_range(selection_dates[-1] + pd.Timedelta(days=1), periods=1)[0].strftime("%Y-%m-%d")
-    _raw_rows(forward_date, snapshots=360).to_csv(
+    _raw_rows(forward_date).to_csv(
         raw / f"live_features_{forward_date}.csv", index=False
     )
     pd.DataFrame(all_outcomes + _outcome_rows(forward_date)).to_csv(

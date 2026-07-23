@@ -281,7 +281,7 @@ def run_audit(
     max_trades_per_day: int = 10,
     selection_sessions_required: int = 12,
     forward_sessions_required: int = 20,
-    min_snapshots: int = 300,
+    min_snapshots: int = 1000,
 ) -> dict:
     output_dir.mkdir(parents=True, exist_ok=True)
     entries, events = load_exact_events(entry_patterns, outcome_patterns)
@@ -400,7 +400,7 @@ def main() -> int:
     parser.add_argument("--max-trades", type=int, default=10)
     parser.add_argument("--selection-sessions", type=int, default=12)
     parser.add_argument("--forward-sessions", type=int, default=20)
-    parser.add_argument("--min-snapshots", type=int, default=300)
+    parser.add_argument("--min-snapshots", type=int, default=1000)
     args = parser.parse_args()
     root = "results/Data/full_universe_rank_paper"
     status = run_audit(

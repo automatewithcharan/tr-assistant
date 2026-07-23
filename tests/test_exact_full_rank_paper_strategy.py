@@ -58,9 +58,9 @@ def _raw(date):
     start = pd.Timestamp(f"{date} 09:16:00")
     return pd.DataFrame(
         {
-            "When": [start + pd.Timedelta(minutes=i) for i in range(360)],
-            "DayChangeRank": [1] * 360,
-            "RecorderGeneration": [5] * 360,
+            "When": [start + pd.Timedelta(seconds=15 * i) for i in range(1440)],
+            "DayChangeRank": [1] * 1440,
+            "RecorderGeneration": [5] * 1440,
         }
     )
 

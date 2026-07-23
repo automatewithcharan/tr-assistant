@@ -70,6 +70,8 @@ FEATURES = [
 ]
 
 REQUIRED_RECORDER_GENERATION = 5
+REQUIRED_GENERATION_MIN_SNAPSHOTS = 1000
+REQUIRED_GENERATION_MAX_GAP_SECONDS = 45.0
 
 
 def _truthy(values: pd.Series) -> pd.Series:
@@ -91,7 +93,7 @@ def _files(patterns: Iterable[str]) -> list[str]:
 def raw_session_coverage(
     patterns: Iterable[str],
     *,
-    min_snapshots: int = 300,
+    min_snapshots: int = 1000,
     latest_minute: int = 15 * 60 + 10,
     max_gap_seconds: float = 150.0,
 ) -> pd.DataFrame:
@@ -126,7 +128,23 @@ def raw_session_coverage(
             last = pd.Timestamp(snapshots[-1])
             gaps = pd.Series(pd.to_datetime(snapshots)).diff().dt.total_seconds()
             largest_gap = float(gaps.max()) if gaps.notna().any() else 0.0
-            continuity_ok = largest_gap <= float(max_gap_seconds)
+            effective_max_gap = (
+                min(
+                    float(max_gap_seconds),
+                    REQUIRED_GENERATION_MAX_GAP_SECONDS,
+                )
+                if recorder_generation == REQUIRED_RECORDER_GENERATION
+                else float(max_gap_seconds)
+            )
+            effective_min_snapshots = (
+                max(
+                    int(min_snapshots),
+                    REQUIRED_GENERATION_MIN_SNAPSHOTS,
+                )
+                if recorder_generation == REQUIRED_RECORDER_GENERATION
+                else int(min_snapshots)
+            )
+            continuity_ok = largest_gap <= effective_max_gap
             first_minute = first.hour * 60 + first.minute
             last_minute = last.hour * 60 + last.minute
             rows.append(
@@ -137,6 +155,10 @@ def raw_session_coverage(
                     "first_snapshot": str(first),
                     "last_snapshot": str(last),
                     "max_gap_seconds": round(largest_gap, 3),
+                    "required_max_gap_seconds": round(
+                        effective_max_gap, 3
+                    ),
+                    "required_min_snapshots": effective_min_snapshots,
                     "continuity_ok": bool(continuity_ok),
                     "recorder_generation": int(recorder_generation),
                     "full_session_eligible": bool(
@@ -144,7 +166,7 @@ def raw_session_coverage(
                         and
                         first_minute <= 9 * 60 + 20
                         and last_minute >= int(latest_minute)
-                        and len(snapshots) >= int(min_snapshots)
+                        and len(snapshots) >= effective_min_snapshots
                         and continuity_ok
                     ),
                 }
@@ -154,6 +176,7 @@ def raw_session_coverage(
             columns=[
                 "date", "source", "snapshots", "first_snapshot",
                 "last_snapshot", "max_gap_seconds", "continuity_ok",
+                "required_max_gap_seconds", "required_min_snapshots",
                 "recorder_generation", "full_session_eligible",
             ]
         )
@@ -642,7 +665,7 @@ def main() -> int:
     parser.add_argument("--stress-cost-pct", type=float, default=0.10)
     parser.add_argument("--max-trades-per-day", type=int, default=10)
     parser.add_argument("--selection-sessions", type=int, default=12)
-    parser.add_argument("--min-snapshots", type=int, default=300)
+    parser.add_argument("--min-snapshots", type=int, default=1000)
     args = parser.parse_args()
     status = run_audit(
         outcome_patterns=args.outcome_glob

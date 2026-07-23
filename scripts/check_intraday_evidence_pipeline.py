@@ -121,7 +121,7 @@ def live_rank_session_coverage(path: Path, session_date: str) -> dict[str, Any]:
         "last_snapshot": ordered[-1],
         "max_gap_seconds": max(gaps, default=0.0),
         "opening_covered": first.hour * 60 + first.minute <= 9 * 60 + 20,
-        "continuity_ok": max(gaps, default=0.0) <= 150.0,
+        "continuity_ok": max(gaps, default=0.0) <= 45.0,
     }
 
 
@@ -295,10 +295,29 @@ def assess(
         / f"live_features_{now.strftime('%Y-%m-%d')}.csv",
         now.strftime("%Y-%m-%d"),
     )
+    progress_start = now.replace(hour=9, minute=20, second=0, microsecond=0)
+    progress_end = min(
+        now,
+        now.replace(hour=15, minute=10, second=0, microsecond=0),
+    )
+    progress_seconds = max(
+        0.0, (progress_end - progress_start).total_seconds()
+    )
+    required_snapshots_so_far = min(
+        1000,
+        max(2, int(progress_seconds * 1000 / (350 * 60))),
+    )
+    last_snapshot_age = (
+        (now - live_coverage["last_snapshot"]).total_seconds()
+        if live_coverage["last_snapshot"] is not None
+        else float("inf")
+    )
     coverage_ok = (
-        live_coverage["snapshots"] >= 2
+        live_coverage["recorder_generation"] == 5
+        and live_coverage["snapshots"] >= required_snapshots_so_far
         and live_coverage["opening_covered"]
         and live_coverage["continuity_ok"]
+        and last_snapshot_age <= 45.0
     )
     first_snapshot = live_coverage["first_snapshot"]
     last_snapshot = live_coverage["last_snapshot"]
@@ -311,7 +330,9 @@ def assess(
                 f"generation={live_coverage['recorder_generation'] or 'legacy'}, "
                 f"first={first_snapshot.strftime('%H:%M:%S') if first_snapshot else 'missing'}, "
                 f"last={last_snapshot.strftime('%H:%M:%S') if last_snapshot else 'missing'}, "
-                f"max_gap={live_coverage['max_gap_seconds']:.0f}s"
+                f"max_gap={live_coverage['max_gap_seconds']:.0f}s, "
+                f"required_so_far={required_snapshots_so_far}, "
+                f"last_age={last_snapshot_age:.0f}s"
                 + ("" if live_market else "; continuity not required outside live market")
             ),
         )
