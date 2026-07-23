@@ -436,7 +436,9 @@ class SignalMonitorRunner:
             self._record_live_feature_snapshot(pd.DataFrame(columns=self.ALERT_COLUMNS))
             summary_df = self._build_summary_from_simple(previous_simple_df, total, 0)
             summary_df = self._annotate_summary_timing(summary_df, cycle_started, 0)
-            _, scorecard_df = self.performance_tracker.register_and_update()
+            scorecard_df = None
+            if self.performance_tracker is not None:
+                _, scorecard_df = self.performance_tracker.register_and_update()
             self._save_outputs(
                 pd.DataFrame(),
                 pd.DataFrame(),

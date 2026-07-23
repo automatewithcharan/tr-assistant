@@ -66,6 +66,46 @@ def test_paper_tracking_env_override_can_enable_fast_mode(monkeypatch):
     assert runner.enable_paper_tracking is True
 
 
+def test_no_changed_symbols_does_not_require_scorecard(monkeypatch):
+    runner = SignalMonitorRunner.__new__(SignalMonitorRunner)
+    runner.universe = "all"
+    runner.limit = 0
+    runner.streaming_mode = True
+    runner.use_live_kite = True
+    runner._preload_done = True
+    runner._cycle_number = 1
+    runner.reset_state = False
+    runner.performance_tracker = None
+    runner.ALERT_COLUMNS = SignalMonitorRunner.ALERT_COLUMNS
+    runner.actionable_runner = SimpleNamespace(
+        get_universe_symbols=lambda: ["ABC"],
+    )
+
+    monkeypatch.setattr(runner, "_load_previous_state", lambda: pd.DataFrame())
+    monkeypatch.setattr(runner, "_load_previous_simple", lambda: pd.DataFrame())
+    monkeypatch.setattr(runner, "_select_symbols_for_cycle", lambda symbols, previous: [])
+    monkeypatch.setattr(runner, "_record_intraday_event_shadow", lambda: None)
+    monkeypatch.setattr(runner, "_run_leader_ignition_lane", lambda: pd.DataFrame())
+    monkeypatch.setattr(runner, "_send_leader_ignition_shadow_alerts", lambda frame: None)
+    monkeypatch.setattr(runner, "_record_live_feature_snapshot", lambda frame: None)
+    monkeypatch.setattr(
+        runner,
+        "_build_summary_from_simple",
+        lambda previous, total, alerts: pd.DataFrame([{"ScannedSymbols": total}]),
+    )
+    monkeypatch.setattr(runner, "_annotate_summary_timing", lambda summary, started, scanned: summary)
+    monkeypatch.setattr(runner, "_save_outputs", lambda *args: None)
+    monkeypatch.setattr(runner, "_print_summary", lambda *args: None)
+    monkeypatch.setattr(runner, "_close_paper_trades_if_eod", lambda: None)
+    monkeypatch.setattr(runner, "_evaluate_event_shadow_outcomes_if_eod", lambda: None)
+
+    _, _, alerts, summary = runner.run()
+
+    assert alerts.empty
+    assert int(summary.iloc[0]["ScannedSymbols"]) == 1
+    assert runner._cycle_number == 2
+
+
 def _alert(symbol: str, action: str, strength: float) -> dict:
     return {
         "When": "2026-05-08 10:15:00",
