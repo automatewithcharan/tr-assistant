@@ -137,6 +137,7 @@ class KiteTickerStreamRunner:
 
         self._symbols: List[str] = []
         self._token_to_symbol: Dict[int, str] = {}
+        self._token_to_exchange: Dict[int, str] = {}
         self._ticks_by_symbol: Dict[str, Dict] = {}
         self._status: Dict[str, object] = {}
         self._connected_event = threading.Event()
@@ -247,7 +248,7 @@ class KiteTickerStreamRunner:
         """Map symbol list to official NSE and BSE instrument tokens."""
         self.session_manager.ensure_fresh_session()
         client = self.session_manager._build_client()
-        symbol_to_token: Dict[str, int] = {}
+        symbol_to_instrument: Dict[str, Tuple[int, str]] = {}
 
         for exchange in ("NSE", "BSE"):
             try:
@@ -263,25 +264,30 @@ class KiteTickerStreamRunner:
                         try:
                             sym = str(row["tradingsymbol"]).strip().upper()
                             # NSE tokens take priority over BSE for dual-listed
-                            if sym not in symbol_to_token or exchange == "NSE":
-                                symbol_to_token[sym] = int(row["instrument_token"])
+                            if sym not in symbol_to_instrument or exchange == "NSE":
+                                symbol_to_instrument[sym] = (
+                                    int(row["instrument_token"]),
+                                    exchange,
+                                )
                         except Exception:
                             continue
             except Exception as exc:
                 default_logger().debug(f"Failed to fetch {exchange} instruments for ticker: {exc}")
 
-        if not symbol_to_token:
+        if not symbol_to_instrument:
             return [], list(symbols)
 
         tokens: List[int] = []
         missing: List[str] = []
         for symbol in symbols:
-            token = symbol_to_token.get(str(symbol).strip().upper())
-            if token is None:
+            instrument = symbol_to_instrument.get(str(symbol).strip().upper())
+            if instrument is None:
                 missing.append(str(symbol).strip().upper())
                 continue
+            token, exchange = instrument
             tokens.append(token)
             self._token_to_symbol[int(token)] = str(symbol).strip().upper()
+            self._token_to_exchange[int(token)] = str(exchange).strip().upper()
 
         # The shared intraday event lane needs same-bar benchmark context.
         # NIFTY 50's Kite instrument token is stable and index-only; it cannot
@@ -295,10 +301,15 @@ class KiteTickerStreamRunner:
             if benchmark_token not in tokens:
                 tokens.append(benchmark_token)
             self._token_to_symbol[benchmark_token] = benchmark_symbol
+            self._token_to_exchange[benchmark_token] = "NSE"
 
         # Persist the latest mapping for inspection/debugging.
         mapping_rows = [
-            {"Symbol": symbol, "InstrumentToken": token}
+            {
+                "Symbol": symbol,
+                "InstrumentToken": token,
+                "Exchange": self._token_to_exchange.get(token, ""),
+            }
             for token, symbol in self._token_to_symbol.items()
         ]
         if mapping_rows:
@@ -348,6 +359,9 @@ class KiteTickerStreamRunner:
         return {
             "symbol": symbol,
             "instrument_token": tick.get("instrument_token"),
+            "exchange": self._token_to_exchange.get(
+                int(tick.get("instrument_token") or 0), ""
+            ),
             "mode": tick.get("mode", ""),
             "last_price": tick.get("last_price"),
             "change": tick.get("change"),

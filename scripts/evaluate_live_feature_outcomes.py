@@ -208,7 +208,12 @@ def feature_bucket(row: pd.Series) -> str:
     sector_top2 = float(row.get("SectorTop2Count", 0) or 0) >= 2
     last_price = float(row.get("LastPrice", 0) or 0)
     traded_value = float(row.get("TradedValue", 0) or 0)
-    tradeable = last_price >= 50.0 and traded_value >= 30_000_000.0
+    exchange = str(row.get("Exchange", "") or "").strip().upper()
+    tradeable = (
+        exchange == "NSE"
+        and last_price >= 50.0
+        and traded_value >= 30_000_000.0
+    )
     if missed and stable and executable_spread and sector not in {"", "UNKNOWN"} and sector_top2 and tradeable:
         return "missed_stable_executable_known_sector"
     if missed and stable:

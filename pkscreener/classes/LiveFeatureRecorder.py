@@ -29,12 +29,14 @@ except Exception:
 class LiveFeatureRecorder:
     """Persist live microstructure/context rows for later research."""
 
-    GENERATION = 5
+    GENERATION = 6
 
     COLUMNS = [
         "When",
         "Bucket",
         "RecorderGeneration",
+        "Exchange",
+        "InstrumentToken",
         "Symbol",
         "Sector",
         "LastPrice",
@@ -552,6 +554,10 @@ class LiveFeatureRecorder:
                     "When": now_dt.strftime("%Y-%m-%d %H:%M:%S"),
                     "Bucket": self._bucket(now_dt),
                     "RecorderGeneration": int(self.GENERATION),
+                    "Exchange": str(tick.get("exchange", "") or "").upper(),
+                    "InstrumentToken": int(
+                        self._to_float(tick.get("instrument_token"))
+                    ),
                     "Symbol": symbol,
                     "Sector": sector,
                     "LastPrice": round(price, 2),

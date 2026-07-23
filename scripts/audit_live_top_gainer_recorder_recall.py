@@ -43,8 +43,12 @@ def executable_feature_mask(
     bid = _number(frame, "BestBid")
     ask = _number(frame, "BestAsk")
     spread = _number(frame, "SpreadBps")
+    exchange = frame.get(
+        "Exchange", pd.Series("", index=frame.index)
+    ).fillna("").astype(str).str.strip().str.upper()
     return (
-        price.ge(float(min_price))
+        exchange.eq("NSE")
+        & price.ge(float(min_price))
         & turnover.ge(float(min_turnover))
         & bid.gt(0.0)
         & ask.gt(bid)
@@ -66,6 +70,9 @@ def first_feature_blockers(
         return "not_seen"
     row = frame.iloc[[0]]
     blockers = []
+    exchange = str(row.get("Exchange", pd.Series([""])).iloc[0] or "").upper()
+    if exchange != "NSE":
+        blockers.append("exchange_cost_model")
     if float(_number(row, "LastPrice").iloc[0] or 0.0) < float(min_price):
         blockers.append("price")
     if float(_number(row, "TradedValue").iloc[0] or 0.0) < float(min_turnover):

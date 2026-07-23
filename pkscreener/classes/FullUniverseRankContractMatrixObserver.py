@@ -33,7 +33,7 @@ class FullUniverseRankContractMatrixObserver:
     """Track fixed exit contracts independently from the same paper entry."""
 
     REGISTRATION_COLUMNS = [
-        "EventId", "Date", "EntryAt", "RecorderGeneration", "Symbol",
+        "EventId", "Date", "EntryAt", "RecorderGeneration", "Exchange", "Symbol",
         "Cohort", "Source",
         "EntryAsk", "EntryBid", "Quantity", "Capital", "DayChangePct",
         "DayChangeRank", "RankImprovement", "RankVelocityPerMinute",
@@ -41,7 +41,7 @@ class FullUniverseRankContractMatrixObserver:
     ]
     OUTCOME_COLUMNS = [
         "MatrixId", "EventId", "Contract", "Date", "EntryAt",
-        "RecorderGeneration", "ExitAt", "Symbol", "Cohort", "Source",
+        "RecorderGeneration", "Exchange", "ExitAt", "Symbol", "Cohort", "Source",
         "EntryAsk", "ExitBid", "Quantity",
         "TargetPct", "StopPct", "HorizonMinutes", "ExitReason", "HoldMinutes",
         "GrossReturnPct", "StressPct", "NetReturnPct", "GrossPnl",
@@ -116,6 +116,9 @@ class FullUniverseRankContractMatrixObserver:
                     "RecorderGeneration": int(
                         self._number(event.get("RecorderGeneration"))
                     ),
+                    "Exchange": str(
+                        event.get("Exchange", "") or ""
+                    ).strip().upper(),
                     "Symbol": str(event.get("Symbol", "") or "").upper(),
                     "Cohort": str(event.get("Cohort", "") or ""),
                     "Source": str(event.get("Source", "") or ""),
@@ -168,6 +171,9 @@ class FullUniverseRankContractMatrixObserver:
                 "RecorderGeneration": int(
                     self._number(entry.get("RecorderGeneration"))
                 ),
+                "Exchange": str(
+                    entry.get("Exchange", "") or ""
+                ).strip().upper(),
                 "ExitAt": now.strftime("%Y-%m-%d %H:%M:%S"),
                 "Symbol": entry["Symbol"],
                 "Cohort": entry["Cohort"],

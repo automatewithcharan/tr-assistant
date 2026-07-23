@@ -243,7 +243,7 @@ def assess(
         and int(recorder.get("universe_size") or 0) >= 2500
         and int(recorder.get("rows_this_snapshot") or 0) >= 75
         and float(recorder.get("interval_seconds") or 0) <= 20
-        and int(recorder.get("recorder_generation") or 0) >= 5
+        and int(recorder.get("recorder_generation") or 0) == 6
         and int(recorder.get("leader_pool_size") or 0) >= 200
         and recorder_safe
     )
@@ -313,7 +313,7 @@ def assess(
         else float("inf")
     )
     coverage_ok = (
-        live_coverage["recorder_generation"] == 5
+        live_coverage["recorder_generation"] == 6
         and live_coverage["snapshots"] >= required_snapshots_so_far
         and live_coverage["opening_covered"]
         and live_coverage["continuity_ok"]

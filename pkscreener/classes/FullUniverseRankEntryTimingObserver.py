@@ -36,23 +36,26 @@ class FullUniverseRankEntryTimingObserver:
 
     REGISTRATION_COLUMNS = [
         "TimingId", "EventId", "Variant", "Date", "SignalAt",
-        "RecorderGeneration", "Symbol", "Cohort", "Source", "SignalAsk",
+        "RecorderGeneration", "Exchange", "Symbol", "Cohort", "Source",
+        "SignalAsk",
         "TriggerPrice", "ExpiresAt",
     ]
     FILL_COLUMNS = [
         "TimingId", "EventId", "Variant", "Date", "SignalAt", "EntryAt",
-        "RecorderGeneration", "Symbol", "Cohort", "Source", "SignalAsk",
+        "RecorderGeneration", "Exchange", "Symbol", "Cohort", "Source",
+        "SignalAsk",
         "EntryAsk", "EntryBid", "Quantity", "Capital", "TargetPrice",
         "StopPrice", "EntryDelayMinutes",
     ]
     NONFILL_COLUMNS = [
         "TimingId", "EventId", "Variant", "Date", "SignalAt", "ResolvedAt",
-        "RecorderGeneration", "Symbol", "SignalAsk", "Reason", "BestAskSeen",
+        "RecorderGeneration", "Exchange", "Symbol", "SignalAsk", "Reason",
+        "BestAskSeen",
         "WorstAskSeen",
     ]
     OUTCOME_COLUMNS = [
         "TimingId", "EventId", "Variant", "Date", "SignalAt", "EntryAt",
-        "RecorderGeneration", "ExitAt", "Symbol", "Cohort", "Source",
+        "RecorderGeneration", "Exchange", "ExitAt", "Symbol", "Cohort", "Source",
         "SignalAsk", "EntryAsk", "ExitBid", "Quantity", "ExitReason",
         "EntryDelayMinutes", "HoldMinutes", "GrossReturnPct", "StressPct",
         "NetReturnPct", "GrossPnl", "StressCost", "NetPnl", "TargetPrice",
@@ -142,6 +145,9 @@ class FullUniverseRankEntryTimingObserver:
                     "RecorderGeneration": int(
                         self._number(event.get("RecorderGeneration"))
                     ),
+                    "Exchange": str(
+                        event.get("Exchange", "") or ""
+                    ).strip().upper(),
                     "ExpiresTs": expires_ts,
                     "Symbol": str(event.get("Symbol", "") or "").upper(),
                     "Cohort": str(event.get("Cohort", "") or ""),
@@ -165,6 +171,9 @@ class FullUniverseRankEntryTimingObserver:
                         "RecorderGeneration": int(
                             self._number(waiting.get("RecorderGeneration"))
                         ),
+                        "Exchange": str(
+                            waiting.get("Exchange", "") or ""
+                        ).strip().upper(),
                         "Symbol": waiting["Symbol"],
                         "Cohort": waiting["Cohort"],
                         "Source": waiting["Source"],
@@ -205,6 +214,9 @@ class FullUniverseRankEntryTimingObserver:
                     "RecorderGeneration": int(
                         self._number(candidate.get("RecorderGeneration"))
                     ),
+                    "Exchange": str(
+                        candidate.get("Exchange", "") or ""
+                    ).strip().upper(),
                     "Symbol": candidate["Symbol"],
                     "SignalAsk": candidate["SignalAsk"],
                     "Reason": "eod_unfilled" if eod else "entry_window_expired",
@@ -250,6 +262,9 @@ class FullUniverseRankEntryTimingObserver:
                 "RecorderGeneration": int(
                     self._number(candidate.get("RecorderGeneration"))
                 ),
+                "Exchange": str(
+                    candidate.get("Exchange", "") or ""
+                ).strip().upper(),
                 "EntryAt": now.strftime("%Y-%m-%d %H:%M:%S"),
                 "EntryTs": now.timestamp(),
                 "EntryAsk": round(entry_price, 2),
@@ -313,6 +328,9 @@ class FullUniverseRankEntryTimingObserver:
                 "RecorderGeneration": int(
                     self._number(position.get("RecorderGeneration"))
                 ),
+                "Exchange": str(
+                    position.get("Exchange", "") or ""
+                ).strip().upper(),
                 "ExitAt": now.strftime("%Y-%m-%d %H:%M:%S"),
                 "Symbol": position["Symbol"],
                 "Cohort": position["Cohort"],

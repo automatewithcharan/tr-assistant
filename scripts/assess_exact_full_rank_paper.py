@@ -93,6 +93,12 @@ def load_exact_events(
     entry_data = entry_data[
         entry_data["RecorderGeneration"].eq(REQUIRED_RECORDER_GENERATION)
     ].copy()
+    if "Exchange" not in entry_data.columns:
+        entry_data["Exchange"] = ""
+    entry_data["Exchange"] = (
+        entry_data["Exchange"].fillna("").astype(str).str.strip().str.upper()
+    )
+    entry_data = entry_data[entry_data["Exchange"].eq("NSE")].copy()
     entry_data = entry_data.drop_duplicates("EventId", keep="first").copy()
     if entry_data.empty:
         return pd.DataFrame(), pd.DataFrame()

@@ -69,7 +69,7 @@ FEATURES = [
     "move_band_3_5",
 ]
 
-REQUIRED_RECORDER_GENERATION = 5
+REQUIRED_RECORDER_GENERATION = 6
 REQUIRED_GENERATION_MIN_SNAPSHOTS = 1000
 REQUIRED_GENERATION_MAX_GAP_SECONDS = 45.0
 
@@ -195,7 +195,7 @@ def load_rank_outcomes(
 ) -> pd.DataFrame:
     frames = []
     required = {
-        "Date", "When", "Symbol", "OutcomeAvailable", "EntryPrice",
+        "Date", "When", "Symbol", "Exchange", "OutcomeAvailable", "EntryPrice",
         "LastPrice", "BestBid", "BestAsk", "SpreadBps", "SpreadOk",
         "TradedValue", "DayChangePct", "DayChangeRank",
         "RankEvidenceBucket", f"{CONTRACT}_return_pct",
@@ -217,6 +217,9 @@ def load_rank_outcomes(
     data = pd.concat(frames, ignore_index=True)
     data["date"] = data["Date"].astype(str)
     data["symbol"] = data["Symbol"].astype(str).str.strip().str.upper()
+    data["exchange"] = (
+        data["Exchange"].fillna("").astype(str).str.strip().str.upper()
+    )
     data["signal_time"] = pd.to_datetime(data["When"], errors="coerce")
     data["exit_time"] = pd.to_datetime(
         data[f"{CONTRACT}_exit_time"], errors="coerce"
@@ -263,7 +266,8 @@ def load_rank_outcomes(
     data["move_band_3_5"] = rank_bucket.str.contains("m3_5", regex=False).astype(float)
 
     executable = (
-        data["OutcomeAvailable"].gt(0)
+        data["exchange"].eq("NSE")
+        & data["OutcomeAvailable"].gt(0)
         & data["signal_time"].notna()
         & data["exit_time"].notna()
         & data["trade_return_pct"].notna()
@@ -299,7 +303,8 @@ def rank_outcome_coverage(
         except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError):
             continue
         required = {
-            "Date", "RankEvidenceBucket", "OutcomeAvailable", "EntryPrice",
+            "Date", "Exchange", "RankEvidenceBucket", "OutcomeAvailable",
+            "EntryPrice",
             "BestBid", "BestAsk", "SpreadBps", "SpreadOk", "TradedValue",
             "DayChangePct",
         }
@@ -324,8 +329,12 @@ def rank_outcome_coverage(
     data["available"] = _truthy(data["OutcomeAvailable"])
     data["spread_ok"] = _truthy(data["SpreadOk"])
     data["rank_state"] = data["RankEvidenceBucket"].fillna("").astype(str)
+    data["exchange"] = (
+        data["Exchange"].fillna("").astype(str).str.strip().str.upper()
+    )
     data["candidate"] = (
-        data["rank_state"].ne("no_rank_state")
+        data["exchange"].eq("NSE")
+        & data["rank_state"].ne("no_rank_state")
         & data["EntryPrice"].ge(50.0)
         & data["TradedValue"].ge(30_000_000.0)
         & data["spread_ok"]

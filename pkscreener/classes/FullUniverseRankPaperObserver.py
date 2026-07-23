@@ -23,7 +23,8 @@ class FullUniverseRankPaperObserver:
     """Persist ask-entry/bid-exit outcomes for predefined rank cohorts."""
 
     ENTRY_COLUMNS = [
-        "EventId", "Date", "EntryAt", "RecorderGeneration", "Symbol", "Sector",
+        "EventId", "Date", "EntryAt", "RecorderGeneration", "Exchange",
+        "InstrumentToken", "Symbol", "Sector",
         "Cohort", "Source",
         "EntryAsk", "EntryBid", "EntrySpreadBps", "Quantity", "Capital",
         "TargetPrice", "StopPrice", "TargetPct", "StopPct", "HorizonMinutes",
@@ -114,8 +115,10 @@ class FullUniverseRankPaperObserver:
             price = self._number(row.get("LastPrice"))
             traded_value = self._number(row.get("TradedValue"))
             day_change = self._number(row.get("DayChangePct"))
+            exchange = str(row.get("Exchange", "") or "").strip().upper()
             if not (
                 symbol
+                and exchange == "NSE"
                 and price >= self.min_price
                 and traded_value >= self.min_traded_value
                 and 0.5 <= day_change <= 5.0
@@ -143,6 +146,10 @@ class FullUniverseRankPaperObserver:
                 "EntryAt": now.strftime("%Y-%m-%d %H:%M:%S"),
                 "EntryTs": now.timestamp(),
                 "RecorderGeneration": recorder_generation,
+                "Exchange": exchange,
+                "InstrumentToken": int(
+                    self._number(row.get("InstrumentToken"))
+                ),
                 "Symbol": symbol,
                 "Sector": str(row.get("Sector", "") or "UNKNOWN"),
                 "Cohort": cohort,
