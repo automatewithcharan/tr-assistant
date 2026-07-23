@@ -242,8 +242,8 @@ def assess(
         and recorder_age <= 180
         and int(recorder.get("universe_size") or 0) >= 2500
         and int(recorder.get("rows_this_snapshot") or 0) >= 75
-        and float(recorder.get("interval_seconds") or 0) <= 60
-        and int(recorder.get("recorder_generation") or 0) >= 4
+        and float(recorder.get("interval_seconds") or 0) <= 20
+        and int(recorder.get("recorder_generation") or 0) >= 5
         and int(recorder.get("leader_pool_size") or 0) >= 200
         and recorder_safe
     )

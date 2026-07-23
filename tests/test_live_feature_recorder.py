@@ -338,7 +338,6 @@ def test_leader_pool_cannot_be_crowded_out_by_supplemental_rows(tmp_path):
 def test_default_discovery_pool_guarantees_top_200(tmp_path):
     recorder = LiveFeatureRecorder(
         output_dir=str(tmp_path),
-        interval_seconds=0,
         top_gainer_pct=50.0,
         stability_window=10,
     )
@@ -359,9 +358,10 @@ def test_default_discovery_pool_guarantees_top_200(tmp_path):
     )
 
     assert recorder.leader_pool_size == 200
+    assert recorder.interval_seconds == 15.0
     assert len(rows) == 200
     assert {row["DayChangeRank"] for row in rows} == set(range(1, 201))
-    assert {row["RecorderGeneration"] for row in rows} == {4}
+    assert {row["RecorderGeneration"] for row in rows} == {5}
 
 
 def test_rapid_climbers_make_row_limit_a_soft_cap(tmp_path):

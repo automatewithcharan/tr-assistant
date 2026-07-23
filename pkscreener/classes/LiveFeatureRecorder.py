@@ -29,7 +29,7 @@ except Exception:
 class LiveFeatureRecorder:
     """Persist live microstructure/context rows for later research."""
 
-    GENERATION = 4
+    GENERATION = 5
 
     COLUMNS = [
         "When",
@@ -113,7 +113,7 @@ class LiveFeatureRecorder:
     def __init__(
         self,
         output_dir: str,
-        interval_seconds: float = 60.0,
+        interval_seconds: float = 15.0,
         top_gainer_pct: float = 5.0,
         stability_window: int = 3,
         min_stable_bs_ratio: float = 2.0,

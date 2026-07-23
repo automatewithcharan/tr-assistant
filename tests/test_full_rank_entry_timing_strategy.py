@@ -14,7 +14,7 @@ def _entry(date, symbol, minute):
         "EventId": f"{date}:{symbol}:cohort",
         "Date": date,
         "EntryAt": when,
-        "RecorderGeneration": 4,
+        "RecorderGeneration": 5,
         "Symbol": symbol,
         "Cohort": "rapid:r1_10:m1_2",
         "Source": "rapid_rank_climber",
@@ -66,7 +66,7 @@ def _raw(date):
         {
             "When": [start + pd.Timedelta(minutes=i) for i in range(360)],
             "DayChangeRank": [1] * 360,
-            "RecorderGeneration": [4] * 360,
+            "RecorderGeneration": [5] * 360,
         }
     )
 

@@ -278,7 +278,7 @@ class SignalMonitorRunner:
         self._live_feature_recorder = (
             LiveFeatureRecorder(
                 output_dir=self.output_dir,
-                interval_seconds=float(os.environ.get("SIGNALMONITOR_LIVE_FEATURE_INTERVAL_SECONDS", "60") or 60),
+                interval_seconds=float(os.environ.get("SIGNALMONITOR_LIVE_FEATURE_INTERVAL_SECONDS", "15") or 15),
                 top_gainer_pct=float(os.environ.get("SIGNALMONITOR_LIVE_FEATURE_TOP_GAINER_PCT", "5.0") or 5.0),
                 stability_window=int(float(os.environ.get("SIGNALMONITOR_LIVE_FEATURE_STABILITY_WINDOW", "3") or 3)),
                 min_stable_bs_ratio=float(os.environ.get("SIGNALMONITOR_LIVE_FEATURE_MIN_STABLE_BS", "2.0") or 2.0),

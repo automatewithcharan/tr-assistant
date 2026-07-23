@@ -17,7 +17,7 @@ def _entry(date, symbol, minute, rank=1, velocity=10.0):
         "EventId": f"{date}:{symbol}:cohort",
         "Date": date,
         "EntryAt": when,
-        "RecorderGeneration": 4,
+        "RecorderGeneration": 5,
         "Symbol": symbol,
         "Cohort": "rapid_rank_climber:r1_10:m1_2",
         "Source": "rapid_rank_climber",
@@ -60,7 +60,7 @@ def _raw(date):
         {
             "When": [start + pd.Timedelta(minutes=i) for i in range(360)],
             "DayChangeRank": [1] * 360,
-            "RecorderGeneration": [4] * 360,
+            "RecorderGeneration": [5] * 360,
         }
     )
 
@@ -87,7 +87,7 @@ def test_load_and_coverage_require_an_exact_exit_for_every_entry(tmp_path):
 def test_exact_loader_rejects_entries_from_older_recorder_generation(tmp_path):
     date = "2026-07-22"
     current = _entry(date, "CURRENT", 0)
-    legacy = {**_entry(date, "LEGACY", 1), "RecorderGeneration": 3}
+    legacy = {**_entry(date, "LEGACY", 1), "RecorderGeneration": 4}
     pd.DataFrame([current, legacy]).to_csv(tmp_path / "entries.csv", index=False)
     pd.DataFrame([_outcome(current), _outcome(legacy)]).to_csv(
         tmp_path / "outcomes.csv", index=False
@@ -100,7 +100,7 @@ def test_exact_loader_rejects_entries_from_older_recorder_generation(tmp_path):
 
     assert entries["Symbol"].tolist() == ["CURRENT"]
     assert events["Symbol"].tolist() == ["CURRENT"]
-    assert entries["RecorderGeneration"].tolist() == [4]
+    assert entries["RecorderGeneration"].tolist() == [5]
 
 
 def test_one_slot_replay_uses_causal_selector_and_skips_overlaps(tmp_path):

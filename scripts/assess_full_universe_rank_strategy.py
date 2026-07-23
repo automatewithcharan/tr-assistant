@@ -69,7 +69,7 @@ FEATURES = [
     "move_band_3_5",
 ]
 
-REQUIRED_RECORDER_GENERATION = 4
+REQUIRED_RECORDER_GENERATION = 5
 
 
 def _truthy(values: pd.Series) -> pd.Series:

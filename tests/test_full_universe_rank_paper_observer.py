@@ -24,7 +24,7 @@ def _tick(bid=100.0, ask=100.1, price=100.05):
 def _rows(**overrides):
     row = {
         "Symbol": "AAA",
-        "RecorderGeneration": 4,
+        "RecorderGeneration": 5,
         "LastPrice": 100.05,
         "DayChangePct": 1.2,
         "DayChangeRank": 12,
@@ -53,8 +53,8 @@ def test_registers_only_buyable_rank_cohort_at_observed_ask(tmp_path):
     assert events[0]["event"] == "entry"
     assert events[0]["EntryAsk"] == 100.1
     assert events[0]["EntryBid"] == 100.0
-    assert events[0]["RecorderGeneration"] == 4
-    assert ":g4:" in events[0]["EventId"]
+    assert events[0]["RecorderGeneration"] == 5
+    assert ":g5:" in events[0]["EventId"]
     assert events[0]["Cohort"] == "rapid_rank_climber:r11_25:m1_2"
     assert events[0]["Quantity"] == int(500000 // 100.1)
     assert json.loads(observer.status_path.read_text())["real_orders_allowed"] is False
