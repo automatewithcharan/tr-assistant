@@ -31,7 +31,7 @@ def fixture_root(tmp_path: Path, base_status: str = "complete") -> tuple[Path, f
             {"status": "collecting", "real_orders_allowed": False},
             fresh,
         )
-    coverage = tmp_path / "results/Data/full_universe_rank_strategy/coverage.csv"
+    coverage = tmp_path / "results/Data/full_universe_rank_strategy/session_coverage.csv"
     coverage.parent.mkdir(parents=True, exist_ok=True)
     coverage.write_text(
         "date,full_session_eligible,max_gap_seconds\n2026-07-23,True,60\n",
@@ -59,7 +59,7 @@ def test_coverage_failure_is_processed_but_not_selection_evidence(tmp_path):
 
 def test_complete_labels_do_not_override_partial_rank_session(tmp_path):
     root, cutoff = fixture_root(tmp_path)
-    coverage = root / "results/Data/full_universe_rank_strategy/coverage.csv"
+    coverage = root / "results/Data/full_universe_rank_strategy/session_coverage.csv"
     coverage.write_text(
         "date,full_session_eligible,max_gap_seconds\n2026-07-23,False,60\n",
         encoding="utf-8",

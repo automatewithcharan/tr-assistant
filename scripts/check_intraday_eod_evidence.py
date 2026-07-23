@@ -75,7 +75,7 @@ def assess(root: Path, session_date: str, cutoff_epoch: float) -> dict[str, Any]
     )
 
     rank_coverage_path = (
-        root / "results/Data/full_universe_rank_strategy/coverage.csv"
+        root / "results/Data/full_universe_rank_strategy/session_coverage.csv"
     )
     rank_coverage_fresh = (
         rank_coverage_path.exists()
