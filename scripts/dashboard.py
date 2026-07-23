@@ -543,10 +543,25 @@ def leader_discovery_stats():
         "full_rank_runner_events_5": int(number(five_pct, "FullRankRunnerEvents")),
         "full_rank_seen_before_5": number(five_pct, "FullRankSeenBeforeCrossPct"),
         "full_rank_early_band_5": number(five_pct, "FullRankBand0_5To3RecallPct"),
+        "full_rank_buyable_before_5": number(
+            five_pct, "FullRankBuyableSeenBeforeCrossPct"
+        ),
+        "full_rank_buyable_early_band_5": number(
+            five_pct, "FullRankBuyableBand0_5To3RecallPct"
+        ),
         "full_rank_runner_events_10": int(number(ten_pct, "FullRankRunnerEvents")),
         "full_rank_seen_before_10": number(ten_pct, "FullRankSeenBeforeCrossPct"),
         "full_rank_early_band_10": number(ten_pct, "FullRankBand0_5To3RecallPct"),
+        "full_rank_buyable_before_10": number(
+            ten_pct, "FullRankBuyableSeenBeforeCrossPct"
+        ),
+        "full_rank_buyable_early_band_10": number(
+            ten_pct, "FullRankBuyableBand0_5To3RecallPct"
+        ),
         "full_rank_lead_10": number(ten_pct, "FullRankMedianLeadMinutes"),
+        "full_rank_buyable_lead_10": number(
+            ten_pct, "FullRankBuyableMedianLeadMinutes"
+        ),
         "forward_start": str(continuation.get("frozen_forward_start") or "n/a"),
         "evaluated_states": int(continuation.get("evaluated_candidate_states") or 0),
         "forward_states": int(continuation.get("forward_candidate_states") or 0),
@@ -1521,14 +1536,21 @@ def render():
     <span>5% runners <span class="big">{leader_discovery['full_rank_runner_events_5']}</span></span>
     <span>Seen before 5% <span class="big">{leader_discovery['full_rank_seen_before_5']:.1f}%</span></span>
     <span>Seen at 0.5-3% <span class="big">{leader_discovery['full_rank_early_band_5']:.1f}%</span></span>
+    <span>Buyable before 5% <span class="big">{leader_discovery['full_rank_buyable_before_5']:.1f}%</span></span>
+    <span>Buyable at 0.5-3% <span class="big">{leader_discovery['full_rank_buyable_early_band_5']:.1f}%</span></span>
     <span>10% runners <span class="big">{leader_discovery['full_rank_runner_events_10']}</span></span>
     <span>Seen before 10% <span class="big">{leader_discovery['full_rank_seen_before_10']:.1f}%</span></span>
     <span>Seen at 0.5-3% <span class="big">{leader_discovery['full_rank_early_band_10']:.1f}%</span></span>
-    <span>Lead <span class="big">{leader_discovery['full_rank_lead_10']:.0f} min</span></span>
+    <span>Buyable before 10% <span class="big">{leader_discovery['full_rank_buyable_before_10']:.1f}%</span></span>
+    <span>Buyable at 0.5-3% <span class="big">{leader_discovery['full_rank_buyable_early_band_10']:.1f}%</span></span>
+    <span>Observed lead <span class="big">{leader_discovery['full_rank_lead_10']:.0f} min</span></span>
+    <span>Buyable lead <span class="big">{leader_discovery['full_rank_buyable_lead_10']:.0f} min</span></span>
   </div>
   <div class="updated" style="margin-top:6px">
     This denominator includes only sessions where the new full-universe rank recorder was active near the open.
-    Legacy selective-recorder history cannot inflate these recall figures. Future runner labels remain diagnostic only.
+    “Seen” measures discovery; “buyable” additionally requires contemporaneous price, turnover, executable
+    bid/ask, and spread gates. Legacy selective-recorder history cannot inflate these recall figures.
+    Future runner labels remain diagnostic only.
   </div>"""
 
     leader_html += f"""
