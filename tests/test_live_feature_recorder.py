@@ -335,6 +335,64 @@ def test_leader_pool_cannot_be_crowded_out_by_supplemental_rows(tmp_path):
     assert status["leader_pool_recall_pct"] == 100.0
 
 
+def test_rapid_climbers_make_row_limit_a_soft_cap(tmp_path):
+    recorder = LiveFeatureRecorder(
+        output_dir=str(tmp_path),
+        interval_seconds=0,
+        top_gainer_pct=50.0,
+        stability_window=10,
+        leader_pool_size=5,
+        max_rows_per_cycle=10,
+        rapid_rank_improvement=5,
+        rapid_change_delta_pct=0.15,
+    )
+    start = datetime(2026, 7, 3, 9, 20)
+    initial_ticks = {
+        f"S{index:03d}": _tick(
+            100.0 + index / 100.0,
+            close=100.0,
+            buy_qty=100000,
+            sell_qty=100000,
+        )
+        for index in range(1, 41)
+    }
+    recorder.build_rows(
+        initial_ticks, alerted_symbols=set(), now=start
+    )
+
+    moved_ticks = dict(initial_ticks)
+    for index in range(1, 21):
+        moved_ticks[f"S{index:03d}"] = _tick(
+            104.0 + index / 100.0,
+            close=100.0,
+            buy_qty=100000,
+            sell_qty=100000,
+        )
+    frame = recorder.record(
+        moved_ticks,
+        alerted_symbols=set(),
+        now=start + timedelta(minutes=1),
+    )
+    rows = frame.to_dict(orient="records")
+
+    rapid_rows = [row for row in rows if row["RapidRankClimber"]]
+    assert len(rapid_rows) == 20
+    assert len(rows) == 20
+    assert len(rows) > recorder.max_rows_per_cycle
+    assert {row["DayChangeRank"] for row in rows[:5]} == set(range(1, 6))
+
+    status = json.loads(
+        (
+            tmp_path
+            / "live_feature_recorder"
+            / "full_universe_rank_status.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert status["rapid_candidates_this_snapshot"] == 20
+    assert status["rapid_recorded_this_snapshot"] == 20
+    assert status["rapid_recall_pct"] == 100.0
+
+
 def test_record_decisions_persists_enriched_lane_journal(tmp_path):
     recorder = LiveFeatureRecorder(output_dir=str(tmp_path), interval_seconds=60, top_gainer_pct=5.0)
     now = datetime(2026, 7, 3, 9, 20, 7)

@@ -29,7 +29,7 @@ except Exception:
 class LiveFeatureRecorder:
     """Persist live microstructure/context rows for later research."""
 
-    GENERATION = 2
+    GENERATION = 3
 
     COLUMNS = [
         "When",
@@ -143,6 +143,7 @@ class LiveFeatureRecorder:
         self._rank_state: Dict[str, Dict[str, Any]] = {}
         self._decision_seen: Set[Tuple[str, str, str, str, str, str]] = set()
         self._last_leader_pool_candidate_count = 0
+        self._last_rapid_candidate_count = 0
 
     def record(
         self,
@@ -239,6 +240,14 @@ class LiveFeatureRecorder:
         leader_pool_candidates = int(
             getattr(self, "_last_leader_pool_candidate_count", 0) or 0
         )
+        rapid_recorded = (
+            int(frame["RapidRankClimber"].astype(bool).sum())
+            if "RapidRankClimber" in frame.columns
+            else 0
+        )
+        rapid_candidates = int(
+            getattr(self, "_last_rapid_candidate_count", 0) or 0
+        )
         existing = {}
         if status_path.exists():
             try:
@@ -281,6 +290,13 @@ class LiveFeatureRecorder:
                 leader_pool_recorded * 100.0 / leader_pool_candidates, 2
             )
             if leader_pool_candidates > 0
+            else 100.0,
+            "rapid_candidates_this_snapshot": rapid_candidates,
+            "rapid_recorded_this_snapshot": rapid_recorded,
+            "rapid_recall_pct": round(
+                rapid_recorded * 100.0 / rapid_candidates, 2
+            )
+            if rapid_candidates > 0
             else 100.0,
             "recorder_generation": int(self.GENERATION),
             "interval_seconds": float(self.interval_seconds),
@@ -603,7 +619,26 @@ class LiveFeatureRecorder:
             }
             for symbol in rank_map
         }
-        return rows[: self.max_rows_per_cycle]
+        mandatory_rows = [
+            row
+            for row in rows
+            if bool(row["RapidRankClimber"])
+            or (
+                int(row["DayChangeRank"] or 999999) <= self.leader_pool_size
+                and float(row["DayChangePct"] or 0.0) >= 0.5
+            )
+        ]
+        self._last_rapid_candidate_count = sum(
+            bool(row["RapidRankClimber"]) for row in rows
+        )
+        mandatory_ids = {id(row) for row in mandatory_rows}
+        supplemental_rows = [
+            row for row in rows if id(row) not in mandatory_ids
+        ]
+        supplemental_slots = max(
+            0, self.max_rows_per_cycle - len(mandatory_rows)
+        )
+        return mandatory_rows + supplemental_rows[:supplemental_slots]
 
     @staticmethod
     def best_bid_ask(tick: Dict[str, Any]) -> Tuple[float, float]:
