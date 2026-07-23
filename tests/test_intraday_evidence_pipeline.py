@@ -46,7 +46,7 @@ def fixture_root(tmp_path: Path) -> tuple[Path, datetime]:
     data = tmp_path / "results/Data"
     stamp = "2026-07-23 10:00:00"
     write(data / "kiteticker_all_status_latest.json", {"connected": True, "started_at": "2026-07-23 03:30:00", "last_tick_at": "2026-07-23 04:30:00", "snapshot_symbols": 2860})
-    write(data / "live_feature_recorder/full_universe_rank_status.json", {"status": "recording_full_universe_rank", "date": "2026-07-23", "recorded_at": stamp, "universe_size": 2860, "rows_this_snapshot": 200, "interval_seconds": 60, "alerts_allowed": False, "real_orders_allowed": False})
+    write(data / "live_feature_recorder/full_universe_rank_status.json", {"status": "recording_full_universe_rank", "date": "2026-07-23", "recorded_at": stamp, "universe_size": 2860, "rows_this_snapshot": 200, "interval_seconds": 60, "recorder_generation": 2, "leader_pool_candidates_this_snapshot": 75, "leader_pool_recorded_this_snapshot": 75, "leader_pool_recall_pct": 100.0, "alerts_allowed": False, "real_orders_allowed": False})
     write(
         data / "live_feature_recorder/live_features_2026-07-23.csv",
         "When,DayChangeRank\n"
@@ -135,6 +135,28 @@ def test_live_readiness_uses_only_latest_recorder_generation(tmp_path):
     assert continuity["passed"] is False
     assert "generation=2" in continuity["detail"]
     assert "first=09:45:00" in continuity["detail"]
+
+
+def test_missing_leader_pool_row_blocks_live_readiness(tmp_path):
+    root, now = fixture_root(tmp_path)
+    status_path = (
+        root
+        / "results/Data/live_feature_recorder/full_universe_rank_status.json"
+    )
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    status["leader_pool_recorded_this_snapshot"] = 74
+    status["leader_pool_recall_pct"] = 98.67
+    write(status_path, status)
+
+    result = run(root, now)
+
+    recall = next(
+        item for item in result["checks"]
+        if item["name"] == "rank_leader_pool_recall"
+    )
+    assert result["status"] == "operational_issues_detected"
+    assert recall["passed"] is False
+    assert "recorded=74/75" in recall["detail"]
 
 
 def test_post_close_stale_feeds_are_expected_when_eod_completed(tmp_path):

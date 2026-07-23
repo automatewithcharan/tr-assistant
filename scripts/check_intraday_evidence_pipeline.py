@@ -243,9 +243,33 @@ def assess(
         and int(recorder.get("universe_size") or 0) >= 2500
         and int(recorder.get("rows_this_snapshot") or 0) >= 75
         and float(recorder.get("interval_seconds") or 0) <= 60
+        and int(recorder.get("recorder_generation") or 0) >= 2
         and recorder_safe
     )
-    checks.append(check("rank_recorder_fresh", recorder_ok or not live_market, f"universe={int(recorder.get('universe_size') or 0)}, rows={int(recorder.get('rows_this_snapshot') or 0)}, age={recorder_age:.0f}s, paper_only={recorder_safe}" + ("" if live_market else "; freshness not required outside live market")))
+    checks.append(check("rank_recorder_fresh", recorder_ok or not live_market, f"universe={int(recorder.get('universe_size') or 0)}, rows={int(recorder.get('rows_this_snapshot') or 0)}, generation={int(recorder.get('recorder_generation') or 0)}, age={recorder_age:.0f}s, paper_only={recorder_safe}" + ("" if live_market else "; freshness not required outside live market")))
+
+    leader_candidates = int(
+        recorder.get("leader_pool_candidates_this_snapshot") or 0
+    )
+    leader_recorded = int(
+        recorder.get("leader_pool_recorded_this_snapshot") or 0
+    )
+    leader_recall_ok = (
+        leader_candidates > 0
+        and leader_recorded == leader_candidates
+        and float(recorder.get("leader_pool_recall_pct") or 0.0) == 100.0
+    )
+    checks.append(
+        check(
+            "rank_leader_pool_recall",
+            leader_recall_ok or not live_market,
+            (
+                f"recorded={leader_recorded}/{leader_candidates}, "
+                f"recall={float(recorder.get('leader_pool_recall_pct') or 0.0):.1f}%"
+                + ("" if live_market else "; recall not required outside live market")
+            ),
+        )
+    )
 
     live_coverage = live_rank_session_coverage(
         data

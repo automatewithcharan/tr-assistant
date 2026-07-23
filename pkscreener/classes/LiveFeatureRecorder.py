@@ -142,6 +142,7 @@ class LiveFeatureRecorder:
         self._rank_date = ""
         self._rank_state: Dict[str, Dict[str, Any]] = {}
         self._decision_seen: Set[Tuple[str, str, str, str, str, str]] = set()
+        self._last_leader_pool_candidate_count = 0
 
     def record(
         self,
@@ -226,6 +227,18 @@ class LiveFeatureRecorder:
             if "UniverseSize" in frame.columns and not frame.empty
             else 0
         )
+        leader_pool_recorded = 0
+        if not frame.empty and {"DayChangeRank", "DayChangePct"}.issubset(
+            frame.columns
+        ):
+            ranks = pd.to_numeric(frame["DayChangeRank"], errors="coerce")
+            moves = pd.to_numeric(frame["DayChangePct"], errors="coerce")
+            leader_pool_recorded = int(
+                (ranks.le(self.leader_pool_size) & moves.ge(0.5)).sum()
+            )
+        leader_pool_candidates = int(
+            getattr(self, "_last_leader_pool_candidate_count", 0) or 0
+        )
         existing = {}
         if status_path.exists():
             try:
@@ -262,6 +275,13 @@ class LiveFeatureRecorder:
             "rows_this_snapshot": int(len(frame)),
             "rapid_rank_climbers_this_snapshot": rapid,
             "leader_pool_size": int(self.leader_pool_size),
+            "leader_pool_candidates_this_snapshot": leader_pool_candidates,
+            "leader_pool_recorded_this_snapshot": leader_pool_recorded,
+            "leader_pool_recall_pct": round(
+                leader_pool_recorded * 100.0 / leader_pool_candidates, 2
+            )
+            if leader_pool_candidates > 0
+            else 100.0,
             "recorder_generation": int(self.GENERATION),
             "interval_seconds": float(self.interval_seconds),
             "alerts_allowed": False,
@@ -403,6 +423,11 @@ class LiveFeatureRecorder:
             ranked_symbols.append((symbol, self._day_change_pct(tick)))
         ranked_symbols.sort(key=lambda item: (-item[1], item[0]))
         universe_size = len(ranked_symbols)
+        self._last_leader_pool_candidate_count = sum(
+            1
+            for rank, (_, change) in enumerate(ranked_symbols, start=1)
+            if rank <= self.leader_pool_size and change >= 0.5
+        )
         rank_map = {
             symbol: rank
             for rank, (symbol, _) in enumerate(ranked_symbols, start=1)

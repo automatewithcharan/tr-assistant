@@ -320,6 +320,20 @@ def test_leader_pool_cannot_be_crowded_out_by_supplemental_rows(tmp_path):
         LiveFeatureRecorder.GENERATION
     }
 
+    recorder.record(
+        ticks, alerted_symbols=set(), now=start + timedelta(minutes=2)
+    )
+    status = json.loads(
+        (
+            tmp_path
+            / "live_feature_recorder"
+            / "full_universe_rank_status.json"
+        ).read_text(encoding="utf-8")
+    )
+    assert status["leader_pool_candidates_this_snapshot"] == 10
+    assert status["leader_pool_recorded_this_snapshot"] == 10
+    assert status["leader_pool_recall_pct"] == 100.0
+
 
 def test_record_decisions_persists_enriched_lane_journal(tmp_path):
     recorder = LiveFeatureRecorder(output_dir=str(tmp_path), interval_seconds=60, top_gainer_pct=5.0)
