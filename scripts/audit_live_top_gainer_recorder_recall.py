@@ -37,7 +37,21 @@ def load_features(pattern: str) -> dict[str, pd.DataFrame]:
             frame.get("DayChangeRank", pd.Series(np.nan, index=frame.index)),
             errors="coerce",
         )
-        frame["FullUniverseRankRecorder"] = universe.ge(2500) & rank.notna()
+        generation = pd.to_numeric(
+            frame.get(
+                "RecorderGeneration", pd.Series(np.nan, index=frame.index)
+            ),
+            errors="coerce",
+        )
+        current_generation = pd.Series(True, index=frame.index)
+        if generation.notna().any():
+            dates = frame["When"].dt.date.astype(str)
+            newest_by_date = generation.groupby(dates).transform("max")
+            current_generation = generation.eq(newest_by_date)
+        frame["RecorderGeneration"] = generation
+        frame["FullUniverseRankRecorder"] = (
+            universe.ge(2500) & rank.notna() & current_generation
+        )
         frame = frame.dropna(subset=["When", "Symbol", "OpenChangePct"])
         for symbol, group in frame.groupby("Symbol", sort=False):
             date = str(group.iloc[0]["When"].date())
