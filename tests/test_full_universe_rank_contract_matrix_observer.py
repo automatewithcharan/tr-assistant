@@ -83,6 +83,29 @@ def test_contracts_close_independently_at_target_and_timeout(tmp_path):
     assert saved["RecorderGeneration"].tolist() == [5, 5]
 
 
+def test_legacy_active_contract_without_generation_still_closes(tmp_path):
+    contracts = {
+        "fast": {
+            "target_pct": 0.5,
+            "stop_pct": 0.5,
+            "horizon_minutes": 15,
+        }
+    }
+    observer = FullUniverseRankContractMatrixObserver(
+        str(tmp_path), contracts=contracts
+    )
+    now = datetime(2026, 7, 22, 9, 20)
+    observer.process([_entry(now)], {"AAA": _tick(100.0)}, now=now)
+    next(iter(observer.active.values())).pop("RecorderGeneration")
+
+    outcomes = observer.process(
+        [], {"AAA": _tick(100.7)}, now=now + timedelta(minutes=5)
+    )
+
+    assert outcomes[0]["RecorderGeneration"] == 0
+    assert outcomes[0]["ExitReason"] == "target"
+
+
 def test_registration_ledger_widens_old_same_day_schema(tmp_path):
     observer = FullUniverseRankContractMatrixObserver(str(tmp_path))
     now = datetime(2026, 7, 22, 9, 20)

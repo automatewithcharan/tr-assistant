@@ -162,7 +162,9 @@ class FullUniverseRankEntryTimingObserver:
                         "Variant": name,
                         "Date": waiting["Date"],
                         "SignalAt": waiting["SignalAt"],
-                        "RecorderGeneration": waiting["RecorderGeneration"],
+                        "RecorderGeneration": int(
+                            self._number(waiting.get("RecorderGeneration"))
+                        ),
                         "Symbol": waiting["Symbol"],
                         "Cohort": waiting["Cohort"],
                         "Source": waiting["Source"],
@@ -200,7 +202,9 @@ class FullUniverseRankEntryTimingObserver:
                     "Date": candidate["Date"],
                     "SignalAt": candidate["SignalAt"],
                     "ResolvedAt": now.strftime("%Y-%m-%d %H:%M:%S"),
-                    "RecorderGeneration": candidate["RecorderGeneration"],
+                    "RecorderGeneration": int(
+                        self._number(candidate.get("RecorderGeneration"))
+                    ),
                     "Symbol": candidate["Symbol"],
                     "SignalAsk": candidate["SignalAsk"],
                     "Reason": "eod_unfilled" if eod else "entry_window_expired",
@@ -243,6 +247,9 @@ class FullUniverseRankEntryTimingObserver:
             delay = max(0.0, (now.timestamp() - float(candidate["SignalTs"])) / 60.0)
             position = {
                 **candidate,
+                "RecorderGeneration": int(
+                    self._number(candidate.get("RecorderGeneration"))
+                ),
                 "EntryAt": now.strftime("%Y-%m-%d %H:%M:%S"),
                 "EntryTs": now.timestamp(),
                 "EntryAsk": round(entry_price, 2),
@@ -303,7 +310,9 @@ class FullUniverseRankEntryTimingObserver:
                 "Date": position["Date"],
                 "SignalAt": position["SignalAt"],
                 "EntryAt": position["EntryAt"],
-                "RecorderGeneration": position["RecorderGeneration"],
+                "RecorderGeneration": int(
+                    self._number(position.get("RecorderGeneration"))
+                ),
                 "ExitAt": now.strftime("%Y-%m-%d %H:%M:%S"),
                 "Symbol": position["Symbol"],
                 "Cohort": position["Cohort"],

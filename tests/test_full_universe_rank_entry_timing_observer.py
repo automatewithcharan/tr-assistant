@@ -113,6 +113,44 @@ def test_filled_variant_exits_at_bid_and_unfilled_variant_expires(tmp_path):
     assert exited[0]["RecorderGeneration"] == 5
 
 
+def test_legacy_waiting_and_position_without_generation_still_resolve(tmp_path):
+    variants = {
+        "dip": {
+            "mode": "dip",
+            "offset_pct": 0.5,
+            "entry_window_minutes": 30,
+        },
+        "confirm": {
+            "mode": "confirm",
+            "offset_pct": 1.0,
+            "entry_window_minutes": 15,
+        },
+    }
+    observer = FullUniverseRankEntryTimingObserver(
+        str(tmp_path), variants=variants
+    )
+    now = datetime(2026, 7, 22, 9, 20)
+    observer.process([_entry(now)], {"AAA": _tick(99.9, 100.0)}, now=now)
+    for candidate in observer.waiting.values():
+        candidate.pop("RecorderGeneration")
+    filled = observer.process(
+        [], {"AAA": _tick(99.35, 99.4)}, now=now + timedelta(minutes=2)
+    )
+    assert filled[0]["RecorderGeneration"] == 0
+
+    expired = observer.process(
+        [], {"AAA": _tick(99.8, 99.9)}, now=now + timedelta(minutes=16)
+    )
+    assert expired[0]["RecorderGeneration"] == 0
+
+    position = next(iter(observer.positions.values()))
+    position.pop("RecorderGeneration", None)
+    exited = observer.process(
+        [], {"AAA": _tick(101.1, 101.2)}, now=now + timedelta(minutes=20)
+    )
+    assert exited[0]["RecorderGeneration"] == 0
+
+
 def test_restart_preserves_waiting_positions_and_prevents_duplicate(tmp_path):
     now = datetime(2026, 7, 22, 9, 20)
     first = FullUniverseRankEntryTimingObserver(str(tmp_path))

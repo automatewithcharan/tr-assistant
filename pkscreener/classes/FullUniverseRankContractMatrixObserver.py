@@ -165,7 +165,9 @@ class FullUniverseRankContractMatrixObserver:
                 "Contract": entry["Contract"],
                 "Date": entry["Date"],
                 "EntryAt": entry["EntryAt"],
-                "RecorderGeneration": entry["RecorderGeneration"],
+                "RecorderGeneration": int(
+                    self._number(entry.get("RecorderGeneration"))
+                ),
                 "ExitAt": now.strftime("%Y-%m-%d %H:%M:%S"),
                 "Symbol": entry["Symbol"],
                 "Cohort": entry["Cohort"],
