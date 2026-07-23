@@ -3,11 +3,21 @@ import json
 import pandas as pd
 
 from scripts.project_intraday_capital_growth import (
+    DEFAULT_STRATEGIES,
     load_validated_strategy,
     project_months,
     required_capital_table,
     run_projection,
 )
+
+
+def test_default_projection_includes_complete_capital_constrained_judges():
+    assert DEFAULT_STRATEGIES["capital_allocation"].endswith(
+        "full_universe_rank_capital_allocation/status.json"
+    )
+    assert DEFAULT_STRATEGIES["integrated_policy"].endswith(
+        "full_universe_rank_integrated_policies/status.json"
+    )
 
 
 def _status(path, *, accepted, sessions=20, avg_return=0.5, lower=0.1):

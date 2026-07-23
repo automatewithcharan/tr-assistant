@@ -16,6 +16,8 @@ DEFAULT_STRATEGIES = {
     "exit_contract": "results/Data/full_universe_rank_contract_strategy/status.json",
     "entry_timing": "results/Data/full_universe_rank_entry_strategy/status.json",
     "feature_gate": "results/Data/full_universe_rank_feature_strategy/status.json",
+    "capital_allocation": "results/Data/full_universe_rank_capital_allocation/status.json",
+    "integrated_policy": "results/Data/full_universe_rank_integrated_policies/status.json",
     "full_rank_model": "results/Data/full_universe_rank_strategy/status.json",
 }
 SCENARIO_DAILY_RETURNS = (0.0, 0.25, 0.50, 1.0, 2.0)
