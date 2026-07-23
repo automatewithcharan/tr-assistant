@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import os
 from datetime import date as date_type
@@ -39,6 +40,20 @@ def load_json(path: Path) -> dict[str, Any]:
         return {}
 
 
+def rank_session_coverage(path: Path, session_date: str) -> tuple[bool, bool]:
+    """Return whether the date exists and is an uninterrupted full session."""
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+    except Exception:
+        return False, False
+    matches = [row for row in rows if str(row.get("date") or "") == session_date]
+    if not matches:
+        return False, False
+    value = str(matches[-1].get("full_session_eligible") or "").strip().lower()
+    return True, value in {"1", "1.0", "true", "yes", "y", "on"}
+
+
 def assess(root: Path, session_date: str, cutoff_epoch: float) -> dict[str, Any]:
     checks = []
     base_path = (
@@ -56,6 +71,27 @@ def assess(root: Path, session_date: str, cutoff_epoch: float) -> dict[str, Any]
             "name": "base_eod_labels",
             "passed": bool(base_fresh and base_complete),
             "detail": f"status={base_status or 'missing'}, fresh_after_close={base_fresh}",
+        }
+    )
+
+    rank_coverage_path = (
+        root / "results/Data/full_universe_rank_strategy/coverage.csv"
+    )
+    rank_coverage_fresh = (
+        rank_coverage_path.exists()
+        and rank_coverage_path.stat().st_mtime >= cutoff_epoch
+    )
+    rank_date_found, rank_full_session = rank_session_coverage(
+        rank_coverage_path, session_date
+    )
+    checks.append(
+        {
+            "name": "rank_session_coverage_manifest",
+            "passed": bool(rank_coverage_fresh and rank_date_found),
+            "detail": (
+                f"date_found={rank_date_found}, fresh_after_close={rank_coverage_fresh}, "
+                f"full_session_eligible={rank_full_session}"
+            ),
         }
     )
 
@@ -77,7 +113,7 @@ def assess(root: Path, session_date: str, cutoff_epoch: float) -> dict[str, Any]
         )
 
     issues = [item["detail"] for item in checks if not item["passed"]]
-    session_eligible = base_status.startswith("complete")
+    session_eligible = bool(base_status.startswith("complete") and rank_full_session)
     if issues:
         status = "incomplete_eod_pipeline"
     elif session_eligible:
@@ -89,6 +125,7 @@ def assess(root: Path, session_date: str, cutoff_epoch: float) -> dict[str, Any]
         "date": session_date,
         "checked_at": datetime.now(IST).isoformat(timespec="seconds"),
         "base_eod_status": base_status or "missing",
+        "rank_full_session_eligible": rank_full_session,
         "session_evidence_eligible": session_eligible,
         "artifacts_refreshed": sum(1 for item in checks if item["passed"]),
         "artifacts_required": len(checks),

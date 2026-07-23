@@ -379,7 +379,7 @@ def evidence_pipeline_stats():
         "eod_status": str(eod.get("status") or "not run today"),
         "eod_date": str(eod.get("date") or "n/a"),
         "eod_refreshed": int(eod.get("artifacts_refreshed") or 0),
-        "eod_required": int(eod.get("artifacts_required") or 11),
+        "eod_required": int(eod.get("artifacts_required") or 12),
         "eod_session_eligible": bool(eod.get("session_evidence_eligible", False)),
     }
 
