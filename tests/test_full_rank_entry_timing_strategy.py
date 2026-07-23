@@ -14,6 +14,7 @@ def _entry(date, symbol, minute):
         "EventId": f"{date}:{symbol}:cohort",
         "Date": date,
         "EntryAt": when,
+        "RecorderGeneration": 4,
         "Symbol": symbol,
         "Cohort": "rapid:r1_10:m1_2",
         "Source": "rapid_rank_climber",

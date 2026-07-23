@@ -23,7 +23,8 @@ class FullUniverseRankPaperObserver:
     """Persist ask-entry/bid-exit outcomes for predefined rank cohorts."""
 
     ENTRY_COLUMNS = [
-        "EventId", "Date", "EntryAt", "Symbol", "Sector", "Cohort", "Source",
+        "EventId", "Date", "EntryAt", "RecorderGeneration", "Symbol", "Sector",
+        "Cohort", "Source",
         "EntryAsk", "EntryBid", "EntrySpreadBps", "Quantity", "Capital",
         "TargetPrice", "StopPrice", "TargetPct", "StopPct", "HorizonMinutes",
         "StressPct", "OpenChangePct", "PullbackFromHighPct", "DayChangePct",
@@ -125,7 +126,12 @@ class FullUniverseRankPaperObserver:
             ):
                 continue
             cohort = self._cohort(source, row)
-            event_id = f"{now:%Y-%m-%d}:{symbol}:{cohort}"
+            recorder_generation = int(
+                self._number(row.get("RecorderGeneration"))
+            )
+            event_id = (
+                f"{now:%Y-%m-%d}:{symbol}:g{recorder_generation}:{cohort}"
+            )
             if event_id in self.seen:
                 continue
             quantity = int(self.capital // ask) if ask > 0 else 0
@@ -136,6 +142,7 @@ class FullUniverseRankPaperObserver:
                 "Date": now.strftime("%Y-%m-%d"),
                 "EntryAt": now.strftime("%Y-%m-%d %H:%M:%S"),
                 "EntryTs": now.timestamp(),
+                "RecorderGeneration": recorder_generation,
                 "Symbol": symbol,
                 "Sector": str(row.get("Sector", "") or "UNKNOWN"),
                 "Cohort": cohort,
@@ -319,7 +326,21 @@ class FullUniverseRankPaperObserver:
     def _cohort(self, source: str, row: Dict[str, Any]) -> str:
         rank = int(self._number(row.get("DayChangeRank")))
         move = self._number(row.get("DayChangePct"))
-        rank_band = "r1_10" if rank <= 10 else "r11_25" if rank <= 25 else "r26_50" if rank <= 50 else "r51_75" if rank <= 75 else "r76_plus"
+        rank_band = (
+            "r1_10"
+            if rank <= 10
+            else "r11_25"
+            if rank <= 25
+            else "r26_50"
+            if rank <= 50
+            else "r51_75"
+            if rank <= 75
+            else "r76_100"
+            if rank <= 100
+            else "r101_200"
+            if rank <= 200
+            else "r201_plus"
+        )
         move_band = "m0_5_1" if move < 1.0 else "m1_2" if move < 2.0 else "m2_3" if move < 3.0 else "m3_5"
         return f"{source}:{rank_band}:{move_band}"
 

@@ -17,6 +17,7 @@ def _entry(date, symbol, minute, rank=1, velocity=10.0):
         "EventId": f"{date}:{symbol}:cohort",
         "Date": date,
         "EntryAt": when,
+        "RecorderGeneration": 4,
         "Symbol": symbol,
         "Cohort": "rapid_rank_climber:r1_10:m1_2",
         "Source": "rapid_rank_climber",
@@ -81,6 +82,25 @@ def test_load_and_coverage_require_an_exact_exit_for_every_entry(tmp_path):
     assert len(events) == 1
     assert coverage["outcome_coverage_pct"] == 50.0
     assert not bool(coverage["eligible"])
+
+
+def test_exact_loader_rejects_entries_from_older_recorder_generation(tmp_path):
+    date = "2026-07-22"
+    current = _entry(date, "CURRENT", 0)
+    legacy = {**_entry(date, "LEGACY", 1), "RecorderGeneration": 3}
+    pd.DataFrame([current, legacy]).to_csv(tmp_path / "entries.csv", index=False)
+    pd.DataFrame([_outcome(current), _outcome(legacy)]).to_csv(
+        tmp_path / "outcomes.csv", index=False
+    )
+
+    entries, events = load_exact_events(
+        [str(tmp_path / "entries.csv")],
+        [str(tmp_path / "outcomes.csv")],
+    )
+
+    assert entries["Symbol"].tolist() == ["CURRENT"]
+    assert events["Symbol"].tolist() == ["CURRENT"]
+    assert entries["RecorderGeneration"].tolist() == [4]
 
 
 def test_one_slot_replay_uses_causal_selector_and_skips_overlaps(tmp_path):

@@ -16,7 +16,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts.assess_full_universe_rank_strategy import raw_session_coverage
+from scripts.assess_full_universe_rank_strategy import (
+    REQUIRED_RECORDER_GENERATION,
+    raw_session_coverage,
+)
 from scripts.assess_leader_pullback_reclaim import metrics
 
 
@@ -44,7 +47,8 @@ SELECTORS = {
 }
 
 NUMERIC_COLUMNS = [
-    "EntryAsk", "EntryBid", "EntrySpreadBps", "Quantity", "Capital",
+    "RecorderGeneration", "EntryAsk", "EntryBid", "EntrySpreadBps",
+    "Quantity", "Capital",
     "DayChangePct", "UniverseSize", "DayChangeRank", "DayChangeRankPct",
     "PreviousDayChangeRank", "RankImprovement", "RankVelocityPerMinute",
     "DayChangeDeltaPct", "TradedValue", "BuyerSellerRatio", "NetReturnPct",
@@ -81,7 +85,17 @@ def load_exact_events(
     if not entries:
         return pd.DataFrame(), pd.DataFrame()
     entry_data = pd.concat(entries, ignore_index=True)
+    if "RecorderGeneration" not in entry_data.columns:
+        entry_data["RecorderGeneration"] = 0
+    entry_data["RecorderGeneration"] = pd.to_numeric(
+        entry_data["RecorderGeneration"], errors="coerce"
+    ).fillna(0).astype(int)
+    entry_data = entry_data[
+        entry_data["RecorderGeneration"].eq(REQUIRED_RECORDER_GENERATION)
+    ].copy()
     entry_data = entry_data.drop_duplicates("EventId", keep="first").copy()
+    if entry_data.empty:
+        return pd.DataFrame(), pd.DataFrame()
     entry_data["date"] = entry_data["Date"].astype(str)
     entry_data["entry_time"] = pd.to_datetime(entry_data["EntryAt"], errors="coerce")
     entry_data["Symbol"] = entry_data["Symbol"].astype(str).str.strip().str.upper()
