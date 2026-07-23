@@ -256,6 +256,39 @@ def test_full_universe_rank_pool_records_early_climber_before_five_percent(tmp_p
     assert "full_universe_leader_pool" in climbed["RecordReason"]
 
 
+def test_leader_pool_cannot_be_crowded_out_by_supplemental_rows(tmp_path):
+    recorder = LiveFeatureRecorder(
+        output_dir=str(tmp_path),
+        interval_seconds=0,
+        top_gainer_pct=50.0,
+        stability_window=2,
+        min_stable_bs_ratio=2.0,
+        leader_pool_size=10,
+        max_rows_per_cycle=10,
+    )
+    start = datetime(2026, 7, 3, 9, 20)
+    ticks = {
+        f"S{index:03d}": _tick(
+            105.0 - index / 100.0,
+            close=100.0,
+            buy_qty=300000,
+            sell_qty=100000,
+        )
+        for index in range(1, 41)
+    }
+    recorder.build_rows(ticks, alerted_symbols=set(), now=start)
+
+    rows = recorder.build_rows(
+        ticks, alerted_symbols=set(), now=start + timedelta(minutes=1)
+    )
+
+    assert len(rows) == 10
+    assert {row["DayChangeRank"] for row in rows} == set(range(1, 11))
+    assert {row["RecorderGeneration"] for row in rows} == {
+        LiveFeatureRecorder.GENERATION
+    }
+
+
 def test_record_decisions_persists_enriched_lane_journal(tmp_path):
     recorder = LiveFeatureRecorder(output_dir=str(tmp_path), interval_seconds=60, top_gainer_pct=5.0)
     now = datetime(2026, 7, 3, 9, 20, 7)

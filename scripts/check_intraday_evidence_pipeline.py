@@ -78,18 +78,30 @@ def dict_assignment_size(path: Path, variable_name: str) -> int:
 
 def live_rank_session_coverage(path: Path, session_date: str) -> dict[str, Any]:
     """Summarize cumulative recorder continuity without trusting latest status."""
-    timestamps: set[datetime] = set()
+    observations: list[tuple[datetime, int | None]] = []
     try:
         with path.open("r", encoding="utf-8", newline="") as handle:
             for row in csv.DictReader(handle):
                 parsed = parse_ist(row.get("When"))
                 if parsed is not None and parsed.strftime("%Y-%m-%d") == session_date:
-                    timestamps.add(parsed)
+                    try:
+                        generation = int(float(str(row.get("RecorderGeneration", ""))))
+                    except (TypeError, ValueError):
+                        generation = None
+                    observations.append((parsed, generation))
     except (OSError, csv.Error):
         pass
+    generations = [generation for _, generation in observations if generation is not None]
+    selected_generation = max(generations) if generations else None
+    timestamps = {
+        timestamp
+        for timestamp, generation in observations
+        if selected_generation is None or generation == selected_generation
+    }
     ordered = sorted(timestamps)
     if not ordered:
         return {
+            "recorder_generation": selected_generation,
             "snapshots": 0,
             "first_snapshot": None,
             "last_snapshot": None,
@@ -103,6 +115,7 @@ def live_rank_session_coverage(path: Path, session_date: str) -> dict[str, Any]:
     ]
     first = ordered[0]
     return {
+        "recorder_generation": selected_generation,
         "snapshots": len(ordered),
         "first_snapshot": first,
         "last_snapshot": ordered[-1],
@@ -253,6 +266,7 @@ def assess(
             coverage_ok or not live_market,
             (
                 f"snapshots={live_coverage['snapshots']}, "
+                f"generation={live_coverage['recorder_generation'] or 'legacy'}, "
                 f"first={first_snapshot.strftime('%H:%M:%S') if first_snapshot else 'missing'}, "
                 f"last={last_snapshot.strftime('%H:%M:%S') if last_snapshot else 'missing'}, "
                 f"max_gap={live_coverage['max_gap_seconds']:.0f}s"

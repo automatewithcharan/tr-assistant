@@ -107,6 +107,15 @@ def raw_session_coverage(
         frame = frame[frame["when"].notna() & frame["rank"].gt(0)].copy()
         if frame.empty:
             continue
+        if "RecorderGeneration" in frame.columns:
+            generations = pd.to_numeric(
+                frame["RecorderGeneration"], errors="coerce"
+            )
+            if generations.notna().any():
+                newest_generation = int(generations.max())
+                frame = frame[generations.eq(newest_generation)].copy()
+                if frame.empty:
+                    continue
         frame["date"] = frame["when"].dt.date.astype(str)
         for date, day in frame.groupby("date", sort=True):
             snapshots = sorted(day["when"].dropna().unique().tolist())

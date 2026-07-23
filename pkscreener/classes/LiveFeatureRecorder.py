@@ -29,9 +29,12 @@ except Exception:
 class LiveFeatureRecorder:
     """Persist live microstructure/context rows for later research."""
 
+    GENERATION = 2
+
     COLUMNS = [
         "When",
         "Bucket",
+        "RecorderGeneration",
         "Symbol",
         "Sector",
         "LastPrice",
@@ -255,6 +258,7 @@ class LiveFeatureRecorder:
             "rows_this_snapshot": int(len(frame)),
             "rapid_rank_climbers_this_snapshot": rapid,
             "leader_pool_size": int(self.leader_pool_size),
+            "recorder_generation": int(self.GENERATION),
             "interval_seconds": float(self.interval_seconds),
             "alerts_allowed": False,
             "real_orders_allowed": False,
@@ -502,6 +506,7 @@ class LiveFeatureRecorder:
                 {
                     "When": now_dt.strftime("%Y-%m-%d %H:%M:%S"),
                     "Bucket": self._bucket(now_dt),
+                    "RecorderGeneration": int(self.GENERATION),
                     "Symbol": symbol,
                     "Sector": sector,
                     "LastPrice": round(price, 2),
@@ -548,6 +553,11 @@ class LiveFeatureRecorder:
 
         rows.sort(
             key=lambda row: (
+                not bool(
+                    int(row["DayChangeRank"] or 999999)
+                    <= self.leader_pool_size
+                    and float(row["DayChangePct"] or 0.0) >= 0.5
+                ),
                 not bool(row["RapidRankClimber"]),
                 not bool(row["EnteredTop50"]),
                 not bool(row["MissedRunnerCandidate"]),

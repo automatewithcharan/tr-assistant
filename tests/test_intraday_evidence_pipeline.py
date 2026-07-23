@@ -115,6 +115,28 @@ def test_historical_rank_snapshot_gap_blocks_live_readiness(tmp_path):
     assert "max_gap=2482s" in continuity["detail"]
 
 
+def test_live_readiness_uses_only_latest_recorder_generation(tmp_path):
+    root, now = fixture_root(tmp_path)
+    write(
+        root / "results/Data/live_feature_recorder/live_features_2026-07-23.csv",
+        "When,DayChangeRank,RecorderGeneration\n"
+        "2026-07-23 09:15:02,1,\n"
+        "2026-07-23 09:16:08,1,\n"
+        "2026-07-23 09:45:00,1,2\n"
+        "2026-07-23 09:46:00,1,2\n",
+    )
+
+    result = run(root, now)
+
+    continuity = next(
+        item for item in result["checks"]
+        if item["name"] == "rank_session_continuity_so_far"
+    )
+    assert continuity["passed"] is False
+    assert "generation=2" in continuity["detail"]
+    assert "first=09:45:00" in continuity["detail"]
+
+
 def test_post_close_stale_feeds_are_expected_when_eod_completed(tmp_path):
     root, _ = fixture_root(tmp_path)
     now = datetime(2026, 7, 23, 16, 15, tzinfo=IST)

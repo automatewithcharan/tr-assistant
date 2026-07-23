@@ -58,6 +58,29 @@ def test_raw_coverage_rejects_mid_session_recorder_gap(tmp_path):
     assert not bool(row["full_session_eligible"])
 
 
+def test_coverage_uses_only_latest_recorder_generation(tmp_path):
+    path = tmp_path / "live_features_2026-07-23.csv"
+    rows = []
+    for minute in range(9 * 60 + 15, 15 * 60 + 30):
+        hour, value = divmod(minute, 60)
+        rows.append(
+            {
+                "When": f"2026-07-23 {hour:02d}:{value:02d}:00",
+                "DayChangeRank": 1,
+                "RecorderGeneration": "" if minute < 10 * 60 else 2,
+            }
+        )
+    pd.DataFrame(rows).to_csv(path, index=False)
+
+    coverage = raw_session_coverage([str(path)], min_snapshots=300)
+
+    assert len(coverage) == 1
+    row = coverage.iloc[0]
+    assert row["first_snapshot"] == "2026-07-23 10:00:00"
+    assert int(row["snapshots"]) == 330
+    assert not bool(row["full_session_eligible"])
+
+
 def test_rank_outcomes_keep_only_buyable_executable_rank_states(tmp_path):
     path = tmp_path / "live_features_rows.csv"
     base = {
