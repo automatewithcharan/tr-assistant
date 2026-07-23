@@ -18,6 +18,7 @@ def _raw_rows(date: str, first="09:16", snapshots=300):
         {
             "When": [start + pd.Timedelta(minutes=index) for index in range(snapshots)],
             "DayChangeRank": [1] * snapshots,
+            "RecorderGeneration": [3] * snapshots,
         }
     )
 
@@ -43,6 +44,7 @@ def test_raw_coverage_rejects_mid_session_recorder_gap(tmp_path):
         {
             "When": [second_start + pd.Timedelta(minutes=index) for index in range(180)],
             "DayChangeRank": [1] * 180,
+            "RecorderGeneration": [3] * 180,
         }
     )
     pd.concat([first, second], ignore_index=True).to_csv(
@@ -78,6 +80,21 @@ def test_coverage_uses_only_latest_recorder_generation(tmp_path):
     row = coverage.iloc[0]
     assert row["first_snapshot"] == "2026-07-23 10:00:00"
     assert int(row["snapshots"]) == 330
+    assert not bool(row["full_session_eligible"])
+
+
+def test_complete_older_generation_is_not_selection_eligible(tmp_path):
+    path = tmp_path / "live_features_2026-07-22.csv"
+    frame = _raw_rows("2026-07-22", snapshots=360)
+    frame["RecorderGeneration"] = 2
+    frame.to_csv(path, index=False)
+
+    coverage = raw_session_coverage([str(path)])
+
+    row = coverage.iloc[0]
+    assert int(row["recorder_generation"]) == 2
+    assert int(row["snapshots"]) == 360
+    assert bool(row["continuity_ok"])
     assert not bool(row["full_session_eligible"])
 
 

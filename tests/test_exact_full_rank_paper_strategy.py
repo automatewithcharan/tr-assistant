@@ -59,6 +59,7 @@ def _raw(date):
         {
             "When": [start + pd.Timedelta(minutes=i) for i in range(360)],
             "DayChangeRank": [1] * 360,
+            "RecorderGeneration": [3] * 360,
         }
     )
 

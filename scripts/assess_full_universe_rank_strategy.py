@@ -69,6 +69,8 @@ FEATURES = [
     "move_band_3_5",
 ]
 
+REQUIRED_RECORDER_GENERATION = 3
+
 
 def _truthy(values: pd.Series) -> pd.Series:
     return values.fillna("").astype(str).str.strip().str.lower().isin(
@@ -107,13 +109,14 @@ def raw_session_coverage(
         frame = frame[frame["when"].notna() & frame["rank"].gt(0)].copy()
         if frame.empty:
             continue
+        recorder_generation = 0
         if "RecorderGeneration" in frame.columns:
             generations = pd.to_numeric(
                 frame["RecorderGeneration"], errors="coerce"
             )
             if generations.notna().any():
-                newest_generation = int(generations.max())
-                frame = frame[generations.eq(newest_generation)].copy()
+                recorder_generation = int(generations.max())
+                frame = frame[generations.eq(recorder_generation)].copy()
                 if frame.empty:
                     continue
         frame["date"] = frame["when"].dt.date.astype(str)
@@ -135,7 +138,10 @@ def raw_session_coverage(
                     "last_snapshot": str(last),
                     "max_gap_seconds": round(largest_gap, 3),
                     "continuity_ok": bool(continuity_ok),
+                    "recorder_generation": int(recorder_generation),
                     "full_session_eligible": bool(
+                        recorder_generation == REQUIRED_RECORDER_GENERATION
+                        and
                         first_minute <= 9 * 60 + 20
                         and last_minute >= int(latest_minute)
                         and len(snapshots) >= int(min_snapshots)
@@ -148,7 +154,7 @@ def raw_session_coverage(
             columns=[
                 "date", "source", "snapshots", "first_snapshot",
                 "last_snapshot", "max_gap_seconds", "continuity_ok",
-                "full_session_eligible",
+                "recorder_generation", "full_session_eligible",
             ]
         )
     coverage = pd.DataFrame(rows).sort_values(["date", "source"])
