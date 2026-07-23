@@ -19,14 +19,15 @@ def _tick(bid, ask=None):
     }
 
 
-def _entry(now):
+def _entry(now, symbol="AAA"):
     return {
         "event": "entry",
-        "EventId": f"{now:%Y-%m-%d}:AAA:rapid:r1_10:m1_2",
+        "EventId": f"{now:%Y-%m-%d}:{symbol}:g5:rapid:r1_10:m1_2",
         "Date": now.strftime("%Y-%m-%d"),
         "EntryAt": now.strftime("%Y-%m-%d %H:%M:%S"),
         "EntryTs": now.timestamp(),
-        "Symbol": "AAA",
+        "RecorderGeneration": 5,
+        "Symbol": symbol,
         "Cohort": "rapid:r1_10:m1_2",
         "Source": "rapid_rank_climber",
         "EntryAsk": 100.1,
@@ -54,6 +55,10 @@ def test_default_matrix_registers_every_frozen_contract(tmp_path):
     assert status["contracts"] == len(CONTRACTS)
     assert status["entry_labels"] == 1
     assert status["real_orders_allowed"] is False
+    registrations = pd.read_csv(
+        observer.root / "registrations_2026-07-22.csv"
+    )
+    assert registrations["RecorderGeneration"].tolist() == [5]
 
 
 def test_contracts_close_independently_at_target_and_timeout(tmp_path):
@@ -75,6 +80,36 @@ def test_contracts_close_independently_at_target_and_timeout(tmp_path):
     saved = pd.read_csv(observer.root / "outcomes_2026-07-22.csv")
     assert saved["Contract"].tolist() == ["fast", "runner"]
     assert saved["ExitBid"].tolist() == [100.7, 100.4]
+    assert saved["RecorderGeneration"].tolist() == [5, 5]
+
+
+def test_registration_ledger_widens_old_same_day_schema(tmp_path):
+    observer = FullUniverseRankContractMatrixObserver(str(tmp_path))
+    now = datetime(2026, 7, 22, 9, 20)
+    path = observer.root / "registrations_2026-07-22.csv"
+    path.parent.mkdir(parents=True)
+    old_columns = [
+        column
+        for column in observer.REGISTRATION_COLUMNS
+        if column != "RecorderGeneration"
+    ]
+    old = _entry(now, symbol="OLD")
+    pd.DataFrame(
+        [{column: old.get(column, "") for column in old_columns}],
+        columns=old_columns,
+    ).to_csv(path, index=False)
+
+    observer.process(
+        [_entry(now, symbol="NEW")],
+        {"NEW": _tick(100.0)},
+        now=now,
+    )
+
+    saved = pd.read_csv(path)
+    assert saved.columns.tolist() == observer.REGISTRATION_COLUMNS
+    assert saved["Symbol"].tolist() == ["OLD", "NEW"]
+    assert pd.isna(saved.iloc[0]["RecorderGeneration"])
+    assert int(saved.iloc[1]["RecorderGeneration"]) == 5
 
 
 def test_restart_preserves_contracts_and_does_not_duplicate_entry(tmp_path):

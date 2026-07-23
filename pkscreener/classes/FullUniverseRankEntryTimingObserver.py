@@ -10,6 +10,9 @@ import pandas as pd
 
 from PKDevTools.classes.PKDateUtilities import PKDateUtilities
 from PKDevTools.classes.log import default_logger
+from pkscreener.classes.FullUniverseRankPaperObserver import (
+    FullUniverseRankPaperObserver,
+)
 from pkscreener.classes.LiveFeatureRecorder import LiveFeatureRecorder
 
 
@@ -32,24 +35,28 @@ class FullUniverseRankEntryTimingObserver:
     """Track alternative exact entry triggers, then one fixed exit contract."""
 
     REGISTRATION_COLUMNS = [
-        "TimingId", "EventId", "Variant", "Date", "SignalAt", "Symbol",
-        "Cohort", "Source", "SignalAsk", "TriggerPrice", "ExpiresAt",
+        "TimingId", "EventId", "Variant", "Date", "SignalAt",
+        "RecorderGeneration", "Symbol", "Cohort", "Source", "SignalAsk",
+        "TriggerPrice", "ExpiresAt",
     ]
     FILL_COLUMNS = [
         "TimingId", "EventId", "Variant", "Date", "SignalAt", "EntryAt",
-        "Symbol", "Cohort", "Source", "SignalAsk", "EntryAsk", "EntryBid",
-        "Quantity", "Capital", "TargetPrice", "StopPrice", "EntryDelayMinutes",
+        "RecorderGeneration", "Symbol", "Cohort", "Source", "SignalAsk",
+        "EntryAsk", "EntryBid", "Quantity", "Capital", "TargetPrice",
+        "StopPrice", "EntryDelayMinutes",
     ]
     NONFILL_COLUMNS = [
         "TimingId", "EventId", "Variant", "Date", "SignalAt", "ResolvedAt",
-        "Symbol", "SignalAsk", "Reason", "BestAskSeen", "WorstAskSeen",
+        "RecorderGeneration", "Symbol", "SignalAsk", "Reason", "BestAskSeen",
+        "WorstAskSeen",
     ]
     OUTCOME_COLUMNS = [
         "TimingId", "EventId", "Variant", "Date", "SignalAt", "EntryAt",
-        "ExitAt", "Symbol", "Cohort", "Source", "SignalAsk", "EntryAsk",
-        "ExitBid", "Quantity", "ExitReason", "EntryDelayMinutes", "HoldMinutes",
-        "GrossReturnPct", "StressPct", "NetReturnPct", "GrossPnl",
-        "StressCost", "NetPnl", "TargetPrice", "StopPrice",
+        "RecorderGeneration", "ExitAt", "Symbol", "Cohort", "Source",
+        "SignalAsk", "EntryAsk", "ExitBid", "Quantity", "ExitReason",
+        "EntryDelayMinutes", "HoldMinutes", "GrossReturnPct", "StressPct",
+        "NetReturnPct", "GrossPnl", "StressCost", "NetPnl", "TargetPrice",
+        "StopPrice",
     ]
 
     def __init__(
@@ -132,6 +139,9 @@ class FullUniverseRankEntryTimingObserver:
                     "Date": str(event.get("Date", now.strftime("%Y-%m-%d"))),
                     "SignalAt": str(event.get("EntryAt", now.strftime("%Y-%m-%d %H:%M:%S"))),
                     "SignalTs": float(event.get("EntryTs", now.timestamp())),
+                    "RecorderGeneration": int(
+                        self._number(event.get("RecorderGeneration"))
+                    ),
                     "ExpiresTs": expires_ts,
                     "Symbol": str(event.get("Symbol", "") or "").upper(),
                     "Cohort": str(event.get("Cohort", "") or ""),
@@ -152,6 +162,7 @@ class FullUniverseRankEntryTimingObserver:
                         "Variant": name,
                         "Date": waiting["Date"],
                         "SignalAt": waiting["SignalAt"],
+                        "RecorderGeneration": waiting["RecorderGeneration"],
                         "Symbol": waiting["Symbol"],
                         "Cohort": waiting["Cohort"],
                         "Source": waiting["Source"],
@@ -189,6 +200,7 @@ class FullUniverseRankEntryTimingObserver:
                     "Date": candidate["Date"],
                     "SignalAt": candidate["SignalAt"],
                     "ResolvedAt": now.strftime("%Y-%m-%d %H:%M:%S"),
+                    "RecorderGeneration": candidate["RecorderGeneration"],
                     "Symbol": candidate["Symbol"],
                     "SignalAsk": candidate["SignalAsk"],
                     "Reason": "eod_unfilled" if eod else "entry_window_expired",
@@ -291,6 +303,7 @@ class FullUniverseRankEntryTimingObserver:
                 "Date": position["Date"],
                 "SignalAt": position["SignalAt"],
                 "EntryAt": position["EntryAt"],
+                "RecorderGeneration": position["RecorderGeneration"],
                 "ExitAt": now.strftime("%Y-%m-%d %H:%M:%S"),
                 "Symbol": position["Symbol"],
                 "Cohort": position["Cohort"],
@@ -394,6 +407,7 @@ class FullUniverseRankEntryTimingObserver:
         if not rows:
             return
         path.parent.mkdir(parents=True, exist_ok=True)
+        FullUniverseRankPaperObserver._ensure_csv_schema(path, columns)
         pd.DataFrame(rows, columns=columns).to_csv(
             path, mode="a", header=not path.exists(), index=False
         )

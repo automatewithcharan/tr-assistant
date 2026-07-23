@@ -10,6 +10,9 @@ import pandas as pd
 
 from PKDevTools.classes.PKDateUtilities import PKDateUtilities
 from PKDevTools.classes.log import default_logger
+from pkscreener.classes.FullUniverseRankPaperObserver import (
+    FullUniverseRankPaperObserver,
+)
 from pkscreener.classes.LiveFeatureRecorder import LiveFeatureRecorder
 
 
@@ -30,14 +33,16 @@ class FullUniverseRankContractMatrixObserver:
     """Track fixed exit contracts independently from the same paper entry."""
 
     REGISTRATION_COLUMNS = [
-        "EventId", "Date", "EntryAt", "Symbol", "Cohort", "Source",
+        "EventId", "Date", "EntryAt", "RecorderGeneration", "Symbol",
+        "Cohort", "Source",
         "EntryAsk", "EntryBid", "Quantity", "Capital", "DayChangePct",
         "DayChangeRank", "RankImprovement", "RankVelocityPerMinute",
         "BuyerSellerRatio", "EntrySpreadBps",
     ]
     OUTCOME_COLUMNS = [
-        "MatrixId", "EventId", "Contract", "Date", "EntryAt", "ExitAt",
-        "Symbol", "Cohort", "Source", "EntryAsk", "ExitBid", "Quantity",
+        "MatrixId", "EventId", "Contract", "Date", "EntryAt",
+        "RecorderGeneration", "ExitAt", "Symbol", "Cohort", "Source",
+        "EntryAsk", "ExitBid", "Quantity",
         "TargetPct", "StopPct", "HorizonMinutes", "ExitReason", "HoldMinutes",
         "GrossReturnPct", "StressPct", "NetReturnPct", "GrossPnl",
         "StressCost", "NetPnl",
@@ -108,6 +113,9 @@ class FullUniverseRankContractMatrixObserver:
                     "Date": str(event.get("Date", now.strftime("%Y-%m-%d"))),
                     "EntryAt": str(event.get("EntryAt", now.strftime("%Y-%m-%d %H:%M:%S"))),
                     "EntryTs": float(event.get("EntryTs", now.timestamp())),
+                    "RecorderGeneration": int(
+                        self._number(event.get("RecorderGeneration"))
+                    ),
                     "Symbol": str(event.get("Symbol", "") or "").upper(),
                     "Cohort": str(event.get("Cohort", "") or ""),
                     "Source": str(event.get("Source", "") or ""),
@@ -157,6 +165,7 @@ class FullUniverseRankContractMatrixObserver:
                 "Contract": entry["Contract"],
                 "Date": entry["Date"],
                 "EntryAt": entry["EntryAt"],
+                "RecorderGeneration": entry["RecorderGeneration"],
                 "ExitAt": now.strftime("%Y-%m-%d %H:%M:%S"),
                 "Symbol": entry["Symbol"],
                 "Cohort": entry["Cohort"],
@@ -245,6 +254,7 @@ class FullUniverseRankContractMatrixObserver:
         if not rows:
             return
         path.parent.mkdir(parents=True, exist_ok=True)
+        FullUniverseRankPaperObserver._ensure_csv_schema(path, columns)
         pd.DataFrame(rows, columns=columns).to_csv(
             path, mode="a", header=not path.exists(), index=False
         )

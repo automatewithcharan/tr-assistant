@@ -25,6 +25,7 @@ def _entry(now):
         "Date": now.strftime("%Y-%m-%d"),
         "EntryAt": now.strftime("%Y-%m-%d %H:%M:%S"),
         "EntryTs": now.timestamp(),
+        "RecorderGeneration": 5,
         "Symbol": "AAA",
         "Cohort": "rapid:r1_10:m1_2",
         "Source": "rapid_rank_climber",
@@ -43,6 +44,10 @@ def test_default_timing_matrix_registers_all_variants(tmp_path):
     status = pd.read_json(observer.status_path, typ="series")
     assert status["variants"] == len(ENTRY_VARIANTS)
     assert status["real_orders_allowed"] is False
+    registrations = pd.read_csv(
+        observer.root / "registrations_2026-07-22.csv"
+    )
+    assert set(registrations["RecorderGeneration"].tolist()) == {5}
 
 
 def test_dip_uses_conservative_limit_and_confirmation_uses_observed_ask(tmp_path):
@@ -60,8 +65,10 @@ def test_dip_uses_conservative_limit_and_confirmation_uses_observed_ask(tmp_path
     assert dip[0]["event"] == "entry_filled"
     assert dip[0]["Variant"] == "dip"
     assert dip[0]["EntryAsk"] == 99.5
+    assert dip[0]["RecorderGeneration"] == 5
     assert confirm[0]["Variant"] == "confirm"
     assert confirm[0]["EntryAsk"] == 100.3
+    assert confirm[0]["RecorderGeneration"] == 5
 
 
 def test_pullback_reclaim_requires_two_distinct_phases(tmp_path):
@@ -103,6 +110,7 @@ def test_filled_variant_exits_at_bid_and_unfilled_variant_expires(tmp_path):
     assert exited[0]["event"] == "timing_exit"
     assert exited[0]["ExitReason"] == "target"
     assert exited[0]["ExitBid"] == 101.1
+    assert exited[0]["RecorderGeneration"] == 5
 
 
 def test_restart_preserves_waiting_positions_and_prevents_duplicate(tmp_path):
