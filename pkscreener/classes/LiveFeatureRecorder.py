@@ -29,7 +29,7 @@ except Exception:
 class LiveFeatureRecorder:
     """Persist live microstructure/context rows for later research."""
 
-    GENERATION = 3
+    GENERATION = 4
 
     COLUMNS = [
         "When",
@@ -119,7 +119,7 @@ class LiveFeatureRecorder:
         min_stable_bs_ratio: float = 2.0,
         spread_ok_bps: float = 35.0,
         max_rows_per_cycle: int = 200,
-        leader_pool_size: int = 75,
+        leader_pool_size: int = 200,
         rapid_rank_improvement: int = 25,
         rapid_change_delta_pct: float = 0.15,
     ) -> None:
@@ -130,7 +130,7 @@ class LiveFeatureRecorder:
         self.min_stable_bs_ratio = max(1.0, float(min_stable_bs_ratio or 2.0))
         self.spread_ok_bps = max(0.0, float(spread_ok_bps or 35.0))
         self.max_rows_per_cycle = max(1, int(max_rows_per_cycle or 200))
-        self.leader_pool_size = max(1, int(leader_pool_size or 75))
+        self.leader_pool_size = max(1, int(leader_pool_size or 200))
         self.rapid_rank_improvement = max(
             1, int(rapid_rank_improvement or 25)
         )

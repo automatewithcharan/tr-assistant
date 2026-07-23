@@ -243,7 +243,8 @@ def assess(
         and int(recorder.get("universe_size") or 0) >= 2500
         and int(recorder.get("rows_this_snapshot") or 0) >= 75
         and float(recorder.get("interval_seconds") or 0) <= 60
-        and int(recorder.get("recorder_generation") or 0) >= 3
+        and int(recorder.get("recorder_generation") or 0) >= 4
+        and int(recorder.get("leader_pool_size") or 0) >= 200
         and recorder_safe
     )
     checks.append(check("rank_recorder_fresh", recorder_ok or not live_market, f"universe={int(recorder.get('universe_size') or 0)}, rows={int(recorder.get('rows_this_snapshot') or 0)}, generation={int(recorder.get('recorder_generation') or 0)}, age={recorder_age:.0f}s, paper_only={recorder_safe}" + ("" if live_market else "; freshness not required outside live market")))

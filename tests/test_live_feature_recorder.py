@@ -335,6 +335,35 @@ def test_leader_pool_cannot_be_crowded_out_by_supplemental_rows(tmp_path):
     assert status["leader_pool_recall_pct"] == 100.0
 
 
+def test_default_discovery_pool_guarantees_top_200(tmp_path):
+    recorder = LiveFeatureRecorder(
+        output_dir=str(tmp_path),
+        interval_seconds=0,
+        top_gainer_pct=50.0,
+        stability_window=10,
+    )
+    ticks = {
+        f"S{index:03d}": _tick(
+            103.5 - index / 1000.0,
+            close=100.0,
+            buy_qty=100000,
+            sell_qty=100000,
+        )
+        for index in range(1, 251)
+    }
+
+    rows = recorder.build_rows(
+        ticks,
+        alerted_symbols=set(),
+        now=datetime(2026, 7, 3, 9, 20),
+    )
+
+    assert recorder.leader_pool_size == 200
+    assert len(rows) == 200
+    assert {row["DayChangeRank"] for row in rows} == set(range(1, 201))
+    assert {row["RecorderGeneration"] for row in rows} == {4}
+
+
 def test_rapid_climbers_make_row_limit_a_soft_cap(tmp_path):
     recorder = LiveFeatureRecorder(
         output_dir=str(tmp_path),

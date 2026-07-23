@@ -284,7 +284,7 @@ class SignalMonitorRunner:
                 min_stable_bs_ratio=float(os.environ.get("SIGNALMONITOR_LIVE_FEATURE_MIN_STABLE_BS", "2.0") or 2.0),
                 spread_ok_bps=float(os.environ.get("SIGNALMONITOR_LIVE_FEATURE_SPREAD_OK_BPS", "35") or 35),
                 max_rows_per_cycle=int(float(os.environ.get("SIGNALMONITOR_LIVE_FEATURE_MAX_ROWS_PER_CYCLE", "200") or 200)),
-                leader_pool_size=int(float(os.environ.get("SIGNALMONITOR_LIVE_FEATURE_LEADER_POOL_SIZE", "75") or 75)),
+                leader_pool_size=int(float(os.environ.get("SIGNALMONITOR_LIVE_FEATURE_LEADER_POOL_SIZE", "200") or 200)),
                 rapid_rank_improvement=int(float(os.environ.get("SIGNALMONITOR_LIVE_FEATURE_RAPID_RANK_IMPROVEMENT", "25") or 25)),
                 rapid_change_delta_pct=float(os.environ.get("SIGNALMONITOR_LIVE_FEATURE_RAPID_CHANGE_DELTA_PCT", "0.15") or 0.15),
             )
