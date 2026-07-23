@@ -232,13 +232,16 @@ class LiveFeatureRecorder:
                 existing = json.loads(status_path.read_text(encoding="utf-8"))
             except Exception:
                 existing = {}
-        first_recorded_at = now.strftime("%Y-%m-%d %H:%M:%S")
-        if str(existing.get("date", "")) == now.strftime("%Y-%m-%d"):
-            first_recorded_at = str(
-                existing.get("first_recorded_at")
-                or existing.get("recorded_at")
-                or first_recorded_at
-            )
+        generation_started_at = now.strftime("%Y-%m-%d %H:%M:%S")
+        same_generation = (
+            str(existing.get("date", "")) == now.strftime("%Y-%m-%d")
+            and int(existing.get("recorder_generation") or 0)
+            == int(self.GENERATION)
+            and bool(existing.get("generation_started_at"))
+        )
+        if same_generation:
+            generation_started_at = str(existing["generation_started_at"])
+        first_recorded_at = generation_started_at
         try:
             first_time = datetime.strptime(
                 first_recorded_at, "%Y-%m-%d %H:%M:%S"
@@ -253,6 +256,7 @@ class LiveFeatureRecorder:
             "date": now.strftime("%Y-%m-%d"),
             "recorded_at": now.strftime("%Y-%m-%d %H:%M:%S"),
             "first_recorded_at": first_recorded_at,
+            "generation_started_at": generation_started_at,
             "full_session_eligible": full_session_eligible,
             "universe_size": universe_size,
             "rows_this_snapshot": int(len(frame)),

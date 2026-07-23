@@ -182,6 +182,38 @@ def test_rank_status_marks_midday_start_as_partial_and_preserves_first_time(tmp_
     assert status["full_session_eligible"] is False
 
 
+def test_rank_status_resets_start_when_recorder_generation_changes(tmp_path):
+    recorder = LiveFeatureRecorder(
+        output_dir=str(tmp_path), interval_seconds=0, top_gainer_pct=0.5
+    )
+    status_path = (
+        tmp_path / "live_feature_recorder" / "full_universe_rank_status.json"
+    )
+    status_path.parent.mkdir(parents=True)
+    status_path.write_text(
+        json.dumps(
+            {
+                "date": "2026-07-03",
+                "first_recorded_at": "2026-07-03 09:15:00",
+                "recorder_generation": 1,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    recorder.record(
+        {"AAA": _tick(101.0, close=100.0)},
+        alerted_symbols=set(),
+        now=datetime(2026, 7, 3, 12, 15),
+    )
+
+    status = json.loads(status_path.read_text(encoding="utf-8"))
+    assert status["recorder_generation"] == LiveFeatureRecorder.GENERATION
+    assert status["generation_started_at"] == "2026-07-03 12:15:00"
+    assert status["first_recorded_at"] == "2026-07-03 12:15:00"
+    assert status["full_session_eligible"] is False
+
+
 def test_record_atomically_widens_old_same_day_schema(tmp_path):
     recorder = LiveFeatureRecorder(
         output_dir=str(tmp_path), interval_seconds=0, top_gainer_pct=0.5
