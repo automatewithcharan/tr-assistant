@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import csv
 import json
 import os
 import shutil
@@ -73,6 +74,42 @@ def dict_assignment_size(path: Path, variable_name: str) -> int:
             continue
         return len(node.value.keys) if isinstance(node.value, ast.Dict) else 0
     return 0
+
+
+def live_rank_session_coverage(path: Path, session_date: str) -> dict[str, Any]:
+    """Summarize cumulative recorder continuity without trusting latest status."""
+    timestamps: set[datetime] = set()
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            for row in csv.DictReader(handle):
+                parsed = parse_ist(row.get("When"))
+                if parsed is not None and parsed.strftime("%Y-%m-%d") == session_date:
+                    timestamps.add(parsed)
+    except (OSError, csv.Error):
+        pass
+    ordered = sorted(timestamps)
+    if not ordered:
+        return {
+            "snapshots": 0,
+            "first_snapshot": None,
+            "last_snapshot": None,
+            "max_gap_seconds": float("inf"),
+            "opening_covered": False,
+            "continuity_ok": False,
+        }
+    gaps = [
+        (current - previous).total_seconds()
+        for previous, current in zip(ordered, ordered[1:])
+    ]
+    first = ordered[0]
+    return {
+        "snapshots": len(ordered),
+        "first_snapshot": first,
+        "last_snapshot": ordered[-1],
+        "max_gap_seconds": max(gaps, default=0.0),
+        "opening_covered": first.hour * 60 + first.minute <= 9 * 60 + 20,
+        "continuity_ok": max(gaps, default=0.0) <= 150.0,
+    }
 
 
 def _service_active(name: str) -> bool:
@@ -196,6 +233,33 @@ def assess(
         and recorder_safe
     )
     checks.append(check("rank_recorder_fresh", recorder_ok or not live_market, f"universe={int(recorder.get('universe_size') or 0)}, rows={int(recorder.get('rows_this_snapshot') or 0)}, age={recorder_age:.0f}s, paper_only={recorder_safe}" + ("" if live_market else "; freshness not required outside live market")))
+
+    live_coverage = live_rank_session_coverage(
+        data
+        / "live_feature_recorder"
+        / f"live_features_{now.strftime('%Y-%m-%d')}.csv",
+        now.strftime("%Y-%m-%d"),
+    )
+    coverage_ok = (
+        live_coverage["snapshots"] >= 2
+        and live_coverage["opening_covered"]
+        and live_coverage["continuity_ok"]
+    )
+    first_snapshot = live_coverage["first_snapshot"]
+    last_snapshot = live_coverage["last_snapshot"]
+    checks.append(
+        check(
+            "rank_session_continuity_so_far",
+            coverage_ok or not live_market,
+            (
+                f"snapshots={live_coverage['snapshots']}, "
+                f"first={first_snapshot.strftime('%H:%M:%S') if first_snapshot else 'missing'}, "
+                f"last={last_snapshot.strftime('%H:%M:%S') if last_snapshot else 'missing'}, "
+                f"max_gap={live_coverage['max_gap_seconds']:.0f}s"
+                + ("" if live_market else "; continuity not required outside live market")
+            ),
+        )
+    )
 
     observers = {
         "exact_ask_bid_observer": ("full_universe_rank_paper/status.json", "recording_exact_ask_to_bid_paper_outcomes", None, None),

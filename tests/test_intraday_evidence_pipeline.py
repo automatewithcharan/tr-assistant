@@ -47,6 +47,12 @@ def fixture_root(tmp_path: Path) -> tuple[Path, datetime]:
     stamp = "2026-07-23 10:00:00"
     write(data / "kiteticker_all_status_latest.json", {"connected": True, "started_at": "2026-07-23 03:30:00", "last_tick_at": "2026-07-23 04:30:00", "snapshot_symbols": 2860})
     write(data / "live_feature_recorder/full_universe_rank_status.json", {"status": "recording_full_universe_rank", "date": "2026-07-23", "recorded_at": stamp, "universe_size": 2860, "rows_this_snapshot": 200, "interval_seconds": 60, "alerts_allowed": False, "real_orders_allowed": False})
+    write(
+        data / "live_feature_recorder/live_features_2026-07-23.csv",
+        "When,DayChangeRank\n"
+        "2026-07-23 09:15:02,1\n"
+        "2026-07-23 09:16:08,1\n",
+    )
     statuses = [
         ("full_universe_rank_paper/status.json", "recording_exact_ask_to_bid_paper_outcomes", {}),
         ("full_universe_rank_contract_matrix/status.json", "recording_exact_exit_contract_matrix", {"contracts": 9}),
@@ -86,6 +92,27 @@ def test_stale_observer_blocks_readiness(tmp_path):
     result = run(root, now)
     assert result["status"] == "operational_issues_detected"
     assert not next(item for item in result["checks"] if item["name"] == "exact_ask_bid_observer")["passed"]
+
+
+def test_historical_rank_snapshot_gap_blocks_live_readiness(tmp_path):
+    root, now = fixture_root(tmp_path)
+    write(
+        root / "results/Data/live_feature_recorder/live_features_2026-07-23.csv",
+        "When,DayChangeRank\n"
+        "2026-07-23 09:15:02,1\n"
+        "2026-07-23 09:18:08,1\n"
+        "2026-07-23 09:59:30,1\n",
+    )
+
+    result = run(root, now)
+
+    continuity = next(
+        item for item in result["checks"]
+        if item["name"] == "rank_session_continuity_so_far"
+    )
+    assert result["status"] == "operational_issues_detected"
+    assert continuity["passed"] is False
+    assert "max_gap=2482s" in continuity["detail"]
 
 
 def test_post_close_stale_feeds_are_expected_when_eod_completed(tmp_path):
