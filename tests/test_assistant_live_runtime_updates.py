@@ -1,4 +1,11 @@
-from pkscreener.classes.AssistantLiveRuntime import AssistantLiveSupervisor
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+from pkscreener.classes.AssistantLiveRuntime import (
+    AssistantLiveSupervisor,
+    _env_truthy,
+)
 
 
 class EventStore:
@@ -48,3 +55,31 @@ def test_non_live_commit_advances_head_without_stopping_children():
 
     assert supervisor._code_commit == "b" * 40
     assert "kept running" in supervisor.store.events[-1][-1]
+
+
+def test_standalone_evidence_command_uses_runtime_python_and_poll(monkeypatch):
+    supervisor = object.__new__(AssistantLiveSupervisor)
+    supervisor.repo_root = Path("/repo")
+    supervisor.settings = SimpleNamespace(universe="all")
+    monkeypatch.setenv(
+        "SIGNALMONITOR_STANDALONE_EVIDENCE_POLL_SECONDS",
+        "3",
+    )
+
+    command = supervisor._evidence_command()
+
+    assert command == [
+        sys.executable,
+        "/repo/scripts/run_full_rank_evidence_recorder.py",
+        "--universe",
+        "all",
+        "--poll-seconds",
+        "3.0",
+    ]
+
+
+def test_runtime_truthy_parser(monkeypatch):
+    monkeypatch.setenv("SIGNALMONITOR_STANDALONE_EVIDENCE", "yes")
+    assert _env_truthy("SIGNALMONITOR_STANDALONE_EVIDENCE") is True
+    monkeypatch.setenv("SIGNALMONITOR_STANDALONE_EVIDENCE", "0")
+    assert _env_truthy("SIGNALMONITOR_STANDALONE_EVIDENCE") is False

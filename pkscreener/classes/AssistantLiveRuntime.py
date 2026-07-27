@@ -44,6 +44,16 @@ def _safe_int(value, default: int = 0) -> int:
         return default
 
 
+def _env_truthy(name: str, default: str = "0") -> bool:
+    return str(os.environ.get(name, default) or default).strip().lower() in {
+        "1",
+        "true",
+        "yes",
+        "y",
+        "on",
+    }
+
+
 def _runtime_env(repo_root: Path) -> Dict[str, str]:
     """Return an environment that can import this checkout from detached launches."""
     env = os.environ.copy()
@@ -474,6 +484,8 @@ class AssistantLiveSupervisor:
             )
         self._launch_process("ticker", self._ticker_command())
         self._wait_for_initial_tick_snapshot()
+        if _env_truthy("SIGNALMONITOR_STANDALONE_EVIDENCE", "0"):
+            self._launch_process("evidence", self._evidence_command())
         self._launch_process("monitor", self._monitor_command())
         self._launch_process("discord", self._discord_command())
         if self.settings.autopilot_enabled:
@@ -562,6 +574,31 @@ class AssistantLiveSupervisor:
         if self.settings.max_consecutive_losses > 0:
             command.extend(["--signalmonitormaxconsecutivelosses", str(self.settings.max_consecutive_losses)])
         return command
+
+    def _evidence_command(self) -> List[str]:
+        return [
+            sys.executable,
+            str(
+                self.repo_root
+                / "scripts"
+                / "run_full_rank_evidence_recorder.py"
+            ),
+            "--universe",
+            self.settings.universe,
+            "--poll-seconds",
+            str(
+                max(
+                    1.0,
+                    float(
+                        os.environ.get(
+                            "SIGNALMONITOR_STANDALONE_EVIDENCE_POLL_SECONDS",
+                            "5",
+                        )
+                        or 5
+                    ),
+                )
+            ),
+        ]
 
     def _discord_command(self) -> List[str]:
         return [

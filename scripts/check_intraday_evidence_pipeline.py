@@ -189,6 +189,7 @@ def assess(
         "scripts/assess_full_rank_integrated_policies.py",
         "scripts/assess_full_rank_opportunity_ceiling.py",
         "scripts/project_intraday_capital_growth.py",
+        "scripts/run_full_rank_evidence_recorder.py",
         "scripts/live_evidence_eod.sh",
         "scripts/check_intraday_eod_evidence.py",
     ]
@@ -229,6 +230,58 @@ def assess(
             ticker_continuous or not live_market,
             f"current stream uptime={ticker_uptime / 60.0:.1f}m"
             + ("" if live_market else "; continuity not required outside live market"),
+        )
+    )
+
+    standalone_evidence = is_truthy(
+        env.get("SIGNALMONITOR_STANDALONE_EVIDENCE", "0")
+    )
+    evidence_runtime = load_json(
+        data / "full_rank_evidence_runtime" / "status.json"
+    )
+    evidence_updated = parse_ist(evidence_runtime.get("updated_at"))
+    evidence_age = (
+        (now - evidence_updated).total_seconds()
+        if evidence_updated
+        else float("inf")
+    )
+    evidence_safe = (
+        bool(evidence_runtime.get("paper_only"))
+        and not bool(evidence_runtime.get("alerts_allowed"))
+        and not bool(evidence_runtime.get("real_orders_allowed"))
+    )
+    evidence_worker_ok = (
+        evidence_runtime.get("status")
+        == "recording_standalone_full_rank_evidence"
+        and evidence_runtime.get("owner") == "standalone"
+        and str(evidence_runtime.get("date")) == now.strftime("%Y-%m-%d")
+        and evidence_age <= 30.0
+        and int(evidence_runtime.get("tick_symbols") or 0) >= 2500
+        and float(evidence_runtime.get("feature_interval_seconds") or 0) <= 20.0
+        and 0.0 < float(evidence_runtime.get("poll_interval_seconds") or 0) <= 5.0
+        and evidence_safe
+    )
+    owner_ok = not standalone_evidence or evidence_worker_ok or not live_market
+    owner_detail = (
+        (
+            f"standalone status={evidence_runtime.get('status') or 'missing'}, "
+            f"owner={evidence_runtime.get('owner') or 'missing'}, "
+            f"ticks={int(evidence_runtime.get('tick_symbols') or 0)}, "
+            f"age={evidence_age:.0f}s, "
+            f"feature_interval={float(evidence_runtime.get('feature_interval_seconds') or 0):.1f}s, "
+            f"poll={float(evidence_runtime.get('poll_interval_seconds') or 0):.1f}s, "
+            f"paper_only={evidence_safe}"
+        )
+        if standalone_evidence
+        else "inline SignalMonitor evidence owner configured"
+    )
+    if standalone_evidence and not live_market:
+        owner_detail += "; freshness not required outside live market"
+    checks.append(
+        check(
+            "evidence_worker_owner",
+            owner_ok,
+            owner_detail,
         )
     )
 

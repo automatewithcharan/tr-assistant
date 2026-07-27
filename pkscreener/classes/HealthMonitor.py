@@ -25,6 +25,13 @@ class HealthMonitor:
             "discord": {"name": "DiscordTradeBot", "required": True},
             "autopilot": {"name": "AutoPilot", "required": True},
         }
+        standalone_evidence = str(
+            os.environ.get("SIGNALMONITOR_STANDALONE_EVIDENCE", "0") or "0"
+        ).strip().lower() in {"1", "true", "yes", "y", "on"}
+        self.workers["evidence"] = {
+            "name": "FullRankEvidence",
+            "required": standalone_evidence,
+        }
         base_dir = output_dir if os.path.basename(os.path.normpath(output_dir)) == "Data" else os.path.join(output_dir, "Data")
         self.logs_dir = os.path.join(base_dir, "assistant_logs")
         self.data_dir = base_dir
@@ -86,6 +93,7 @@ class HealthMonitor:
             "monitor": "--signalmonitor",
             "discord": "--discordtradebot",
             "autopilot": "--autopilot",
+            "evidence": "run_full_rank_evidence_recorder.py",
         }
 
         found_workers = set()
@@ -114,6 +122,7 @@ class HealthMonitor:
             "monitor": f"session_{self.session_id}_monitor.log",
             "discord": f"session_{self.session_id}_discord.log",
             "autopilot": f"session_{self.session_id}_autopilot.log",
+            "evidence": f"session_{self.session_id}_evidence.log",
         }
 
         for worker_key, log_name in expected_logs.items():

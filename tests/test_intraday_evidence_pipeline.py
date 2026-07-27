@@ -25,6 +25,7 @@ def fixture_root(tmp_path: Path) -> tuple[Path, datetime]:
         "scripts/assess_full_rank_integrated_policies.py",
         "scripts/project_intraday_capital_growth.py",
         "scripts/assess_full_rank_opportunity_ceiling.py",
+        "scripts/run_full_rank_evidence_recorder.py",
         "scripts/check_intraday_eod_evidence.py",
     ]
     for name in required:
@@ -84,6 +85,75 @@ def test_unsafe_autotrade_flag_blocks_readiness(tmp_path):
     result = run(root, now)
     assert result["status"] == "operational_issues_detected"
     assert not next(item for item in result["checks"] if item["name"] == "real_orders_disabled")["passed"]
+
+
+def test_standalone_evidence_owner_is_verified_when_enabled(tmp_path):
+    root, now = fixture_root(tmp_path)
+    write(
+        root / ".env.dev",
+        "KITE_AUTO_TRADE=0\n"
+        "ENABLE_GRADE_B_AUTOTRADE=0\n"
+        "SIGNALMONITOR_STANDALONE_EVIDENCE=1\n",
+    )
+    write(
+        root / "results/Data/full_rank_evidence_runtime/status.json",
+        {
+            "status": "recording_standalone_full_rank_evidence",
+            "owner": "standalone",
+            "date": "2026-07-23",
+            "updated_at": "2026-07-23 10:00:00",
+            "tick_symbols": 2860,
+            "feature_interval_seconds": 15,
+            "poll_interval_seconds": 5,
+            "paper_only": True,
+            "alerts_allowed": False,
+            "real_orders_allowed": False,
+        },
+    )
+
+    result = run(root, now)
+
+    owner = next(
+        item for item in result["checks"]
+        if item["name"] == "evidence_worker_owner"
+    )
+    assert owner["passed"] is True
+    assert "owner=standalone" in owner["detail"]
+
+
+def test_stale_standalone_evidence_owner_blocks_readiness(tmp_path):
+    root, now = fixture_root(tmp_path)
+    write(
+        root / ".env.dev",
+        "KITE_AUTO_TRADE=0\n"
+        "ENABLE_GRADE_B_AUTOTRADE=0\n"
+        "SIGNALMONITOR_STANDALONE_EVIDENCE=1\n",
+    )
+    write(
+        root / "results/Data/full_rank_evidence_runtime/status.json",
+        {
+            "status": "recording_standalone_full_rank_evidence",
+            "owner": "standalone",
+            "date": "2026-07-23",
+            "updated_at": "2026-07-23 09:58:00",
+            "tick_symbols": 2860,
+            "feature_interval_seconds": 15,
+            "poll_interval_seconds": 5,
+            "paper_only": True,
+            "alerts_allowed": False,
+            "real_orders_allowed": False,
+        },
+    )
+
+    result = run(root, now)
+
+    owner = next(
+        item for item in result["checks"]
+        if item["name"] == "evidence_worker_owner"
+    )
+    assert result["status"] == "operational_issues_detected"
+    assert owner["passed"] is False
+    assert "age=120s" in owner["detail"]
 
 
 def test_stale_observer_blocks_readiness(tmp_path):

@@ -204,6 +204,9 @@ class SignalMonitorRunner:
         self.enable_leader_ignition = self._env_truthy("SIGNALMONITOR_ENABLE_LEADER_IGNITION", "1")
         self.leader_ignition_discord_alerts = self._env_truthy("SIGNALMONITOR_LEADER_IGNITION_DISCORD", "0")
         self.enable_live_feature_recorder = self._env_truthy("SIGNALMONITOR_ENABLE_LIVE_FEATURE_RECORDER", "1")
+        self.standalone_live_feature_recorder = self._env_truthy(
+            "SIGNALMONITOR_STANDALONE_EVIDENCE", "0"
+        )
         self.enable_full_rank_paper_observer = self._env_truthy(
             "SIGNALMONITOR_ENABLE_FULL_RANK_PAPER_OBSERVER", "1"
         )
@@ -300,7 +303,11 @@ class SignalMonitorRunner:
                 horizon_minutes=float(os.environ.get("SIGNALMONITOR_FULL_RANK_PAPER_HORIZON_MINUTES", "60") or 60),
                 stress_pct=float(os.environ.get("SIGNALMONITOR_FULL_RANK_PAPER_STRESS_PCT", "0.10") or 0.10),
             )
-            if self.enable_live_feature_recorder and self.enable_full_rank_paper_observer
+            if (
+                self.enable_live_feature_recorder
+                and self.enable_full_rank_paper_observer
+                and not self.standalone_live_feature_recorder
+            )
             else None
         )
         self._full_rank_contract_matrix = (
@@ -308,7 +315,11 @@ class SignalMonitorRunner:
                 output_dir=self.output_dir,
                 stress_pct=float(os.environ.get("SIGNALMONITOR_FULL_RANK_PAPER_STRESS_PCT", "0.10") or 0.10),
             )
-            if self.enable_live_feature_recorder and self.enable_full_rank_contract_matrix
+            if (
+                self.enable_live_feature_recorder
+                and self.enable_full_rank_contract_matrix
+                and not self.standalone_live_feature_recorder
+            )
             else None
         )
         self._full_rank_entry_timing = (
@@ -320,7 +331,11 @@ class SignalMonitorRunner:
                 horizon_minutes=float(os.environ.get("SIGNALMONITOR_FULL_RANK_PAPER_HORIZON_MINUTES", "60") or 60),
                 stress_pct=float(os.environ.get("SIGNALMONITOR_FULL_RANK_PAPER_STRESS_PCT", "0.10") or 0.10),
             )
-            if self.enable_live_feature_recorder and self.enable_full_rank_entry_timing
+            if (
+                self.enable_live_feature_recorder
+                and self.enable_full_rank_entry_timing
+                and not self.standalone_live_feature_recorder
+            )
             else None
         )
         self._last_discord_heartbeat_ts = 0.0
@@ -4229,6 +4244,8 @@ class SignalMonitorRunner:
         """Shadow-record live-only context for later strategy research."""
         recorder = getattr(self, "_live_feature_recorder", None)
         if recorder is None or not getattr(self, "enable_live_feature_recorder", False):
+            return
+        if getattr(self, "standalone_live_feature_recorder", False):
             return
         if not self.use_live_kite or not self._is_regular_market_hours():
             return
