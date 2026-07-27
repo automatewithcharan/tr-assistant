@@ -1,3 +1,4 @@
+import hashlib
 import json
 
 from scripts.build_broad_rank_checkpoint_status import (
