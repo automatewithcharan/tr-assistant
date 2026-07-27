@@ -35,14 +35,16 @@ class FullUniverseRankContractMatrixObserver:
     REGISTRATION_COLUMNS = [
         "EventId", "Date", "EntryAt", "RecorderGeneration", "Exchange", "Symbol",
         "Cohort", "Source",
-        "EntryAsk", "EntryBid", "Quantity", "Capital", "DayChangePct",
+        "EntryAsk", "EntryBid", "EntryAskQty", "RequestedQuantity",
+        "EntryTopLevelFillable", "Quantity", "Capital", "DayChangePct",
         "DayChangeRank", "RankImprovement", "RankVelocityPerMinute",
         "BuyerSellerRatio", "EntrySpreadBps",
     ]
     OUTCOME_COLUMNS = [
         "MatrixId", "EventId", "Contract", "Date", "EntryAt",
         "RecorderGeneration", "Exchange", "ExitAt", "Symbol", "Cohort", "Source",
-        "EntryAsk", "ExitBid", "Quantity",
+        "EntryAsk", "ExitBid", "EntryAskQty", "ExitBidQty",
+        "EntryTopLevelFillable", "ExitTopLevelFillable", "Quantity",
         "TargetPct", "StopPct", "HorizonMinutes", "ExitReason", "HoldMinutes",
         "GrossReturnPct", "StressPct", "NetReturnPct", "GrossPnl",
         "StressCost", "NetPnl",
@@ -131,6 +133,12 @@ class FullUniverseRankContractMatrixObserver:
                     "Cohort": str(event.get("Cohort", "") or ""),
                     "Source": str(event.get("Source", "") or ""),
                     "EntryAsk": entry_ask,
+                    "EntryAskQty": int(
+                        self._number(event.get("EntryAskQty"))
+                    ),
+                    "EntryTopLevelFillable": self._truthy(
+                        event.get("EntryTopLevelFillable")
+                    ),
                     "Quantity": quantity,
                     "TargetPct": target_pct,
                     "StopPct": stop_pct,
@@ -152,7 +160,9 @@ class FullUniverseRankContractMatrixObserver:
         rows = []
         eod = now.hour * 60 + now.minute >= 15 * 60 + 25
         for matrix_id, entry in list(self.active.items()):
-            bid, _ = LiveFeatureRecorder.best_bid_ask(ticks.get(entry["Symbol"], {}))
+            exit_tick = ticks.get(entry["Symbol"], {})
+            bid, _ = LiveFeatureRecorder.best_bid_ask(exit_tick)
+            bid_qty, _ = LiveFeatureRecorder.best_bid_ask_quantities(exit_tick)
             if bid <= 0:
                 continue
             hold = max(0.0, (now.timestamp() - float(entry["EntryTs"])) / 60.0)
@@ -190,6 +200,16 @@ class FullUniverseRankContractMatrixObserver:
                 "Source": entry["Source"],
                 "EntryAsk": ask,
                 "ExitBid": round(bid, 2),
+                "EntryAskQty": int(
+                    self._number(entry.get("EntryAskQty"))
+                ),
+                "ExitBidQty": int(bid_qty),
+                "EntryTopLevelFillable": self._truthy(
+                    entry.get("EntryTopLevelFillable")
+                ),
+                "ExitTopLevelFillable": bool(
+                    bid_qty > 0 and bid_qty >= quantity
+                ),
                 "Quantity": quantity,
                 "TargetPct": entry["TargetPct"],
                 "StopPct": entry["StopPct"],
@@ -298,3 +318,11 @@ class FullUniverseRankContractMatrixObserver:
             return float(value)
         except Exception:
             return 0.0
+
+    @staticmethod
+    def _truthy(value: Any) -> bool:
+        if isinstance(value, bool):
+            return value
+        return str(value or "").strip().lower() in {
+            "1", "true", "yes", "y"
+        }

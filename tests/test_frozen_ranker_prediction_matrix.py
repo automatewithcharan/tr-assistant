@@ -51,6 +51,9 @@ def _evidence(session_count=32, winning_return=3.0):
                 "MoveBand": "1-2",
                 "ModelTrainedThrough": model_date,
                 "ModelSourceSha256": model_hash,
+                "EntryAskQty": 10000,
+                "RequestedQuantity": 5000,
+                "EntryTopLevelFillable": True,
             }
         )
         for contract in CONTRACTS:
@@ -70,6 +73,8 @@ def _evidence(session_count=32, winning_return=3.0):
                     "ExpectedReturnPct": 0.3,
                     "ModelTrainedThrough": model_date,
                     "ModelSourceSha256": model_hash,
+                    "ExitBidQty": 10000,
+                    "ExitTopLevelFillable": True,
                 }
             )
         coverage.append(
@@ -176,6 +181,7 @@ def test_replay_enforces_slot_occupancy_and_same_time_score_order():
                 "EntryAt": pd.Timestamp(f"{date} 09:30:00"),
                 "Symbol": "AAA",
                 "ExpectedReturnPct": 0.3,
+                "EntryTopLevelFillable": True,
             },
             {
                 "EventId": "B",
@@ -183,6 +189,7 @@ def test_replay_enforces_slot_occupancy_and_same_time_score_order():
                 "EntryAt": pd.Timestamp(f"{date} 09:30:00"),
                 "Symbol": "BBB",
                 "ExpectedReturnPct": 0.4,
+                "EntryTopLevelFillable": True,
             },
             {
                 "EventId": "C",
@@ -190,6 +197,15 @@ def test_replay_enforces_slot_occupancy_and_same_time_score_order():
                 "EntryAt": pd.Timestamp(f"{date} 09:41:00"),
                 "Symbol": "CCC",
                 "ExpectedReturnPct": 0.2,
+                "EntryTopLevelFillable": True,
+            },
+            {
+                "EventId": "D",
+                "Date": date,
+                "EntryAt": pd.Timestamp(f"{date} 09:30:00"),
+                "Symbol": "DDD",
+                "ExpectedReturnPct": 0.9,
+                "EntryTopLevelFillable": False,
             },
         ]
     )
@@ -200,11 +216,13 @@ def test_replay_enforces_slot_occupancy_and_same_time_score_order():
                 "Contract": "fast",
                 "ExitAt": pd.Timestamp(f"{date} {exit_time}"),
                 "NetReturnPct": 1.0,
+                "ExitTopLevelFillable": True,
             }
             for event, exit_time in (
                 ("A", "09:40:00"),
                 ("B", "09:40:00"),
                 ("C", "09:50:00"),
+                ("D", "09:40:00"),
             )
         ]
     )

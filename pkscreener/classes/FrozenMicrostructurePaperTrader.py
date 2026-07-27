@@ -52,12 +52,15 @@ class FrozenMicrostructurePaperTrader:
     PREDICTION_COLUMNS = [
         "date", "when", "symbol", "move_band", "expected_return_pct",
         "selected", "selection_reason", "entry_bid", "entry_ask",
+        "entry_bid_qty", "entry_ask_qty",
         "recorder_generation", "exchange", "model_trained_through",
         "model_source_sha256", *MODEL_FEATURES,
     ]
     TRADE_COLUMNS = [
         "date", "symbol", "contract", "signal_time", "entry_time", "exit_time",
         "expected_return_pct", "entry_price", "exit_price", "qty", "deployed_capital",
+        "requested_qty", "entry_ask_qty", "entry_top_level_fillable",
+        "exit_bid_qty", "exit_top_level_fillable",
         "target_price", "stop_price", "exit_reason", "gross_pnl", "costs",
         "net_pnl", "net_return_pct", "model_trained_through", "closed",
     ]
@@ -244,12 +247,16 @@ class FrozenMicrostructurePaperTrader:
         traded_value = _float(current.get("TradedValue"))
         best_bid = _float(current.get("BestBid"))
         best_ask = _float(current.get("BestAsk"))
+        best_bid_qty = _float(current.get("BestBidQty"))
+        best_ask_qty = _float(current.get("BestAskQty"))
         spread = _float(current.get("SpreadBps"))
         if not (
             price >= 50.0
             and traded_value >= 30_000_000.0
             and best_bid > 0.0
             and best_ask > best_bid
+            and best_bid_qty > 0
+            and best_ask_qty > 0
             and 0.01 <= spread <= 20.0
         ):
             return None
@@ -264,6 +271,8 @@ class FrozenMicrostructurePaperTrader:
             "move_band": band[2],
             "entry_bid": best_bid,
             "entry_ask": best_ask,
+            "entry_bid_qty": int(best_bid_qty),
+            "entry_ask_qty": int(best_ask_qty),
             "recorder_generation": int(
                 _float(current.get("RecorderGeneration"))
             ),
@@ -310,6 +319,7 @@ class FrozenMicrostructurePaperTrader:
             if score < self.threshold or ask <= 0:
                 continue
             quantity = int(self.capital // ask)
+            ask_qty = int(_float(row.get("entry_ask_qty")))
             when = pd.Timestamp(row.get("when"))
             symbol = str(row.get("symbol", "") or "").strip().upper()
             move_band = str(row.get("move_band", "") or "")
@@ -336,6 +346,11 @@ class FrozenMicrostructurePaperTrader:
                     "Source": "prior_session_frozen_ranker",
                     "EntryAsk": ask,
                     "EntryBid": _float(row.get("entry_bid")),
+                    "EntryAskQty": ask_qty,
+                    "RequestedQuantity": quantity,
+                    "EntryTopLevelFillable": bool(
+                        ask_qty > 0 and ask_qty >= quantity
+                    ),
                     "Quantity": quantity,
                     "Capital": round(ask * quantity, 2),
                     "DayChangePct": _float(row.get("DayChangePct")),
@@ -382,7 +397,9 @@ class FrozenMicrostructurePaperTrader:
 
     def _enter(self, candidate: Dict[str, Any], now: datetime) -> Optional[Dict[str, Any]]:
         price = _float(candidate.get("entry_ask"))
-        qty = int(self.capital // price) if price > 0 else 0
+        requested_qty = int(self.capital // price) if price > 0 else 0
+        ask_qty = int(_float(candidate.get("entry_ask_qty")))
+        qty = min(requested_qty, ask_qty)
         if qty < 1:
             return None
         trade = {
@@ -397,6 +414,13 @@ class FrozenMicrostructurePaperTrader:
             "exit_price": 0.0,
             "qty": qty,
             "deployed_capital": round(price * qty, 2),
+            "requested_qty": requested_qty,
+            "entry_ask_qty": ask_qty,
+            "entry_top_level_fillable": bool(
+                ask_qty >= requested_qty
+            ),
+            "exit_bid_qty": 0,
+            "exit_top_level_fillable": False,
             "target_price": round(price * (1.0 + self.target_pct / 100.0), 4),
             "stop_price": round(price * (1.0 - self.stop_pct / 100.0), 4),
             "exit_reason": "",
@@ -419,10 +443,19 @@ class FrozenMicrostructurePaperTrader:
             return []
         tick = ticks.get(str(trade["symbol"]), {}) if isinstance(ticks, dict) else {}
         bid = _float(tick.get("best_bid") or tick.get("bid"))
+        bid_qty = int(
+            _float(
+                tick.get("best_bid_quantity")
+                or tick.get("bid_quantity")
+            )
+        )
         if bid <= 0:
             depth = tick.get("depth") if isinstance(tick, dict) else None
             buy = depth.get("buy", []) if isinstance(depth, dict) else []
             bid = _float((buy[0] or {}).get("price")) if buy else 0.0
+            bid_qty = int(
+                _float((buy[0] or {}).get("quantity"))
+            ) if buy else 0
         if bid <= 0:
             return []
         age_minutes = (
@@ -455,6 +488,10 @@ class FrozenMicrostructurePaperTrader:
                 "costs": round(costs, 2),
                 "net_pnl": round(net, 2),
                 "net_return_pct": round(net / deployed * 100.0, 6),
+                "exit_bid_qty": bid_qty,
+                "exit_top_level_fillable": bool(
+                    bid_qty > 0 and bid_qty >= int(trade["qty"])
+                ),
                 "closed": True,
             }
         )

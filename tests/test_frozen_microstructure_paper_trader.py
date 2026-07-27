@@ -52,6 +52,8 @@ def _row(when, move, bs=2.0):
         "OrderBookStable": True,
         "BestBid": 99.9,
         "BestAsk": 100.1,
+        "BestBidQty": 10000,
+        "BestAskQty": 10000,
         "SpreadBps": 19.99,
         "SectorAvgChangePct": 0.2,
         "SectorBreadthPct": 60.0,
@@ -68,7 +70,12 @@ def test_live_paper_prediction_precedes_executable_trade_and_exit(tmp_path):
         output_dir=str(tmp_path), model_path=str(_artifact(tmp_path)), persist=True
     )
     start = datetime(2026, 7, 22, 9, 18)
-    ticks = {"AAA": {"best_bid": 99.9}}
+    ticks = {
+        "AAA": {
+            "best_bid": 99.9,
+            "best_bid_quantity": 10000,
+        }
+    }
 
     assert trader.process(pd.DataFrame([_row(start, 0.55)]), ticks, now=start) == []
     assert trader.process(
@@ -85,6 +92,7 @@ def test_live_paper_prediction_precedes_executable_trade_and_exit(tmp_path):
     assert [event["event"] for event in events] == ["paper_entry"]
     assert events[0]["model_trained_through"] == "2026-07-21"
     assert events[0]["entry_price"] == 100.1
+    assert events[0]["entry_top_level_fillable"] is True
     predictions = pd.read_csv(
         tmp_path / "frozen_microstructure_paper" / "predictions_2026-07-22.csv"
     )
@@ -98,11 +106,18 @@ def test_live_paper_prediction_precedes_executable_trade_and_exit(tmp_path):
     assert contract_entries[0]["Source"] == "prior_session_frozen_ranker"
 
     exits = trader.process(
-        pd.DataFrame(), {"AAA": {"best_bid": 101.7}},
+        pd.DataFrame(),
+        {
+            "AAA": {
+                "best_bid": 101.7,
+                "best_bid_quantity": 10000,
+            }
+        },
         now=start + timedelta(minutes=3),
     )
     assert [event["event"] for event in exits] == ["paper_exit"]
     assert exits[0]["exit_reason"] == "target"
+    assert exits[0]["exit_top_level_fillable"] is True
     assert exits[0]["net_pnl"] > 0
 
 
@@ -116,7 +131,12 @@ def test_same_day_model_cannot_trade(tmp_path):
     for offset, move in enumerate((0.55, 0.65, 0.85)):
         events = trader.process(
             pd.DataFrame([_row(start + timedelta(minutes=offset), move)]),
-            {"AAA": {"best_bid": 99.9}},
+            {
+                "AAA": {
+                    "best_bid": 99.9,
+                    "best_bid_quantity": 10000,
+                }
+            },
             now=start + timedelta(minutes=offset),
         )
     assert events == []
@@ -132,7 +152,12 @@ def test_high_frequency_standalone_rows_keep_model_history_near_two_minutes(
         persist=False,
     )
     start = datetime(2026, 7, 22, 9, 18)
-    ticks = {"AAA": {"best_bid": 99.9}}
+    ticks = {
+        "AAA": {
+            "best_bid": 99.9,
+            "best_bid_quantity": 10000,
+        }
+    }
     entries = []
     for offset in range(0, 121, 15):
         now = start + timedelta(seconds=offset)

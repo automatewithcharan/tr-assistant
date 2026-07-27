@@ -33,6 +33,9 @@ def _entry(now, symbol="AAA"):
         "EntryAsk": 100.1,
         "EntryBid": 100.0,
         "EntrySpreadBps": 9.995,
+        "EntryAskQty": 1000,
+        "RequestedQuantity": 4995,
+        "EntryTopLevelFillable": False,
         "Quantity": 4995,
         "Capital": 499999.5,
         "DayChangePct": 1.2,
@@ -58,7 +61,10 @@ def test_default_matrix_registers_every_frozen_contract(tmp_path):
     registrations = pd.read_csv(
         observer.root / "registrations_2026-07-22.csv"
     )
-    assert registrations["RecorderGeneration"].tolist() == [5]
+    assert registrations["RecorderGeneration"].tolist() == [6]
+    assert registrations["Exchange"].tolist() == ["NSE"]
+    assert registrations["EntryAskQty"].tolist() == [1000]
+    assert registrations["EntryTopLevelFillable"].tolist() == [False]
 
 
 def test_contracts_close_independently_at_target_and_timeout(tmp_path):
@@ -80,7 +86,10 @@ def test_contracts_close_independently_at_target_and_timeout(tmp_path):
     saved = pd.read_csv(observer.root / "outcomes_2026-07-22.csv")
     assert saved["Contract"].tolist() == ["fast", "runner"]
     assert saved["ExitBid"].tolist() == [100.7, 100.4]
-    assert saved["RecorderGeneration"].tolist() == [5, 5]
+    assert saved["RecorderGeneration"].tolist() == [6, 6]
+    assert saved["Exchange"].tolist() == ["NSE", "NSE"]
+    assert saved["ExitBidQty"].tolist() == [1000, 1000]
+    assert saved["ExitTopLevelFillable"].tolist() == [False, False]
 
 
 def test_legacy_active_contract_without_generation_still_closes(tmp_path):

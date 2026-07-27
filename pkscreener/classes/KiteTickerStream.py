@@ -354,8 +354,10 @@ class KiteTickerStreamRunner:
     def _compact_tick(self, symbol: str, tick: Dict, received_at: str) -> Dict:
         ohlc = tick.get("ohlc", {}) or {}
         depth = tick.get("depth", {}) or {}
-        best_bid = ((depth.get("buy") or [{}])[0] or {}).get("price")
-        best_ask = ((depth.get("sell") or [{}])[0] or {}).get("price")
+        best_bid_level = (depth.get("buy") or [{}])[0] or {}
+        best_ask_level = (depth.get("sell") or [{}])[0] or {}
+        best_bid = best_bid_level.get("price")
+        best_ask = best_ask_level.get("price")
         return {
             "symbol": symbol,
             "instrument_token": tick.get("instrument_token"),
@@ -378,6 +380,8 @@ class KiteTickerStreamRunner:
             "exchange_timestamp": str(tick.get("exchange_timestamp") or ""),
             "best_bid": best_bid,
             "best_ask": best_ask,
+            "best_bid_quantity": best_bid_level.get("quantity"),
+            "best_ask_quantity": best_ask_level.get("quantity"),
             "received_at": received_at,
         }
 

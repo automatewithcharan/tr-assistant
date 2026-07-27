@@ -82,6 +82,7 @@ def load_trades(patterns: Iterable[str]) -> pd.DataFrame:
         required = {
             "date", "symbol", "entry_time", "exit_time", "deployed_capital",
             "net_pnl", "model_trained_through", "closed",
+            "entry_top_level_fillable", "exit_top_level_fillable",
         }
         if not required.issubset(frame.columns):
             continue
@@ -100,6 +101,12 @@ def load_trades(patterns: Iterable[str]) -> pd.DataFrame:
     )
     data["net_pnl"] = pd.to_numeric(data["net_pnl"], errors="coerce")
     data["closed"] = _truthy(data["closed"])
+    data["entry_top_level_fillable"] = _truthy(
+        data["entry_top_level_fillable"]
+    )
+    data["exit_top_level_fillable"] = _truthy(
+        data["exit_top_level_fillable"]
+    )
     data["model_trained_through"] = (
         data["model_trained_through"].astype(str).str[:10]
     )
@@ -141,6 +148,11 @@ def _day_is_causal_and_complete(
 
     if (~trades["closed"]).any():
         issues.append("open paper trade remains")
+    if (
+        ~trades["entry_top_level_fillable"]
+        | ~trades["exit_top_level_fillable"]
+    ).any():
+        issues.append("paper trade was not fully executable at top level")
     if (
         trades["entry_time"].isna()
         | trades["exit_time"].isna()

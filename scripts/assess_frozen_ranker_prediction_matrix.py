@@ -29,6 +29,12 @@ SLOT_COUNTS = (1, 2, 3)
 SCORE_THRESHOLDS = (0.20, 0.25, 0.30, 0.40)
 
 
+def _truthy(values: pd.Series) -> pd.Series:
+    return values.fillna("").astype(str).str.strip().str.lower().isin(
+        {"1", "1.0", "true", "yes", "y", "on"}
+    )
+
+
 def _files(patterns: Iterable[str]) -> list[str]:
     return sorted(
         {
@@ -49,7 +55,8 @@ def load_registrations(patterns: Iterable[str]) -> pd.DataFrame:
         required = {
             "EventId", "Date", "EntryAt", "Symbol", "EntryAsk",
             "ExpectedReturnPct", "MoveBand", "ModelTrainedThrough",
-            "ModelSourceSha256",
+            "ModelSourceSha256", "EntryAskQty", "RequestedQuantity",
+            "EntryTopLevelFillable",
         }
         if not required.issubset(frame.columns):
             continue
@@ -62,6 +69,9 @@ def load_registrations(patterns: Iterable[str]) -> pd.DataFrame:
     data["Symbol"] = data["Symbol"].astype(str).str.strip().str.upper()
     for column in ("EntryAsk", "ExpectedReturnPct"):
         data[column] = pd.to_numeric(data[column], errors="coerce")
+    data["EntryTopLevelFillable"] = _truthy(
+        data["EntryTopLevelFillable"]
+    )
     data["ModelTrainedThrough"] = (
         data["ModelTrainedThrough"].astype(str).str[:10]
     )
@@ -78,7 +88,7 @@ def load_outcomes(patterns: Iterable[str]) -> pd.DataFrame:
         required = {
             "EventId", "Contract", "Date", "EntryAt", "ExitAt", "Symbol",
             "NetReturnPct", "ExpectedReturnPct", "ModelTrainedThrough",
-            "ModelSourceSha256",
+            "ModelSourceSha256", "ExitBidQty", "ExitTopLevelFillable",
         }
         if not required.issubset(frame.columns):
             continue
@@ -92,6 +102,9 @@ def load_outcomes(patterns: Iterable[str]) -> pd.DataFrame:
     data["Symbol"] = data["Symbol"].astype(str).str.strip().str.upper()
     for column in ("NetReturnPct", "ExpectedReturnPct"):
         data[column] = pd.to_numeric(data[column], errors="coerce")
+    data["ExitTopLevelFillable"] = _truthy(
+        data["ExitTopLevelFillable"]
+    )
     return data.drop_duplicates(["EventId", "Contract"], keep="last")
 
 
@@ -239,6 +252,7 @@ def replay_policy(
             & pd.to_numeric(
                 registrations["ExpectedReturnPct"], errors="coerce"
             ).ge(float(score_threshold))
+            & _truthy(registrations["EntryTopLevelFillable"])
         ].sort_values(
             ["EntryAt", "ExpectedReturnPct", "Symbol"],
             ascending=[True, False, True],
@@ -270,7 +284,10 @@ def replay_policy(
                 if row.Symbol in traded_symbols:
                     continue
                 outcome = outcome_map.get(str(row.EventId))
-                if outcome is None:
+                if (
+                    outcome is None
+                    or not bool(outcome.ExitTopLevelFillable)
+                ):
                     continue
                 net_return = (
                     float(outcome.NetReturnPct) - float(extra_cost_pct)

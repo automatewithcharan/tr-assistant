@@ -26,7 +26,8 @@ class FullUniverseRankPaperObserver:
         "EventId", "Date", "EntryAt", "RecorderGeneration", "Exchange",
         "InstrumentToken", "Symbol", "Sector",
         "Cohort", "Source",
-        "EntryAsk", "EntryBid", "EntrySpreadBps", "Quantity", "Capital",
+        "EntryAsk", "EntryBid", "EntrySpreadBps", "EntryAskQty",
+        "RequestedQuantity", "EntryTopLevelFillable", "Quantity", "Capital",
         "TargetPrice", "StopPrice", "TargetPct", "StopPct", "HorizonMinutes",
         "StressPct", "OpenChangePct", "PullbackFromHighPct", "DayChangePct",
         "UniverseSize", "DayChangeRank", "DayChangeRankPct", "PreviousDayChangeRank",
@@ -39,7 +40,9 @@ class FullUniverseRankPaperObserver:
     ]
     OUTCOME_COLUMNS = [
         "EventId", "Date", "EntryAt", "ExitAt", "Symbol", "Cohort", "Source",
-        "EntryAsk", "ExitBid", "Quantity", "ExitReason", "HoldMinutes",
+        "EntryAsk", "ExitBid", "EntryAskQty", "ExitBidQty",
+        "EntryTopLevelFillable", "ExitTopLevelFillable",
+        "Quantity", "ExitReason", "HoldMinutes",
         "GrossReturnPct", "StressPct", "NetReturnPct", "GrossPnl", "StressCost",
         "NetPnl", "TargetPrice", "StopPrice",
     ]
@@ -111,6 +114,7 @@ class FullUniverseRankPaperObserver:
             symbol = str(row.get("Symbol", "") or "").strip().upper()
             tick = ticks.get(symbol, {})
             bid, ask = LiveFeatureRecorder.best_bid_ask(tick)
+            _, ask_qty = LiveFeatureRecorder.best_bid_ask_quantities(tick)
             spread_bps = self._spread_bps(bid, ask)
             price = self._number(row.get("LastPrice"))
             traded_value = self._number(row.get("TradedValue"))
@@ -157,6 +161,11 @@ class FullUniverseRankPaperObserver:
                 "EntryAsk": round(ask, 2),
                 "EntryBid": round(bid, 2),
                 "EntrySpreadBps": round(spread_bps, 3),
+                "EntryAskQty": int(ask_qty),
+                "RequestedQuantity": quantity,
+                "EntryTopLevelFillable": bool(
+                    ask_qty > 0 and ask_qty >= quantity
+                ),
                 "Quantity": quantity,
                 "Capital": round(quantity * ask, 2),
                 "TargetPrice": round(ask * (1.0 + self.target_pct / 100.0), 2),
@@ -208,7 +217,9 @@ class FullUniverseRankPaperObserver:
         outcome_rows: List[Dict[str, Any]] = []
         eod = now.hour * 60 + now.minute >= 15 * 60 + 25
         for event_id, entry in list(self.active.items()):
-            bid, _ = LiveFeatureRecorder.best_bid_ask(ticks.get(entry["Symbol"], {}))
+            exit_tick = ticks.get(entry["Symbol"], {})
+            bid, _ = LiveFeatureRecorder.best_bid_ask(exit_tick)
+            bid_qty, _ = LiveFeatureRecorder.best_bid_ask_quantities(exit_tick)
             if bid <= 0:
                 continue
             hold_minutes = max(0.0, (now.timestamp() - float(entry["EntryTs"])) / 60.0)
@@ -238,6 +249,16 @@ class FullUniverseRankPaperObserver:
                 "Source": entry["Source"],
                 "EntryAsk": ask,
                 "ExitBid": round(bid, 2),
+                "EntryAskQty": int(
+                    self._number(entry.get("EntryAskQty"))
+                ),
+                "ExitBidQty": int(bid_qty),
+                "EntryTopLevelFillable": self._truthy(
+                    entry.get("EntryTopLevelFillable")
+                ),
+                "ExitTopLevelFillable": bool(
+                    bid_qty > 0 and bid_qty >= quantity
+                ),
                 "Quantity": quantity,
                 "ExitReason": reason,
                 "HoldMinutes": round(hold_minutes, 3),

@@ -33,6 +33,8 @@ def _trade(date, symbol, entry, exit_at, pnl, trained_through):
         "net_pnl": pnl,
         "closed": True,
         "model_trained_through": trained_through,
+        "entry_top_level_fillable": True,
+        "exit_top_level_fillable": True,
     }
 
 
@@ -152,3 +154,30 @@ def test_prior_session_ranker_excludes_noncausal_model_provenance():
     assert status["excluded_or_invalid_sessions"] == 1
     assert any("not prior-session-only" in issue for issue in status["issues"])
     assert status["accepted"] is False
+
+
+def test_prior_session_ranker_rejects_unfillable_top_level_trade():
+    date = "2026-07-27"
+    prior = "2026-07-24"
+    entry = f"{date} 09:30:00"
+    trade = _trade(
+        date, "THIN", entry, f"{date} 09:45:00", 12000.0, prior
+    )
+    trade["entry_top_level_fillable"] = False
+
+    status, daily = build_assessment(
+        pd.DataFrame([_prediction(date, "THIN", entry, prior)]),
+        pd.DataFrame([trade]),
+        _coverage([date]),
+        capital=500_000.0,
+        daily_goal=10_000.0,
+        stress_cost_pct=0.10,
+        minimum_sessions=1,
+        minimum_trade_sessions=1,
+        minimum_trades=1,
+        max_trades_per_day=10,
+    )
+
+    assert daily.empty
+    assert status["accepted"] is False
+    assert any("not fully executable" in issue for issue in status["issues"])

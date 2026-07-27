@@ -57,6 +57,8 @@ def test_registers_only_buyable_rank_cohort_at_observed_ask(tmp_path):
     assert ":g5:" in events[0]["EventId"]
     assert events[0]["Cohort"] == "rapid_rank_climber:r11_25:m1_2"
     assert events[0]["Quantity"] == int(500000 // 100.1)
+    assert events[0]["EntryAskQty"] == 1000
+    assert events[0]["EntryTopLevelFillable"] is False
     assert json.loads(observer.status_path.read_text())["real_orders_allowed"] is False
 
     rejected = _rows(Symbol="CHEAP", LastPrice=20.0)
@@ -92,6 +94,9 @@ def test_target_exit_uses_observed_bid_and_applies_stress(tmp_path):
     events = observer.process(
         pd.DataFrame(), {"AAA": _tick(bid=101.7, ask=101.8)}, now=start + timedelta(minutes=5)
     )
+
+    assert events[0]["ExitBidQty"] == 1000
+    assert events[0]["ExitTopLevelFillable"] is False
 
     assert len(events) == 1
     outcome = events[0]

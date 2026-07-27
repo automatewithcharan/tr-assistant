@@ -66,6 +66,8 @@ class LiveFeatureRecorder:
         "OrderBookStable",
         "BestBid",
         "BestAsk",
+        "BestBidQty",
+        "BestAskQty",
         "SpreadBps",
         "SpreadOk",
         "SectorCount",
@@ -106,6 +108,8 @@ class LiveFeatureRecorder:
         "SellQty",
         "BestBid",
         "BestAsk",
+        "BestBidQty",
+        "BestAskQty",
         "SpreadBps",
         "SpreadOk",
         "Checks",
@@ -345,6 +349,7 @@ class LiveFeatureRecorder:
             tick_last_price = self._to_float(tick.get("last_price"))
             day_high = self._to_float(tick.get("high")) or self._to_float(decision.get("DayHigh"))
             best_bid, best_ask = self.best_bid_ask(tick)
+            best_bid_qty, best_ask_qty = self.best_bid_ask_quantities(tick)
             spread_bps = self._spread_bps(best_bid, best_ask)
             buy_qty = self._to_float(tick.get("total_buy_quantity")) or self._to_float(decision.get("TotalBuyQty"))
             sell_qty = self._to_float(tick.get("total_sell_quantity")) or self._to_float(decision.get("TotalSellQty"))
@@ -390,6 +395,8 @@ class LiveFeatureRecorder:
                     "SellQty": int(sell_qty),
                     "BestBid": round(best_bid, 2),
                     "BestAsk": round(best_ask, 2),
+                    "BestBidQty": int(best_bid_qty),
+                    "BestAskQty": int(best_ask_qty),
                     "SpreadBps": round(spread_bps, 3),
                     "SpreadOk": (
                         best_bid > 0.0
@@ -513,6 +520,7 @@ class LiveFeatureRecorder:
             sell_qty = self._to_float(tick.get("total_sell_quantity"))
             bs_ratio = self._buyer_seller_ratio(buy_qty, sell_qty)
             best_bid, best_ask = self.best_bid_ask(tick)
+            best_bid_qty, best_ask_qty = self.best_bid_ask_quantities(tick)
             spread_bps = self._spread_bps(best_bid, best_ask)
             history_stats = self._update_history(symbol, now_dt, bs_ratio, spread_bps)
             sector = get_sector(symbol) or "UNKNOWN"
@@ -587,6 +595,8 @@ class LiveFeatureRecorder:
                     "OrderBookStable": ob_stable,
                     "BestBid": round(best_bid, 2),
                     "BestAsk": round(best_ask, 2),
+                    "BestBidQty": int(best_bid_qty),
+                    "BestAskQty": int(best_ask_qty),
                     "SpreadBps": round(spread_bps, 3),
                     "SpreadOk": spread_ok,
                     "SectorCount": int(sector_row.get("count", 0) or 0),
@@ -662,6 +672,30 @@ class LiveFeatureRecorder:
         if best_bid <= 0 or best_ask <= best_bid:
             return 0.0, 0.0
         return best_bid, best_ask
+
+    @staticmethod
+    def best_bid_ask_quantities(
+        tick: Dict[str, Any],
+    ) -> Tuple[float, float]:
+        best_bid_qty = LiveFeatureRecorder._to_float(
+            tick.get("best_bid_quantity") or tick.get("bid_quantity")
+        )
+        best_ask_qty = LiveFeatureRecorder._to_float(
+            tick.get("best_ask_quantity") or tick.get("ask_quantity")
+        )
+        depth = tick.get("depth") if isinstance(tick, dict) else {}
+        if isinstance(depth, dict):
+            buy_depth = depth.get("buy") or []
+            sell_depth = depth.get("sell") or []
+            if best_bid_qty <= 0 and buy_depth:
+                best_bid_qty = LiveFeatureRecorder._to_float(
+                    (buy_depth[0] or {}).get("quantity")
+                )
+            if best_ask_qty <= 0 and sell_depth:
+                best_ask_qty = LiveFeatureRecorder._to_float(
+                    (sell_depth[0] or {}).get("quantity")
+                )
+        return best_bid_qty, best_ask_qty
 
     def _build_sector_stats(self, ticks: Dict[str, Dict[str, Any]]) -> Tuple[Dict[str, Dict[str, float]], float]:
         sector_changes: Dict[str, List[float]] = {}
