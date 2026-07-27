@@ -361,7 +361,7 @@ def test_default_discovery_pool_guarantees_top_200(tmp_path):
     assert recorder.interval_seconds == 15.0
     assert len(rows) == 200
     assert {row["DayChangeRank"] for row in rows} == set(range(1, 201))
-    assert {row["RecorderGeneration"] for row in rows} == {5}
+    assert {row["RecorderGeneration"] for row in rows} == {6}
 
 
 def test_rapid_climbers_make_row_limit_a_soft_cap(tmp_path):

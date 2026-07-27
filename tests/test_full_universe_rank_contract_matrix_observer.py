@@ -22,11 +22,12 @@ def _tick(bid, ask=None):
 def _entry(now, symbol="AAA"):
     return {
         "event": "entry",
-        "EventId": f"{now:%Y-%m-%d}:{symbol}:g5:rapid:r1_10:m1_2",
+        "EventId": f"{now:%Y-%m-%d}:{symbol}:g6:rapid:r1_10:m1_2",
         "Date": now.strftime("%Y-%m-%d"),
         "EntryAt": now.strftime("%Y-%m-%d %H:%M:%S"),
         "EntryTs": now.timestamp(),
-        "RecorderGeneration": 5,
+        "RecorderGeneration": 6,
+        "Exchange": "NSE",
         "Symbol": symbol,
         "Cohort": "rapid:r1_10:m1_2",
         "Source": "rapid_rank_climber",
@@ -123,7 +124,7 @@ def test_registration_ledger_widens_old_same_day_schema(tmp_path):
     old_columns = [
         column
         for column in observer.REGISTRATION_COLUMNS
-        if column != "RecorderGeneration"
+        if column not in {"RecorderGeneration", "Exchange"}
     ]
     old = _entry(now, symbol="OLD")
     pd.DataFrame(
@@ -141,7 +142,7 @@ def test_registration_ledger_widens_old_same_day_schema(tmp_path):
     assert saved.columns.tolist() == observer.REGISTRATION_COLUMNS
     assert saved["Symbol"].tolist() == ["OLD", "NEW"]
     assert pd.isna(saved.iloc[0]["RecorderGeneration"])
-    assert int(saved.iloc[1]["RecorderGeneration"]) == 5
+    assert int(saved.iloc[1]["RecorderGeneration"]) == 6
 
 
 def test_restart_preserves_contracts_and_does_not_duplicate_entry(tmp_path):

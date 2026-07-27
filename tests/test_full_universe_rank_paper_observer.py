@@ -24,7 +24,9 @@ def _tick(bid=100.0, ask=100.1, price=100.05):
 def _rows(**overrides):
     row = {
         "Symbol": "AAA",
-        "RecorderGeneration": 5,
+        "RecorderGeneration": 6,
+        "Exchange": "NSE",
+        "InstrumentToken": 12345,
         "LastPrice": 100.05,
         "DayChangePct": 1.2,
         "DayChangeRank": 12,
@@ -53,8 +55,10 @@ def test_registers_only_buyable_rank_cohort_at_observed_ask(tmp_path):
     assert events[0]["event"] == "entry"
     assert events[0]["EntryAsk"] == 100.1
     assert events[0]["EntryBid"] == 100.0
-    assert events[0]["RecorderGeneration"] == 5
-    assert ":g5:" in events[0]["EventId"]
+    assert events[0]["RecorderGeneration"] == 6
+    assert events[0]["Exchange"] == "NSE"
+    assert events[0]["InstrumentToken"] == 12345
+    assert ":g6:" in events[0]["EventId"]
     assert events[0]["Cohort"] == "rapid_rank_climber:r11_25:m1_2"
     assert events[0]["Quantity"] == int(500000 // 100.1)
     assert events[0]["EntryAskQty"] == 1000
@@ -69,6 +73,17 @@ def test_registers_only_buyable_rank_cohort_at_observed_ask(tmp_path):
         now=now + timedelta(minutes=1),
     )
     assert events == []
+
+
+def test_rejects_bse_entries_until_group_specific_costs_are_modeled(tmp_path):
+    observer = FullUniverseRankPaperObserver(str(tmp_path))
+    events = observer.process(
+        _rows(Exchange="BSE", InstrumentToken=54321),
+        {"AAA": _tick()},
+        now=datetime(2026, 7, 22, 9, 20),
+    )
+    assert events == []
+    assert not observer.active
 
 
 def test_cohorts_keep_discovery_and_outside_pool_ranks_distinct(tmp_path):
@@ -151,7 +166,10 @@ def test_entry_ledger_widens_old_same_day_schema_atomically(tmp_path):
     path.parent.mkdir(parents=True)
     old_columns = [
         column for column in observer.ENTRY_COLUMNS
-        if column not in {"Sector", "UniverseSize", "OpenChangePct"}
+        if column not in {
+            "Exchange", "InstrumentToken", "Sector", "UniverseSize",
+            "OpenChangePct",
+        }
     ]
     with path.open("w", encoding="utf-8", newline="") as handle:
         writer = csv.writer(handle)
