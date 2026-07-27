@@ -692,6 +692,9 @@ def leader_discovery_stats():
         "prediction_matrix_policy_contract": str(
             prediction_matrix_policy.get("contract") or "not selected"
         ),
+        "prediction_matrix_policy_threshold": number(
+            prediction_matrix_policy, "score_threshold"
+        ),
         "prediction_matrix_policy_slots": int(
             number(prediction_matrix_policy, "slots")
         ),
@@ -1986,13 +1989,14 @@ def render():
     <span>Contract selection <span class="big">{leader_discovery['prediction_matrix_selection_sessions']}/{leader_discovery['prediction_matrix_selection_required']}</span></span>
     <span>Untouched forward <span class="big">{leader_discovery['prediction_matrix_forward_sessions']}/20</span></span>
     <span>Forward trades <span class="big">{leader_discovery['prediction_matrix_forward_trades']}</span></span>
-    <span>Selected policy <span class="big">{escape(leader_discovery['prediction_matrix_policy_contract'])} / {leader_discovery['prediction_matrix_policy_slots']} slot(s)</span></span>
+    <span>Selected policy <span class="big">score {leader_discovery['prediction_matrix_policy_threshold']:.2f} / {escape(leader_discovery['prediction_matrix_policy_contract'])} / {leader_discovery['prediction_matrix_policy_slots']} slot(s)</span></span>
     <span>Stressed forward <span class="big {prediction_matrix_class}">{money(leader_discovery['prediction_matrix_forward_avg_pnl'])}/day</span></span>
   </div>
   <div class="updated" style="margin-top:6px">
     All score-qualified frozen predictions are tracked across nine exact
-    ask-to-bid exit contracts. Contract and slot count use only the first
-    12 complete sessions; the following 20 sessions remain untouched.
+    ask-to-bid exit contracts. Score threshold, contract, and slot count use
+    only the first 12 complete sessions; the following 20 sessions remain
+    untouched.
     Lower confidence bound {leader_discovery['prediction_matrix_forward_lower95_pct']:+.3f}%;
     status <b>{escape(leader_discovery['prediction_matrix_status'])}</b>;
     accepted: <b>{'YES' if leader_discovery['prediction_matrix_accepted'] else 'NO'}</b>;

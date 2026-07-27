@@ -91,6 +91,7 @@ def test_leader_dashboard_reports_frozen_prediction_contract_strategy(
                 "selected_policy": {
                     "contract": "t0_8_s0_5_h30",
                     "slots": 2,
+                    "score_threshold": 0.3,
                 },
                 "forward": {
                     "sessions": 4,
@@ -116,6 +117,7 @@ def test_leader_dashboard_reports_frozen_prediction_contract_strategy(
         == "t0_8_s0_5_h30"
     )
     assert stats["prediction_matrix_policy_slots"] == 2
+    assert stats["prediction_matrix_policy_threshold"] == 0.3
     assert stats["prediction_matrix_accepted"] is False
 
 
