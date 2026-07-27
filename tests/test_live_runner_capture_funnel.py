@@ -133,6 +133,33 @@ def test_predictions_after_runner_cross_cannot_count_as_early_capture():
     assert result["FirstFailedStage"] == "frozen_model_not_scored"
 
 
+def test_broad_first_observation_lane_gets_credit_without_frozen_score():
+    recall = pd.DataFrame([_recall("FAST_BURST")])
+    broad = pd.DataFrame(
+        [
+            {
+                "Date": "2026-07-28",
+                "EntryAt": pd.Timestamp("2026-07-28 09:30"),
+                "Symbol": "FAST_BURST",
+                "EntryTopLevelFillable": True,
+            }
+        ]
+    )
+
+    result = build_capture_funnel(
+        recall,
+        pd.DataFrame(),
+        pd.DataFrame(),
+        broad,
+    ).iloc[0]
+
+    assert bool(result["BroadExactRegistrationBeforeCross"])
+    assert bool(result["BroadTopLevelQuantityFillableBeforeCross"])
+    assert result["FirstFailedStage"] == (
+        "broad_lane_only_awaiting_selector"
+    )
+
+
 def test_summary_uses_only_catchable_events_as_rate_denominator():
     funnel = build_capture_funnel(
         pd.DataFrame(

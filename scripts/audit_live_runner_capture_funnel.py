@@ -26,6 +26,9 @@ DEFAULT_REGISTRATIONS = (
     "results/Data/frozen_ranker_prediction_contract_matrix/"
     "registrations_20*.csv"
 )
+DEFAULT_BROAD_REGISTRATIONS = (
+    "results/Data/full_universe_rank_paper/entries_20*.csv"
+)
 DEFAULT_OUTPUT = "results/Data/live_runner_capture_funnel"
 
 
@@ -120,6 +123,35 @@ def load_registrations(patterns: Iterable[str]) -> pd.DataFrame:
     ).drop_duplicates(["Date", "EntryAt", "Symbol"], keep="last")
 
 
+def load_broad_registrations(patterns: Iterable[str]) -> pd.DataFrame:
+    """Load exact first-observation labels from the independent broad lane."""
+    frames = []
+    for path in _files(patterns):
+        try:
+            frame = pd.read_csv(path, low_memory=False)
+        except (OSError, pd.errors.EmptyDataError, pd.errors.ParserError):
+            continue
+        required = {"Date", "EntryAt", "Symbol"}
+        if not required.issubset(frame.columns):
+            continue
+        frames.append(frame)
+    if not frames:
+        return pd.DataFrame()
+    data = pd.concat(frames, ignore_index=True)
+    data["Date"] = data["Date"].astype(str).str[:10]
+    data["EntryAt"] = _market_naive(data["EntryAt"])
+    data["Symbol"] = data["Symbol"].astype(str).str.strip().str.upper()
+    if "EntryTopLevelFillable" in data.columns:
+        data["EntryTopLevelFillable"] = data[
+            "EntryTopLevelFillable"
+        ].map(_truthy)
+    else:
+        data["EntryTopLevelFillable"] = pd.NA
+    return data.dropna(
+        subset=["Date", "EntryAt", "Symbol"]
+    ).drop_duplicates(["Date", "EntryAt", "Symbol"], keep="last")
+
+
 def _safe_bool(row: pd.Series, column: str) -> bool:
     return _truthy(row.get(column, False))
 
@@ -132,6 +164,7 @@ def build_capture_funnel(
     recall: pd.DataFrame,
     predictions: pd.DataFrame,
     registrations: pd.DataFrame,
+    broad_registrations: pd.DataFrame | None = None,
     *,
     score_threshold: float = 0.20,
 ) -> pd.DataFrame:
@@ -164,6 +197,15 @@ def build_capture_funnel(
             ["Date", "Symbol"], sort=False
         )
     } if registrations is not None and not registrations.empty else {}
+    broad_registration_groups = {
+        (str(date), str(symbol)): group.sort_values("EntryAt")
+        for (date, symbol), group in broad_registrations.groupby(
+            ["Date", "Symbol"], sort=False
+        )
+    } if (
+        broad_registrations is not None
+        and not broad_registrations.empty
+    ) else {}
 
     rows = []
     for event in events.itertuples(index=False):
@@ -233,6 +275,25 @@ def build_capture_funnel(
                 "EntryTopLevelFillable"
             ].fillna(False).astype(bool).any()
         )
+        before_broad = broad_registration_groups.get(
+            (date, symbol), pd.DataFrame()
+        )
+        if not before_broad.empty:
+            before_broad = before_broad[
+                before_broad["EntryAt"] < cross_time
+            ].copy()
+        broad_registered = not before_broad.empty
+        broad_fillability_known = bool(
+            broad_registered
+            and before_broad["EntryTopLevelFillable"].notna().any()
+        )
+        broad_quantity_fillable = bool(
+            broad_fillability_known
+            and before_broad["EntryTopLevelFillable"]
+            .fillna(False)
+            .astype(bool)
+            .any()
+        )
 
         if not catchable:
             stage = "uncatchable_before_recorder"
@@ -242,6 +303,8 @@ def build_capture_funnel(
             stage = "not_contemporaneously_buyable"
         elif not early_buyable:
             stage = "buyable_only_after_early_band"
+        elif not scored and broad_registered:
+            stage = "broad_lane_only_awaiting_selector"
         elif not scored:
             stage = "frozen_model_not_scored"
         elif not score_qualified:
@@ -276,6 +339,13 @@ def build_capture_funnel(
                 "QuantityFillabilityKnown": fillability_known,
                 "TopLevelQuantityFillableBeforeCross": quantity_fillable,
                 "SelectedBeforeCross": selected,
+                "BroadExactRegistrationBeforeCross": broad_registered,
+                "BroadQuantityFillabilityKnown": (
+                    broad_fillability_known
+                ),
+                "BroadTopLevelQuantityFillableBeforeCross": (
+                    broad_quantity_fillable
+                ),
                 "FirstFailedStage": stage,
                 "UsesFutureRunnerLabel": True,
                 "DiagnosticOnly": True,
@@ -320,6 +390,14 @@ def summarize_funnel(funnel: pd.DataFrame) -> pd.DataFrame:
                     int(catchable["FrozenModelScoredBeforeCross"].sum()),
                     denominator,
                 ),
+                "BroadExactCandidatePctOfCatchable": _rate(
+                    int(
+                        catchable[
+                            "BroadExactRegistrationBeforeCross"
+                        ].sum()
+                    ),
+                    denominator,
+                ),
                 "ScoreQualifiedPctOfCatchable": _rate(
                     int(catchable["ScoreQualifiedBeforeCross"].sum()),
                     denominator,
@@ -358,6 +436,9 @@ def main() -> int:
     parser.add_argument(
         "--registrations", default=DEFAULT_REGISTRATIONS
     )
+    parser.add_argument(
+        "--broad-registrations", default=DEFAULT_BROAD_REGISTRATIONS
+    )
     parser.add_argument("--output-dir", default=DEFAULT_OUTPUT)
     parser.add_argument("--score-threshold", type=float, default=0.20)
     args = parser.parse_args()
@@ -365,10 +446,14 @@ def main() -> int:
     recall = pd.read_csv(args.recall, low_memory=False)
     predictions = load_predictions([args.predictions])
     registrations = load_registrations([args.registrations])
+    broad_registrations = load_broad_registrations(
+        [args.broad_registrations]
+    )
     funnel = build_capture_funnel(
         recall,
         predictions,
         registrations,
+        broad_registrations,
         score_threshold=args.score_threshold,
     )
     summary = summarize_funnel(funnel)

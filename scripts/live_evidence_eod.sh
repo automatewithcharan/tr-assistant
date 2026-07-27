@@ -115,6 +115,7 @@ run_event_shadow_rebuild() {
         --recall "$REPO/results/Data/live_top_gainer_recorder_recall/events.csv" \
         --predictions "$REPO/results/Data/frozen_microstructure_paper/predictions_20*.csv" \
         --registrations "$REPO/results/Data/frozen_ranker_prediction_contract_matrix/registrations_20*.csv" \
+        --broad-registrations "$REPO/results/Data/full_universe_rank_paper/entries_20*.csv" \
         --output-dir "$REPO/results/Data/live_runner_capture_funnel" \
         --score-threshold 0.20 \
         >>"$LOG" 2>&1 || true
