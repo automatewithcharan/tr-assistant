@@ -372,6 +372,43 @@ def test_leader_dashboard_reports_contract_matrix_and_capital_gate(
     assert not stats["contract_strategy_accepted"]
 
 
+def test_leader_dashboard_separates_fixed_rank_first_forward(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(dashboard, "DATA", tmp_path)
+    root = tmp_path / "fixed_rank_first_forward"
+    root.mkdir(parents=True)
+    (root / "status.json").write_text(
+        json.dumps(
+            {
+                "status": "collecting_fixed_rank_first_forward_sessions",
+                "hypothesis": {"selection_cutoff": "2026-07-27"},
+                "selection_diagnostic": {"avg_daily_pnl": 10652.75},
+                "forward_sessions": 3,
+                "forward_sessions_required": 20,
+                "forward": {
+                    "trades": 18,
+                    "avg_daily_pnl": 4200.0,
+                    "goal_hit_pct": 33.33,
+                },
+                "accepted": False,
+                "real_orders_allowed": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    stats = dashboard.leader_discovery_stats()
+
+    assert stats["fixed_rank_first_cutoff"] == "2026-07-27"
+    assert stats["fixed_rank_first_selection_pnl"] == 10652.75
+    assert stats["fixed_rank_first_forward_sessions"] == 3
+    assert stats["fixed_rank_first_forward_required"] == 20
+    assert stats["fixed_rank_first_forward_trades"] == 18
+    assert stats["fixed_rank_first_forward_avg_pnl"] == 4200.0
+    assert not stats["fixed_rank_first_accepted"]
+
+
 def test_leader_dashboard_reports_entry_timing_matrix_and_gate(
     tmp_path, monkeypatch
 ):

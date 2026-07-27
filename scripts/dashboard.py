@@ -379,7 +379,7 @@ def evidence_pipeline_stats():
         "eod_status": str(eod.get("status") or "not run today"),
         "eod_date": str(eod.get("date") or "n/a"),
         "eod_refreshed": int(eod.get("artifacts_refreshed") or 0),
-        "eod_required": int(eod.get("artifacts_required") or 14),
+        "eod_required": int(eod.get("artifacts_required") or 16),
         "eod_session_eligible": bool(eod.get("session_evidence_eligible", False)),
     }
 
@@ -466,6 +466,13 @@ def leader_discovery_stats():
         DATA / "full_universe_rank_contract_strategy" / "status.json", {}
     )
     contract_forward = contract_strategy.get("forward", {}) or {}
+    fixed_rank_first = load_json(
+        DATA / "fixed_rank_first_forward" / "status.json", {}
+    )
+    fixed_rank_first_selection = fixed_rank_first.get(
+        "selection_diagnostic", {}
+    ) or {}
+    fixed_rank_first_forward = fixed_rank_first.get("forward", {}) or {}
     opportunity_ceiling = load_json(
         DATA / "full_universe_rank_opportunity_ceiling" / "status.json", {}
     )
@@ -903,6 +910,36 @@ def leader_discovery_stats():
         "contract_strategy_forward_trades": int(number(contract_forward, "trades")),
         "contract_strategy_forward_avg_pnl": number(contract_forward, "avg_daily_pnl"),
         "contract_strategy_accepted": bool(contract_strategy.get("accepted", False)),
+        "fixed_rank_first_status": str(
+            fixed_rank_first.get("status")
+            or "awaiting fixed forward judge"
+        ),
+        "fixed_rank_first_cutoff": str(
+            (fixed_rank_first.get("hypothesis", {}) or {}).get(
+                "selection_cutoff", "2026-07-27"
+            )
+        ),
+        "fixed_rank_first_selection_pnl": number(
+            fixed_rank_first_selection, "avg_daily_pnl"
+        ),
+        "fixed_rank_first_forward_sessions": int(
+            number(fixed_rank_first, "forward_sessions")
+        ),
+        "fixed_rank_first_forward_required": int(
+            number(fixed_rank_first, "forward_sessions_required") or 20
+        ),
+        "fixed_rank_first_forward_trades": int(
+            number(fixed_rank_first_forward, "trades")
+        ),
+        "fixed_rank_first_forward_avg_pnl": number(
+            fixed_rank_first_forward, "avg_daily_pnl"
+        ),
+        "fixed_rank_first_goal_hit_pct": number(
+            fixed_rank_first_forward, "goal_hit_pct"
+        ),
+        "fixed_rank_first_accepted": bool(
+            fixed_rank_first.get("accepted", False)
+        ),
         "opportunity_ceiling_status": str(
             opportunity_ceiling.get("status") or "awaiting exact ceiling audit"
         ),
@@ -1804,6 +1841,28 @@ def render():
     The judge tests them with the same four causal entry orderings and one reusable Rs 500,000 slot.
     Selection and untouched-forward gates remain separate. Accepted: <b>{'YES' if leader_discovery['contract_strategy_accepted'] else 'NO'}</b>;
     alerts: <b>NO</b>; real orders: <b>NO</b>.
+  </div>"""
+
+    fixed_forward_class = (
+        "gain"
+        if leader_discovery["fixed_rank_first_forward_avg_pnl"] > 0
+        else "loss"
+    )
+    leader_html += f"""
+  <div class="summary" style="margin-top:10px">
+    <span>Fixed rank-first hypothesis <span class="big">{escape(leader_discovery['fixed_rank_first_status'])}</span></span>
+    <span>Selection cutoff <span class="big">{escape(leader_discovery['fixed_rank_first_cutoff'])}</span></span>
+    <span class="badge orange">Selection diagnostic {money(leader_discovery['fixed_rank_first_selection_pnl'])}</span>
+    <span>Untouched forward <span class="big">{leader_discovery['fixed_rank_first_forward_sessions']}/{leader_discovery['fixed_rank_first_forward_required']} sessions</span></span>
+    <span>Forward trades <span class="big">{leader_discovery['fixed_rank_first_forward_trades']}</span></span>
+    <span>Forward P&amp;L <span class="big {fixed_forward_class}">{money(leader_discovery['fixed_rank_first_forward_avg_pnl'])}/day</span></span>
+    <span>Goal days <span class="big">{leader_discovery['fixed_rank_first_goal_hit_pct']:.1f}%</span></span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    Frozen rule: rank-first, +1% target, -1% stop, 60-minute horizon, one reusable Rs 500,000 slot,
+    ten-trade cap. July 27 selected the hypothesis and is excluded forever; evidence starts July 28.
+    Accepted: <b>{'YES' if leader_discovery['fixed_rank_first_accepted'] else 'NO'}</b>;
+    real orders: <b>NO</b>.
   </div>"""
 
     allocation_forward_class = (
