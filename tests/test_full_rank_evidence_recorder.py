@@ -43,6 +43,18 @@ class FakeObserver:
         return [{"event": self.event, "Symbol": "TEST"}]
 
 
+class FakeFrozenRanker:
+    def __init__(self):
+        self.calls = []
+
+    def process(self, rows, ticks, now=None):
+        self.calls.append((rows, ticks, now))
+        return [{"event": "paper_entry", "symbol": "TEST"}]
+
+    def contract_entry_events(self):
+        return [{"event": "entry", "EventId": "frozen:TEST"}]
+
+
 def test_worker_advances_all_paper_observers_and_publishes_safe_status(tmp_path):
     recorder = FakeRecorder()
     paper = FakePaper()
@@ -82,6 +94,37 @@ def test_worker_advances_all_paper_observers_and_publishes_safe_status(tmp_path)
     assert payload["real_orders_allowed"] is False
     stored = json.loads(worker.status_path.read_text(encoding="utf-8"))
     assert stored == payload
+
+
+def test_worker_owns_frozen_ranker_when_scanner_recorder_is_standalone(
+    tmp_path,
+):
+    frozen = FakeFrozenRanker()
+    frozen_contracts = FakeObserver("contract_exit")
+    worker = StandaloneFullRankEvidenceWorker(
+        output_dir=tmp_path,
+        recorder=FakeRecorder(),
+        paper=FakePaper(),
+        contracts=FakeObserver("contract_exit"),
+        timing=FakeObserver("timing_exit"),
+        frozen_ranker=frozen,
+        frozen_contracts=frozen_contracts,
+    )
+
+    payload = worker.cycle(
+        {"TEST": {"last_price": 100.0}},
+        now=datetime(2026, 7, 27, 10, 0, 0),
+    )
+
+    assert len(frozen.calls) == 1
+    assert frozen_contracts.calls[0][0] == [
+        {"event": "entry", "EventId": "frozen:TEST"}
+    ]
+    assert payload["frozen_ranker_enabled"] is True
+    assert payload["frozen_ranker_events"] == 1
+    assert payload["frozen_prediction_entries"] == 1
+    assert payload["frozen_contract_events"] == 1
+    assert payload["real_orders_allowed"] is False
 
 
 def test_stale_tick_status_does_not_call_any_observer(tmp_path):

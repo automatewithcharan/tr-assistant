@@ -16,13 +16,19 @@ def write(path: Path, value) -> None:
 
 def fixture_root(tmp_path: Path) -> tuple[Path, datetime]:
     now = datetime(2026, 7, 23, 10, 0, tzinfo=IST)
-    write(tmp_path / ".env.dev", "KITE_AUTO_TRADE=0\nENABLE_GRADE_B_AUTOTRADE=0\n")
+    write(
+        tmp_path / ".env.dev",
+        "KITE_AUTO_TRADE=0\n"
+        "ENABLE_GRADE_B_AUTOTRADE=0\n"
+        "SIGNALMONITOR_STANDALONE_EVIDENCE=0\n",
+    )
     required = [
         "pkscreener/classes/FullUniverseRankPaperObserver.py",
         "scripts/assess_full_rank_contract_matrix.py",
         "scripts/assess_full_rank_entry_timing.py",
         "scripts/assess_full_rank_capital_allocation.py",
         "scripts/assess_full_rank_integrated_policies.py",
+        "scripts/assess_frozen_ranker_prediction_matrix.py",
         "scripts/assess_prior_session_ranker_paper.py",
         "scripts/project_intraday_capital_growth.py",
         "scripts/assess_full_rank_opportunity_ceiling.py",
@@ -43,7 +49,7 @@ def fixture_root(tmp_path: Path) -> tuple[Path, datetime]:
     write(tmp_path / "pkscreener/classes/FullUniverseRankEntryTimingObserver.py", "ENTRY_VARIANTS = {" + ",".join(f'\"v{i}\": {{\"mode\": \"dip\"}}' for i in range(6)) + "}")
     write(tmp_path / "scripts/assess_full_rank_feature_gates.py", "FEATURE_GATES = {" + ",".join(f'\"g{i}\": \"gate\"' for i in range(12)) + "}")
     write(tmp_path / "scripts/assess_exact_full_rank_paper.py", "SELECTORS = {" + ",".join(f'\"s{i}\": \"selector\"' for i in range(4)) + "}")
-    calls = ["run_exact_full_rank_strategy", "run_full_rank_contract_matrix", "run_full_rank_entry_timing", "run_full_rank_feature_gates", "run_full_rank_capital_allocation", "run_full_rank_integrated_policies", "run_full_rank_opportunity_ceiling", "run_prior_session_ranker_paper", "run_intraday_capital_growth", "run_eod_integrity"]
+    calls = ["run_exact_full_rank_strategy", "run_full_rank_contract_matrix", "run_full_rank_entry_timing", "run_full_rank_feature_gates", "run_full_rank_capital_allocation", "run_full_rank_integrated_policies", "run_full_rank_opportunity_ceiling", "run_frozen_ranker_prediction_matrix", "run_prior_session_ranker_paper", "run_intraday_capital_growth", "run_eod_integrity"]
     write(tmp_path / "scripts/live_evidence_eod.sh", "\n".join(calls + calls))
     data = tmp_path / "results/Data"
     stamp = "2026-07-23 10:00:00"
@@ -106,6 +112,7 @@ def test_standalone_evidence_owner_is_verified_when_enabled(tmp_path):
             "tick_symbols": 2860,
             "feature_interval_seconds": 15,
             "poll_interval_seconds": 5,
+            "frozen_ranker_enabled": True,
             "paper_only": True,
             "alerts_allowed": False,
             "real_orders_allowed": False,
@@ -120,6 +127,42 @@ def test_standalone_evidence_owner_is_verified_when_enabled(tmp_path):
     )
     assert owner["passed"] is True
     assert "owner=standalone" in owner["detail"]
+
+
+def test_standalone_owner_requires_frozen_ranker_when_enabled(tmp_path):
+    root, now = fixture_root(tmp_path)
+    write(
+        root / ".env.dev",
+        "KITE_AUTO_TRADE=0\n"
+        "ENABLE_GRADE_B_AUTOTRADE=0\n"
+        "SIGNALMONITOR_STANDALONE_EVIDENCE=1\n"
+        "SIGNALMONITOR_ENABLE_FROZEN_MICROSTRUCTURE_PAPER=1\n",
+    )
+    write(
+        root / "results/Data/full_rank_evidence_runtime/status.json",
+        {
+            "status": "recording_standalone_full_rank_evidence",
+            "owner": "standalone",
+            "date": "2026-07-23",
+            "updated_at": "2026-07-23 10:00:00",
+            "tick_symbols": 2860,
+            "feature_interval_seconds": 15,
+            "poll_interval_seconds": 5,
+            "frozen_ranker_enabled": False,
+            "paper_only": True,
+            "alerts_allowed": False,
+            "real_orders_allowed": False,
+        },
+    )
+
+    result = run(root, now)
+
+    owner = next(
+        item for item in result["checks"]
+        if item["name"] == "evidence_worker_owner"
+    )
+    assert owner["passed"] is False
+    assert "frozen_ranker=False" in owner["detail"]
 
 
 def test_stale_standalone_evidence_owner_blocks_readiness(tmp_path):
@@ -140,6 +183,7 @@ def test_stale_standalone_evidence_owner_blocks_readiness(tmp_path):
             "tick_symbols": 2860,
             "feature_interval_seconds": 15,
             "poll_interval_seconds": 5,
+            "frozen_ranker_enabled": True,
             "paper_only": True,
             "alerts_allowed": False,
             "real_orders_allowed": False,

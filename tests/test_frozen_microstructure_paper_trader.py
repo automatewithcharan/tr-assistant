@@ -90,6 +90,12 @@ def test_live_paper_prediction_precedes_executable_trade_and_exit(tmp_path):
     )
     assert predictions.iloc[0]["selected"] in (True, "True")
     assert predictions.iloc[0]["expected_return_pct"] == 0.3
+    contract_entries = trader.contract_entry_events()
+    assert len(contract_entries) == 1
+    assert contract_entries[0]["EntryAsk"] == 100.1
+    assert contract_entries[0]["ExpectedReturnPct"] == 0.3
+    assert contract_entries[0]["ModelTrainedThrough"] == "2026-07-21"
+    assert contract_entries[0]["Source"] == "prior_session_frozen_ranker"
 
     exits = trader.process(
         pd.DataFrame(), {"AAA": {"best_bid": 101.7}},
@@ -115,3 +121,29 @@ def test_same_day_model_cannot_trade(tmp_path):
         )
     assert events == []
     assert trader.trades == []
+
+
+def test_high_frequency_standalone_rows_keep_model_history_near_two_minutes(
+    tmp_path,
+):
+    trader = FrozenMicrostructurePaperTrader(
+        output_dir=str(tmp_path),
+        model_path=str(_artifact(tmp_path)),
+        persist=False,
+    )
+    start = datetime(2026, 7, 22, 9, 18)
+    ticks = {"AAA": {"best_bid": 99.9}}
+    entries = []
+    for offset in range(0, 121, 15):
+        now = start + timedelta(seconds=offset)
+        entries.extend(
+            trader.process(
+                pd.DataFrame([_row(now, 0.55 + offset / 1000.0)]),
+                ticks,
+                now=now,
+            )
+        )
+
+    assert len(entries) == 1
+    assert entries[0]["entry_time"].endswith("09:20:00")
+    assert trader.latest_predictions[0]["SnapshotSpanMinutes"] == 2.0

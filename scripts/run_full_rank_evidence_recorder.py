@@ -30,6 +30,9 @@ from pkscreener.classes.FullUniverseRankEntryTimingObserver import (  # noqa: E4
 from pkscreener.classes.FullUniverseRankPaperObserver import (  # noqa: E402
     FullUniverseRankPaperObserver,
 )
+from pkscreener.classes.FrozenMicrostructurePaperTrader import (  # noqa: E402
+    FrozenMicrostructurePaperTrader,
+)
 from pkscreener.classes.KiteTickerStream import load_latest_live_ticks  # noqa: E402
 from pkscreener.classes.LiveFeatureRecorder import LiveFeatureRecorder  # noqa: E402
 
@@ -84,6 +87,8 @@ class StandaloneFullRankEvidenceWorker:
         paper: FullUniverseRankPaperObserver | None = None,
         contracts: FullUniverseRankContractMatrixObserver | None = None,
         timing: FullUniverseRankEntryTimingObserver | None = None,
+        frozen_ranker: FrozenMicrostructurePaperTrader | None = None,
+        frozen_contracts: FullUniverseRankContractMatrixObserver | None = None,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.universe = str(universe or "all").strip().lower()
@@ -195,6 +200,62 @@ class StandaloneFullRankEvidenceWorker:
             horizon_minutes=horizon,
             stress_pct=stress,
         )
+        self.frozen_ranker = frozen_ranker
+        if (
+            self.frozen_ranker is None
+            and _truthy(
+                "SIGNALMONITOR_ENABLE_FROZEN_MICROSTRUCTURE_PAPER", "0"
+            )
+        ):
+            model_path = Path(
+                str(
+                    os.environ.get(
+                        "SIGNALMONITOR_FROZEN_MICROSTRUCTURE_MODEL",
+                        self.output_dir
+                        / "live_leader_continuation"
+                        / "frozen_ranker_live_model.joblib",
+                    )
+                    or ""
+                )
+            )
+            if model_path.is_file():
+                self.frozen_ranker = FrozenMicrostructurePaperTrader(
+                    output_dir=str(self.output_dir),
+                    model_path=str(model_path),
+                    capital=float(
+                        os.environ.get(
+                            "SIGNALMONITOR_FROZEN_PAPER_CAPITAL", "500000"
+                        )
+                        or 500000
+                    ),
+                    threshold=float(
+                        os.environ.get(
+                            "SIGNALMONITOR_FROZEN_PAPER_THRESHOLD", "0.20"
+                        )
+                        or 0.20
+                    ),
+                    max_trades_per_day=int(
+                        float(
+                            os.environ.get(
+                                "SIGNALMONITOR_FROZEN_PAPER_MAX_TRADES", "10"
+                            )
+                            or 10
+                        )
+                    ),
+                )
+        self.frozen_contracts = frozen_contracts
+        if self.frozen_contracts is None and self.frozen_ranker is not None:
+            self.frozen_contracts = FullUniverseRankContractMatrixObserver(
+                output_dir=str(self.output_dir),
+                stress_pct=stress,
+                root_name="frozen_ranker_prediction_contract_matrix",
+                metadata_columns=[
+                    "ExpectedReturnPct",
+                    "MoveBand",
+                    "ModelTrainedThrough",
+                    "ModelSourceSha256",
+                ],
+            )
         self.status_path = (
             self.output_dir / "full_rank_evidence_runtime" / "status.json"
         )
@@ -217,6 +278,20 @@ class StandaloneFullRankEvidenceWorker:
         paper_events = self.paper.process(rows, ticks, now=now)
         contract_events = self.contracts.process(paper_events, ticks, now=now)
         timing_events = self.timing.process(paper_events, ticks, now=now)
+        frozen_events = []
+        frozen_contract_events = []
+        frozen_prediction_entries = []
+        if self.frozen_ranker is not None:
+            frozen_events = self.frozen_ranker.process(rows, ticks, now=now)
+            frozen_prediction_entries = (
+                self.frozen_ranker.contract_entry_events()
+            )
+        if self.frozen_contracts is not None:
+            frozen_contract_events = self.frozen_contracts.process(
+                frozen_prediction_entries,
+                ticks,
+                now=now,
+            )
         payload = {
             "status": "recording_standalone_full_rank_evidence",
             "owner": "standalone",
@@ -228,6 +303,12 @@ class StandaloneFullRankEvidenceWorker:
             "paper_events": int(len(paper_events)),
             "contract_events": int(len(contract_events)),
             "timing_events": int(len(timing_events)),
+            "frozen_ranker_enabled": self.frozen_ranker is not None,
+            "frozen_ranker_events": int(len(frozen_events)),
+            "frozen_prediction_entries": int(
+                len(frozen_prediction_entries)
+            ),
+            "frozen_contract_events": int(len(frozen_contract_events)),
             "cycle_ms": round((time.monotonic() - started) * 1000.0, 2),
             "feature_interval_seconds": float(self.recorder.interval_seconds),
             "poll_interval_seconds": self.poll_seconds,

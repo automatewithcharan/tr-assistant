@@ -28,6 +28,7 @@ MOVE_BANDS = (
     (2.0, 3.0, "2-3", "band_2_3"),
     (3.0, 5.000001, "3-5", "band_3_5"),
 )
+MIN_HISTORY_SAMPLE_SECONDS = 50.0
 
 
 def _float(value: Any) -> float:
@@ -50,7 +51,8 @@ class FrozenMicrostructurePaperTrader:
 
     PREDICTION_COLUMNS = [
         "date", "when", "symbol", "move_band", "expected_return_pct",
-        "selected", "selection_reason", "entry_ask", "model_trained_through",
+        "selected", "selection_reason", "entry_bid", "entry_ask",
+        "recorder_generation", "exchange", "model_trained_through",
         "model_source_sha256", *MODEL_FEATURES,
     ]
     TRADE_COLUMNS = [
@@ -91,6 +93,7 @@ class FrozenMicrostructurePaperTrader:
         self._seen_bands: set[str] = set()
         self._traded_symbols: set[str] = set()
         self.trades: List[Dict[str, Any]] = []
+        self.latest_predictions: List[Dict[str, Any]] = []
         self._prediction_keys: set[str] = set()
         if self.persist:
             self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -104,6 +107,7 @@ class FrozenMicrostructurePaperTrader:
     ) -> List[Dict[str, Any]]:
         today = now.strftime("%Y-%m-%d")
         self._roll_day(today)
+        self.latest_predictions = []
         events = self._update_open_trade(ticks, now)
         if not self._artifact_valid_for(today):
             return events
@@ -137,6 +141,7 @@ class FrozenMicrostructurePaperTrader:
                     }
                 )
                 prediction_rows.append(prediction)
+            self.latest_predictions = prediction_rows
             self._append_predictions(prediction_rows)
             if selected_index is not None:
                 event = self._enter(frame.loc[selected_index].to_dict(), now)
@@ -212,6 +217,12 @@ class FrozenMicrostructurePaperTrader:
         history = self._history.setdefault(symbol, [])
         if history and history[-1]["_when"] == current["_when"]:
             return None
+        if history:
+            sample_age = (
+                current["_when"] - history[-1]["_when"]
+            ).total_seconds()
+            if sample_age < MIN_HISTORY_SAMPLE_SECONDS:
+                return None
         history.append(current)
         history[:] = history[-8:]
         if len(history) < 3:
@@ -251,7 +262,14 @@ class FrozenMicrostructurePaperTrader:
         row = {
             "symbol": symbol,
             "move_band": band[2],
+            "entry_bid": best_bid,
             "entry_ask": best_ask,
+            "recorder_generation": int(
+                _float(current.get("RecorderGeneration"))
+            ),
+            "exchange": str(
+                current.get("Exchange", "") or ""
+            ).strip().upper(),
             "signal_minute": float(signal_minute),
             "DayChangePct": _float(current.get("DayChangePct")),
             "OpenChangePct": move,
@@ -281,6 +299,62 @@ class FrozenMicrostructurePaperTrader:
         }
         row[band[3]] = 1.0
         return row
+
+    def contract_entry_events(self) -> List[Dict[str, Any]]:
+        """Expose score-qualified labels to the paper-only contract observer."""
+        events = []
+        model_hash = str(self.metadata.get("source_sha256", "") or "")
+        for row in self.latest_predictions:
+            score = _float(row.get("expected_return_pct"))
+            ask = _float(row.get("entry_ask"))
+            if score < self.threshold or ask <= 0:
+                continue
+            quantity = int(self.capital // ask)
+            when = pd.Timestamp(row.get("when"))
+            symbol = str(row.get("symbol", "") or "").strip().upper()
+            move_band = str(row.get("move_band", "") or "")
+            if quantity < 1 or not symbol or pd.isna(when):
+                continue
+            events.append(
+                {
+                    "event": "entry",
+                    "EventId": (
+                        f"{row.get('date')}:{symbol}:{move_band}:"
+                        f"{model_hash[:16] or 'unknown-model'}"
+                    ),
+                    "Date": str(row.get("date", "") or ""),
+                    "EntryAt": when.isoformat(),
+                    "EntryTs": when.timestamp(),
+                    "RecorderGeneration": int(
+                        _float(row.get("recorder_generation"))
+                    ),
+                    "Exchange": str(
+                        row.get("exchange", "") or ""
+                    ).strip().upper(),
+                    "Symbol": symbol,
+                    "Cohort": f"score_ge_{self.threshold:.2f}",
+                    "Source": "prior_session_frozen_ranker",
+                    "EntryAsk": ask,
+                    "EntryBid": _float(row.get("entry_bid")),
+                    "Quantity": quantity,
+                    "Capital": round(ask * quantity, 2),
+                    "DayChangePct": _float(row.get("DayChangePct")),
+                    "DayChangeRank": 0,
+                    "RankImprovement": 0,
+                    "RankVelocityPerMinute": 0.0,
+                    "BuyerSellerRatio": _float(
+                        row.get("BuyerSellerRatio")
+                    ),
+                    "EntrySpreadBps": _float(row.get("SpreadBps")),
+                    "ExpectedReturnPct": score,
+                    "MoveBand": move_band,
+                    "ModelTrainedThrough": str(
+                        row.get("model_trained_through", "") or ""
+                    ),
+                    "ModelSourceSha256": model_hash,
+                }
+            )
+        return events
 
     def _selected_index(self, frame: pd.DataFrame) -> Optional[int]:
         if self._open_trade() is not None or len(self.trades) >= self.max_trades_per_day:

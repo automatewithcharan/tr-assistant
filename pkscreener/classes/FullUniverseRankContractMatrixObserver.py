@@ -53,12 +53,19 @@ class FullUniverseRankContractMatrixObserver:
         output_dir: str,
         stress_pct: float = 0.10,
         contracts: Optional[Dict[str, Dict[str, float]]] = None,
+        root_name: str = "full_universe_rank_contract_matrix",
+        metadata_columns: Optional[List[str]] = None,
     ) -> None:
-        self.root = Path(output_dir) / "full_universe_rank_contract_matrix"
+        self.root = Path(output_dir) / str(root_name)
         self.state_path = self.root / "state.json"
         self.status_path = self.root / "status.json"
         self.stress_pct = max(0.0, float(stress_pct))
         self.contracts = contracts or CONTRACTS
+        self.metadata_columns = list(dict.fromkeys(metadata_columns or []))
+        self.registration_columns = (
+            self.REGISTRATION_COLUMNS + self.metadata_columns
+        )
+        self.outcome_columns = self.OUTCOME_COLUMNS + self.metadata_columns
         self.active: Dict[str, Dict[str, Any]] = {}
         self.seen_events: set = set()
         self.state_date = ""
@@ -98,7 +105,8 @@ class FullUniverseRankContractMatrixObserver:
             if entry_ask <= 0 or quantity < 1:
                 continue
             registration = {
-                column: event.get(column, "") for column in self.REGISTRATION_COLUMNS
+                column: event.get(column, "")
+                for column in self.registration_columns
             }
             registrations.append(registration)
             self.seen_events.add(event_id)
@@ -130,9 +138,11 @@ class FullUniverseRankContractMatrixObserver:
                     "TargetPrice": round(entry_ask * (1.0 + target_pct / 100.0), 2),
                     "StopPrice": round(entry_ask * (1.0 - stop_pct / 100.0), 2),
                 }
+                for column in self.metadata_columns:
+                    self.active[matrix_id][column] = event.get(column, "")
         self._append_rows(
             self.root / f"registrations_{now:%Y-%m-%d}.csv",
-            self.REGISTRATION_COLUMNS,
+            self.registration_columns,
             registrations,
         )
 
@@ -193,10 +203,14 @@ class FullUniverseRankContractMatrixObserver:
                 "StressCost": round(stress_cost, 2),
                 "NetPnl": round(gross_pnl - stress_cost, 2),
             }
+            for column in self.metadata_columns:
+                row[column] = entry.get(column, "")
             rows.append(row)
             del self.active[matrix_id]
         self._append_rows(
-            self.root / f"outcomes_{now:%Y-%m-%d}.csv", self.OUTCOME_COLUMNS, rows
+            self.root / f"outcomes_{now:%Y-%m-%d}.csv",
+            self.outcome_columns,
+            rows,
         )
         return [{"event": "contract_exit", **row} for row in rows]
 

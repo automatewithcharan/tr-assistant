@@ -76,6 +76,49 @@ def test_leader_dashboard_reports_prior_session_ranker_forward_judge(
     assert stats["live_paper_forward_accepted"] is False
 
 
+def test_leader_dashboard_reports_frozen_prediction_contract_strategy(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(dashboard, "DATA", tmp_path)
+    root = tmp_path / "frozen_ranker_prediction_strategy"
+    root.mkdir(parents=True)
+    (root / "status.json").write_text(
+        json.dumps(
+            {
+                "status": "collecting_untouched_forward_sessions",
+                "selection_sessions": 12,
+                "selection_sessions_required": 12,
+                "selected_policy": {
+                    "contract": "t0_8_s0_5_h30",
+                    "slots": 2,
+                },
+                "forward": {
+                    "sessions": 4,
+                    "trades": 11,
+                    "avg_daily_pnl": 3250.0,
+                    "lower_95_pct": -0.2,
+                },
+                "accepted": False,
+                "real_orders_allowed": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    stats = dashboard.leader_discovery_stats()
+
+    assert stats["prediction_matrix_selection_sessions"] == 12
+    assert stats["prediction_matrix_forward_sessions"] == 4
+    assert stats["prediction_matrix_forward_trades"] == 11
+    assert stats["prediction_matrix_forward_avg_pnl"] == 3250.0
+    assert (
+        stats["prediction_matrix_policy_contract"]
+        == "t0_8_s0_5_h30"
+    )
+    assert stats["prediction_matrix_policy_slots"] == 2
+    assert stats["prediction_matrix_accepted"] is False
+
+
 def test_leader_dashboard_reports_pullback_reclaim_rejection(tmp_path, monkeypatch):
     monkeypatch.setattr(dashboard, "DATA", tmp_path)
     root = tmp_path / "leader_pullback_reclaim_audit"

@@ -27,6 +27,8 @@ ARTIFACTS = {
     "capital_allocation_matrix": "results/Data/full_universe_rank_capital_allocation/status.json",
     "integrated_policy_registry": "results/Data/full_universe_rank_integrated_policies/status.json",
     "opportunity_ceiling": "results/Data/full_universe_rank_opportunity_ceiling/status.json",
+    "prior_session_ranker": "results/Data/prior_session_ranker_paper/status.json",
+    "frozen_prediction_matrix": "results/Data/frozen_ranker_prediction_strategy/status.json",
     "capital_growth": "results/Data/intraday_capital_growth/status.json",
     "runner_recall": "results/Data/live_top_gainer_recorder_recall/status.json",
 }

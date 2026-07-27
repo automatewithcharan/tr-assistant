@@ -150,6 +150,41 @@ def test_restart_preserves_contracts_and_does_not_duplicate_entry(tmp_path):
     assert len(registrations) == 1
 
 
+def test_custom_namespace_preserves_prediction_metadata(tmp_path):
+    observer = FullUniverseRankContractMatrixObserver(
+        str(tmp_path),
+        contracts={
+            "fast": {
+                "target_pct": 0.5,
+                "stop_pct": 0.5,
+                "horizon_minutes": 15,
+            }
+        },
+        root_name="frozen_prediction_matrix",
+        metadata_columns=[
+            "ExpectedReturnPct",
+            "ModelSourceSha256",
+        ],
+    )
+    now = datetime(2026, 7, 22, 9, 20)
+    entry = _entry(now)
+    entry["ExpectedReturnPct"] = 0.31
+    entry["ModelSourceSha256"] = "abc123"
+
+    observer.process([entry], {"AAA": _tick(100.0)}, now=now)
+    observer.process(
+        [], {"AAA": _tick(100.7)}, now=now + timedelta(minutes=5)
+    )
+
+    assert observer.root.name == "frozen_prediction_matrix"
+    registration = pd.read_csv(
+        observer.root / "registrations_2026-07-22.csv"
+    )
+    outcome = pd.read_csv(observer.root / "outcomes_2026-07-22.csv")
+    assert registration.iloc[0]["ExpectedReturnPct"] == 0.31
+    assert outcome.iloc[0]["ModelSourceSha256"] == "abc123"
+
+
 def test_eod_closes_all_contracts_and_component_has_no_order_path(tmp_path):
     now = datetime(2026, 7, 22, 15, 20)
     observer = FullUniverseRankContractMatrixObserver(str(tmp_path))

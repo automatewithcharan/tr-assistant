@@ -168,6 +168,22 @@ run_prior_session_ranker_paper() {
         >>"$LOG" 2>&1 || true
 }
 
+run_frozen_ranker_prediction_matrix() {
+    "$PYTHON" "$REPO/scripts/assess_frozen_ranker_prediction_matrix.py" \
+        --prediction-glob "$REPO/results/Data/frozen_microstructure_paper/predictions_20*.csv" \
+        --registration-glob "$REPO/results/Data/frozen_ranker_prediction_contract_matrix/registrations_20*.csv" \
+        --outcome-glob "$REPO/results/Data/frozen_ranker_prediction_contract_matrix/outcomes_20*.csv" \
+        --raw-glob "$REPO/results/Data/live_feature_recorder/live_features_20*.csv" \
+        --output-dir "$REPO/results/Data/frozen_ranker_prediction_strategy" \
+        --threshold 0.20 --capital 500000 --daily-goal 10000 \
+        --extra-cost-pct 0.10 --selection-sessions 12 \
+        --minimum-forward-sessions 20 \
+        --minimum-forward-trade-sessions 10 \
+        --minimum-forward-trades 30 --max-trades-per-day 10 \
+        --min-snapshots 1000 \
+        >>"$LOG" 2>&1 || true
+}
+
 run_full_universe_rank_strategy() {
     "$PYTHON" "$REPO/scripts/assess_full_universe_rank_strategy.py" \
         --outcome-glob "$REPO/results/Data/live_feature_recorder/eod/20*/live_features_rows.csv" \
@@ -321,6 +337,7 @@ if [ -f "$OUTPUT_ROOT/status.json" ]; then
         run_event_shadow_rebuild
         run_rank_migration_audit
         run_prior_session_ranker_paper
+        run_frozen_ranker_prediction_matrix
         run_full_universe_rank_strategy
         run_exact_full_rank_strategy
         run_full_rank_contract_matrix
@@ -376,6 +393,7 @@ run_live_microstructure_research
 run_event_shadow_rebuild
 run_rank_migration_audit
 run_prior_session_ranker_paper
+run_frozen_ranker_prediction_matrix
 run_full_universe_rank_strategy
 run_exact_full_rank_strategy
 run_full_rank_contract_matrix

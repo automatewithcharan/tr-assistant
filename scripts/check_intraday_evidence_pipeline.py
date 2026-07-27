@@ -188,6 +188,7 @@ def assess(
         "scripts/assess_full_rank_capital_allocation.py",
         "scripts/assess_full_rank_integrated_policies.py",
         "scripts/assess_full_rank_opportunity_ceiling.py",
+        "scripts/assess_frozen_ranker_prediction_matrix.py",
         "scripts/assess_prior_session_ranker_paper.py",
         "scripts/project_intraday_capital_growth.py",
         "scripts/run_full_rank_evidence_recorder.py",
@@ -206,6 +207,7 @@ def assess(
         "run_full_rank_capital_allocation",
         "run_full_rank_integrated_policies",
         "run_full_rank_opportunity_ceiling",
+        "run_frozen_ranker_prediction_matrix",
         "run_prior_session_ranker_paper",
         "run_intraday_capital_growth",
         "run_eod_integrity",
@@ -236,7 +238,12 @@ def assess(
     )
 
     standalone_evidence = is_truthy(
-        env.get("SIGNALMONITOR_STANDALONE_EVIDENCE", "0")
+        env.get("SIGNALMONITOR_STANDALONE_EVIDENCE", "1")
+    )
+    frozen_ranker_expected = is_truthy(
+        env.get(
+            "SIGNALMONITOR_ENABLE_FROZEN_MICROSTRUCTURE_PAPER", "1"
+        )
     )
     evidence_runtime = load_json(
         data / "full_rank_evidence_runtime" / "status.json"
@@ -261,6 +268,10 @@ def assess(
         and int(evidence_runtime.get("tick_symbols") or 0) >= 2500
         and float(evidence_runtime.get("feature_interval_seconds") or 0) <= 20.0
         and 0.0 < float(evidence_runtime.get("poll_interval_seconds") or 0) <= 5.0
+        and (
+            not frozen_ranker_expected
+            or bool(evidence_runtime.get("frozen_ranker_enabled"))
+        )
         and evidence_safe
     )
     owner_ok = not standalone_evidence or evidence_worker_ok or not live_market
@@ -272,6 +283,7 @@ def assess(
             f"age={evidence_age:.0f}s, "
             f"feature_interval={float(evidence_runtime.get('feature_interval_seconds') or 0):.1f}s, "
             f"poll={float(evidence_runtime.get('poll_interval_seconds') or 0):.1f}s, "
+            f"frozen_ranker={bool(evidence_runtime.get('frozen_ranker_enabled'))}, "
             f"paper_only={evidence_safe}"
         )
         if standalone_evidence

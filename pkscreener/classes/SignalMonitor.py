@@ -269,6 +269,7 @@ class SignalMonitorRunner:
         self._autotrade_order_manager = None
         self._ranked_confirmation_paper_trader = None
         self._frozen_microstructure_paper_trader = None
+        self._frozen_microstructure_contract_matrix = None
         self._intraday_event_shadow = (
             IntradayEventShadowRecorder(self.output_dir)
             if self.enable_intraday_event_shadow and self.use_live_kite
@@ -4367,12 +4368,48 @@ class SignalMonitorRunner:
                 ticks,
                 now=self.run_at,
             )
+            if self._frozen_microstructure_contract_matrix is None:
+                self._frozen_microstructure_contract_matrix = (
+                    FullUniverseRankContractMatrixObserver(
+                        output_dir=self.output_dir,
+                        stress_pct=float(
+                            os.environ.get(
+                                "SIGNALMONITOR_FULL_RANK_PAPER_STRESS_PCT",
+                                "0.10",
+                            )
+                            or 0.10
+                        ),
+                        root_name=(
+                            "frozen_ranker_prediction_contract_matrix"
+                        ),
+                        metadata_columns=[
+                            "ExpectedReturnPct",
+                            "MoveBand",
+                            "ModelTrainedThrough",
+                            "ModelSourceSha256",
+                        ],
+                    )
+                )
+            prediction_entries = (
+                self._frozen_microstructure_paper_trader
+                .contract_entry_events()
+            )
+            contract_events = self._frozen_microstructure_contract_matrix.process(
+                prediction_entries,
+                ticks,
+                now=self.run_at,
+            )
         except Exception as exc:
             default_logger().warning(
                 f"Frozen microstructure paper lane failed: {exc}",
                 exc_info=True,
             )
             return
+        if contract_events:
+            OutputControls().printOutput(
+                f"  [+] Frozen-ranker contract matrix: "
+                f"{len(contract_events)} exact paper exit(s) (no orders)"
+            )
         for event in events:
             symbol = str(event.get("symbol", "") or "").upper()
             if event.get("event") == "paper_entry":

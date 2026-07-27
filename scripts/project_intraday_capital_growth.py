@@ -19,6 +19,7 @@ DEFAULT_STRATEGIES = {
     "capital_allocation": "results/Data/full_universe_rank_capital_allocation/status.json",
     "integrated_policy": "results/Data/full_universe_rank_integrated_policies/status.json",
     "full_rank_model": "results/Data/full_universe_rank_strategy/status.json",
+    "frozen_prediction_matrix": "results/Data/frozen_ranker_prediction_strategy/status.json",
     "prior_session_ranker": "results/Data/prior_session_ranker_paper/status.json",
 }
 SCENARIO_DAILY_RETURNS = (0.0, 0.25, 0.50, 1.0, 2.0)

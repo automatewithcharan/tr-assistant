@@ -21,6 +21,9 @@ def test_default_projection_includes_complete_capital_constrained_judges():
     assert DEFAULT_STRATEGIES["prior_session_ranker"].endswith(
         "prior_session_ranker_paper/status.json"
     )
+    assert DEFAULT_STRATEGIES["frozen_prediction_matrix"].endswith(
+        "frozen_ranker_prediction_strategy/status.json"
+    )
 
 
 def _status(path, *, accepted, sessions=20, avg_return=0.5, lower=0.1):

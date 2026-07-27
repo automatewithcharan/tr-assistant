@@ -379,7 +379,7 @@ def evidence_pipeline_stats():
         "eod_status": str(eod.get("status") or "not run today"),
         "eod_date": str(eod.get("date") or "n/a"),
         "eod_refreshed": int(eod.get("artifacts_refreshed") or 0),
-        "eod_required": int(eod.get("artifacts_required") or 12),
+        "eod_required": int(eod.get("artifacts_required") or 14),
         "eod_session_eligible": bool(eod.get("session_evidence_eligible", False)),
     }
 
@@ -414,6 +414,13 @@ def leader_discovery_stats():
         DATA / "prior_session_ranker_paper" / "status.json", {}
     )
     live_paper_forward = live_paper_judge.get("forward_stress", {}) or {}
+    prediction_matrix = load_json(
+        DATA / "frozen_ranker_prediction_strategy" / "status.json", {}
+    )
+    prediction_matrix_forward = prediction_matrix.get("forward", {}) or {}
+    prediction_matrix_policy = (
+        prediction_matrix.get("selected_policy", {}) or {}
+    )
     reclaim = load_json(
         DATA / "leader_pullback_reclaim_audit" / "status.json", {}
     )
@@ -657,6 +664,39 @@ def leader_discovery_stats():
         ),
         "live_paper_forward_accepted": bool(
             live_paper_judge.get("accepted", False)
+        ),
+        "prediction_matrix_status": str(
+            prediction_matrix.get("status") or "pending"
+        ),
+        "prediction_matrix_selection_sessions": int(
+            number(prediction_matrix, "selection_sessions")
+        ),
+        "prediction_matrix_selection_required": int(
+            number(
+                prediction_matrix, "selection_sessions_required"
+            )
+            or 12
+        ),
+        "prediction_matrix_forward_sessions": int(
+            number(prediction_matrix_forward, "sessions")
+        ),
+        "prediction_matrix_forward_trades": int(
+            number(prediction_matrix_forward, "trades")
+        ),
+        "prediction_matrix_forward_avg_pnl": number(
+            prediction_matrix_forward, "avg_daily_pnl"
+        ),
+        "prediction_matrix_forward_lower95_pct": number(
+            prediction_matrix_forward, "lower_95_pct"
+        ),
+        "prediction_matrix_policy_contract": str(
+            prediction_matrix_policy.get("contract") or "not selected"
+        ),
+        "prediction_matrix_policy_slots": int(
+            number(prediction_matrix_policy, "slots")
+        ),
+        "prediction_matrix_accepted": bool(
+            prediction_matrix.get("accepted", False)
         ),
         "reclaim_status": str(reclaim.get("status") or "pending"),
         "reclaim_sessions": int(number(reclaim_stress, "sessions")),
@@ -1915,6 +1955,11 @@ def render():
         if leader_discovery["live_paper_forward_avg_pnl"] > 0
         else "loss"
     )
+    prediction_matrix_class = (
+        "gain"
+        if leader_discovery["prediction_matrix_forward_avg_pnl"] > 0
+        else "loss"
+    )
     leader_html += f"""
   <div class="summary" style="margin-top:10px">
     <span>Live shadow <span class="big">{escape(leader_discovery['live_paper_status'])}</span></span>
@@ -1934,6 +1979,24 @@ def render():
     lower confidence bound {leader_discovery['live_paper_forward_lower95_pct']:+.3f}%,
     Rs10k-hit sessions {leader_discovery['live_paper_forward_goal_hit_pct']:.1f}%,
     accepted: <b>{'YES' if leader_discovery['live_paper_forward_accepted'] else 'NO'}</b>.
+  </div>"""
+
+    leader_html += f"""
+  <div class="summary" style="margin-top:10px">
+    <span>Contract selection <span class="big">{leader_discovery['prediction_matrix_selection_sessions']}/{leader_discovery['prediction_matrix_selection_required']}</span></span>
+    <span>Untouched forward <span class="big">{leader_discovery['prediction_matrix_forward_sessions']}/20</span></span>
+    <span>Forward trades <span class="big">{leader_discovery['prediction_matrix_forward_trades']}</span></span>
+    <span>Selected policy <span class="big">{escape(leader_discovery['prediction_matrix_policy_contract'])} / {leader_discovery['prediction_matrix_policy_slots']} slot(s)</span></span>
+    <span>Stressed forward <span class="big {prediction_matrix_class}">{money(leader_discovery['prediction_matrix_forward_avg_pnl'])}/day</span></span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    All score-qualified frozen predictions are tracked across nine exact
+    ask-to-bid exit contracts. Contract and slot count use only the first
+    12 complete sessions; the following 20 sessions remain untouched.
+    Lower confidence bound {leader_discovery['prediction_matrix_forward_lower95_pct']:+.3f}%;
+    status <b>{escape(leader_discovery['prediction_matrix_status'])}</b>;
+    accepted: <b>{'YES' if leader_discovery['prediction_matrix_accepted'] else 'NO'}</b>;
+    real orders: <b>NO</b>.
   </div>"""
 
     reclaim_class = (
