@@ -26,6 +26,7 @@ from pkscreener.classes.FullUniverseRankContractMatrixObserver import (  # noqa:
 
 FORWARD_START = "2026-07-28"
 SLOT_COUNTS = (1, 2, 3)
+SCORE_THRESHOLDS = (0.20, 0.25, 0.30, 0.40)
 
 
 def _files(patterns: Iterable[str]) -> list[str]:
@@ -218,6 +219,7 @@ def replay_policy(
     *,
     contract: str,
     slots: int,
+    score_threshold: float,
     capital: float,
     extra_cost_pct: float,
     max_trades_per_day: int,
@@ -234,6 +236,9 @@ def replay_policy(
     for date in dates:
         candidates = registrations[
             registrations["Date"].eq(date)
+            & pd.to_numeric(
+                registrations["ExpectedReturnPct"], errors="coerce"
+            ).ge(float(score_threshold))
         ].sort_values(
             ["EntryAt", "ExpectedReturnPct", "Symbol"],
             ascending=[True, False, True],
@@ -275,6 +280,7 @@ def replay_policy(
                     "date": date,
                     "contract": str(contract),
                     "slots": int(slots),
+                    "score_threshold": float(score_threshold),
                     "event_id": str(row.EventId),
                     "symbol": str(row.Symbol),
                     "entry_at": row.EntryAt,
@@ -316,6 +322,7 @@ def build_assessment(
     coverage: pd.DataFrame,
     *,
     threshold: float,
+    candidate_thresholds: Iterable[float] | None = None,
     capital: float,
     daily_goal: float,
     extra_cost_pct: float,
@@ -324,8 +331,22 @@ def build_assessment(
     minimum_forward_trade_sessions: int,
     minimum_forward_trades: int,
     max_trades_per_day: int,
+    minimum_selection_trade_sessions: int = 6,
+    minimum_selection_trades: int = 6,
     forward_start: str = FORWARD_START,
 ) -> tuple[dict, pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    selection_thresholds = sorted(
+        {
+            float(value)
+            for value in (candidate_thresholds or SCORE_THRESHOLDS)
+            if float(value) >= float(threshold)
+        }
+    )
+    if not selection_thresholds:
+        raise ValueError(
+            "candidate thresholds must include at least one value at or above "
+            "the recording threshold"
+        )
     eligible_dates = []
     if not coverage.empty and {
         "date", "full_session_eligible"
@@ -371,29 +392,32 @@ def build_assessment(
     replay_cache = {}
     for contract in sorted(contracts):
         for slots in SLOT_COUNTS:
-            selection_daily, selection_trades = replay_policy(
-                selection_dates,
-                registrations,
-                outcomes,
-                contract=contract,
-                slots=slots,
-                capital=capital,
-                extra_cost_pct=extra_cost_pct,
-                max_trades_per_day=max_trades_per_day,
-            )
-            selection_metrics = metrics(selection_daily, daily_goal)
-            key = (contract, slots)
-            replay_cache[key] = (selection_daily, selection_trades)
-            summary_rows.append(
-                {
-                    "contract": contract,
-                    "slots": slots,
-                    **{
-                        f"selection_{name}": value
-                        for name, value in selection_metrics.items()
-                    },
-                }
-            )
+            for score_threshold in selection_thresholds:
+                selection_daily, selection_trades = replay_policy(
+                    selection_dates,
+                    registrations,
+                    outcomes,
+                    contract=contract,
+                    slots=slots,
+                    score_threshold=score_threshold,
+                    capital=capital,
+                    extra_cost_pct=extra_cost_pct,
+                    max_trades_per_day=max_trades_per_day,
+                )
+                selection_metrics = metrics(selection_daily, daily_goal)
+                key = (contract, slots, score_threshold)
+                replay_cache[key] = (selection_daily, selection_trades)
+                summary_rows.append(
+                    {
+                        "contract": contract,
+                        "slots": slots,
+                        "score_threshold": score_threshold,
+                        **{
+                            f"selection_{name}": value
+                            for name, value in selection_metrics.items()
+                        },
+                    }
+                )
     summary = pd.DataFrame(summary_rows)
     chosen = {}
     selection_daily = pd.DataFrame()
@@ -404,7 +428,15 @@ def build_assessment(
         len(selection_dates) == int(selection_sessions)
         and not summary.empty
     ):
-        ranked = summary.sort_values(
+        eligible_summary = summary[
+            pd.to_numeric(
+                summary["selection_trade_sessions"], errors="coerce"
+            ).fillna(0).ge(int(minimum_selection_trade_sessions))
+            & pd.to_numeric(
+                summary["selection_trades"], errors="coerce"
+            ).fillna(0).ge(int(minimum_selection_trades))
+        ]
+        ranked = eligible_summary.sort_values(
             [
                 "selection_avg_daily_pnl",
                 "selection_lower_95_pct",
@@ -412,30 +444,37 @@ def build_assessment(
                 "selection_trades",
                 "contract",
                 "slots",
+                "score_threshold",
             ],
-            ascending=[False, False, False, False, True, True],
+            ascending=[False, False, False, False, True, True, False],
             na_position="last",
         )
-        chosen = {
-            key: (
-                value.item()
-                if hasattr(value, "item")
-                else value
+        if not ranked.empty:
+            chosen = {
+                key: (
+                    value.item()
+                    if hasattr(value, "item")
+                    else value
+                )
+                for key, value in ranked.iloc[0].to_dict().items()
+            }
+            key = (
+                str(chosen["contract"]),
+                int(chosen["slots"]),
+                float(chosen["score_threshold"]),
             )
-            for key, value in ranked.iloc[0].to_dict().items()
-        }
-        key = (str(chosen["contract"]), int(chosen["slots"]))
-        selection_daily, selection_trades = replay_cache[key]
-        forward_daily, forward_trades = replay_policy(
-            forward_dates,
-            registrations,
-            outcomes,
-            contract=key[0],
-            slots=key[1],
-            capital=capital,
-            extra_cost_pct=extra_cost_pct,
-            max_trades_per_day=max_trades_per_day,
-        )
+            selection_daily, selection_trades = replay_cache[key]
+            forward_daily, forward_trades = replay_policy(
+                forward_dates,
+                registrations,
+                outcomes,
+                contract=key[0],
+                slots=key[1],
+                score_threshold=key[2],
+                capital=capital,
+                extra_cost_pct=extra_cost_pct,
+                max_trades_per_day=max_trades_per_day,
+            )
 
     forward_metrics = metrics(forward_daily, daily_goal)
     accepted = bool(
@@ -452,20 +491,22 @@ def build_assessment(
         and float(forward_metrics["block_floor_pct"]) > 0.0
         and not issues
     )
+    if len(selection_dates) < int(selection_sessions):
+        status_name = "collecting_contract_selection_sessions"
+    elif not chosen:
+        status_name = "selection_rejected_insufficient_activity"
+    elif accepted:
+        status_name = "accepted_forward_strategy"
+    else:
+        status_name = "collecting_untouched_forward_sessions"
     status = {
-        "status": (
-            "accepted_forward_strategy"
-            if accepted
-            else (
-                "collecting_untouched_forward_sessions"
-                if len(selection_dates) == int(selection_sessions)
-                else "collecting_contract_selection_sessions"
-            )
-        ),
+        "status": status_name,
         "evidence": "prior_session_ranker_all_predictions_exact_contracts",
         "forward_start": forward_start,
         "selection_uses_forward_period": False,
         "threshold": float(threshold),
+        "recording_floor": float(threshold),
+        "candidate_thresholds": selection_thresholds,
         "capital": float(capital),
         "daily_goal": float(daily_goal),
         "extra_cost_pct": float(extra_cost_pct),
@@ -474,6 +515,10 @@ def build_assessment(
         "valid_sessions": int(len(valid_dates)),
         "selection_sessions": int(len(selection_dates)),
         "selection_sessions_required": int(selection_sessions),
+        "minimum_selection_trade_sessions": int(
+            minimum_selection_trade_sessions
+        ),
+        "minimum_selection_trades": int(minimum_selection_trades),
         "forward": forward_metrics,
         "minimum_forward_sessions": int(minimum_forward_sessions),
         "minimum_forward_trade_sessions": int(
@@ -515,10 +560,20 @@ def main() -> int:
         default="results/Data/frozen_ranker_prediction_strategy",
     )
     parser.add_argument("--threshold", type=float, default=0.20)
+    parser.add_argument(
+        "--candidate-thresholds",
+        nargs="+",
+        type=float,
+        default=list(SCORE_THRESHOLDS),
+    )
     parser.add_argument("--capital", type=float, default=500_000.0)
     parser.add_argument("--daily-goal", type=float, default=10_000.0)
     parser.add_argument("--extra-cost-pct", type=float, default=0.10)
     parser.add_argument("--selection-sessions", type=int, default=12)
+    parser.add_argument(
+        "--minimum-selection-trade-sessions", type=int, default=6
+    )
+    parser.add_argument("--minimum-selection-trades", type=int, default=6)
     parser.add_argument("--minimum-forward-sessions", type=int, default=20)
     parser.add_argument(
         "--minimum-forward-trade-sessions", type=int, default=10
@@ -543,10 +598,15 @@ def main() -> int:
         outcomes,
         coverage,
         threshold=args.threshold,
+        candidate_thresholds=args.candidate_thresholds,
         capital=args.capital,
         daily_goal=args.daily_goal,
         extra_cost_pct=args.extra_cost_pct,
         selection_sessions=args.selection_sessions,
+        minimum_selection_trade_sessions=(
+            args.minimum_selection_trade_sessions
+        ),
+        minimum_selection_trades=args.minimum_selection_trades,
         minimum_forward_sessions=args.minimum_forward_sessions,
         minimum_forward_trade_sessions=(
             args.minimum_forward_trade_sessions
