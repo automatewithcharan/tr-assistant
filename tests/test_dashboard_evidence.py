@@ -515,6 +515,17 @@ def test_leader_dashboard_reports_shared_capital_slot_ceiling(
                     "goal_hit_pct": 58.33,
                 },
                 "current_bottleneck": "causal_selector_bottleneck",
+                "best_eligible_selector_regret": {
+                    "contract": "t1_0_s0_5_h30",
+                    "selector": "acceleration_first",
+                    "selected_avg_daily_pnl": 6100,
+                    "selected_win_rate_pct": 57.14,
+                    "missed_positive_symbols": 88,
+                    "missed_behind_selected_loser": 7,
+                    "primary_missed_reason": "active_position",
+                    "primary_missed_observations": 122,
+                    "excluded_from_evidence": False,
+                },
             }
         ),
         encoding="utf-8",
@@ -527,6 +538,16 @@ def test_leader_dashboard_reports_shared_capital_slot_ceiling(
     assert stats["opportunity_slot_avg_pnl"] == 13_200
     assert stats["opportunity_slot_goal_hit_pct"] == 58.33
     assert not stats["opportunity_slot_partial"]
+    assert stats["opportunity_regret_combination"] == (
+        "t1_0_s0_5_h30 / acceleration_first"
+    )
+    assert stats["opportunity_regret_avg_pnl"] == 6100
+    assert stats["opportunity_regret_win_rate"] == 57.14
+    assert stats["opportunity_regret_missed_symbols"] == 88
+    assert stats["opportunity_regret_behind_loser"] == 7
+    assert stats["opportunity_regret_primary_reason"] == "active_position"
+    assert stats["opportunity_regret_primary_count"] == 122
+    assert not stats["opportunity_regret_partial"]
 
 
 def test_broad_rank_checkpoint_stats_distinguishes_diagnostic_and_full(tmp_path, monkeypatch):

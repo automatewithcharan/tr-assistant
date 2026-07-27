@@ -448,6 +448,13 @@ def leader_discovery_stats():
         "best_partial_causal_diagnostic", {}
     ) or {}
     opportunity_causal_display = opportunity_causal or opportunity_partial_causal
+    opportunity_regret = opportunity_ceiling.get(
+        "best_eligible_selector_regret", {}
+    ) or {}
+    opportunity_partial_regret = opportunity_ceiling.get(
+        "best_partial_selector_regret", {}
+    ) or {}
+    opportunity_regret_display = opportunity_regret or opportunity_partial_regret
     opportunity_partial = opportunity_ceiling.get("best_partial_diagnostic", {}) or {}
     opportunity_display = opportunity_best or opportunity_partial
     opportunity_slot_best = opportunity_ceiling.get(
@@ -825,6 +832,33 @@ def leader_discovery_stats():
         ) or "none",
         "opportunity_causal_avg_pnl": number(opportunity_causal_display, "avg_causal_pnl"),
         "opportunity_capture_pct": number(opportunity_causal_display, "opportunity_capture_pct"),
+        "opportunity_regret_combination": " / ".join(
+            value for value in (
+                str(opportunity_regret_display.get("contract") or ""),
+                str(opportunity_regret_display.get("selector") or ""),
+            ) if value
+        ) or "none",
+        "opportunity_regret_avg_pnl": number(
+            opportunity_regret_display, "selected_avg_daily_pnl"
+        ),
+        "opportunity_regret_win_rate": number(
+            opportunity_regret_display, "selected_win_rate_pct"
+        ),
+        "opportunity_regret_missed_symbols": int(
+            number(opportunity_regret_display, "missed_positive_symbols")
+        ),
+        "opportunity_regret_behind_loser": int(
+            number(opportunity_regret_display, "missed_behind_selected_loser")
+        ),
+        "opportunity_regret_primary_reason": str(
+            opportunity_regret_display.get("primary_missed_reason") or "none"
+        ),
+        "opportunity_regret_primary_count": int(
+            number(opportunity_regret_display, "primary_missed_observations")
+        ),
+        "opportunity_regret_partial": bool(
+            not opportunity_regret and opportunity_partial_regret
+        ),
         "entry_timing_status": str(
             entry_timing.get("status") or "awaiting live entry timing"
         ),
@@ -1698,6 +1732,14 @@ def render():
     Best causal combination: {escape(leader_discovery['opportunity_causal_combination'])},
     {money(leader_discovery['opportunity_causal_avg_pnl'])}/day and
     {leader_discovery['opportunity_capture_pct']:.1f}% of the ceiling.
+    Regret trace: <b>{escape(leader_discovery['opportunity_regret_combination'])}</b>,
+    {money(leader_discovery['opportunity_regret_avg_pnl'])}/day,
+    {leader_discovery['opportunity_regret_win_rate']:.1f}% selected win rate;
+    {leader_discovery['opportunity_regret_missed_symbols']} distinct profitable symbols skipped.
+    Primary miss: <b>{escape(leader_discovery['opportunity_regret_primary_reason'])}</b>
+    ({leader_discovery['opportunity_regret_primary_count']} observations);
+    {leader_discovery['opportunity_regret_behind_loser']} profitable observations ranked behind a selected loser.
+    {'This regret sample is partial and excluded.' if leader_discovery['opportunity_regret_partial'] else ''}
   </div>"""
 
     entry_forward_class = (

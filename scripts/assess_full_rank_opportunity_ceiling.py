@@ -33,6 +33,293 @@ from scripts.assess_exact_full_rank_paper import SELECTORS, replay_one_slot
 from scripts.assess_full_universe_rank_strategy import raw_session_coverage
 
 
+def _finite_number(value, default: float = 0.0) -> float:
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return float(default)
+    return number if math.isfinite(number) else float(default)
+
+
+def trace_selector_regret(
+    events: pd.DataFrame,
+    dates: Iterable[str],
+    *,
+    selector: str,
+    capital: float = 500_000.0,
+    max_trades: int = 10,
+    session_scope: str = "eligible_full_session",
+) -> pd.DataFrame:
+    """Explain each causal pick and each future-profitable candidate it skipped."""
+    if selector not in SELECTORS:
+        raise ValueError(f"unknown selector: {selector}")
+    if events is None or events.empty:
+        return pd.DataFrame()
+    config = SELECTORS[selector]
+    rows = []
+    for date in sorted({str(value) for value in dates}):
+        day = events[events["date"].astype(str).eq(date)].copy()
+        if day.empty:
+            continue
+        day["entry_batch"] = pd.to_datetime(
+            day["entry_time"], errors="coerce"
+        ).dt.floor("min")
+        day.sort_values(
+            ["entry_batch", *config["columns"]],
+            ascending=[True, *config["ascending"]],
+            inplace=True,
+        )
+        active_exit = None
+        traded_symbols: set[str] = set()
+        day_trades = 0
+        for batch, visible in day.groupby("entry_batch", sort=True):
+            visible = visible.copy()
+            visible["priority_in_batch"] = range(1, len(visible) + 1)
+            if active_exit is not None and pd.Timestamp(active_exit) > pd.Timestamp(batch):
+                decisions = [(row, "blocked_active_position", None) for _, row in visible.iterrows()]
+            elif day_trades >= int(max_trades):
+                decisions = [(row, "blocked_daily_trade_cap", None) for _, row in visible.iterrows()]
+            else:
+                repeat_mask = visible["Symbol"].astype(str).isin(traded_symbols)
+                eligible = visible[~repeat_mask]
+                selected_index = eligible.index[0] if not eligible.empty else None
+                selected_return = (
+                    float(visible.loc[selected_index, "NetReturnPct"])
+                    if selected_index is not None
+                    else None
+                )
+                decisions = []
+                for index, row in visible.iterrows():
+                    if bool(repeat_mask.loc[index]):
+                        reason = "blocked_symbol_already_traded"
+                    elif index == selected_index:
+                        reason = "selected"
+                    else:
+                        reason = "lower_causal_priority_same_minute"
+                    decisions.append((row, reason, selected_return))
+                if selected_index is not None:
+                    pick = visible.loc[selected_index]
+                    active_exit = pick["exit_time"]
+                    traded_symbols.add(str(pick["Symbol"]))
+                    day_trades += 1
+
+            for row, decision, selected_return in decisions:
+                net_return = float(row["NetReturnPct"])
+                # Keep every actual pick plus skipped winners. Skipped losing
+                # rows add volume but no information to the regret diagnosis.
+                if decision != "selected" and net_return <= 0.0:
+                    continue
+                selected_loss_ahead = bool(
+                    decision == "lower_causal_priority_same_minute"
+                    and selected_return is not None
+                    and selected_return <= 0.0
+                    and net_return > 0.0
+                )
+                rows.append(
+                    {
+                        "date": date,
+                        "session_scope": session_scope,
+                        "contract": str(row.get("Contract", "")),
+                        "selector": selector,
+                        "symbol": str(row.get("Symbol", "")),
+                        "entry_time": row.get("entry_time"),
+                        "exit_time": row.get("exit_time"),
+                        "entry_batch": batch,
+                        "priority_in_batch": int(row["priority_in_batch"]),
+                        "decision": decision,
+                        "selected": decision == "selected",
+                        "future_positive": net_return > 0.0,
+                        "selected_loss_ahead": selected_loss_ahead,
+                        "net_return_pct": round(net_return, 6),
+                        "diagnostic_pnl": round(
+                            float(capital) * net_return / 100.0, 2
+                        ),
+                        "selected_return_pct": (
+                            round(float(selected_return), 6)
+                            if selected_return is not None
+                            else pd.NA
+                        ),
+                        "day_change_rank": int(
+                            _finite_number(row.get("DayChangeRank", 0))
+                        ),
+                        "day_change_pct": round(
+                            _finite_number(row.get("DayChangePct", 0.0)), 6
+                        ),
+                        "rank_improvement": round(
+                            _finite_number(row.get("RankImprovement", 0.0)), 6
+                        ),
+                        "rank_velocity_per_minute": round(
+                            _finite_number(
+                                row.get("RankVelocityPerMinute", 0.0)
+                            ),
+                            6,
+                        ),
+                        "entry_spread_bps": round(
+                            _finite_number(row.get("EntrySpreadBps", 0.0)), 6
+                        ),
+                        "buyer_seller_ratio": round(
+                            _finite_number(row.get("BuyerSellerRatio", 0.0)), 6
+                        ),
+                        "uses_future_outcome": True,
+                        "diagnostic_only": True,
+                        "can_promote_strategy": False,
+                    }
+                )
+    return pd.DataFrame(rows)
+
+
+def summarize_selector_regret(
+    decisions: pd.DataFrame,
+    *,
+    expected_sessions: int | None = None,
+) -> pd.DataFrame:
+    """Aggregate causal mistakes without treating skipped P&L as additive."""
+    if decisions is None or decisions.empty:
+        return pd.DataFrame()
+    rows = []
+    keys = ["session_scope", "contract", "selector"]
+    for key, group in decisions.groupby(keys, sort=True):
+        selected = group[group["selected"].astype(bool)]
+        missed = group[
+            ~group["selected"].astype(bool)
+            & group["future_positive"].astype(bool)
+        ]
+        selected_pnl = pd.to_numeric(
+            selected["diagnostic_pnl"], errors="coerce"
+        ).fillna(0.0)
+        selected_return = pd.to_numeric(
+            selected["net_return_pct"], errors="coerce"
+        ).fillna(0.0)
+        reason_counts = missed["decision"].value_counts().to_dict()
+        sessions = (
+            max(0, int(expected_sessions))
+            if expected_sessions is not None
+            else int(group["date"].astype(str).nunique())
+        )
+        selected_net_pnl = round(float(selected_pnl.sum()), 2)
+        rows.append(
+            {
+                "session_scope": key[0],
+                "contract": key[1],
+                "selector": key[2],
+                "sessions": sessions,
+                "selected_trades": int(len(selected)),
+                "selected_winners": int(selected_return.gt(0.0).sum()),
+                "selected_losers": int(selected_return.le(0.0).sum()),
+                "selected_win_rate_pct": round(
+                    float(selected_return.gt(0.0).mean() * 100.0)
+                    if len(selected_return)
+                    else 0.0,
+                    2,
+                ),
+                "selected_net_pnl": selected_net_pnl,
+                "selected_avg_daily_pnl": round(
+                    selected_net_pnl / sessions if sessions else 0.0, 2
+                ),
+                "missed_positive_observations": int(len(missed)),
+                "missed_positive_symbols": int(
+                    missed[["date", "symbol"]].drop_duplicates().shape[0]
+                ),
+                "missed_behind_selected_loser": int(
+                    missed["selected_loss_ahead"].astype(bool).sum()
+                ),
+                "missed_blocked_active_position": int(
+                    reason_counts.get("blocked_active_position", 0)
+                ),
+                "missed_lower_same_minute_priority": int(
+                    reason_counts.get("lower_causal_priority_same_minute", 0)
+                ),
+                "missed_symbol_repeat": int(
+                    reason_counts.get("blocked_symbol_already_traded", 0)
+                ),
+                "missed_daily_trade_cap": int(
+                    reason_counts.get("blocked_daily_trade_cap", 0)
+                ),
+                "future_pnl_is_non_additive": True,
+                "diagnostic_only": True,
+                "paper_promotion_allowed": False,
+                "real_orders_allowed": False,
+            }
+        )
+    return pd.DataFrame(rows).sort_values(
+        [
+            "selected_net_pnl",
+            "missed_behind_selected_loser",
+            "selected_win_rate_pct",
+        ],
+        ascending=[False, True, False],
+    )
+
+
+def evaluate_selector_regret(
+    events: pd.DataFrame,
+    dates: list[str],
+    *,
+    capital: float,
+    max_trades: int,
+    session_scope: str,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    decisions = []
+    for contract in CONTRACTS:
+        contract_events = events[
+            events["Contract"].astype(str).eq(contract)
+        ].copy()
+        for selector in SELECTORS:
+            traced = trace_selector_regret(
+                contract_events,
+                dates,
+                selector=selector,
+                capital=capital,
+                max_trades=max_trades,
+                session_scope=session_scope,
+            )
+            if not traced.empty:
+                decisions.append(traced)
+    detail = pd.concat(decisions, ignore_index=True) if decisions else pd.DataFrame()
+    return detail, summarize_selector_regret(
+        detail,
+        expected_sessions=len({str(value) for value in dates}),
+    )
+
+
+def regret_status_snapshot(summary: pd.DataFrame, *, excluded: bool) -> dict:
+    if summary is None or summary.empty:
+        return {}
+    row = summary.iloc[0]
+    reasons = {
+        "active_position": int(row.get("missed_blocked_active_position", 0) or 0),
+        "same_minute_priority": int(
+            row.get("missed_lower_same_minute_priority", 0) or 0
+        ),
+        "symbol_repeat": int(row.get("missed_symbol_repeat", 0) or 0),
+        "daily_trade_cap": int(row.get("missed_daily_trade_cap", 0) or 0),
+    }
+    primary_reason = max(reasons, key=reasons.get) if any(reasons.values()) else "none"
+    return {
+        "contract": str(row.get("contract", "")),
+        "selector": str(row.get("selector", "")),
+        "sessions": int(row.get("sessions", 0) or 0),
+        "selected_trades": int(row.get("selected_trades", 0) or 0),
+        "selected_win_rate_pct": round(
+            float(row.get("selected_win_rate_pct", 0.0) or 0.0), 2
+        ),
+        "selected_avg_daily_pnl": round(
+            float(row.get("selected_avg_daily_pnl", 0.0) or 0.0), 2
+        ),
+        "missed_positive_symbols": int(
+            row.get("missed_positive_symbols", 0) or 0
+        ),
+        "missed_behind_selected_loser": int(
+            row.get("missed_behind_selected_loser", 0) or 0
+        ),
+        "primary_missed_reason": primary_reason,
+        "primary_missed_observations": reasons[primary_reason]
+        if primary_reason != "none"
+        else 0,
+        "excluded_from_evidence": bool(excluded),
+    }
+
+
 def best_nonoverlapping_schedule(
     events: pd.DataFrame,
     *,
@@ -508,6 +795,20 @@ def run_audit(
         max_trades=max_trades,
         eligible_only=False,
     )
+    regret_decisions, regret_summary = evaluate_selector_regret(
+        events,
+        eligible_dates,
+        capital=capital,
+        max_trades=max_trades,
+        session_scope="eligible_full_session",
+    )
+    partial_regret_decisions, partial_regret_summary = evaluate_selector_regret(
+        events,
+        partial_dates,
+        capital=capital,
+        max_trades=max_trades,
+        session_scope="partial_incomplete_diagnostic",
+    )
     daily.to_csv(output_dir / "daily.csv", index=False)
     summary.to_csv(output_dir / "summary.csv", index=False)
     selected.to_csv(output_dir / "selected_intervals.csv", index=False)
@@ -518,12 +819,24 @@ def run_audit(
     )
     selector_gap.to_csv(output_dir / "selector_gap.csv", index=False)
     partial_selector_gap.to_csv(output_dir / "partial_selector_gap.csv", index=False)
+    regret_decisions.to_csv(output_dir / "selector_regret_decisions.csv", index=False)
+    regret_summary.to_csv(output_dir / "selector_regret_summary.csv", index=False)
+    partial_regret_decisions.to_csv(
+        output_dir / "partial_selector_regret_decisions.csv", index=False
+    )
+    partial_regret_summary.to_csv(
+        output_dir / "partial_selector_regret_summary.csv", index=False
+    )
     best = summary.iloc[0].to_dict() if not summary.empty else {}
     best_slot = (
         slot_summary.iloc[0].to_dict() if not slot_summary.empty else {}
     )
     best_causal = selector_gap.iloc[0].to_dict() if not selector_gap.empty else {}
     best_partial_causal = partial_selector_gap.iloc[0].to_dict() if not partial_selector_gap.empty else {}
+    best_regret = regret_status_snapshot(regret_summary, excluded=False)
+    best_partial_regret = regret_status_snapshot(
+        partial_regret_summary, excluded=True
+    )
     partial = daily[~daily["eligible_full_session"]].copy() if not daily.empty else pd.DataFrame()
     partial_slots = (
         slot_daily[~slot_daily["eligible_full_session"]].copy()
@@ -577,6 +890,8 @@ def run_audit(
         "best_eligible_contract": best,
         "best_shared_capital_slot_ceiling": best_slot,
         "best_causal_combination": best_causal,
+        "best_eligible_selector_regret": best_regret,
+        "best_partial_selector_regret": best_partial_regret,
         "best_partial_causal_diagnostic": {
             "contract": str(best_partial_causal.get("contract", "")),
             "selector": str(best_partial_causal.get("selector", "")),

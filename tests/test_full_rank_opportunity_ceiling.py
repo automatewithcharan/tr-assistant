@@ -10,7 +10,10 @@ from scripts.assess_full_rank_opportunity_ceiling import (
     evaluate_ceiling,
     evaluate_selector_gap,
     evaluate_slot_ceiling,
+    summarize_selector_regret,
+    trace_selector_regret,
 )
+from scripts.assess_exact_full_rank_paper import replay_one_slot
 
 
 def events():
@@ -144,3 +147,57 @@ def test_partial_gap_is_explicitly_separate_and_non_promoting():
     assert not gap.empty
     assert set(gap["session_scope"]) == {"partial_incomplete_diagnostic"}
     assert not bool(gap["paper_promotion_allowed"].any())
+
+
+def test_regret_trace_explains_winner_ranked_behind_selected_loser():
+    frame = events().copy()
+    frame.loc[frame["Symbol"].eq("B"), "NetReturnPct"] = -1.1
+    frame.loc[frame["Symbol"].eq("B"), "ExitBid"] = 98.9
+
+    traced = trace_selector_regret(
+        frame,
+        ["2026-07-23"],
+        selector="rank_first",
+    )
+
+    selected_b = traced[
+        traced["symbol"].eq("B") & traced["decision"].eq("selected")
+    ].iloc[0]
+    missed_a = traced[
+        traced["symbol"].eq("A")
+        & traced["decision"].eq("lower_causal_priority_same_minute")
+    ].iloc[0]
+    assert selected_b["net_return_pct"] == -1.1
+    assert bool(missed_a["selected_loss_ahead"])
+    assert not bool(traced["can_promote_strategy"].any())
+
+    summary = summarize_selector_regret(traced).iloc[0]
+    summary_with_empty_session = summarize_selector_regret(
+        traced, expected_sessions=2
+    ).iloc[0]
+    assert summary["selected_losers"] == 2
+    assert summary["missed_behind_selected_loser"] == 1
+    assert summary["missed_blocked_active_position"] == 1
+    assert not bool(summary["paper_promotion_allowed"])
+    assert summary_with_empty_session["sessions"] == 2
+    assert summary_with_empty_session["selected_avg_daily_pnl"] == -5500.0
+
+
+def test_regret_selected_pnl_matches_causal_replay():
+    frame = events()
+    traced = trace_selector_regret(
+        frame,
+        ["2026-07-23"],
+        selector="rank_first",
+    )
+    daily, trades = replay_one_slot(
+        frame,
+        ["2026-07-23"],
+        selector="rank_first",
+    )
+
+    selected = traced[traced["selected"].astype(bool)]
+    assert selected["symbol"].tolist() == trades["symbol"].tolist()
+    assert round(selected["diagnostic_pnl"].sum(), 2) == round(
+        daily["pnl"].sum(), 2
+    )
