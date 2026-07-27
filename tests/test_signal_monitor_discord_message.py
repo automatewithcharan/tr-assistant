@@ -1003,7 +1003,32 @@ def test_monitor_heartbeat_reports_active_scanner_without_fresh_buy(monkeypatch)
     assert "Intraday Goal Scanner Heartbeat" in sent_messages[0]
     assert "Scanner `active`" in sent_messages[0]
     assert "Goal alerts today `2/20`" in sent_messages[0]
+    assert "Buy promotion `eligible" in sent_messages[0]
     assert "VOLTAS" in sent_messages[0]
+
+
+def test_monitor_heartbeat_explains_unvalidated_selector_lock(monkeypatch):
+    runner = _make_runner()
+    runner.goal_selector_validated = False
+    runner._is_regular_market_hours = lambda: True
+    monkeypatch.setattr(runner, "_load_daily_symbol_set", lambda *_args, **_kwargs: set())
+    summary_df = pd.DataFrame(
+        [
+            {
+                "ScannedSymbols": 2929,
+                "FreshAlertsThisRun": 0,
+                "BuyNowCount": 5,
+                "MomentumBuyCount": 5,
+            }
+        ]
+    )
+
+    captured = []
+    runner._send_discord_alert = captured.append
+    runner._send_monitor_heartbeat(summary_df, pd.DataFrame(columns=runner.ALERT_COLUMNS))
+
+    assert len(captured) == 1
+    assert "Buy promotion `BLOCKED — selector not validated; paper evidence continues`" in captured[0]
 
 
 def test_monitor_heartbeat_throttle_survives_runner_restart(monkeypatch, tmp_path):

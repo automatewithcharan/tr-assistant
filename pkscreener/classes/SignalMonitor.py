@@ -4911,6 +4911,10 @@ class SignalMonitorRunner:
             if len(suppressed) > 6:
                 suppressed_line += f" ... +{len(suppressed) - 6}"
 
+        selector_line = "Buy promotion `eligible — validated selector loaded`"
+        if not bool(getattr(self, "goal_selector_validated", False)):
+            selector_line = "Buy promotion `BLOCKED — selector not validated; paper evidence continues`"
+
         lines = [
             "**Intraday Goal Scanner Heartbeat**",
             f"Source `{self._alert_source_label()}` | Sent `{sent_at}`",
@@ -4921,6 +4925,7 @@ class SignalMonitorRunner:
                 f"Fresh `{fresh_alerts}`"
             ),
             f"Goal alerts today `{len(goal_symbols)}/{max_goal}`",
+            selector_line,
             status_line,
             suppressed_line,
         ]
