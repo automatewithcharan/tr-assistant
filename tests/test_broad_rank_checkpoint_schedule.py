@@ -46,3 +46,15 @@ def test_checkpoint_predeclares_dynamic_model_families():
         1,
     )[0]
     assert registry_block.count('--status "') == 15
+
+
+def test_final_checkpoint_uses_mapped_universe_gate_function():
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / "run_broad_rank_acceleration_checkpoint.sh"
+    ).read_text(encoding="utf-8")
+
+    assert "required_goal_cached_symbols" in script
+    assert 'REQUIRED="$FINAL_REQUIRED"' in script
+    assert 'final_required_cached_symbols.txt' in script

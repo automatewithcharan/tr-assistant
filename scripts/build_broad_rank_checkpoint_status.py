@@ -6,14 +6,24 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
 
-MIN_GOAL_CACHED_SYMBOLS = 2_900
+MIN_GOAL_ABSOLUTE_SYMBOLS = 2_800
 MIN_GOAL_COVERAGE_RATIO = 0.98
+
+
+def required_goal_cached_symbols(mapped_symbols: int) -> int:
+    """Require a broad absolute sample and 98% of the broker-mapped universe."""
+    mapped = max(0, int(mapped_symbols))
+    return max(
+        MIN_GOAL_ABSOLUTE_SYMBOLS,
+        int(math.ceil(mapped * MIN_GOAL_COVERAGE_RATIO)),
+    )
 
 
 def load_status(path: Path) -> dict[str, Any]:
@@ -67,8 +77,9 @@ def build_status(
     cached = max(0, int(cached_symbols))
     mapped = max(0, int(mapped_symbols))
     coverage_ratio = cached / mapped if mapped else 0.0
+    minimum_goal_cached_symbols = required_goal_cached_symbols(mapped)
     broad_coverage_gate_passed = bool(
-        cached >= MIN_GOAL_CACHED_SYMBOLS
+        cached >= minimum_goal_cached_symbols
         and coverage_ratio >= MIN_GOAL_COVERAGE_RATIO
     )
     long_goal = bool(long_status.get("final_goal_evidence_passed", False))
@@ -98,6 +109,9 @@ def build_status(
         "starting_capital": load_optional_text(output_dir / "starting_capital.txt"),
         "daily_goal": load_optional_text(output_dir / "daily_goal.txt"),
         "stress_cost_pct": load_optional_text(output_dir / "stress_cost_pct.txt"),
+        "final_required_cached_symbols": load_optional_text(
+            output_dir / "final_required_cached_symbols.txt"
+        ),
         "signal_times": load_optional_text(
             output_dir / "signal_times_at_start.txt"
         ),
@@ -108,7 +122,8 @@ def build_status(
         "cached_symbols": cached,
         "mapped_symbols": mapped,
         "coverage_ratio": round(coverage_ratio, 6),
-        "minimum_goal_cached_symbols": MIN_GOAL_CACHED_SYMBOLS,
+        "minimum_goal_absolute_symbols": MIN_GOAL_ABSOLUTE_SYMBOLS,
+        "minimum_goal_cached_symbols": minimum_goal_cached_symbols,
         "minimum_goal_coverage_ratio": MIN_GOAL_COVERAGE_RATIO,
         "broad_coverage_gate_passed": broad_coverage_gate_passed,
         "diagnostic_only": not broad_coverage_gate_passed,

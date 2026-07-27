@@ -92,6 +92,8 @@ def _cnc_pos(
         target2=t2,
         product_type="CNC",
         holding_horizon="swing",
+        bot_owned=True,
+        auto_exit_allowed=True,
     )
     pos.buy_time = _ist_now_str(age_minutes)
     pos.gtt_trigger_id = gtt_id

@@ -1,6 +1,10 @@
 import json
 
-from scripts.build_broad_rank_checkpoint_status import build_status, write_status
+from scripts.build_broad_rank_checkpoint_status import (
+    build_status,
+    required_goal_cached_symbols,
+    write_status,
+)
 
 
 def _write_side_status(directory, side, *, selection=True, goal=True):
@@ -77,6 +81,22 @@ def test_symbol_count_floor_blocks_small_high_ratio_universe(tmp_path):
     assert not status["historical_goal_gate_passed"]
 
 
+def test_final_gate_tracks_98_percent_of_current_mapped_universe(tmp_path):
+    _write_side_status(tmp_path, "long")
+    _write_side_status(tmp_path, "short", selection=False, goal=False)
+    required = required_goal_cached_symbols(2_889)
+
+    assert required == 2_832
+    below = build_status(tmp_path, 2_900, required - 1, 2_889)
+    complete = build_status(tmp_path, 2_900, required, 2_889)
+
+    assert not below["broad_coverage_gate_passed"]
+    assert complete["broad_coverage_gate_passed"]
+    assert complete["minimum_goal_absolute_symbols"] == 2_800
+    assert complete["minimum_goal_cached_symbols"] == required
+    assert complete["historical_goal_gate_passed"]
+
+
 def test_full_coverage_can_report_classifier_goal_without_enabling_orders(tmp_path):
     _write_side_status(tmp_path, "long", selection=False, goal=False)
     _write_side_status(tmp_path, "short", selection=False, goal=False)
@@ -139,6 +159,9 @@ def test_checkpoint_status_records_frozen_input_provenance(tmp_path):
     (tmp_path / "starting_capital.txt").write_text("500000\n", encoding="utf-8")
     (tmp_path / "daily_goal.txt").write_text("10000\n", encoding="utf-8")
     (tmp_path / "stress_cost_pct.txt").write_text("0.10\n", encoding="utf-8")
+    (tmp_path / "final_required_cached_symbols.txt").write_text(
+        "2857\n", encoding="utf-8"
+    )
     (tmp_path / "signal_times_at_start.txt").write_text(
         "09:30,09:45,10:00\n",
         encoding="utf-8",
@@ -158,7 +181,8 @@ def test_checkpoint_status_records_frozen_input_provenance(tmp_path):
         "backfill_summary_sha256": hashlib.sha256(summary_bytes).hexdigest(),
         "fixed_time_candidates_sha256": hashlib.sha256(candidate_bytes).hexdigest(),
         "starting_capital": "500000",
-        "daily_goal": "10000",
-        "stress_cost_pct": "0.10",
-        "signal_times": "09:30,09:45,10:00",
-    }
+            "daily_goal": "10000",
+            "stress_cost_pct": "0.10",
+            "final_required_cached_symbols": "2857",
+            "signal_times": "09:30,09:45,10:00",
+        }

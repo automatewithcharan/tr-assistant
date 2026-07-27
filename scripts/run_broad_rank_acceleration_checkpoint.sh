@@ -49,9 +49,14 @@ fi
 
 CACHED=$($PYTHON -c 'import json,sys; d=json.load(open(sys.argv[1])); print(int(d.get("quality_eligible_cache_files", d.get("exact_range_cache_files", 0))))' "$SUMMARY")
 MAPPED=$($PYTHON -c 'import json,sys; print(int(json.load(open(sys.argv[1])).get("mapped_symbols", 0)))' "$SUMMARY")
+FINAL_REQUIRED=$($PYTHON -c 'import sys; from scripts.build_broad_rank_checkpoint_status import required_goal_cached_symbols; print(required_goal_cached_symbols(int(sys.argv[1])))' "$MAPPED")
 MILESTONE=0
 for value in 1000 2000 2900; do
-    if [ "$CACHED" -ge "$value" ] && [ ! -s "$REPO/results/Data/broad_rank_acceleration/checkpoint_${value}/status.json" ]; then
+    REQUIRED="$value"
+    if [ "$value" -eq 2900 ]; then
+        REQUIRED="$FINAL_REQUIRED"
+    fi
+    if [ "$CACHED" -ge "$REQUIRED" ] && [ ! -s "$REPO/results/Data/broad_rank_acceleration/checkpoint_${value}/status.json" ]; then
         MILESTONE=$value
         break
     fi
@@ -69,6 +74,7 @@ fi
 mkdir -p "$OUT"
 printf '%s\n' "$CACHED" > "$OUT/coverage_at_start.txt"
 printf '%s\n' "$MAPPED" > "$OUT/mapped_at_start.txt"
+printf '%s\n' "$FINAL_REQUIRED" > "$OUT/final_required_cached_symbols.txt"
 printf '%s\n' "$CAPITAL" > "$OUT/starting_capital.txt"
 printf '%s\n' "$DAILY_GOAL" > "$OUT/daily_goal.txt"
 printf '%s\n' "$STRESS_COST_PCT" > "$OUT/stress_cost_pct.txt"
@@ -78,7 +84,7 @@ sha256sum "$QUALITY_UNIVERSE" | awk '{print $1}' > "$OUT/quality_universe_sha256
 sha256sum "$CALENDAR" | awk '{print $1}' > "$OUT/calendar_sha256.txt"
 cp "$SUMMARY" "$OUT/backfill_summary_at_start.json"
 date -u +'%Y-%m-%dT%H:%M:%SZ' > "$OUT/started_at_utc.txt"
-echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] starting checkpoint=$MILESTONE cached=$CACHED mapped=$MAPPED" >> "$LOG"
+echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] starting checkpoint=$MILESTONE cached=$CACHED mapped=$MAPPED final_required=$FINAL_REQUIRED" >> "$LOG"
 
 nice -n 10 "$PYTHON" scripts/backtest_fixed_time_leader_rank.py \
     --data-dir "$DATA_DIR" --calendar-file "$CALENDAR" \

@@ -16,6 +16,7 @@ def simulate_day(
     exit_time_column: str,
     extra_cost_pct: float = 0.0,
     max_trades_per_day: int = 10,
+    prepared: bool = False,
 ) -> tuple[dict[str, Any], pd.DataFrame]:
     if capital <= 0:
         raise ValueError("capital must be positive")
@@ -28,22 +29,41 @@ def simulate_day(
     if missing:
         raise ValueError(f"candidate frame missing columns: {', '.join(sorted(missing))}")
 
-    day = candidates.copy()
-    day["entry_time"] = pd.to_datetime(day["entry_time"], errors="coerce")
-    day[exit_time_column] = pd.to_datetime(day[exit_time_column], errors="coerce")
-    day[return_column] = pd.to_numeric(day[return_column], errors="coerce")
-    day = day.dropna(subset=["entry_time", exit_time_column, return_column])
-    sort_columns = ["entry_time"]
-    ascending = [True]
-    if "selection_score" in day.columns:
-        sort_columns.append("selection_score")
-        ascending.append(False)
-    sort_columns.append("symbol")
-    ascending.append(True)
-    day.sort_values(sort_columns, ascending=ascending, inplace=True)
-
     initial_capital = float(capital)
     slot_capital = initial_capital / int(slots)
+    if candidates.empty:
+        return {
+            "date": "",
+            "candidate_trades": 0,
+            "executed_trades": 0,
+            "trades": 0,
+            "skipped_busy": 0,
+            "ending_cash": round(initial_capital, 2),
+            "pnl": 0.0,
+            "daily_return_pct": 0.0,
+            "capital_reuse": "exact_exit_bar_unleveraged",
+            "slots": int(slots),
+            "max_trades_per_day": int(max_trades_per_day),
+            "real_orders_allowed": False,
+        }, pd.DataFrame()
+
+    if prepared:
+        day = candidates
+    else:
+        day = candidates.copy()
+        day["entry_time"] = pd.to_datetime(day["entry_time"], errors="coerce")
+        day[exit_time_column] = pd.to_datetime(day[exit_time_column], errors="coerce")
+        day[return_column] = pd.to_numeric(day[return_column], errors="coerce")
+        day = day.dropna(subset=["entry_time", exit_time_column, return_column])
+        sort_columns = ["entry_time"]
+        ascending = [True]
+        if "selection_score" in day.columns:
+            sort_columns.append("selection_score")
+            ascending.append(False)
+        sort_columns.append("symbol")
+        ascending.append(True)
+        day.sort_values(sort_columns, ascending=ascending, inplace=True)
+
     cash = initial_capital
     active: list[dict[str, Any]] = []
     traded_symbols: set[str] = set()
@@ -103,7 +123,7 @@ def simulate_day(
                 "net_return_pct": round(net_return, 6),
                 "pnl": round(pnl, 2),
                 "selection_score": float(row.get("selection_score", 0.0) or 0.0),
-                "selection_label": int(row.get("selection_label", 0) or 0),
+                "selection_label": float(row.get("selection_label", 0.0) or 0.0),
                 "eventual_runner_label": int(row.get("eventual_runner_label", 0) or 0),
             }
         )
@@ -139,8 +159,34 @@ def simulate_calendar(
     extra_cost_pct: float = 0.0,
     max_trades_per_day: int = 10,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    groups = {str(date): group for date, group in candidates.groupby("date", sort=False)}
-    empty = candidates.iloc[0:0]
+    required = {"date", "symbol", "entry_time", exit_time_column, return_column}
+    missing = required - set(candidates.columns)
+    if missing:
+        raise ValueError(f"candidate frame missing columns: {', '.join(sorted(missing))}")
+    prepared = candidates.copy()
+    prepared["date"] = prepared["date"].astype(str)
+    prepared["entry_time"] = pd.to_datetime(prepared["entry_time"], errors="coerce")
+    prepared[exit_time_column] = pd.to_datetime(
+        prepared[exit_time_column], errors="coerce"
+    )
+    prepared[return_column] = pd.to_numeric(
+        prepared[return_column], errors="coerce"
+    )
+    prepared = prepared.dropna(
+        subset=["entry_time", exit_time_column, return_column]
+    )
+    sort_columns = ["date", "entry_time"]
+    ascending = [True, True]
+    if "selection_score" in prepared.columns:
+        sort_columns.append("selection_score")
+        ascending.append(False)
+    sort_columns.append("symbol")
+    ascending.append(True)
+    prepared.sort_values(sort_columns, ascending=ascending, inplace=True)
+    groups = {
+        str(date): group for date, group in prepared.groupby("date", sort=False)
+    }
+    empty = prepared.iloc[0:0]
     daily_rows = []
     trade_frames = []
     for date in dates:
@@ -152,6 +198,7 @@ def simulate_calendar(
             exit_time_column,
             extra_cost_pct,
             max_trades_per_day,
+            prepared=True,
         )
         summary["date"] = str(date)
         summary["daily_goal_hit"] = bool(summary["pnl"] >= float(daily_goal))

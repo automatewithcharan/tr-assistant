@@ -164,6 +164,111 @@ def test_signal_window_selection_uses_prefinal_period_only():
     assert selected["stress_final_avg_daily_pnl"] < 0.0
 
 
+def test_frozen_window_ends_bound_search_without_dropping_late_signals():
+    dates = pd.bdate_range("2025-01-01", periods=12).strftime("%Y-%m-%d").tolist()
+    rows = []
+    signal_minutes = tuple(range(570, 856, 15))
+    for date in dates:
+        for minute in signal_minutes:
+            row = _feature_row(date, f"S{minute}", minute, 1)
+            row.update(
+                {
+                    "runner_probability": 0.9,
+                    "entry_time": f"{date} 09:35",
+                    "exit_time__test": f"{date} 09:40",
+                    "return__test": 1.0,
+                }
+            )
+            rows.append(row)
+
+    summary, artifacts = evaluate_registry(
+        pd.DataFrame(rows),
+        dates,
+        "return__test",
+        "exit_time__test",
+        thresholds=(0.8,),
+        signal_window_ends=(630, 750, 855),
+    )
+
+    assert len(summary) == 3 * 1 * 2 * 2
+    assert set(summary["signal_window"]) == {
+        "through_10:30",
+        "through_12:30",
+        "through_14:15",
+    }
+    final_window = summary[summary["signal_window"].eq("through_14:15")]
+    assert all(
+        str(855) in value.split(",")
+        for value in final_window["signal_minutes"].astype(str)
+    )
+    assert artifacts == {}
+
+
+def test_failed_sample_gate_prefers_observed_diagnostic_over_zero_trade_config():
+    dates = pd.bdate_range("2025-01-01", periods=12).strftime("%Y-%m-%d").tolist()
+    rows = []
+    for date in dates:
+        for minute in (570, 585):
+            row = _feature_row(date, f"S{minute}", minute, 1)
+            row.update(
+                {
+                    "runner_probability": 0.7 if minute == 570 else 0.4,
+                    "entry_time": f"{date} 09:35",
+                    "exit_time__test": f"{date} 09:40",
+                    "return__test": -0.5,
+                }
+            )
+            rows.append(row)
+
+    summary, _ = evaluate_registry(
+        pd.DataFrame(rows),
+        dates,
+        "return__test",
+        "exit_time__test",
+        thresholds=(0.5, 0.9),
+        signal_window_ends=(585,),
+    )
+
+    assert not bool(summary.iloc[0]["sample_gate_passed"])
+    assert summary.iloc[0]["threshold"] == 0.5
+    assert summary.iloc[0]["diagnostic_prefinal_trade_days"] > 0
+
+
+def test_selected_stress_artifact_rebuild_applies_extra_cost():
+    dates = pd.bdate_range("2026-01-01", periods=3).strftime("%Y-%m-%d").tolist()
+    rows = []
+    for date in dates:
+        row = _feature_row(date, "AAA", 570, 1)
+        row.update(
+            {
+                "runner_probability": 0.9,
+                "entry_time": f"{date} 09:35",
+                "exit_time__test": f"{date} 09:40",
+                "return__test": 1.0,
+            }
+        )
+        rows.append(row)
+    selected = {
+        "signal_minutes": "570",
+        "threshold": 0.8,
+        "top_per_signal": 1,
+        "slots": 1,
+    }
+    daily, trades = rebuild_selected_stress_artifacts(
+        pd.DataFrame(rows),
+        dates,
+        selected,
+        "return__test",
+        "exit_time__test",
+        500_000.0,
+        10_000.0,
+        0.10,
+        "eventual_runner_label",
+    )
+    assert daily["daily_return_pct"].tolist() == [0.9, 0.9, 0.9]
+    assert trades["net_return_pct"].tolist() == [0.9, 0.9, 0.9]
+
+
 def test_optimistic_bound_uses_future_positive_returns_and_ignores_overlap():
     date = "2026-01-02"
     scored = pd.DataFrame(

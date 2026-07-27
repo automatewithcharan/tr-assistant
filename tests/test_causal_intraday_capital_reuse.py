@@ -68,6 +68,25 @@ def test_calendar_includes_cash_days_and_goal_result():
     assert not bool(daily.iloc[1]["daily_goal_hit"])
 
 
+def test_calendar_preserves_float_regression_selection_labels():
+    candidates = pd.DataFrame(
+        [_candidate("AAA", "2026-01-02 09:35", "2026-01-02 09:40", 1.0)]
+    )
+    candidates["selection_label"] = 0.375
+
+    _, trades = simulate_calendar(
+        candidates,
+        ["2026-01-02"],
+        400_000.0,
+        1,
+        "return__test",
+        "exit_time__test",
+        10_000.0,
+    )
+
+    assert trades["selection_label"].tolist() == [0.375]
+
+
 def test_daily_trade_cap_blocks_eleventh_reused_slot():
     candidates = pd.DataFrame(
         [

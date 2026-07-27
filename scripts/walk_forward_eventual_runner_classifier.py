@@ -492,6 +492,7 @@ def evaluate_registry(
     stress_cost_pct: float = 0.10,
     thresholds: tuple[float, ...] = (0.5, 0.6, 0.7, 0.8, 0.9),
     label_column: str = "eventual_runner_label",
+    signal_window_ends: tuple[int, ...] | None = None,
 ) -> tuple[
     pd.DataFrame,
     dict[tuple[str, float, int, int], tuple[pd.DataFrame, pd.DataFrame]],
@@ -501,13 +502,24 @@ def evaluate_registry(
     prefinal = [*splits["train"], *splits["validation"]]
     blocks = [list(values) for values in np.array_split(prefinal, 4) if len(values)]
     rows = []
-    artifacts = {}
     available_minutes = tuple(
         sorted(pd.to_numeric(scored["signal_minute"]).dropna().astype(int).unique())
     )
     signal_windows = []
-    for end_index in range(len(available_minutes)):
-        minutes = available_minutes[: end_index + 1]
+    if signal_window_ends is None:
+        effective_window_ends = available_minutes
+    else:
+        effective_window_ends = tuple(
+            sorted(
+                {
+                    max(minute for minute in available_minutes if minute <= requested)
+                    for requested in signal_window_ends
+                    if any(minute <= requested for minute in available_minutes)
+                }
+            )
+        )
+    for window_end in effective_window_ends:
+        minutes = tuple(minute for minute in available_minutes if minute <= window_end)
         label = "through_" + f"{minutes[-1] // 60:02d}:{minutes[-1] % 60:02d}"
         signal_windows.append((label, minutes))
     for signal_window, allowed_minutes in signal_windows:
@@ -517,12 +529,6 @@ def evaluate_registry(
                 selected = select_candidates(window_scored, threshold, top_per_signal)
                 selected["selection_label"] = selected[label_column]
                 for slots in (1, 2):
-                    key = (
-                        signal_window,
-                        float(threshold),
-                        int(top_per_signal),
-                        int(slots),
-                    )
                     daily, trades = simulate_calendar(
                         selected,
                         scored_dates,
@@ -542,7 +548,6 @@ def evaluate_registry(
                         daily_goal,
                         extra_cost_pct=stress_cost_pct,
                     )
-                    artifacts[key] = (daily, trades)
                     row: dict[str, Any] = {
                         "signal_window": signal_window,
                         "signal_minutes": ",".join(
@@ -623,6 +628,12 @@ def evaluate_registry(
                         and row["stress_train_avg_daily_return_pct"] > 0.0
                         and row["stress_validation_avg_daily_return_pct"] > 0.0
                     )
+                    row["diagnostic_prefinal_trade_days"] = (
+                        0
+                        if row["sample_gate_passed"]
+                        else int(row["stress_train_trade_days"])
+                        + int(row["stress_validation_trade_days"])
+                    )
                     row["evidence_accepted"] = False
                     row["paper_promotion_allowed"] = False
                     row["real_orders_allowed"] = False
@@ -632,16 +643,20 @@ def evaluate_registry(
         [
             "selection_gate_passed",
             "sample_gate_passed",
+            "diagnostic_prefinal_trade_days",
             "stress_selection_block_floor_pct",
             "stress_validation_avg_daily_return_pct",
         ],
         ascending=False,
         inplace=True,
     )
-    return summary.reset_index(drop=True), artifacts
+    # Selected artifacts are rebuilt once after pre-final selection. Retaining
+    # every candidate configuration here can consume several GB at broad
+    # universe checkpoints without adding any evidence.
+    return summary.reset_index(drop=True), {}
 
 
-def rebuild_selected_stress_artifacts(
+def rebuild_selected_artifacts(
     scored: pd.DataFrame,
     calendar_dates: list[str],
     selected: dict[str, Any],
@@ -649,10 +664,10 @@ def rebuild_selected_stress_artifacts(
     exit_time_column: str,
     capital: float,
     daily_goal: float,
-    stress_cost_pct: float,
+    extra_cost_pct: float,
     label_column: str,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
-    """Rebuild the chosen path with the declared extra stress cost."""
+    """Rebuild only the pre-finally selected portfolio path."""
     allowed_minutes = tuple(
         int(value)
         for value in str(selected["signal_minutes"]).split(",")
@@ -676,7 +691,32 @@ def rebuild_selected_stress_artifacts(
         return_column,
         exit_time_column,
         daily_goal,
-        extra_cost_pct=stress_cost_pct,
+        extra_cost_pct=extra_cost_pct,
+    )
+
+
+def rebuild_selected_stress_artifacts(
+    scored: pd.DataFrame,
+    calendar_dates: list[str],
+    selected: dict[str, Any],
+    return_column: str,
+    exit_time_column: str,
+    capital: float,
+    daily_goal: float,
+    stress_cost_pct: float,
+    label_column: str,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Rebuild the chosen path with the declared extra stress cost."""
+    return rebuild_selected_artifacts(
+        scored,
+        calendar_dates,
+        selected,
+        return_column,
+        exit_time_column,
+        capital,
+        daily_goal,
+        stress_cost_pct,
+        label_column,
     )
 
 
@@ -698,6 +738,14 @@ def main() -> int:
     parser.add_argument("--capital", type=float, default=400_000.0)
     parser.add_argument("--daily-goal", type=float, default=10_000.0)
     parser.add_argument("--stress-cost-pct", type=float, default=0.10)
+    parser.add_argument(
+        "--signal-window-ends",
+        default="10:30,12:30,14:15",
+        help=(
+            "Frozen cumulative strategy cutoffs. Candidate observations remain "
+            "available at every supplied signal time."
+        ),
+    )
     parser.add_argument(
         "--feature-set",
         choices=("snapshot", "temporal", "bar_path", "bar_path_regime"),
@@ -740,7 +788,7 @@ def main() -> int:
     )
     if scored.empty:
         raise RuntimeError("eventual-runner classifier produced no scored rows")
-    summary, artifacts = evaluate_registry(
+    summary, _ = evaluate_registry(
         scored,
         calendar,
         args.return_column,
@@ -752,6 +800,14 @@ def main() -> int:
         thresholds=(0.0, 0.05, 0.10, 0.20, 0.30)
         if objective == "regression"
         else (0.5, 0.6, 0.7, 0.8, 0.9),
+        signal_window_ends=tuple(
+            int(hour) * 60 + int(minute)
+            for hour, minute in (
+                value.strip().split(":", 1)
+                for value in args.signal_window_ends.split(",")
+                if value.strip()
+            )
+        ),
     )
     opportunity_summary, opportunity_daily = evaluate_opportunity_bounds(
         scored,
@@ -762,13 +818,17 @@ def main() -> int:
         stress_cost_pct=args.stress_cost_pct,
     )
     selected = summary.iloc[0].to_dict()
-    key = (
-        str(selected["signal_window"]),
-        float(selected["threshold"]),
-        int(selected["top_per_signal"]),
-        int(selected["slots"]),
+    daily, trades = rebuild_selected_artifacts(
+        scored,
+        calendar,
+        selected,
+        args.return_column,
+        args.exit_time_column,
+        args.capital,
+        args.daily_goal,
+        0.0,
+        label_column,
     )
-    daily, trades = artifacts[key]
     stress_daily, stress_trades = rebuild_selected_stress_artifacts(
         scored,
         calendar,
@@ -837,6 +897,7 @@ def main() -> int:
         "label_available_only_after_session": True,
         "capital_reuse": "exact_exit_bar_unleveraged",
         "stress_extra_cost_pct": float(args.stress_cost_pct),
+        "signal_window_ends": args.signal_window_ends,
         "optimistic_opportunity_bound": opportunity_summary.to_dict(orient="records"),
         "opportunity_bound_uses_future_outcomes": True,
         "opportunity_bound_can_promote_strategy": False,
