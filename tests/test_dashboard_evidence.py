@@ -493,6 +493,42 @@ def test_leader_dashboard_reports_integrated_policy_forward_separately(
     assert not stats["integrated_policy_accepted"]
 
 
+def test_leader_dashboard_reports_shared_capital_slot_ceiling(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(dashboard, "DATA", tmp_path)
+    root = tmp_path / "full_universe_rank_opportunity_ceiling"
+    root.mkdir(parents=True)
+    (root / "status.json").write_text(
+        json.dumps(
+            {
+                "status": "diagnostic_available",
+                "eligible_full_sessions": 12,
+                "best_eligible_contract": {
+                    "contract": "t1_5_s1_0_h60",
+                    "avg_first_observation_one_slot_pnl": 17_500,
+                },
+                "best_shared_capital_slot_ceiling": {
+                    "contract": "t1_0_s0_5_h30",
+                    "slots": 3,
+                    "avg_perfect_shared_capital_pnl": 13_200,
+                    "goal_hit_pct": 58.33,
+                },
+                "current_bottleneck": "causal_selector_bottleneck",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    stats = dashboard.leader_discovery_stats()
+
+    assert stats["opportunity_slot_contract"] == "t1_0_s0_5_h30"
+    assert stats["opportunity_slot_count"] == 3
+    assert stats["opportunity_slot_avg_pnl"] == 13_200
+    assert stats["opportunity_slot_goal_hit_pct"] == 58.33
+    assert not stats["opportunity_slot_partial"]
+
+
 def test_broad_rank_checkpoint_stats_distinguishes_diagnostic_and_full(tmp_path, monkeypatch):
     monkeypatch.setattr(dashboard, "DATA", tmp_path)
     first = tmp_path / "broad_rank_acceleration" / "checkpoint_1000"

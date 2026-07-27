@@ -450,6 +450,13 @@ def leader_discovery_stats():
     opportunity_causal_display = opportunity_causal or opportunity_partial_causal
     opportunity_partial = opportunity_ceiling.get("best_partial_diagnostic", {}) or {}
     opportunity_display = opportunity_best or opportunity_partial
+    opportunity_slot_best = opportunity_ceiling.get(
+        "best_shared_capital_slot_ceiling", {}
+    ) or {}
+    opportunity_partial_slot = opportunity_ceiling.get(
+        "best_partial_shared_capital_diagnostic", {}
+    ) or {}
+    opportunity_slot_display = opportunity_slot_best or opportunity_partial_slot
     entry_timing = load_json(
         DATA / "full_universe_rank_entry_timing" / "status.json", {}
     )
@@ -790,6 +797,23 @@ def leader_discovery_stats():
             opportunity_best, "first_observation_goal_hit_pct"
         ),
         "opportunity_ceiling_partial": bool(not opportunity_best and opportunity_partial),
+        "opportunity_slot_contract": str(
+            opportunity_slot_display.get("contract") or "none"
+        ),
+        "opportunity_slot_count": int(
+            number(opportunity_slot_display, "slots")
+        ),
+        "opportunity_slot_avg_pnl": number(
+            opportunity_slot_best, "avg_perfect_shared_capital_pnl"
+        ) or number(
+            opportunity_partial_slot, "perfect_shared_capital_pnl"
+        ),
+        "opportunity_slot_goal_hit_pct": number(
+            opportunity_slot_best, "goal_hit_pct"
+        ),
+        "opportunity_slot_partial": bool(
+            not opportunity_slot_best and opportunity_partial_slot
+        ),
         "opportunity_bottleneck": str(
             opportunity_ceiling.get("current_bottleneck") or "awaiting_complete_full_session"
         ),
@@ -1657,11 +1681,18 @@ def render():
     <span>Perfect P&amp;L <span class="big">{money(leader_discovery['opportunity_ceiling_avg_pnl'])}/day</span></span>
     <span>Lower 95% <span class="big">{money(leader_discovery['opportunity_ceiling_lower95_pnl'])}/day</span></span>
     <span>Goal days <span class="big">{leader_discovery['opportunity_ceiling_goal_hit_pct']:.1f}%</span></span>
+    <span>Shared-capital slots <span class="big">{leader_discovery['opportunity_slot_count']}</span></span>
+    <span>Slot ceiling <span class="big">{money(leader_discovery['opportunity_slot_avg_pnl'])}/day</span></span>
+    <span>Slot goal days <span class="big">{leader_discovery['opportunity_slot_goal_hit_pct']:.1f}%</span></span>
     <span class="badge {'orange' if leader_discovery['opportunity_ceiling_partial'] else 'grey'}">{'PARTIAL, EXCLUDED' if leader_discovery['opportunity_ceiling_partial'] else 'FUTURE-KNOWN ONLY'}</span>
   </div>
   <div class="updated" style="margin-top:6px">
     Future-known upper bound using each symbol's first observed ask, observed bid exits, one reusable Rs 500,000 slot,
-    at most ten trades, and all nine fixed exit contracts. It diagnoses universe capacity versus selector quality;
+    at most ten trades, and all nine fixed exit contracts. The shared-capital diagnostic independently tests
+    1/2/3/5 equal slots under the same total Rs 500,000; its best contract is
+    {escape(leader_discovery['opportunity_slot_contract'])}
+    ({'partial and excluded' if leader_discovery['opportunity_slot_partial'] else 'eligible-session diagnostic'}).
+    It diagnoses universe capacity versus selector quality;
     it is never tradeable and can never enable paper promotion or real orders.
     Bottleneck: <b>{escape(leader_discovery['opportunity_bottleneck'])}</b>.
     Best causal combination: {escape(leader_discovery['opportunity_causal_combination'])},
