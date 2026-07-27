@@ -10,7 +10,9 @@ CALENDAR="${FULL_SESSION_CALENDAR:-$DATA_DIR/NIFTY 50.csv}"
 UNIVERSE="${FULL_SESSION_UNIVERSE:-results/Data/broad_universe_5minute_backfill_quality_eligible_universe.csv}"
 OUT="${FULL_SESSION_REGIME_OUTPUT_DIR:-results/Data/broad_rank_acceleration/checkpoint_1000/full_session_regime}"
 WORKERS="${FULL_SESSION_WORKERS:-12}"
-SIGNAL_TIMES="${FULL_SESSION_SIGNAL_TIMES:-09:30,09:45,10:00,10:15,10:30,10:45,11:00,11:15,11:30,11:45,12:00,12:15,12:30,12:45,13:00,13:15,13:30}"
+# Keep this aligned with the frozen broad-checkpoint schedule. The 14:15
+# signal enters on the 14:20 bar and its 60-minute contract ends by 15:20.
+SIGNAL_TIMES="${FULL_SESSION_SIGNAL_TIMES:-09:30,09:45,10:00,10:15,10:30,10:45,11:00,11:15,11:30,11:45,12:00,12:15,12:30,12:45,13:00,13:15,13:30,13:45,14:00,14:15}"
 
 mkdir -p "$OUT"
 

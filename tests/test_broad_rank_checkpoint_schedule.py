@@ -1,6 +1,19 @@
 from pathlib import Path
 
 
+def _signal_times(script_name: str, variable: str) -> tuple[list[str], str]:
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts"
+        / script_name
+    ).read_text(encoding="utf-8")
+    signal_line = next(
+        line for line in script.splitlines()
+        if line.startswith(variable)
+    )
+    return signal_line.split(":-", 1)[-1].rstrip('}"').split(","), script
+
+
 def test_next_broad_checkpoint_covers_delayed_intraday_starters():
     script = (
         Path(__file__).resolve().parents[1]
@@ -19,6 +32,29 @@ def test_next_broad_checkpoint_covers_delayed_intraday_starters():
     assert "11:30" in values
     assert "13:30" in values
     assert '--signal-times "$SIGNAL_TIMES"' in script
+    assert (
+        "FIXED_PHASE_SIGNAL_TIMES=(09:30 10:30 12:30 14:15)"
+        in script
+    )
+    assert (
+        'for SIGNAL_TIME in "${FIXED_PHASE_SIGNAL_TIMES[@]}"; do'
+        in script
+    )
+
+
+def test_full_session_launchers_keep_delayed_intraday_starters():
+    for script_name in (
+        "run_full_session_leader_research.sh",
+        "run_full_session_regime_leader_research.sh",
+    ):
+        values, script = _signal_times(
+            script_name,
+            'SIGNAL_TIMES="${FULL_SESSION_SIGNAL_TIMES:-',
+        )
+        assert len(values) == 20
+        assert values[0] == "09:30"
+        assert values[-1] == "14:15"
+        assert '--signal-times "$SIGNAL_TIMES"' in script
 
 
 def test_checkpoint_predeclares_dynamic_model_families():

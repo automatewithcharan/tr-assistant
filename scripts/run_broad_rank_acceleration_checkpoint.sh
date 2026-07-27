@@ -22,6 +22,10 @@ STRESS_COST_PCT="${BROAD_RANK_STRESS_COST_PCT:-0.10}"
 # Frozen before the 2,000-symbol checkpoint. The final signal enters on the
 # 14:20 bar and its 60-minute contract ends by 15:20.
 SIGNAL_TIMES="09:30,09:45,10:00,10:15,10:30,10:45,11:00,11:15,11:30,11:45,12:00,12:15,12:30,12:45,13:00,13:15,13:30,13:45,14:00,14:15"
+# Phase-specific models are one family in the registry. Spread their frozen
+# observations across the session instead of spending every comparison before
+# 10:30 and leaving delayed starters unrepresented.
+FIXED_PHASE_SIGNAL_TIMES=(09:30 10:30 12:30 14:15)
 case "$WORKERS" in
     ''|*[!0-9]*) WORKERS="$(nproc)" ;;
 esac
@@ -194,7 +198,7 @@ nice -n 10 "$PYTHON" scripts/research_rank_acceleration_registry.py \
     --stress-cost-pct "$STRESS_COST_PCT" \
     >> "$LOG" 2>&1
 
-for SIGNAL_TIME in 09:30 09:45 10:00 10:30; do
+for SIGNAL_TIME in "${FIXED_PHASE_SIGNAL_TIMES[@]}"; do
     SIGNAL_KEY="${SIGNAL_TIME/:/}"
     nice -n 10 "$PYTHON" scripts/walk_forward_fixed_time_leader_ranker.py \
         --input "$OUT/fixed_time_candidates.csv" --calendar-file "$CALENDAR" \
