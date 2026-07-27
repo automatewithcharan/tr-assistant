@@ -42,6 +42,10 @@ def fixture_root(tmp_path: Path) -> tuple[Path, datetime]:
         "SLOT_COUNTS = (1, 2, 3, 5)\n",
     )
     write(
+        tmp_path / "scripts/assess_frozen_ranker_prediction_matrix.py",
+        "SCORE_THRESHOLDS = (0.20, 0.25, 0.30, 0.40)\n",
+    )
+    write(
         tmp_path / "scripts/assess_full_rank_integrated_policies.py",
         "INTEGRATED_POLICIES = {" + ",".join(f'\"p{i}\": {{}}' for i in range(10)) + "}\n",
     )
@@ -84,6 +88,12 @@ def test_ready_pipeline_is_not_strategy_acceptance(tmp_path):
     assert result["status"] == "ready_for_next_full_session"
     assert result["strategy_accepted"] is False
     assert result["real_orders_allowed"] is False
+    search = next(
+        item for item in result["checks"]
+        if item["name"] == "predeclared_search_space"
+    )
+    assert search["passed"] is True
+    assert "4 frozen score thresholds" in search["detail"]
 
 
 def test_unsafe_autotrade_flag_blocks_readiness(tmp_path):

@@ -76,6 +76,26 @@ def dict_assignment_size(path: Path, variable_name: str) -> int:
     return 0
 
 
+def sequence_assignment_size(path: Path, variable_name: str) -> int:
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except Exception:
+        return 0
+    for node in tree.body:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if not any(
+            isinstance(target, ast.Name) and target.id == variable_name
+            for target in targets
+        ):
+            continue
+        if isinstance(node.value, (ast.Tuple, ast.List, ast.Set)):
+            return len(node.value.elts)
+        return 0
+    return 0
+
+
 def live_rank_session_coverage(path: Path, session_date: str) -> dict[str, Any]:
     """Summarize cumulative recorder continuity without trusting latest status."""
     observations: list[tuple[datetime, int | None]] = []
@@ -427,9 +447,13 @@ def assess(
         "selectors": dict_assignment_size(root / "scripts/assess_exact_full_rank_paper.py", "SELECTORS"),
         "slot_counts": 4 if "SLOT_COUNTS = (1, 2, 3, 5)" in (root / "scripts/assess_full_rank_capital_allocation.py").read_text(errors="ignore") else 0,
         "integrated_policies": dict_assignment_size(root / "scripts/assess_full_rank_integrated_policies.py", "INTEGRATED_POLICIES"),
+        "score_thresholds": sequence_assignment_size(
+            root / "scripts/assess_frozen_ranker_prediction_matrix.py",
+            "SCORE_THRESHOLDS",
+        ),
     }
-    matrix_ok = matrix_counts == {"contracts": 9, "variants": 6, "gates": 12, "selectors": 4, "slot_counts": 4, "integrated_policies": 10}
-    checks.append(check("predeclared_search_space", matrix_ok, "9 exit contracts, 6 timing variants, 12 feature gates, 4 selectors, 4 capital slot counts, 10 integrated policies declared" if matrix_ok else "one or more predeclared matrices are incomplete"))
+    matrix_ok = matrix_counts == {"contracts": 9, "variants": 6, "gates": 12, "selectors": 4, "slot_counts": 4, "integrated_policies": 10, "score_thresholds": 4}
+    checks.append(check("predeclared_search_space", matrix_ok, "9 exit contracts, 6 timing variants, 12 feature gates, 4 selectors, 4 capital slot counts, 10 integrated policies, 4 frozen score thresholds declared" if matrix_ok else "one or more predeclared matrices are incomplete"))
 
     eod = load_json(data / "intraday_evidence_pipeline" / "eod_latest.json")
     eod_status = str(eod.get("status") or "")
