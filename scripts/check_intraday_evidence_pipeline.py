@@ -188,6 +188,7 @@ def assess(
         "scripts/assess_full_rank_capital_allocation.py",
         "scripts/assess_full_rank_integrated_policies.py",
         "scripts/assess_full_rank_opportunity_ceiling.py",
+        "scripts/assess_prior_session_ranker_paper.py",
         "scripts/project_intraday_capital_growth.py",
         "scripts/run_full_rank_evidence_recorder.py",
         "scripts/live_evidence_eod.sh",
@@ -205,6 +206,7 @@ def assess(
         "run_full_rank_capital_allocation",
         "run_full_rank_integrated_policies",
         "run_full_rank_opportunity_ceiling",
+        "run_prior_session_ranker_paper",
         "run_intraday_capital_growth",
         "run_eod_integrity",
     ]

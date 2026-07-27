@@ -23,6 +23,7 @@ def fixture_root(tmp_path: Path) -> tuple[Path, datetime]:
         "scripts/assess_full_rank_entry_timing.py",
         "scripts/assess_full_rank_capital_allocation.py",
         "scripts/assess_full_rank_integrated_policies.py",
+        "scripts/assess_prior_session_ranker_paper.py",
         "scripts/project_intraday_capital_growth.py",
         "scripts/assess_full_rank_opportunity_ceiling.py",
         "scripts/run_full_rank_evidence_recorder.py",
@@ -42,7 +43,7 @@ def fixture_root(tmp_path: Path) -> tuple[Path, datetime]:
     write(tmp_path / "pkscreener/classes/FullUniverseRankEntryTimingObserver.py", "ENTRY_VARIANTS = {" + ",".join(f'\"v{i}\": {{\"mode\": \"dip\"}}' for i in range(6)) + "}")
     write(tmp_path / "scripts/assess_full_rank_feature_gates.py", "FEATURE_GATES = {" + ",".join(f'\"g{i}\": \"gate\"' for i in range(12)) + "}")
     write(tmp_path / "scripts/assess_exact_full_rank_paper.py", "SELECTORS = {" + ",".join(f'\"s{i}\": \"selector\"' for i in range(4)) + "}")
-    calls = ["run_exact_full_rank_strategy", "run_full_rank_contract_matrix", "run_full_rank_entry_timing", "run_full_rank_feature_gates", "run_full_rank_capital_allocation", "run_full_rank_integrated_policies", "run_full_rank_opportunity_ceiling", "run_intraday_capital_growth", "run_eod_integrity"]
+    calls = ["run_exact_full_rank_strategy", "run_full_rank_contract_matrix", "run_full_rank_entry_timing", "run_full_rank_feature_gates", "run_full_rank_capital_allocation", "run_full_rank_integrated_policies", "run_full_rank_opportunity_ceiling", "run_prior_session_ranker_paper", "run_intraday_capital_growth", "run_eod_integrity"]
     write(tmp_path / "scripts/live_evidence_eod.sh", "\n".join(calls + calls))
     data = tmp_path / "results/Data"
     stamp = "2026-07-23 10:00:00"

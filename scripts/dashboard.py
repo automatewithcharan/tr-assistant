@@ -410,6 +410,10 @@ def leader_discovery_stats():
     live_paper = load_json(
         DATA / "frozen_microstructure_paper" / "status.json", {}
     )
+    live_paper_judge = load_json(
+        DATA / "prior_session_ranker_paper" / "status.json", {}
+    )
+    live_paper_forward = live_paper_judge.get("forward_stress", {}) or {}
     reclaim = load_json(
         DATA / "leader_pullback_reclaim_audit" / "status.json", {}
     )
@@ -633,6 +637,27 @@ def leader_discovery_stats():
         "live_paper_trades": int(live_paper.get("trades") or 0),
         "live_paper_closed": int(live_paper.get("closed_trades") or 0),
         "live_paper_net_pnl": number(live_paper, "net_pnl"),
+        "live_paper_forward_sessions": int(
+            number(live_paper_forward, "sessions")
+        ),
+        "live_paper_forward_trades": int(
+            number(live_paper_forward, "trades")
+        ),
+        "live_paper_forward_avg_pnl": number(
+            live_paper_forward, "avg_daily_pnl"
+        ),
+        "live_paper_forward_lower95_pct": number(
+            live_paper_forward, "lower_95_pct"
+        ),
+        "live_paper_forward_goal_hit_pct": number(
+            live_paper_forward, "goal_hit_pct"
+        ),
+        "live_paper_forward_required": int(
+            number(live_paper_judge, "minimum_forward_sessions") or 20
+        ),
+        "live_paper_forward_accepted": bool(
+            live_paper_judge.get("accepted", False)
+        ),
         "reclaim_status": str(reclaim.get("status") or "pending"),
         "reclaim_sessions": int(number(reclaim_stress, "sessions")),
         "reclaim_trades": int(number(reclaim_stress, "trades")),
@@ -1885,6 +1910,11 @@ def render():
     live_paper_class = (
         "gain" if leader_discovery["live_paper_net_pnl"] > 0 else "loss"
     )
+    live_paper_forward_class = (
+        "gain"
+        if leader_discovery["live_paper_forward_avg_pnl"] > 0
+        else "loss"
+    )
     leader_html += f"""
   <div class="summary" style="margin-top:10px">
     <span>Live shadow <span class="big">{escape(leader_discovery['live_paper_status'])}</span></span>
@@ -1892,11 +1922,18 @@ def render():
     <span>Max score <span class="big">{leader_discovery['live_paper_max_score']:+.3f}%</span></span>
     <span>Paper trades <span class="big">{leader_discovery['live_paper_closed']}/{leader_discovery['live_paper_trades']}</span></span>
     <span>Net P&amp;L <span class="big {live_paper_class}">{money(leader_discovery['live_paper_net_pnl'])}</span></span>
+    <span>Eligible forward <span class="big">{leader_discovery['live_paper_forward_sessions']}/{leader_discovery['live_paper_forward_required']} sessions</span></span>
+    <span>Forward trades <span class="big">{leader_discovery['live_paper_forward_trades']}</span></span>
+    <span>Stressed forward <span class="big {live_paper_forward_class}">{money(leader_discovery['live_paper_forward_avg_pnl'])}/day</span></span>
   </div>
   <div class="updated" style="margin-top:6px">
     Timestamped live paper decisions for {escape(leader_discovery['live_paper_date'])};
     model trained only through {escape(leader_discovery['live_paper_model_through'])}.
     Predictions are recorded before outcomes, use observed asks and bids, and cannot send alerts or broker orders.
+    Aggregate judge includes no-trade days and an additional 0.10% stress charge;
+    lower confidence bound {leader_discovery['live_paper_forward_lower95_pct']:+.3f}%,
+    Rs10k-hit sessions {leader_discovery['live_paper_forward_goal_hit_pct']:.1f}%,
+    accepted: <b>{'YES' if leader_discovery['live_paper_forward_accepted'] else 'NO'}</b>.
   </div>"""
 
     reclaim_class = (

@@ -18,6 +18,9 @@ def test_default_projection_includes_complete_capital_constrained_judges():
     assert DEFAULT_STRATEGIES["integrated_policy"].endswith(
         "full_universe_rank_integrated_policies/status.json"
     )
+    assert DEFAULT_STRATEGIES["prior_session_ranker"].endswith(
+        "prior_session_ranker_paper/status.json"
+    )
 
 
 def _status(path, *, accepted, sessions=20, avg_return=0.5, lower=0.1):

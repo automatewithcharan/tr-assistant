@@ -34,6 +34,46 @@ def test_leader_dashboard_reports_ready_prior_session_artifact(tmp_path, monkeyp
     assert stats["live_paper_date"] == "2026-07-22"
     assert stats["live_paper_model_through"] == "2026-07-21"
     assert stats["live_paper_predictions"] == 0
+    assert stats["live_paper_forward_sessions"] == 0
+    assert stats["live_paper_forward_required"] == 20
+    assert stats["live_paper_forward_accepted"] is False
+
+
+def test_leader_dashboard_reports_prior_session_ranker_forward_judge(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(dashboard, "DATA", tmp_path)
+    root = tmp_path / "prior_session_ranker_paper"
+    root.mkdir(parents=True)
+    (root / "status.json").write_text(
+        json.dumps(
+            {
+                "status": "collecting_prior_session_ranker_forward_evidence",
+                "minimum_forward_sessions": 20,
+                "forward_stress": {
+                    "sessions": 4,
+                    "trades": 5,
+                    "avg_daily_pnl": 2521.5,
+                    "lower_95_pct": -0.42,
+                    "goal_hit_pct": 25.0,
+                },
+                "accepted": False,
+                "paper_promotion_allowed": False,
+                "real_orders_allowed": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    stats = dashboard.leader_discovery_stats()
+
+    assert stats["live_paper_forward_sessions"] == 4
+    assert stats["live_paper_forward_trades"] == 5
+    assert stats["live_paper_forward_avg_pnl"] == 2521.5
+    assert stats["live_paper_forward_lower95_pct"] == -0.42
+    assert stats["live_paper_forward_goal_hit_pct"] == 25.0
+    assert stats["live_paper_forward_required"] == 20
+    assert stats["live_paper_forward_accepted"] is False
 
 
 def test_leader_dashboard_reports_pullback_reclaim_rejection(tmp_path, monkeypatch):
