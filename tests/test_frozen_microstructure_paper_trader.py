@@ -37,10 +37,10 @@ def _artifact(tmp_path, trained_through="2026-07-21"):
     return path
 
 
-def _row(when, move, bs=2.0):
+def _row(when, move, bs=2.0, symbol="AAA", ask_qty=10000):
     return {
         "When": when.strftime("%Y-%m-%d %H:%M:%S"),
-        "Symbol": "AAA",
+        "Symbol": symbol,
         "LastPrice": 100.0,
         "DayChangePct": move,
         "OpenChangePct": move,
@@ -53,7 +53,7 @@ def _row(when, move, bs=2.0):
         "BestBid": 99.9,
         "BestAsk": 100.1,
         "BestBidQty": 10000,
-        "BestAskQty": 10000,
+        "BestAskQty": ask_qty,
         "SpreadBps": 19.99,
         "SectorAvgChangePct": 0.2,
         "SectorBreadthPct": 60.0,
@@ -172,3 +172,52 @@ def test_high_frequency_standalone_rows_keep_model_history_near_two_minutes(
     assert len(entries) == 1
     assert entries[0]["entry_time"].endswith("09:20:00")
     assert trader.latest_predictions[0]["SnapshotSpanMinutes"] == 2.0
+
+
+def test_unfillable_top_score_yields_to_next_executable_candidate(tmp_path):
+    trader = FrozenMicrostructurePaperTrader(
+        output_dir=str(tmp_path),
+        model_path=str(_artifact(tmp_path)),
+        persist=False,
+    )
+    start = datetime(2026, 7, 22, 9, 18)
+    ticks = {
+        symbol: {
+            "best_bid": 99.9,
+            "best_bid_quantity": 10000,
+        }
+        for symbol in ("AAA", "BBB")
+    }
+    for offset, move in enumerate((0.55, 0.65)):
+        now = start + timedelta(minutes=offset)
+        rows = pd.DataFrame(
+            [
+                _row(now, move, symbol="AAA", ask_qty=100),
+                _row(now, move, symbol="BBB", ask_qty=10000),
+            ]
+        )
+        assert trader.process(rows, ticks, now=now) == []
+
+    trader.model.predict = lambda frame: [0.40, 0.30]
+    now = start + timedelta(minutes=2)
+    events = trader.process(
+        pd.DataFrame(
+            [
+                _row(now, 0.85, symbol="AAA", ask_qty=100),
+                _row(now, 0.85, symbol="BBB", ask_qty=10000),
+            ]
+        ),
+        ticks,
+        now=now,
+    )
+
+    assert [event["symbol"] for event in events] == ["BBB"]
+    predictions = {
+        row["symbol"]: row for row in trader.latest_predictions
+    }
+    assert predictions["AAA"]["selected"] is False
+    assert (
+        predictions["AAA"]["selection_reason"]
+        == "insufficient_top_level_ask_quantity"
+    )
+    assert predictions["BBB"]["selected"] is True

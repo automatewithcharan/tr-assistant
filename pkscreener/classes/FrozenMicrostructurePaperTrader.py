@@ -374,9 +374,22 @@ class FrozenMicrostructurePaperTrader:
     def _selected_index(self, frame: pd.DataFrame) -> Optional[int]:
         if self._open_trade() is not None or len(self.trades) >= self.max_trades_per_day:
             return None
+        entry_ask = pd.to_numeric(
+            frame["entry_ask"], errors="coerce"
+        ).fillna(0.0)
+        entry_ask_qty = pd.to_numeric(
+            frame["entry_ask_qty"], errors="coerce"
+        ).fillna(0.0)
+        requested_qty = pd.Series(0, index=frame.index, dtype="int64")
+        positive_ask = entry_ask.gt(0.0)
+        requested_qty.loc[positive_ask] = np.floor(
+            self.capital / entry_ask.loc[positive_ask]
+        ).astype("int64")
         eligible = frame[
             (frame["expected_return_pct"] >= self.threshold)
             & ~frame["symbol"].isin(self._traded_symbols)
+            & requested_qty.ge(1)
+            & entry_ask_qty.ge(requested_qty)
         ]
         if eligible.empty:
             return None
@@ -389,6 +402,14 @@ class FrozenMicrostructurePaperTrader:
             return "score_below_frozen_threshold"
         if str(row["symbol"]) in self._traded_symbols:
             return "symbol_already_traded_today"
+        entry_ask = _float(row.get("entry_ask"))
+        requested_qty = int(self.capital // entry_ask) if entry_ask > 0 else 0
+        entry_ask_qty = int(_float(row.get("entry_ask_qty")))
+        if (
+            requested_qty < 1
+            or entry_ask_qty < requested_qty
+        ):
+            return "insufficient_top_level_ask_quantity"
         if self._open_trade() is not None:
             return "single_slot_occupied"
         if len(self.trades) >= self.max_trades_per_day:
@@ -399,9 +420,9 @@ class FrozenMicrostructurePaperTrader:
         price = _float(candidate.get("entry_ask"))
         requested_qty = int(self.capital // price) if price > 0 else 0
         ask_qty = int(_float(candidate.get("entry_ask_qty")))
-        qty = min(requested_qty, ask_qty)
-        if qty < 1:
+        if requested_qty < 1 or ask_qty < requested_qty:
             return None
+        qty = requested_qty
         trade = {
             "date": self._date,
             "symbol": str(candidate["symbol"]),
@@ -416,9 +437,7 @@ class FrozenMicrostructurePaperTrader:
             "deployed_capital": round(price * qty, 2),
             "requested_qty": requested_qty,
             "entry_ask_qty": ask_qty,
-            "entry_top_level_fillable": bool(
-                ask_qty >= requested_qty
-            ),
+            "entry_top_level_fillable": True,
             "exit_bid_qty": 0,
             "exit_top_level_fillable": False,
             "target_price": round(price * (1.0 + self.target_pct / 100.0), 4),
