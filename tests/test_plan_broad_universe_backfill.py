@@ -5,7 +5,7 @@ import pandas as pd
 
 from scripts import kite_intraday_backfill
 from scripts.kite_intraday_backfill import load_backfill_universe, save_cache, select_record_batch
-from scripts.plan_broad_universe_backfill import retry_symbols_from_audits
+from scripts.plan_broad_universe_backfill import retry_symbols_from_audits, write_pending_batch
 
 
 def test_select_record_batch_keeps_benchmark_and_stable_slice():
@@ -67,3 +67,19 @@ def test_retry_symbols_uses_latest_batch_audit(tmp_path: Path):
     os.utime(old, (1, 1))
     os.utime(new, (2, 2))
     assert retry_symbols_from_audits(prefix, "5minute") == {"OLD", "XYZ"}
+
+
+def test_write_pending_batch_compacts_actual_missing_symbols(tmp_path: Path):
+    manifest = pd.DataFrame(
+        {
+            "symbol": ["CACHED0", "MISS1", "CACHED2", "MISS3", "MISS4"],
+            "needs_fetch": [False, True, False, True, True],
+            "batch_index": [0, 0, 0, 1, 1],
+        }
+    )
+    output = tmp_path / "pending.csv"
+
+    count = write_pending_batch(manifest, output, batch_size=2)
+
+    assert count == 2
+    assert pd.read_csv(output)["symbol"].tolist() == ["MISS1", "MISS3"]

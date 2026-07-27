@@ -10,6 +10,7 @@ LOCK="${BROAD_UNIVERSE_BACKFILL_LOCK:-$REPO/results/Data/.broad_universe_backfil
 LOG="$REPO/results/Data/broad_universe_backfill.log"
 PREFIX="$REPO/results/Data/broad_universe_5minute_backfill"
 UNIVERSE="$REPO/results/Indices/NSE_BSE_COMBINED.csv"
+PENDING_UNIVERSE="${PREFIX}_pending_batch.csv"
 START="${BROAD_BACKFILL_START:-2024-05-30}"
 END="${BROAD_BACKFILL_END:-2026-05-29}"
 BATCH_SIZE="${BROAD_BACKFILL_BATCH_SIZE:-100}"
@@ -43,28 +44,45 @@ mkdir -p "$(dirname "$LOG")"
 echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] planning broad backfill" >> "$LOG"
 "$PYTHON" scripts/plan_broad_universe_backfill.py \
     --universe "$UNIVERSE" --interval 5minute --start "$START" --end "$END" \
-    --batch-size "$BATCH_SIZE" --chunk-days 60 --out-prefix "$PREFIX" >> "$LOG" 2>&1
+    --batch-size "$BATCH_SIZE" --chunk-days 60 --out-prefix "$PREFIX" \
+    --pending-batch-output "$PENDING_UNIVERSE" >> "$LOG" 2>&1
 
-BATCH_INDEX=$("$PYTHON" - "$PREFIX" <<'PY'
-import pandas as pd
+BATCH_COUNT=$("$PYTHON" - "$PENDING_UNIVERSE" <<'PY'
 import sys
-manifest = pd.read_csv(sys.argv[1] + "_manifest.csv")
-pending = manifest[manifest["needs_fetch"].astype(str).str.lower().isin({"true", "1"})]
-print(int(pending["batch_index"].min()) if not pending.empty else -1)
+import pandas as pd
+path = sys.argv[1]
+frame = pd.read_csv(path)
+print(len(frame))
 PY
 )
 
-if [ "$BATCH_INDEX" -lt 0 ]; then
+if [ "$BATCH_COUNT" -eq 0 ]; then
     echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] broad backfill already complete" >> "$LOG"
     exit 0
 fi
 
-echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] starting batch $BATCH_INDEX" >> "$LOG"
+BATCH_INDEX=$("$PYTHON" - "$PREFIX" <<'PY'
+from pathlib import Path
+import re
+import sys
+prefix = Path(sys.argv[1])
+indices = []
+pattern = re.compile(r"_batch_(\d+)_5minute_audit\.csv$")
+for path in prefix.parent.glob(prefix.name + "_batch_*_5minute_audit.csv"):
+    match = pattern.search(path.name)
+    if match:
+        indices.append(int(match.group(1)))
+print(max(indices, default=-1) + 1)
+PY
+)
+
+echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] starting run $BATCH_INDEX with $BATCH_COUNT pending symbols" >> "$LOG"
 set +e
 "$PYTHON" scripts/kite_intraday_backfill.py \
-    --universe "$UNIVERSE" --limit 0 --start "$START" --end "$END" \
+    --universe "$PENDING_UNIVERSE" --limit 0 --start "$START" --end "$END" \
     --intervals 5minute --chunk-days 60 --batch-size "$BATCH_SIZE" \
-    --batch-index "$BATCH_INDEX" --sleep "$REQUEST_SLEEP" --out-prefix "$PREFIX" >> "$LOG" 2>&1
+    --batch-index 0 --batch-output-index "$BATCH_INDEX" \
+    --sleep "$REQUEST_SLEEP" --out-prefix "$PREFIX" >> "$LOG" 2>&1
 BATCH_RC=$?
 set -e
 

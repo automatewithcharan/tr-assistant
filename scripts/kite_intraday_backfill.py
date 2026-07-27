@@ -342,6 +342,12 @@ def main() -> int:
     parser.add_argument("--limit", type=int, default=178)
     parser.add_argument("--batch-size", type=int, default=0, help="Stable stock batch size; 0 processes the full selected universe.")
     parser.add_argument("--batch-index", type=int, default=0, help="Zero-based batch index used with --batch-size.")
+    parser.add_argument(
+        "--batch-output-index",
+        type=int,
+        default=None,
+        help="Optional audit/output batch label independent of the selected input slice.",
+    )
     parser.add_argument("--start", default="2024-05-13")
     parser.add_argument("--end", default="2026-05-12")
     parser.add_argument("--intervals", nargs="+", default=["5minute", "15minute"])
@@ -372,7 +378,12 @@ def main() -> int:
             f"with batch size {args.batch_size}."
         )
         return 0
-    batch_suffix = f"_batch_{args.batch_index:04d}" if args.batch_size > 0 else ""
+    output_batch_index = (
+        args.batch_index
+        if args.batch_output_index is None
+        else max(0, int(args.batch_output_index))
+    )
+    batch_suffix = f"_batch_{output_batch_index:04d}" if args.batch_size > 0 else ""
     batch_prefix = out_prefix.with_name(out_prefix.name + batch_suffix)
     pd.DataFrame(records).to_csv(batch_prefix.with_name(batch_prefix.name + "_instrument_map.csv"), index=False)
 
@@ -450,6 +461,7 @@ def main() -> int:
         "requested_end": _date_str(args.end),
         "batch_size": int(args.batch_size),
         "batch_index": int(args.batch_index),
+        "batch_output_index": int(output_batch_index),
         "full_selected_symbols": max(0, full_record_count - 1),
         "intervals": interval_gates,
         "all_gates_pass": all(v["gate_pass"] for v in interval_gates.values()),

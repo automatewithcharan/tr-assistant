@@ -60,6 +60,17 @@ def retry_symbols_from_audits(prefix: Path, interval: str) -> set[str]:
     }
 
 
+def write_pending_batch(manifest: pd.DataFrame, output: Path, batch_size: int) -> int:
+    """Write the next actual missing-symbol batch for the scheduled downloader."""
+    size = max(1, int(batch_size))
+    pending = manifest[
+        manifest["needs_fetch"].astype(str).str.strip().str.lower().isin({"true", "1"})
+    ].head(size)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    pending.loc[:, ["symbol"]].to_csv(output, index=False)
+    return int(len(pending))
+
+
 def build_plan(
     symbols: list[str],
     instruments: pd.DataFrame,
@@ -144,6 +155,11 @@ def main() -> int:
     parser.add_argument("--batch-size", type=int, default=100)
     parser.add_argument("--chunk-days", type=int, default=60)
     parser.add_argument("--out-prefix", default=str(RESULTS_DIR / "broad_universe_5minute_backfill"))
+    parser.add_argument(
+        "--pending-batch-output",
+        default="",
+        help="Optional CSV receiving the next --batch-size symbols that genuinely need fetching.",
+    )
     args = parser.parse_args()
 
     symbols = load_backfill_universe(Path(args.universe))
@@ -167,6 +183,12 @@ def main() -> int:
     )
     summary["fetch_error_retry_symbols"] = len(retry_symbols)
     manifest.to_csv(prefix.with_name(prefix.name + "_manifest.csv"), index=False)
+    if args.pending_batch_output:
+        summary["pending_batch_symbols"] = write_pending_batch(
+            manifest,
+            Path(args.pending_batch_output),
+            args.batch_size,
+        )
     manifest.loc[manifest["quality_eligible"], ["symbol"]].to_csv(
         prefix.with_name(prefix.name + "_quality_eligible_universe.csv"), index=False
     )
