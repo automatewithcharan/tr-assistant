@@ -4,9 +4,12 @@ import sys
 from pathlib import Path
 
 from scripts.assess_full_rank_opportunity_ceiling import (
+    SLOT_COUNTS,
     best_nonoverlapping_schedule,
+    best_shared_capital_slot_schedule,
     evaluate_ceiling,
     evaluate_selector_gap,
+    evaluate_slot_ceiling,
 )
 
 
@@ -41,6 +44,63 @@ def test_ceiling_honors_trade_cap():
     pnl, selected = best_nonoverlapping_schedule(events(), capital=500_000, max_trades=1)
     assert pnl == 10_000.0
     assert selected["Symbol"].tolist() == ["B"]
+
+
+def test_shared_capital_slot_oracle_enforces_concurrency_and_symbol_uniqueness():
+    frame = pd.DataFrame(
+        {
+            "date": ["2026-07-23"] * 4,
+            "Contract": ["t1_5_s1_0_h60"] * 4,
+            "Symbol": ["A", "B", "A", "C"],
+            "entry_time": pd.to_datetime(
+                [
+                    "2026-07-23 09:20",
+                    "2026-07-23 09:20",
+                    "2026-07-23 09:31",
+                    "2026-07-23 09:21",
+                ]
+            ),
+            "exit_time": pd.to_datetime(
+                [
+                    "2026-07-23 09:30",
+                    "2026-07-23 09:40",
+                    "2026-07-23 09:41",
+                    "2026-07-23 09:29",
+                ]
+            ),
+            "EntryAsk": [100.0] * 4,
+            "ExitBid": [102.0, 101.0, 103.0, 104.0],
+            "StressPct": [0.1] * 4,
+        }
+    )
+
+    one_pnl, one = best_shared_capital_slot_schedule(frame, slots=1)
+    two_pnl, two = best_shared_capital_slot_schedule(frame, slots=2)
+
+    assert one["Symbol"].tolist() == ["C", "A"]
+    assert two["Symbol"].value_counts().max() == 1
+    # Equal slots diversify execution capacity; they do not manufacture
+    # capital. The clairvoyant concentrated schedule remains the upper bound.
+    assert one_pnl == 34_000.0
+    assert two_pnl == 19_250.0
+    assert two_pnl <= one_pnl
+    for instant in two["entry_time"]:
+        concurrent = (
+            two["entry_time"].le(instant) & two["exit_time"].gt(instant)
+        ).sum()
+        assert concurrent <= 2
+
+
+def test_slot_ceiling_keeps_partial_sessions_out_of_summary():
+    coverage = pd.DataFrame([{"date": "2026-07-23", "eligible": False}])
+    daily, summary, selected = evaluate_slot_ceiling(events(), coverage)
+
+    assert len(daily) == len(SLOT_COUNTS) * len(
+        set(daily["contract"])
+    )
+    assert summary.empty
+    assert not selected.empty
+    assert not bool(daily["can_promote_strategy"].any())
 
 
 def test_partial_session_never_enters_eligible_summary():

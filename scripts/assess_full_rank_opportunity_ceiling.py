@@ -16,6 +16,8 @@ import sys
 from typing import Iterable
 
 import pandas as pd
+import numpy as np
+from scipy.optimize import Bounds, LinearConstraint, milp
 
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
@@ -26,6 +28,7 @@ from scripts.assess_full_rank_contract_matrix import (
     load_matrix_events,
     matrix_session_coverage,
 )
+from scripts.assess_full_rank_capital_allocation import SLOT_COUNTS
 from scripts.assess_exact_full_rank_paper import SELECTORS, replay_one_slot
 from scripts.assess_full_universe_rank_strategy import raw_session_coverage
 
@@ -87,6 +90,96 @@ def best_nonoverlapping_schedule(
     if not chosen.empty:
         chosen["OraclePnl"] = chosen["NetReturnPct"] * float(capital) / 100.0
     return round(float(dp[n][max(range(limit + 1), key=lambda value: dp[n][value])]), 2), chosen
+
+
+def best_shared_capital_slot_schedule(
+    events: pd.DataFrame,
+    *,
+    slots: int,
+    capital: float = 500_000.0,
+    max_trades: int = 10,
+) -> tuple[float, pd.DataFrame]:
+    """Return the exact future-known optimum for fixed equal capital slots."""
+    if int(slots) not in SLOT_COUNTS:
+        raise ValueError(f"unsupported slot count: {slots}")
+    if events is None or events.empty or max_trades <= 0:
+        return 0.0, pd.DataFrame()
+    day = events.copy()
+    day["entry_time"] = pd.to_datetime(day["entry_time"], errors="coerce")
+    day["exit_time"] = pd.to_datetime(day["exit_time"], errors="coerce")
+    for column in ("EntryAsk", "ExitBid", "StressPct"):
+        day[column] = pd.to_numeric(day.get(column), errors="coerce")
+    day = day[
+        day["entry_time"].notna()
+        & day["exit_time"].notna()
+        & day["EntryAsk"].gt(0.0)
+        & day["ExitBid"].gt(0.0)
+        & (day["exit_time"] > day["entry_time"])
+    ].copy()
+    if day.empty:
+        return 0.0, pd.DataFrame()
+
+    slot_capital = float(capital) / int(slots)
+    day["OracleQuantity"] = np.floor(
+        slot_capital / day["EntryAsk"]
+    ).astype(int)
+    deployed = day["OracleQuantity"] * day["EntryAsk"]
+    day["OraclePnl"] = (
+        (day["ExitBid"] - day["EntryAsk"]) * day["OracleQuantity"]
+        - deployed * day["StressPct"].fillna(0.0) / 100.0
+    )
+    day = day[
+        day["OracleQuantity"].gt(0) & day["OraclePnl"].gt(0.0)
+    ].sort_values(
+        ["entry_time", "exit_time", "Symbol"]
+    ).reset_index(drop=True)
+    if day.empty:
+        return 0.0, pd.DataFrame()
+
+    constraints = []
+    upper = []
+    # Cardinality is global across the session.
+    constraints.append(np.ones(len(day), dtype=float))
+    upper.append(float(max_trades))
+    # A symbol can be selected only once, even if it re-enters the recorder.
+    for _, indexes in day.groupby(day["Symbol"].astype(str)).groups.items():
+        row = np.zeros(len(day), dtype=float)
+        row[list(indexes)] = 1.0
+        constraints.append(row)
+        upper.append(1.0)
+    # For interval schedules, concurrency can increase only at an entry time.
+    # Checking each distinct entry instant therefore proves the slot bound.
+    for instant in sorted(day["entry_time"].dropna().unique().tolist()):
+        active = (
+            day["entry_time"].le(pd.Timestamp(instant))
+            & day["exit_time"].gt(pd.Timestamp(instant))
+        )
+        row = active.astype(float).to_numpy()
+        if row.any():
+            constraints.append(row)
+            upper.append(float(slots))
+
+    matrix = np.vstack(constraints)
+    result = milp(
+        c=-day["OraclePnl"].to_numpy(dtype=float),
+        integrality=np.ones(len(day), dtype=int),
+        bounds=Bounds(np.zeros(len(day)), np.ones(len(day))),
+        constraints=LinearConstraint(
+            matrix,
+            np.full(len(constraints), -np.inf),
+            np.asarray(upper, dtype=float),
+        ),
+        options={"time_limit": 30.0},
+    )
+    if not bool(result.success) or result.x is None:
+        raise RuntimeError(
+            f"shared-capital slot oracle failed: {result.message}"
+        )
+    selected = day.loc[np.asarray(result.x) > 0.5].copy()
+    selected.sort_values(["entry_time", "exit_time", "Symbol"], inplace=True)
+    selected["OracleSlots"] = int(slots)
+    selected["OracleSlotCapital"] = round(slot_capital, 2)
+    return round(float(selected["OraclePnl"].sum()), 2), selected
 
 
 def _lower95(values: pd.Series) -> float | None:
@@ -259,6 +352,118 @@ def evaluate_selector_gap(
     return result
 
 
+def evaluate_slot_ceiling(
+    events: pd.DataFrame,
+    coverage: pd.DataFrame,
+    *,
+    capital: float = 500_000.0,
+    daily_goal: float = 10_000.0,
+    max_trades: int = 10,
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    """Evaluate exact 1/2/3/5-slot future-known shared-capital capacity."""
+    rows = []
+    selected_rows = []
+    if coverage is None or coverage.empty:
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+    eligible_map = dict(
+        zip(coverage["date"].astype(str), coverage["eligible"].astype(bool))
+    )
+    for date in coverage["date"].astype(str).tolist():
+        day_all = (
+            events[events["date"].astype(str).eq(date)]
+            if events is not None and not events.empty
+            else pd.DataFrame()
+        )
+        for contract in CONTRACTS:
+            contract_day = (
+                day_all[day_all["Contract"].astype(str).eq(contract)]
+                if not day_all.empty
+                else day_all
+            )
+            first = (
+                contract_day.sort_values(["entry_time", "Symbol"])
+                .drop_duplicates("Symbol", keep="first")
+                if not contract_day.empty
+                else contract_day
+            )
+            for slots in SLOT_COUNTS:
+                pnl, chosen = best_shared_capital_slot_schedule(
+                    first,
+                    slots=slots,
+                    capital=capital,
+                    max_trades=max_trades,
+                )
+                rows.append(
+                    {
+                        "date": date,
+                        "contract": contract,
+                        "slots": int(slots),
+                        "slot_capital": round(float(capital) / slots, 2),
+                        "eligible_full_session": bool(
+                            eligible_map.get(date, False)
+                        ),
+                        "perfect_shared_capital_pnl": pnl,
+                        "perfect_shared_capital_return_pct": round(
+                            pnl / float(capital) * 100.0, 6
+                        ) if capital else 0.0,
+                        "goal_hit": pnl >= float(daily_goal),
+                        "selected_trades": int(len(chosen)),
+                        "uses_future_outcomes": True,
+                        "can_promote_strategy": False,
+                    }
+                )
+                if not chosen.empty:
+                    chosen = chosen.copy()
+                    chosen["date"] = date
+                    chosen["contract"] = contract
+                    chosen["eligible_full_session"] = bool(
+                        eligible_map.get(date, False)
+                    )
+                    selected_rows.extend(chosen.to_dict(orient="records"))
+    daily = pd.DataFrame(rows)
+    selected = pd.DataFrame(selected_rows)
+    summary_rows = []
+    eligible = daily[daily["eligible_full_session"]] if not daily.empty else daily
+    for (contract, slots), group in eligible.groupby(
+        ["contract", "slots"], sort=True
+    ):
+        pnl = pd.to_numeric(
+            group["perfect_shared_capital_pnl"], errors="coerce"
+        ).fillna(0.0)
+        summary_rows.append(
+            {
+                "contract": contract,
+                "slots": int(slots),
+                "sessions": int(len(group)),
+                "avg_perfect_shared_capital_pnl": round(float(pnl.mean()), 2),
+                "lower95_perfect_shared_capital_pnl": round(
+                    float(_lower95(pnl) or 0.0), 2
+                ),
+                "goal_hit_pct": round(
+                    float((pnl >= float(daily_goal)).mean() * 100.0), 2
+                ),
+                "worst_session_pnl": round(float(pnl.min()), 2),
+                "best_session_pnl": round(float(pnl.max()), 2),
+                "uses_future_outcomes": True,
+                "diagnostic_only": True,
+                "evidence_accepted": False,
+                "paper_promotion_allowed": False,
+                "real_orders_allowed": False,
+            }
+        )
+    summary = pd.DataFrame(summary_rows)
+    if not summary.empty:
+        summary.sort_values(
+            [
+                "avg_perfect_shared_capital_pnl",
+                "lower95_perfect_shared_capital_pnl",
+            ],
+            ascending=False,
+            inplace=True,
+        )
+    return daily, summary, selected
+
+
 def run_audit(
     *,
     entry_patterns: Iterable[str],
@@ -276,6 +481,13 @@ def run_audit(
     coverage = matrix_session_coverage(entries, events, raw)
     daily, summary, selected = evaluate_ceiling(
         events, coverage, capital=capital, daily_goal=daily_goal, max_trades=max_trades
+    )
+    slot_daily, slot_summary, slot_selected = evaluate_slot_ceiling(
+        events,
+        coverage,
+        capital=capital,
+        daily_goal=daily_goal,
+        max_trades=max_trades,
     )
     eligible_dates = coverage.loc[coverage["eligible"], "date"].astype(str).tolist() if not coverage.empty else []
     selector_gap = evaluate_selector_gap(
@@ -299,12 +511,25 @@ def run_audit(
     daily.to_csv(output_dir / "daily.csv", index=False)
     summary.to_csv(output_dir / "summary.csv", index=False)
     selected.to_csv(output_dir / "selected_intervals.csv", index=False)
+    slot_daily.to_csv(output_dir / "slot_daily.csv", index=False)
+    slot_summary.to_csv(output_dir / "slot_summary.csv", index=False)
+    slot_selected.to_csv(
+        output_dir / "slot_selected_intervals.csv", index=False
+    )
     selector_gap.to_csv(output_dir / "selector_gap.csv", index=False)
     partial_selector_gap.to_csv(output_dir / "partial_selector_gap.csv", index=False)
     best = summary.iloc[0].to_dict() if not summary.empty else {}
+    best_slot = (
+        slot_summary.iloc[0].to_dict() if not slot_summary.empty else {}
+    )
     best_causal = selector_gap.iloc[0].to_dict() if not selector_gap.empty else {}
     best_partial_causal = partial_selector_gap.iloc[0].to_dict() if not partial_selector_gap.empty else {}
     partial = daily[~daily["eligible_full_session"]].copy() if not daily.empty else pd.DataFrame()
+    partial_slots = (
+        slot_daily[~slot_daily["eligible_full_session"]].copy()
+        if not slot_daily.empty
+        else pd.DataFrame()
+    )
     partial_best = {}
     if not partial.empty:
         row = partial.sort_values("first_observation_one_slot_pnl", ascending=False).iloc[0]
@@ -315,9 +540,26 @@ def run_audit(
             "repeat_allowed_one_slot_pnl": round(float(row["perfect_one_slot_pnl"]), 2),
             "excluded_from_evidence": True,
         }
+    partial_slot_best = {}
+    if not partial_slots.empty:
+        row = partial_slots.sort_values(
+            "perfect_shared_capital_pnl", ascending=False
+        ).iloc[0]
+        partial_slot_best = {
+            "date": str(row["date"]),
+            "contract": str(row["contract"]),
+            "slots": int(row["slots"]),
+            "perfect_shared_capital_pnl": round(
+                float(row["perfect_shared_capital_pnl"]), 2
+            ),
+            "selected_trades": int(row["selected_trades"]),
+            "excluded_from_evidence": True,
+        }
     if not best:
         bottleneck = "awaiting_complete_full_session"
-    elif float(best.get("avg_first_observation_one_slot_pnl", 0.0) or 0.0) < float(daily_goal):
+    elif float(
+        best_slot.get("avg_perfect_shared_capital_pnl", 0.0) or 0.0
+    ) < float(daily_goal):
         bottleneck = "candidate_universe_capacity_below_goal"
     elif float(best_causal.get("avg_causal_pnl", 0.0) or 0.0) < float(daily_goal):
         bottleneck = "causal_selector_bottleneck"
@@ -333,6 +575,7 @@ def run_audit(
         "eligible_full_sessions": int(coverage["eligible"].sum()) if not coverage.empty else 0,
         "partial_or_incomplete_sessions": int((~coverage["eligible"]).sum()) if not coverage.empty else 0,
         "best_eligible_contract": best,
+        "best_shared_capital_slot_ceiling": best_slot,
         "best_causal_combination": best_causal,
         "best_partial_causal_diagnostic": {
             "contract": str(best_partial_causal.get("contract", "")),
@@ -343,6 +586,7 @@ def run_audit(
             "excluded_from_evidence": True,
         } if best_partial_causal else {},
         "best_partial_diagnostic": partial_best,
+        "best_partial_shared_capital_diagnostic": partial_slot_best,
         "current_bottleneck": bottleneck,
         "uses_future_outcomes": True,
         "diagnostic_only": True,
