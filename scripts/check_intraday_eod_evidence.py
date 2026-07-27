@@ -31,6 +31,7 @@ ARTIFACTS = {
     "frozen_prediction_matrix": "results/Data/frozen_ranker_prediction_strategy/status.json",
     "capital_growth": "results/Data/intraday_capital_growth/status.json",
     "runner_recall": "results/Data/live_top_gainer_recorder_recall/status.json",
+    "runner_capture_funnel": "results/Data/live_runner_capture_funnel/status.json",
 }
 
 

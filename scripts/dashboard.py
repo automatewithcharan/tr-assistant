@@ -403,6 +403,22 @@ def leader_discovery_stats():
         ),
         {},
     )
+    capture_funnel = load_json(
+        DATA / "live_runner_capture_funnel" / "status.json", {}
+    )
+    capture_rows = (
+        capture_funnel.get("summary", [])
+        if isinstance(capture_funnel, dict)
+        else []
+    )
+    capture_five_pct = next(
+        (
+            row
+            for row in capture_rows
+            if float(row.get("RunnerThresholdPct") or 0.0) == 5.0
+        ),
+        {},
+    )
     continuation = load_json(DATA / "live_leader_continuation" / "status.json", {})
     ranker = load_json(
         DATA / "live_leader_continuation" / "frozen_ranker_status.json", {}
@@ -586,6 +602,36 @@ def leader_discovery_stats():
         "full_rank_lead_10": number(ten_pct, "FullRankMedianLeadMinutes"),
         "full_rank_buyable_lead_10": number(
             ten_pct, "FullRankBuyableMedianLeadMinutes"
+        ),
+        "capture_funnel_sessions": int(
+            capture_funnel.get("sessions") or 0
+        ),
+        "capture_catchable_5": int(
+            number(capture_five_pct, "CatchableRunnerEvents")
+        ),
+        "capture_seen_5": number(
+            capture_five_pct, "RecorderSeenPctOfCatchable"
+        ),
+        "capture_buyable_5": number(
+            capture_five_pct, "BuyablePctOfCatchable"
+        ),
+        "capture_buyable_early_5": number(
+            capture_five_pct, "BuyableEarlyBandPctOfCatchable"
+        ),
+        "capture_model_scored_5": number(
+            capture_five_pct, "FrozenModelScoredPctOfCatchable"
+        ),
+        "capture_score_qualified_5": number(
+            capture_five_pct, "ScoreQualifiedPctOfCatchable"
+        ),
+        "capture_selected_5": number(
+            capture_five_pct, "SelectedPctOfCatchable"
+        ),
+        "capture_primary_failure_5": str(
+            capture_five_pct.get("PrimaryFailedStage") or "pending"
+        ),
+        "capture_primary_failure_count_5": int(
+            number(capture_five_pct, "PrimaryFailedStageCount")
         ),
         "forward_start": str(continuation.get("frozen_forward_start") or "n/a"),
         "evaluated_states": int(continuation.get("evaluated_candidate_states") or 0),
@@ -1677,6 +1723,24 @@ def render():
     “Seen” measures discovery; “buyable” additionally requires contemporaneous price, turnover, executable
     bid/ask, and spread gates. Legacy selective-recorder history cannot inflate these recall figures.
     Future runner labels remain diagnostic only.
+  </div>"""
+
+    leader_html += f"""
+  <div class="summary" style="margin-top:10px">
+    <span>Capture-funnel sessions <span class="big">{leader_discovery['capture_funnel_sessions']}</span></span>
+    <span>Catchable 5% runners <span class="big">{leader_discovery['capture_catchable_5']}</span></span>
+    <span>Recorder conversion <span class="big">{leader_discovery['capture_seen_5']:.1f}%</span></span>
+    <span>Buyable conversion <span class="big">{leader_discovery['capture_buyable_5']:.1f}%</span></span>
+    <span>Early buyable conversion <span class="big">{leader_discovery['capture_buyable_early_5']:.1f}%</span></span>
+    <span>Frozen-model coverage <span class="big">{leader_discovery['capture_model_scored_5']:.1f}%</span></span>
+    <span>Score-qualified <span class="big">{leader_discovery['capture_score_qualified_5']:.1f}%</span></span>
+    <span>Paper selected <span class="big">{leader_discovery['capture_selected_5']:.1f}%</span></span>
+  </div>
+  <div class="updated" style="margin-top:6px">
+    Primary runner loss stage:
+    <b>{escape(leader_discovery['capture_primary_failure_5'])}</b>
+    ({leader_discovery['capture_primary_failure_count_5']} observations).
+    This is a hindsight conversion funnel only; it cannot promote paper or real trading.
   </div>"""
 
     leader_html += f"""

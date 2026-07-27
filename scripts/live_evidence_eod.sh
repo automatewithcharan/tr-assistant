@@ -111,6 +111,13 @@ run_event_shadow_rebuild() {
         --bars "$rebuilt/intraday_event_shadow/bars_20*.csv" \
         --output-dir "$REPO/results/Data/live_top_gainer_recorder_recall" \
         >>"$LOG" 2>&1 || true
+    "$PYTHON" "$REPO/scripts/audit_live_runner_capture_funnel.py" \
+        --recall "$REPO/results/Data/live_top_gainer_recorder_recall/events.csv" \
+        --predictions "$REPO/results/Data/frozen_microstructure_paper/predictions_20*.csv" \
+        --registrations "$REPO/results/Data/frozen_ranker_prediction_contract_matrix/registrations_20*.csv" \
+        --output-dir "$REPO/results/Data/live_runner_capture_funnel" \
+        --score-threshold 0.20 \
+        >>"$LOG" 2>&1 || true
     "$PYTHON" "$REPO/scripts/assess_live_leader_continuation.py" \
         --features "$REPO/results/Data/live_feature_recorder/live_features_20*.csv" \
         --bars "$rebuilt/intraday_event_shadow/bars_20*.csv" \

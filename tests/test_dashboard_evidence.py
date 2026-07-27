@@ -1114,3 +1114,132 @@ def test_frozen_microstructure_and_backfill_status(tmp_path: Path, monkeypatch):
     assert backfill["present"] == 505
     assert backfill["rejected"] == 2
     assert round(backfill["coverage_pct"], 2) == 17.02
+
+
+def test_leader_discovery_keeps_retrospective_and_forward_separate(
+    tmp_path: Path, monkeypatch
+):
+    monkeypatch.setattr(dashboard, "DATA", tmp_path)
+    recall = tmp_path / "live_top_gainer_recorder_recall"
+    recall.mkdir()
+    (recall / "status.json").write_text(
+        json.dumps(
+            {
+                "sessions": 5,
+                "summary": [
+                    {
+                        "RunnerThresholdPct": 10.0,
+                        "RunnerEvents": 83,
+                        "FeatureSeenBeforeCrossPct": 91.57,
+                        "Band0_5To3RecallPct": 39.76,
+                        "Band0_5To5RecallPct": 68.67,
+                        "MedianLeadMinutes": 83.74,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    funnel = tmp_path / "live_runner_capture_funnel"
+    funnel.mkdir()
+    (funnel / "status.json").write_text(
+        json.dumps(
+            {
+                "sessions": 4,
+                "summary": [
+                    {
+                        "RunnerThresholdPct": 5.0,
+                        "CatchableRunnerEvents": 46,
+                        "RecorderSeenPctOfCatchable": 97.83,
+                        "BuyablePctOfCatchable": 63.04,
+                        "BuyableEarlyBandPctOfCatchable": 45.65,
+                        "FrozenModelScoredPctOfCatchable": 43.48,
+                        "ScoreQualifiedPctOfCatchable": 15.22,
+                        "SelectedPctOfCatchable": 2.17,
+                        "PrimaryFailedStage": (
+                            "not_contemporaneously_buyable"
+                        ),
+                        "PrimaryFailedStageCount": 16,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    continuation = tmp_path / "live_leader_continuation"
+    continuation.mkdir()
+    (continuation / "status.json").write_text(
+        json.dumps(
+            {
+                "frozen_forward_start": "2026-07-20",
+                "evaluated_candidate_states": 131,
+                "forward_candidate_states": 3,
+                "extension_acceleration_selection_rejected": True,
+                "clairvoyant_opportunity_bound": {
+                    "Contract": "t1.5_s1.0",
+                    "AvgPerfectOneSlotPnl": 10776.39,
+                    "Lower95PerfectOneSlotPnl": 8847.94,
+                    "GoalHitPct": 60.0,
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    (continuation / "summary.csv").write_text(
+        "EvidencePhase,Cohort,Contract,Evaluated,TargetHitPct,AvgNetReturnPct,Lower95DailyEqualReturnPct\n"
+        "retrospective,extension_acceleration,t1.0_s1.0,61,37.70,-0.2856,-0.3455\n"
+        "frozen_forward,extension_acceleration,t1.0_s1.0,3,66.67,0.3000,-0.1000\n",
+        encoding="utf-8",
+    )
+    (continuation / "snapshot_summary.csv").write_text(
+        "EvidencePhase,Cohort,Contract,Evaluated,TargetHitPct,AvgNetReturnPct,Lower95DailyEqualReturnPct\n"
+        "retrospective,extension_acceleration,t1.0_s1.0,113,30.09,-0.2083,-0.4200\n",
+        encoding="utf-8",
+    )
+    (continuation / "frozen_ranker_status.json").write_text(
+        json.dumps(
+            {
+                "status": "collecting_forward_evidence",
+                "contract": "t1.5_s1.0",
+                "forward_start": "2026-07-22",
+                "forward_stress": {
+                    "sessions": 3,
+                    "trades": 4,
+                    "avg_daily_pnl": 1250.0,
+                    "lower_95_pct": -0.4,
+                    "goal_hit_pct": 0.0,
+                },
+                "accepted": False,
+                "real_orders_allowed": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    stats = dashboard.leader_discovery_stats()
+    assert stats["runner_events_10"] == 83
+    assert stats["seen_before_10_pct"] == 91.57
+    assert stats["retrospective_evaluated"] == 61
+    assert stats["forward_evaluated"] == 3
+    assert stats["forward_avg_return_pct"] == 0.3
+    assert stats["snapshot_evaluated"] == 113
+    assert stats["snapshot_avg_return_pct"] == -0.2083
+    assert stats["selection_rejected"]
+    assert stats["opportunity_contract"] == "t1.5_s1.0"
+    assert stats["opportunity_avg_pnl"] == 10776.39
+    assert stats["ranker_status"] == "collecting_forward_evidence"
+    assert stats["ranker_forward_sessions"] == 3
+    assert stats["ranker_forward_trades"] == 4
+    assert stats["ranker_stress_avg_pnl"] == 1250.0
+    assert stats["capture_funnel_sessions"] == 4
+    assert stats["capture_catchable_5"] == 46
+    assert stats["capture_seen_5"] == 97.83
+    assert stats["capture_buyable_early_5"] == 45.65
+    assert stats["capture_score_qualified_5"] == 15.22
+    assert stats["capture_selected_5"] == 2.17
+    assert stats["capture_primary_failure_5"] == (
+        "not_contemporaneously_buyable"
+    )
+    assert not stats["ranker_accepted"]
+    assert not stats["evidence_accepted"]
+    assert not stats["real_orders_allowed"]
