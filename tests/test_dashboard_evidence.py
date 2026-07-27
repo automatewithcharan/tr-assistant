@@ -1155,6 +1155,7 @@ def test_leader_discovery_keeps_retrospective_and_forward_separate(
                         "BuyableEarlyBandPctOfCatchable": 45.65,
                         "FrozenModelScoredPctOfCatchable": 43.48,
                         "BroadExactCandidatePctOfCatchable": 56.52,
+                        "BroadPolicyCoveredPctOfCatchable": 54.35,
                         "ScoreQualifiedPctOfCatchable": 15.22,
                         "SelectedPctOfCatchable": 2.17,
                         "PrimaryFailedStage": (
@@ -1238,6 +1239,7 @@ def test_leader_discovery_keeps_retrospective_and_forward_separate(
     assert stats["capture_buyable_early_5"] == 45.65
     assert stats["capture_score_qualified_5"] == 15.22
     assert stats["capture_broad_candidate_5"] == 56.52
+    assert stats["capture_broad_policy_covered_5"] == 54.35
     assert stats["capture_selected_5"] == 2.17
     assert stats["capture_primary_failure_5"] == (
         "not_contemporaneously_buyable"

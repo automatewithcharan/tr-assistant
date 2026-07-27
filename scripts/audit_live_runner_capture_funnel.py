@@ -17,6 +17,14 @@ from typing import Iterable
 import numpy as np
 import pandas as pd
 
+from scripts.assess_full_rank_feature_gates import (
+    FEATURE_GATES,
+    apply_feature_gate,
+)
+from scripts.assess_full_rank_integrated_policies import (
+    INTEGRATED_POLICIES,
+)
+
 
 DEFAULT_RECALL = "results/Data/live_top_gainer_recorder_recall/events.csv"
 DEFAULT_PREDICTIONS = (
@@ -160,6 +168,25 @@ def _rate(numerator: int, denominator: int) -> float:
     return round(numerator * 100.0 / denominator, 2) if denominator else 0.0
 
 
+def _predeclared_policy_coverage(
+    broad_rows: pd.DataFrame,
+) -> tuple[list[str], list[str]]:
+    """Return gates and integrated policies eligible at broad registration."""
+    if broad_rows is None or broad_rows.empty:
+        return [], []
+    gates = [
+        gate
+        for gate in FEATURE_GATES
+        if not apply_feature_gate(broad_rows, gate).empty
+    ]
+    policies = [
+        name
+        for name, policy in INTEGRATED_POLICIES.items()
+        if str(policy.get("gate", "")) in gates
+    ]
+    return gates, policies
+
+
 def build_capture_funnel(
     recall: pd.DataFrame,
     predictions: pd.DataFrame,
@@ -294,6 +321,10 @@ def build_capture_funnel(
             .astype(bool)
             .any()
         )
+        broad_gates, broad_policies = _predeclared_policy_coverage(
+            before_broad
+        )
+        broad_policy_covered = bool(broad_policies)
 
         if not catchable:
             stage = "uncatchable_before_recorder"
@@ -303,6 +334,8 @@ def build_capture_funnel(
             stage = "not_contemporaneously_buyable"
         elif not early_buyable:
             stage = "buyable_only_after_early_band"
+        elif not scored and broad_registered and not broad_policy_covered:
+            stage = "broad_lane_not_covered_by_policy_registry"
         elif not scored and broad_registered:
             stage = "broad_lane_only_awaiting_selector"
         elif not scored:
@@ -345,6 +378,13 @@ def build_capture_funnel(
                 ),
                 "BroadTopLevelQuantityFillableBeforeCross": (
                     broad_quantity_fillable
+                ),
+                "BroadEligibleFeatureGates": "|".join(broad_gates),
+                "BroadEligibleIntegratedPolicies": "|".join(
+                    broad_policies
+                ),
+                "BroadPredeclaredPolicyCoveredBeforeCross": (
+                    broad_policy_covered
                 ),
                 "FirstFailedStage": stage,
                 "UsesFutureRunnerLabel": True,
@@ -394,6 +434,14 @@ def summarize_funnel(funnel: pd.DataFrame) -> pd.DataFrame:
                     int(
                         catchable[
                             "BroadExactRegistrationBeforeCross"
+                        ].sum()
+                    ),
+                    denominator,
+                ),
+                "BroadPolicyCoveredPctOfCatchable": _rate(
+                    int(
+                        catchable[
+                            "BroadPredeclaredPolicyCoveredBeforeCross"
                         ].sum()
                     ),
                     denominator,

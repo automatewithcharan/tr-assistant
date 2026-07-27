@@ -624,6 +624,9 @@ def leader_discovery_stats():
         "capture_broad_candidate_5": number(
             capture_five_pct, "BroadExactCandidatePctOfCatchable"
         ),
+        "capture_broad_policy_covered_5": number(
+            capture_five_pct, "BroadPolicyCoveredPctOfCatchable"
+        ),
         "capture_score_qualified_5": number(
             capture_five_pct, "ScoreQualifiedPctOfCatchable"
         ),
@@ -1737,6 +1740,7 @@ def render():
     <span>Early buyable conversion <span class="big">{leader_discovery['capture_buyable_early_5']:.1f}%</span></span>
     <span>Frozen-model coverage <span class="big">{leader_discovery['capture_model_scored_5']:.1f}%</span></span>
     <span>Broad-lane coverage <span class="big">{leader_discovery['capture_broad_candidate_5']:.1f}%</span></span>
+    <span>Frozen-policy coverage <span class="big">{leader_discovery['capture_broad_policy_covered_5']:.1f}%</span></span>
     <span>Score-qualified <span class="big">{leader_discovery['capture_score_qualified_5']:.1f}%</span></span>
     <span>Paper selected <span class="big">{leader_discovery['capture_selected_5']:.1f}%</span></span>
   </div>

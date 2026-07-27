@@ -142,6 +142,7 @@ def test_broad_first_observation_lane_gets_credit_without_frozen_score():
                 "EntryAt": pd.Timestamp("2026-07-28 09:30"),
                 "Symbol": "FAST_BURST",
                 "EntryTopLevelFillable": True,
+                "RapidRankClimber": True,
             }
         ]
     )
@@ -155,8 +156,44 @@ def test_broad_first_observation_lane_gets_credit_without_frozen_score():
 
     assert bool(result["BroadExactRegistrationBeforeCross"])
     assert bool(result["BroadTopLevelQuantityFillableBeforeCross"])
+    assert bool(result["BroadPredeclaredPolicyCoveredBeforeCross"])
+    assert "rapid_rank_climber" in result["BroadEligibleFeatureGates"]
+    assert (
+        "rapid_climber_diversified"
+        in result["BroadEligibleIntegratedPolicies"]
+    )
     assert result["FirstFailedStage"] == (
         "broad_lane_only_awaiting_selector"
+    )
+
+
+def test_broad_candidate_without_declared_policy_is_not_called_selectable():
+    recall = pd.DataFrame([_recall("UNCOVERED")])
+    broad = pd.DataFrame(
+        [
+            {
+                "Date": "2026-07-28",
+                "EntryAt": pd.Timestamp("2026-07-28 09:30"),
+                "Symbol": "UNCOVERED",
+                "EntryTopLevelFillable": True,
+                "DayChangeRank": 500,
+                "DayChangePct": 4.5,
+                "EntrySpreadBps": 18.0,
+            }
+        ]
+    )
+
+    result = build_capture_funnel(
+        recall,
+        pd.DataFrame(),
+        pd.DataFrame(),
+        broad,
+    ).iloc[0]
+
+    assert not bool(result["BroadPredeclaredPolicyCoveredBeforeCross"])
+    assert result["BroadEligibleIntegratedPolicies"] == ""
+    assert result["FirstFailedStage"] == (
+        "broad_lane_not_covered_by_policy_registry"
     )
 
 
@@ -185,6 +222,7 @@ def test_summary_uses_only_catchable_events_as_rate_denominator():
     assert summary["CatchableRunnerEvents"] == 2
     assert summary["RecorderSeenPctOfCatchable"] == 50.0
     assert summary["BuyableEarlyBandPctOfCatchable"] == 50.0
+    assert summary["BroadPolicyCoveredPctOfCatchable"] == 0.0
     assert not bool(summary["CanPromoteStrategy"])
     assert not bool(summary["RealOrdersAllowed"])
 
