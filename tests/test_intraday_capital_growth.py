@@ -26,13 +26,22 @@ def test_default_projection_includes_complete_capital_constrained_judges():
     )
 
 
-def _status(path, *, accepted, sessions=20, avg_return=0.5, lower=0.1):
+def _status(
+    path,
+    *,
+    accepted,
+    sessions=20,
+    avg_return=0.5,
+    lower=0.1,
+    capital=500000,
+):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
         json.dumps(
             {
                 "status": "accepted" if accepted else "collecting",
                 "accepted": accepted,
+                "capital": capital,
                 "forward": {
                     "sessions": sessions,
                     "trades": 40,
@@ -111,3 +120,36 @@ def test_projection_keeps_math_scenarios_separate_when_nothing_is_validated(tmp_
     assert not status["capital_projection_allowed"]
     assert not status["real_orders_allowed"]
     assert not scenarios["scenario"].str.startswith("validated_").any()
+
+
+def test_validated_projection_does_not_scale_past_tested_capacity(tmp_path):
+    accepted = tmp_path / "accepted.json"
+    _status(
+        accepted,
+        accepted=True,
+        avg_return=1.0,
+        lower=0.2,
+        capital=500000,
+    )
+    output = tmp_path / "output"
+
+    status = run_projection(
+        strategy_paths={"paper": str(accepted)},
+        output_dir=output,
+        initial_capital=500000,
+        monthly_contribution=200000,
+        daily_goal=10000,
+        months=2,
+        trading_days_per_month=20,
+    )
+
+    validated = pd.read_csv(output / "monthly_scenarios.csv")
+    validated = validated[
+        validated["scenario"].eq("validated_paper")
+    ].reset_index(drop=True)
+    assert status["validated_capacity"] == 500000
+    assert status["validated_scaling_beyond_capacity"] is False
+    assert validated.loc[1, "start_capital"] > 500000
+    assert validated.loc[1, "deployable_capital_at_month_start"] == 500000
+    assert validated.loc[1, "unvalidated_excess_capital"] > 0
+    assert validated.loc[1, "projected_daily_pnl_at_month_start"] == 5000

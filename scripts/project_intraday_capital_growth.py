@@ -48,6 +48,7 @@ def load_validated_strategy(
         forward = payload.get("forward", {}) or payload.get("forward_stress", {}) or {}
         sessions = int(_number(forward, "sessions"))
         avg_return = _number(forward, "avg_daily_return_pct")
+        validated_capital = _number(payload, "capital")
         lower = forward.get("lower_95_pct")
         try:
             lower_value = float(lower) if lower is not None else None
@@ -57,6 +58,7 @@ def load_validated_strategy(
             bool(payload.get("accepted", False))
             and sessions >= int(minimum_forward_sessions)
             and avg_return > 0.0
+            and validated_capital > 0.0
             and lower_value is not None
             and lower_value > 0.0
             and not bool(payload.get("real_orders_allowed", False))
@@ -70,6 +72,7 @@ def load_validated_strategy(
                 "forward_sessions": sessions,
                 "forward_trades": int(_number(forward, "trades")),
                 "avg_daily_return_pct": avg_return,
+                "validated_capital": validated_capital,
                 "lower_95_pct": lower_value,
                 "avg_daily_pnl": _number(forward, "avg_daily_pnl"),
             }
@@ -86,19 +89,31 @@ def project_months(
     months: int,
     trading_days_per_month: int,
     scenario: str,
+    validated_capacity: float | None = None,
 ) -> pd.DataFrame:
     rows = []
     capital = float(initial_capital)
     for month in range(1, int(months) + 1):
         start = capital
         required_return = float(daily_goal) * 100.0 / start if start > 0 else 0.0
-        projected_daily_pnl = start * float(daily_return_pct) / 100.0
-        growth_factor = (1.0 + float(daily_return_pct) / 100.0) ** int(
-            trading_days_per_month
+        deployable_start = (
+            min(start, float(validated_capacity))
+            if validated_capacity is not None
+            else start
         )
-        trading_profit = start * (growth_factor - 1.0)
-        before_contribution = start + trading_profit
-        capital = before_contribution + float(monthly_contribution)
+        projected_daily_pnl = (
+            deployable_start * float(daily_return_pct) / 100.0
+        )
+        trading_start = capital
+        for _ in range(int(trading_days_per_month)):
+            deployable = (
+                min(capital, float(validated_capacity))
+                if validated_capacity is not None
+                else capital
+            )
+            capital += deployable * float(daily_return_pct) / 100.0
+        trading_profit = capital - trading_start
+        capital += float(monthly_contribution)
         rows.append(
             {
                 "scenario": scenario,
@@ -107,6 +122,17 @@ def project_months(
                 "daily_return_pct": round(float(daily_return_pct), 6),
                 "required_return_for_goal_pct": round(required_return, 6),
                 "projected_daily_pnl_at_month_start": round(projected_daily_pnl, 2),
+                "validated_capacity": (
+                    round(float(validated_capacity), 2)
+                    if validated_capacity is not None
+                    else 0.0
+                ),
+                "deployable_capital_at_month_start": round(
+                    deployable_start, 2
+                ),
+                "unvalidated_excess_capital": round(
+                    max(0.0, start - deployable_start), 2
+                ),
                 "trading_profit": round(trading_profit, 2),
                 "monthly_contribution": round(float(monthly_contribution), 2),
                 "end_capital": round(capital, 2),
@@ -170,6 +196,7 @@ def run_projection(
                 months=months,
                 trading_days_per_month=trading_days_per_month,
                 scenario=f"validated_{validated['name']}",
+                validated_capacity=validated["validated_capital"],
             )
         )
     projection = pd.concat(projections, ignore_index=True)
@@ -197,6 +224,10 @@ def run_projection(
         "trading_days_per_month": int(trading_days_per_month),
         "minimum_forward_sessions": int(minimum_forward_sessions),
         "validated_strategy": validated or {},
+        "validated_capacity": (
+            float(validated["validated_capital"]) if validated else None
+        ),
+        "validated_scaling_beyond_capacity": False,
         "first_month_required_return_at_or_below_1pct_without_trading_profit": (
             int(first_contribution_month.iloc[0])
             if not first_contribution_month.empty else None
