@@ -19,6 +19,9 @@ WORKERS="${BROAD_RANK_WORKERS:-$(nproc)}"
 CAPITAL="${BROAD_RANK_CAPITAL:-500000}"
 DAILY_GOAL="${BROAD_RANK_DAILY_GOAL:-10000}"
 STRESS_COST_PCT="${BROAD_RANK_STRESS_COST_PCT:-0.10}"
+# Frozen before the 2,000-symbol checkpoint. The final signal enters on the
+# 14:20 bar and its 60-minute contract ends by 15:20.
+SIGNAL_TIMES="09:30,09:45,10:00,10:15,10:30,10:45,11:00,11:15,11:30,11:45,12:00,12:15,12:30,12:45,13:00,13:15,13:30,13:45,14:00,14:15"
 case "$WORKERS" in
     ''|*[!0-9]*) WORKERS="$(nproc)" ;;
 esac
@@ -69,6 +72,7 @@ printf '%s\n' "$MAPPED" > "$OUT/mapped_at_start.txt"
 printf '%s\n' "$CAPITAL" > "$OUT/starting_capital.txt"
 printf '%s\n' "$DAILY_GOAL" > "$OUT/daily_goal.txt"
 printf '%s\n' "$STRESS_COST_PCT" > "$OUT/stress_cost_pct.txt"
+printf '%s\n' "$SIGNAL_TIMES" > "$OUT/signal_times_at_start.txt"
 git rev-parse HEAD > "$OUT/code_commit_at_start.txt"
 sha256sum "$QUALITY_UNIVERSE" | awk '{print $1}' > "$OUT/quality_universe_sha256.txt"
 sha256sum "$CALENDAR" | awk '{print $1}' > "$OUT/calendar_sha256.txt"
@@ -80,7 +84,7 @@ nice -n 10 "$PYTHON" scripts/backtest_fixed_time_leader_rank.py \
     --data-dir "$DATA_DIR" --calendar-file "$CALENDAR" \
     --universe-file "$QUALITY_UNIVERSE" \
     --output-prefix "$OUT/fixed_time" \
-    --signal-times 09:30,09:45,10:00,10:30 \
+    --signal-times "$SIGNAL_TIMES" \
     --horizons 60 --targets 0.5,0.7,1.0,1.5 --stops 0.5,0.7,1.0,1.5 \
     --top-k 1,2 --workers "$WORKERS" --progress-every 100 --warmup-days 76 \
     >> "$LOG" 2>&1
@@ -116,9 +120,36 @@ nice -n 10 "$PYTHON" scripts/walk_forward_eventual_runner_classifier.py \
     --candidates "$OUT/fixed_time_candidates.csv" \
     --runner-events "$OUT/top_gainer_recall_events.csv" \
     --calendar-file "$CALENDAR" \
+    --output-prefix "$OUT/eventual_runner_bar_path_regime_classifier" \
+    --feature-set bar_path_regime --capital "$CAPITAL" \
+    --daily-goal "$DAILY_GOAL" --stress-cost-pct "$STRESS_COST_PCT" \
+    >> "$LOG" 2>&1
+
+nice -n 10 "$PYTHON" scripts/walk_forward_eventual_runner_classifier.py \
+    --candidates "$OUT/fixed_time_candidates.csv" \
+    --runner-events "$OUT/top_gainer_recall_events.csv" \
+    --calendar-file "$CALENDAR" \
     --output-prefix "$OUT/eventual_runner_bar_path_classifier" \
     --feature-set bar_path --capital "$CAPITAL" --daily-goal "$DAILY_GOAL" \
     --stress-cost-pct "$STRESS_COST_PCT" >> "$LOG" 2>&1
+
+nice -n 10 "$PYTHON" scripts/walk_forward_eventual_runner_classifier.py \
+    --candidates "$OUT/fixed_time_candidates.csv" \
+    --calendar-file "$CALENDAR" \
+    --output-prefix "$OUT/direct_target_bar_path_regime_classifier" \
+    --label-mode target_before_stop --feature-set bar_path_regime \
+    --capital "$CAPITAL" --daily-goal "$DAILY_GOAL" \
+    --stress-cost-pct "$STRESS_COST_PCT" >> "$LOG" 2>&1
+
+for FEATURE_SET in snapshot temporal bar_path bar_path_regime; do
+    nice -n 10 "$PYTHON" scripts/walk_forward_eventual_runner_classifier.py \
+        --candidates "$OUT/fixed_time_candidates.csv" \
+        --calendar-file "$CALENDAR" \
+        --output-prefix "$OUT/expected_return_${FEATURE_SET}_classifier" \
+        --label-mode expected_return --feature-set "$FEATURE_SET" \
+        --capital "$CAPITAL" --daily-goal "$DAILY_GOAL" \
+        --stress-cost-pct "$STRESS_COST_PCT" >> "$LOG" 2>&1
+done
 
 nice -n 10 "$PYTHON" scripts/walk_forward_eventual_runner_classifier.py \
     --candidates "$OUT/fixed_time_candidates.csv" \
@@ -182,9 +213,15 @@ done
     --status "eventual_snapshot=$OUT/eventual_runner_classifier_status.json" \
     --status "eventual_temporal=$OUT/eventual_runner_temporal_classifier_status.json" \
     --status "eventual_bar_path=$OUT/eventual_runner_bar_path_classifier_status.json" \
+    --status "eventual_bar_path_regime=$OUT/eventual_runner_bar_path_regime_classifier_status.json" \
     --status "direct_snapshot=$OUT/direct_target_classifier_status.json" \
     --status "direct_temporal=$OUT/direct_target_temporal_classifier_status.json" \
     --status "direct_bar_path=$OUT/direct_target_bar_path_classifier_status.json" \
+    --status "direct_bar_path_regime=$OUT/direct_target_bar_path_regime_classifier_status.json" \
+    --status "expected_snapshot=$OUT/expected_return_snapshot_classifier_status.json" \
+    --status "expected_temporal=$OUT/expected_return_temporal_classifier_status.json" \
+    --status "expected_bar_path=$OUT/expected_return_bar_path_classifier_status.json" \
+    --status "expected_bar_path_regime=$OUT/expected_return_bar_path_regime_classifier_status.json" \
     --status "rank_acceleration_long=$OUT/long_status.json" \
     --status "rank_acceleration_short=$OUT/short_status.json" \
     --status "expected_return=$OUT/expected_return_registry_status.json" \

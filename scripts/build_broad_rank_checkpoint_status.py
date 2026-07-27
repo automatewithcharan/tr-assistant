@@ -61,6 +61,9 @@ def build_status(
     expected_return_registry_status = load_optional_status(
         output_dir / "expected_return_registry_status.json"
     )
+    strategy_family_status = load_optional_status(
+        output_dir / "strategy_family_status.json"
+    )
     cached = max(0, int(cached_symbols))
     mapped = max(0, int(mapped_symbols))
     coverage_ratio = cached / mapped if mapped else 0.0
@@ -75,6 +78,9 @@ def build_status(
     )
     direct_classifier_goal = bool(
         direct_classifier_status.get("final_goal_contract_passed", False)
+    )
+    strategy_family_goal = bool(
+        strategy_family_status.get("final_goal_contract_passed", False)
     )
     provenance = {
         "code_commit": load_optional_text(output_dir / "code_commit_at_start.txt"),
@@ -92,6 +98,9 @@ def build_status(
         "starting_capital": load_optional_text(output_dir / "starting_capital.txt"),
         "daily_goal": load_optional_text(output_dir / "daily_goal.txt"),
         "stress_cost_pct": load_optional_text(output_dir / "stress_cost_pct.txt"),
+        "signal_times": load_optional_text(
+            output_dir / "signal_times_at_start.txt"
+        ),
     }
     return {
         "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
@@ -109,9 +118,16 @@ def build_status(
         "short_final_goal_evidence_passed": short_goal,
         "eventual_runner_classifier_goal_passed": classifier_goal,
         "direct_target_classifier_goal_passed": direct_classifier_goal,
+        "strategy_family_goal_passed": strategy_family_goal,
         "historical_goal_gate_passed": bool(
             broad_coverage_gate_passed
-            and (long_goal or short_goal or classifier_goal or direct_classifier_goal)
+            and (
+                long_goal
+                or short_goal
+                or classifier_goal
+                or direct_classifier_goal
+                or strategy_family_goal
+            )
         ),
         "evidence_accepted": False,
         "paper_promotion_allowed": False,
@@ -125,6 +141,7 @@ def build_status(
         "direct_target_classifier_status": direct_classifier_status,
         "runner_filter_funnel_status": runner_filter_funnel_status,
         "expected_return_registry_status": expected_return_registry_status,
+        "strategy_family_status": strategy_family_status,
     }
 
 

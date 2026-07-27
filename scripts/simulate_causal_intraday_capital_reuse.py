@@ -15,11 +15,14 @@ def simulate_day(
     return_column: str,
     exit_time_column: str,
     extra_cost_pct: float = 0.0,
+    max_trades_per_day: int = 10,
 ) -> tuple[dict[str, Any], pd.DataFrame]:
     if capital <= 0:
         raise ValueError("capital must be positive")
     if slots < 1:
         raise ValueError("slots must be at least one")
+    if max_trades_per_day < 1:
+        raise ValueError("max_trades_per_day must be at least one")
     required = {"date", "symbol", "entry_time", exit_time_column, return_column}
     missing = required - set(candidates.columns)
     if missing:
@@ -66,6 +69,8 @@ def simulate_day(
         reason = ""
         if symbol in traded_symbols:
             reason = "same_symbol_already_traded"
+        elif len(traded_symbols) >= int(max_trades_per_day):
+            reason = "daily_trade_cap"
         elif len(active) >= int(slots):
             reason = "all_slots_busy"
         elif cash <= 0:
@@ -117,6 +122,7 @@ def simulate_day(
         "daily_return_pct": round(pnl / initial_capital * 100.0, 6),
         "capital_reuse": "exact_exit_bar_unleveraged",
         "slots": int(slots),
+        "max_trades_per_day": int(max_trades_per_day),
         "real_orders_allowed": False,
     }
     return summary, pd.DataFrame(records)
@@ -131,6 +137,7 @@ def simulate_calendar(
     exit_time_column: str,
     daily_goal: float,
     extra_cost_pct: float = 0.0,
+    max_trades_per_day: int = 10,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     groups = {str(date): group for date, group in candidates.groupby("date", sort=False)}
     empty = candidates.iloc[0:0]
@@ -144,6 +151,7 @@ def simulate_calendar(
             return_column,
             exit_time_column,
             extra_cost_pct,
+            max_trades_per_day,
         )
         summary["date"] = str(date)
         summary["daily_goal_hit"] = bool(summary["pnl"] >= float(daily_goal))

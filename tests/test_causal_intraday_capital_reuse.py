@@ -66,3 +66,31 @@ def test_calendar_includes_cash_days_and_goal_result():
     assert bool(daily.iloc[0]["daily_goal_hit"])
     assert daily.iloc[1]["pnl"] == 0.0
     assert not bool(daily.iloc[1]["daily_goal_hit"])
+
+
+def test_daily_trade_cap_blocks_eleventh_reused_slot():
+    candidates = pd.DataFrame(
+        [
+            _candidate(
+                f"S{index:02d}",
+                f"2026-01-02 {9 + (35 + index * 10) // 60:02d}:"
+                f"{(35 + index * 10) % 60:02d}",
+                f"2026-01-02 {9 + (40 + index * 10) // 60:02d}:"
+                f"{(40 + index * 10) % 60:02d}",
+                0.5,
+            )
+            for index in range(11)
+        ]
+    )
+
+    summary, trades = simulate_day(
+        candidates,
+        500_000.0,
+        1,
+        "return__test",
+        "exit_time__test",
+    )
+
+    assert summary["executed_trades"] == 10
+    assert summary["max_trades_per_day"] == 10
+    assert trades.iloc[-1]["skip_reason"] == "daily_trade_cap"

@@ -92,6 +92,10 @@ def select_registry(rows: list[dict]) -> tuple[pd.DataFrame, dict]:
         and chosen["final_goal_contract_passed"]
         and chosen["paper_promotion_allowed"]
     )
+    historical_goal_contract_passed = bool(
+        chosen["selection_gate_passed"]
+        and chosen["final_goal_contract_passed"]
+    )
     status = {
         "strategy": "broad_strategy_family_registry",
         "selection_order": [
@@ -101,6 +105,7 @@ def select_registry(rows: list[dict]) -> tuple[pd.DataFrame, dict]:
         ],
         "selection_uses_final_period": False,
         "selected": chosen,
+        "final_goal_contract_passed": historical_goal_contract_passed,
         "evidence_accepted": accepted,
         "paper_promotion_allowed": accepted,
         "real_orders_allowed": False,

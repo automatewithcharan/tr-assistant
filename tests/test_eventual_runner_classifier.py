@@ -187,6 +187,32 @@ def test_optimistic_bound_uses_future_positive_returns_and_ignores_overlap():
     assert not bool(bound.iloc[0]["real_orders_allowed"])
 
 
+def test_optimistic_bound_respects_daily_trade_cap():
+    date = "2026-01-02"
+    scored = pd.DataFrame(
+        [
+            {
+                "date": date,
+                "signal_minute": 570 + index,
+                "return__test": 1.0,
+            }
+            for index in range(12)
+        ]
+    )
+
+    bound = optimistic_opportunity_bound(
+        scored,
+        [date],
+        "return__test",
+        capital=500_000.0,
+        slots=1,
+        daily_goal=10_000.0,
+    )
+
+    assert bound.iloc[0]["trades"] == 10
+    assert bound.iloc[0]["max_trades_per_day"] == 10
+
+
 def test_opportunity_bound_stress_and_goal_respect_arguments():
     dates = pd.bdate_range("2026-01-01", periods=40).strftime("%Y-%m-%d").tolist()
     scored = pd.DataFrame(

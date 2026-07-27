@@ -347,6 +347,7 @@ def optimistic_opportunity_bound(
     slots: int,
     daily_goal: float,
     extra_cost_pct: float = 0.0,
+    max_trades_per_day: int = 10,
 ) -> pd.DataFrame:
     """Return a deliberately optimistic upper bound for the fixed contract.
 
@@ -360,6 +361,8 @@ def optimistic_opportunity_bound(
         raise ValueError("capital must be positive")
     if slots < 1:
         raise ValueError("slots must be at least one")
+    if max_trades_per_day < 1:
+        raise ValueError("max_trades_per_day must be at least one")
     required = {"date", "signal_minute", return_column}
     missing = required - set(scored.columns)
     if missing:
@@ -381,6 +384,14 @@ def optimistic_opportunity_bound(
             .groupby(["date", "signal_minute"], group_keys=False)
             .head(int(slots))
         )
+        chosen = (
+            chosen.sort_values(
+                ["date", return_column, "signal_minute"],
+                ascending=[True, False, True],
+            )
+            .groupby("date", group_keys=False)
+            .head(int(max_trades_per_day))
+        )
         observed = chosen.groupby("date")[return_column].agg(["sum", "count"])
     else:
         observed = pd.DataFrame(columns=["sum", "count"])
@@ -399,6 +410,7 @@ def optimistic_opportunity_bound(
                 "daily_return_pct": round(pnl / float(capital) * 100.0, 6),
                 "daily_goal_hit": bool(pnl >= float(daily_goal)),
                 "bound_assumptions": "future_returns_overlap_ignored_positive_only",
+                "max_trades_per_day": int(max_trades_per_day),
                 "real_orders_allowed": False,
             }
         )
@@ -804,7 +816,11 @@ def main() -> int:
         "model_features": list(model_features),
         "temporal_feature_availability": (
             "same_symbol_same_session_prior_qualifying_scans_only"
-            if args.feature_set in {"temporal", "bar_path"}
+            if args.feature_set in {
+                "temporal",
+                "bar_path",
+                "bar_path_regime",
+            }
             else "not_used"
         ),
         "bar_path_feature_availability": (
