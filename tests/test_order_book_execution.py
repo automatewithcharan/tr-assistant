@@ -1,5 +1,6 @@
 import pytest
 
+from pkscreener.classes.KiteTickerStream import KiteTickerStreamRunner
 from pkscreener.classes.OrderBookExecution import (
     affordable_market_fill,
     depth_json,
@@ -58,3 +59,43 @@ def test_affordable_fill_respects_capital_across_levels():
     assert fill["quantity"] == 24
     assert fill["filled_quantity"] == 24
     assert fill["notional"] == pytest.approx(2401.4)
+
+
+def test_shared_kite_tick_preserves_five_depth_levels_per_side():
+    runner = KiteTickerStreamRunner.__new__(KiteTickerStreamRunner)
+    runner._token_to_exchange = {101: "NSE"}
+    tick = {
+        "instrument_token": 101,
+        "last_price": 100.0,
+        "ohlc": {
+            "open": 99.0,
+            "high": 101.0,
+            "low": 98.0,
+            "close": 99.5,
+        },
+        "depth": {
+            "buy": [
+                {
+                    "price": 99.9 - level * 0.05,
+                    "quantity": 450 + level,
+                    "orders": 2 + level,
+                }
+                for level in range(6)
+            ],
+            "sell": [
+                {
+                    "price": 100.1 + level * 0.05,
+                    "quantity": 375 + level,
+                    "orders": 3 + level,
+                }
+                for level in range(6)
+            ],
+        },
+    }
+
+    compact = runner._compact_tick("TEST", tick, "2026-07-29T10:00:00")
+
+    assert len(depth_levels(compact, "buy")) == 5
+    assert len(depth_levels(compact, "sell")) == 5
+    assert compact["best_bid_quantity"] == 450
+    assert compact["best_ask_quantity"] == 375
