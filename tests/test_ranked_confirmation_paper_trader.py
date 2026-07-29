@@ -204,6 +204,70 @@ def test_target_exit_records_cost_adjusted_pnl(tmp_path):
     assert tape.iloc[-1]["candidate_status"] == "entered"
 
 
+def test_profit_lock_activates_only_after_observed_favorable_move(tmp_path):
+    start = datetime(2026, 7, 13, 9, 30, 0)
+    trader = RankedConfirmationPaperTrader(
+        str(tmp_path),
+        _config(
+            profit_lock_activation_pct=0.50,
+            profit_lock_floor_pct=0.20,
+        ),
+        now_fn=lambda: start,
+    )
+    _advance_to_entry(trader, start)
+    trade = trader.trades["TEST"]
+
+    trader.process(
+        pd.DataFrame(),
+        {"TEST": _tick(trade.entry_price * 1.006, 103_000, vwap=trade.entry_price)},
+        now=start + timedelta(seconds=90),
+    )
+
+    assert trade.protected_stop_price == round(trade.entry_price * 1.002, 4)
+    events = trader.process(
+        pd.DataFrame(),
+        {"TEST": _tick(trade.entry_price * 1.001, 104_000, vwap=trade.entry_price)},
+        now=start + timedelta(seconds=110),
+    )
+
+    exits = [event for event in events if event["event"] == "paper_exit"]
+    assert len(exits) == 1
+    assert exits[0]["reason"] == "profit_lock_exit"
+    assert trade.closed
+
+
+def test_trailing_stop_rises_with_observed_high_watermark(tmp_path):
+    start = datetime(2026, 7, 13, 9, 30, 0)
+    trader = RankedConfirmationPaperTrader(
+        str(tmp_path),
+        _config(
+            trailing_activation_pct=0.50,
+            trailing_distance_pct=0.25,
+        ),
+        now_fn=lambda: start,
+    )
+    _advance_to_entry(trader, start)
+    trade = trader.trades["TEST"]
+
+    high = trade.entry_price * 1.008
+    trader.process(
+        pd.DataFrame(),
+        {"TEST": _tick(high, 103_000, vwap=trade.entry_price)},
+        now=start + timedelta(seconds=90),
+    )
+    expected_stop = round(high * 0.9975, 4)
+    assert trade.protected_stop_price == expected_stop
+
+    events = trader.process(
+        pd.DataFrame(),
+        {"TEST": _tick(expected_stop - 0.01, 104_000, vwap=trade.entry_price)},
+        now=start + timedelta(seconds=110),
+    )
+    exits = [event for event in events if event["event"] == "paper_exit"]
+    assert len(exits) == 1
+    assert exits[0]["reason"] == "trailing_stop_hit"
+
+
 def test_consecutive_loss_guard_blocks_next_entry(tmp_path):
     start = datetime(2026, 7, 13, 9, 30, 0)
     trader = RankedConfirmationPaperTrader(

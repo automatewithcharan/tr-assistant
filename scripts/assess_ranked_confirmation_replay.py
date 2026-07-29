@@ -81,6 +81,35 @@ def configuration_registry() -> Dict[str, RankedPaperConfig]:
             max_day_change_pct=4.0,
             latest_entry_minutes=12 * 60,
         ),
+        "lock_050_floor_015": replace(
+            base,
+            profit_lock_activation_pct=0.50,
+            profit_lock_floor_pct=0.15,
+        ),
+        "lock_075_floor_025": replace(
+            base,
+            profit_lock_activation_pct=0.75,
+            profit_lock_floor_pct=0.25,
+        ),
+        "lock_090_floor_050": replace(
+            base,
+            profit_lock_activation_pct=0.90,
+            profit_lock_floor_pct=0.50,
+        ),
+        "trail_075_distance_035": replace(
+            base,
+            profit_lock_activation_pct=0.75,
+            profit_lock_floor_pct=0.15,
+            trailing_activation_pct=0.75,
+            trailing_distance_pct=0.35,
+        ),
+        "trail_050_distance_025": replace(
+            base,
+            profit_lock_activation_pct=0.50,
+            profit_lock_floor_pct=0.10,
+            trailing_activation_pct=0.50,
+            trailing_distance_pct=0.25,
+        ),
     }
 
 

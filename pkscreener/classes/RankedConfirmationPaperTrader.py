@@ -53,6 +53,10 @@ class RankedPaperConfig:
     max_spread_bps: float = 20.0
     target_pct: float = 1.00
     stop_pct: float = 0.75
+    profit_lock_activation_pct: float = 0.0
+    profit_lock_floor_pct: float = 0.0
+    trailing_activation_pct: float = 0.0
+    trailing_distance_pct: float = 0.0
     fast_failure_age_seconds: int = 180
     fast_failure_drop_pct: float = 0.35
     fast_failure_sell_ratio: float = 1.30
@@ -92,6 +96,18 @@ class RankedPaperConfig:
             max_spread_bps=f("SIGNALMONITOR_RANKED_PAPER_MAX_SPREAD_BPS", 20.0),
             target_pct=f("SIGNALMONITOR_RANKED_PAPER_TARGET_PCT", 1.00),
             stop_pct=f("SIGNALMONITOR_RANKED_PAPER_STOP_PCT", 0.75),
+            profit_lock_activation_pct=f(
+                "SIGNALMONITOR_RANKED_PAPER_PROFIT_LOCK_ACTIVATION_PCT", 0.0
+            ),
+            profit_lock_floor_pct=f(
+                "SIGNALMONITOR_RANKED_PAPER_PROFIT_LOCK_FLOOR_PCT", 0.0
+            ),
+            trailing_activation_pct=f(
+                "SIGNALMONITOR_RANKED_PAPER_TRAILING_ACTIVATION_PCT", 0.0
+            ),
+            trailing_distance_pct=f(
+                "SIGNALMONITOR_RANKED_PAPER_TRAILING_DISTANCE_PCT", 0.0
+            ),
             fast_failure_age_seconds=i("SIGNALMONITOR_RANKED_PAPER_FAST_FAILURE_AGE_SECONDS", 180),
             fast_failure_drop_pct=f("SIGNALMONITOR_RANKED_PAPER_FAST_FAILURE_DROP_PCT", 0.35),
             fast_failure_sell_ratio=f("SIGNALMONITOR_RANKED_PAPER_FAST_FAILURE_SELL_RATIO", 1.30),
@@ -167,6 +183,7 @@ class RankedPaperTrade:
     mae_pct: float = 0.0
     highest_price: float = 0.0
     lowest_price: float = 0.0
+    protected_stop_price: float = 0.0
     closed: bool = False
 
 
@@ -472,10 +489,18 @@ class RankedConfirmationPaperTrader:
             trade.lowest_price = min(trade.lowest_price or price, price)
             trade.mfe_pct = round((trade.highest_price / trade.entry_price - 1.0) * 100.0, 4)
             trade.mae_pct = round((trade.lowest_price / trade.entry_price - 1.0) * 100.0, 4)
+            self._update_protected_stop(trade)
 
             reason = ""
             if price <= trade.stop_price:
                 reason = "stop_hit"
+            elif trade.protected_stop_price > 0 and price <= trade.protected_stop_price:
+                reason = (
+                    "trailing_stop_hit"
+                    if self.config.trailing_activation_pct > 0
+                    and trade.mfe_pct >= self.config.trailing_activation_pct
+                    else "profit_lock_exit"
+                )
             elif price >= trade.target_price:
                 reason = "target_hit"
             elif minute_of_day >= self.config.eod_exit_minutes:
@@ -498,6 +523,34 @@ class RankedConfirmationPaperTrader:
                     reason = "failed_confirmation_exit"
             if reason:
                 self._close_trade(trade, tick, price, now, reason, events)
+
+    def _update_protected_stop(self, trade: RankedPaperTrade) -> None:
+        """Raise a causal protective stop after favorable price movement."""
+        protected = trade.protected_stop_price
+        if (
+            self.config.profit_lock_activation_pct > 0
+            and trade.mfe_pct >= self.config.profit_lock_activation_pct
+        ):
+            protected = max(
+                protected,
+                trade.entry_price
+                * (1.0 + self.config.profit_lock_floor_pct / 100.0),
+            )
+        if (
+            self.config.trailing_activation_pct > 0
+            and self.config.trailing_distance_pct > 0
+            and trade.mfe_pct >= self.config.trailing_activation_pct
+        ):
+            protected = max(
+                protected,
+                trade.highest_price
+                * (1.0 - self.config.trailing_distance_pct / 100.0),
+            )
+        if protected > 0:
+            trade.protected_stop_price = round(
+                max(trade.stop_price, protected),
+                4,
+            )
 
     def _close_trade(
         self,

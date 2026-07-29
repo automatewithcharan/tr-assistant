@@ -73,4 +73,6 @@ def test_configuration_registry_is_fixed_and_small():
 
     assert "baseline_current" in registry
     assert "patient_strong" in registry
-    assert len(registry) == 9
+    assert "lock_075_floor_025" in registry
+    assert "trail_075_distance_035" in registry
+    assert len(registry) == 14
