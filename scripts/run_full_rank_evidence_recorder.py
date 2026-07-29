@@ -35,7 +35,13 @@ from pkscreener.classes.FrozenMicrostructurePaperTrader import (  # noqa: E402
     RANK_MIGRATION_MODEL_FEATURES,
 )
 from pkscreener.classes.KiteTickerStream import load_latest_live_ticks  # noqa: E402
+from pkscreener.classes.KiteMarginEvidenceRecorder import (  # noqa: E402
+    KiteMarginEvidenceRecorder,
+)
 from pkscreener.classes.LiveFeatureRecorder import LiveFeatureRecorder  # noqa: E402
+from pkscreener.classes.MarginQualifiedLeverageObserver import (  # noqa: E402
+    MarginQualifiedLeverageObserver,
+)
 
 
 def _truthy(name: str, default: str = "0") -> bool:
@@ -96,6 +102,9 @@ class StandaloneFullRankEvidenceWorker:
         stop_avoidance_contracts: FullUniverseRankContractMatrixObserver | None = None,
         runner_qualified_ranker: FrozenMicrostructurePaperTrader | None = None,
         runner_qualified_contracts: FullUniverseRankContractMatrixObserver | None = None,
+        margin_evidence_recorder: KiteMarginEvidenceRecorder | None = None,
+        margin_leverage_observer: MarginQualifiedLeverageObserver | None = None,
+        margin_leverage_contracts: FullUniverseRankContractMatrixObserver | None = None,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.universe = str(universe or "all").strip().lower()
@@ -418,6 +427,75 @@ class StandaloneFullRankEvidenceWorker:
                     ],
                 )
             )
+        self.margin_evidence_recorder = margin_evidence_recorder
+        if (
+            self.margin_evidence_recorder is None
+            and _truthy("SIGNALMONITOR_ENABLE_MARGIN_EVIDENCE", "1")
+        ):
+            self.margin_evidence_recorder = KiteMarginEvidenceRecorder(
+                output_dir=self.output_dir,
+                min_interval_seconds=float(
+                    os.environ.get(
+                        "SIGNALMONITOR_MARGIN_EVIDENCE_INTERVAL_SECONDS",
+                        "60",
+                    )
+                    or 60
+                ),
+                max_batch_size=int(
+                    float(
+                        os.environ.get(
+                            "SIGNALMONITOR_MARGIN_EVIDENCE_BATCH_SIZE",
+                            "50",
+                        )
+                        or 50
+                    )
+                ),
+                max_attempts_per_symbol=int(
+                    float(
+                        os.environ.get(
+                            "SIGNALMONITOR_MARGIN_EVIDENCE_MAX_ATTEMPTS",
+                            "3",
+                        )
+                        or 3
+                    )
+                ),
+            )
+        self.margin_leverage_observer = margin_leverage_observer
+        if (
+            self.margin_leverage_observer is None
+            and self.margin_evidence_recorder is not None
+        ):
+            self.margin_leverage_observer = (
+                MarginQualifiedLeverageObserver(
+                    output_dir=self.output_dir,
+                    lane_capital=250_000.0,
+                    multipliers=(1.25, 1.50),
+                )
+            )
+        self.margin_leverage_contracts = margin_leverage_contracts
+        if (
+            self.margin_leverage_contracts is None
+            and self.margin_leverage_observer is not None
+        ):
+            self.margin_leverage_contracts = (
+                FullUniverseRankContractMatrixObserver(
+                    output_dir=str(self.output_dir),
+                    stress_pct=stress,
+                    root_name="frozen_margin_leverage_contract_matrix",
+                    metadata_columns=[
+                        "OriginalEventId",
+                        "ExpectedReturnPct",
+                        "MoveBand",
+                        "ModelTrainedThrough",
+                        "ModelSourceSha256",
+                        "MarginQuotedAt",
+                        "MarginPct",
+                        "RequiredMarginEstimate",
+                        "NotionalMultiplier",
+                        "BaseLaneCapital",
+                    ],
+                )
+            )
         self.status_path = (
             self.output_dir / "full_rank_evidence_runtime" / "status.json"
         )
@@ -514,6 +592,29 @@ class StandaloneFullRankEvidenceWorker:
                     now=now,
                 )
             )
+        margin_evidence_rows = []
+        if self.margin_evidence_recorder is not None:
+            margin_evidence_rows = self.margin_evidence_recorder.process(
+                stop_avoidance_entries + runner_qualified_entries,
+                now=now,
+            )
+        margin_leverage_entries = []
+        if self.margin_leverage_observer is not None:
+            margin_leverage_entries = self.margin_leverage_observer.process(
+                stop_avoidance_entries + runner_qualified_entries,
+                margin_evidence_rows,
+                ticks,
+                now=now,
+            )
+        margin_leverage_contract_events = []
+        if self.margin_leverage_contracts is not None:
+            margin_leverage_contract_events = (
+                self.margin_leverage_contracts.process(
+                    margin_leverage_entries,
+                    ticks,
+                    now=now,
+                )
+            )
         payload = {
             "status": "recording_standalone_full_rank_evidence",
             "owner": "standalone",
@@ -560,6 +661,21 @@ class StandaloneFullRankEvidenceWorker:
             ),
             "runner_qualified_stop_contract_events": int(
                 len(runner_qualified_contract_events)
+            ),
+            "margin_evidence_enabled": (
+                self.margin_evidence_recorder is not None
+            ),
+            "margin_evidence_quotes_this_cycle": int(
+                len(margin_evidence_rows)
+            ),
+            "margin_leverage_enabled": (
+                self.margin_leverage_observer is not None
+            ),
+            "margin_leverage_entries_this_cycle": int(
+                len(margin_leverage_entries)
+            ),
+            "margin_leverage_contract_events": int(
+                len(margin_leverage_contract_events)
             ),
             "cycle_ms": round((time.monotonic() - started) * 1000.0, 2),
             "feature_interval_seconds": float(self.recorder.interval_seconds),

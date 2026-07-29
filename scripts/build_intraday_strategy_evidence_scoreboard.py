@@ -371,6 +371,14 @@ def build_scoreboard(data_dir: Path) -> pd.DataFrame:
             ),
             evidence_class="five_level_depth_executable_forward",
         ),
+        _forward_status_lane(
+            data_dir,
+            lane="Post-margin balanced stop portfolio 1.50x",
+            relative_path=(
+                "frozen_balanced_stop_margin_forward/status.json"
+            ),
+            evidence_class="five_level_depth_executable_forward",
+        ),
         _partial_capital_diagnostic(data_dir),
         _goal_status_lane(
             data_dir,

@@ -196,3 +196,45 @@ def test_accepted_balanced_stop_portfolio_becomes_comparable(tmp_path):
     assert row["StressAvgDailyPnl"] == 10_750
     assert row["StressLower95DailyPnl"] == 750.0
     assert not bool(row["RealOrdersAllowed"])
+
+
+def test_accepted_primary_post_margin_portfolio_becomes_comparable(
+    tmp_path,
+):
+    data = tmp_path / "Data"
+    _json(
+        data / "frozen_balanced_stop_margin_forward/status.json",
+        {
+            "status": "accepted_primary_1_50x_post_margin_forward",
+            "contract": "t1_5_s1_0_h60",
+            "execution_schema_version": 2,
+            "capital": 500_000,
+            "primary_multiplier": 1.5,
+            "accepted": True,
+            "paper_promotion_allowed": True,
+            "paper_only": True,
+            "alerts_allowed": False,
+            "real_orders_allowed": False,
+            "forward": {
+                "sessions": 20,
+                "trades": 80,
+                "avg_daily_pnl": 10_250,
+                "lower_95_pct": 0.12,
+                "positive_session_pct": 75,
+                "goal_hit_pct": 55,
+                "worst_session_pct": -1.25,
+            },
+        },
+    )
+
+    scoreboard = write_scoreboard(data, tmp_path / "out")
+    row = scoreboard[
+        scoreboard["Lane"].eq(
+            "Post-margin balanced stop portfolio 1.50x"
+        )
+    ].iloc[0]
+
+    assert bool(row["CapitalAllocationComparable"])
+    assert row["StressAvgDailyPnl"] == 10_250
+    assert row["StressLower95DailyPnl"] == 600.0
+    assert not bool(row["RealOrdersAllowed"])

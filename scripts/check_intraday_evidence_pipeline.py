@@ -201,6 +201,8 @@ def assess(
         "pkscreener/classes/FullUniverseRankPaperObserver.py",
         "pkscreener/classes/FullUniverseRankContractMatrixObserver.py",
         "pkscreener/classes/FullUniverseRankEntryTimingObserver.py",
+        "pkscreener/classes/KiteMarginEvidenceRecorder.py",
+        "pkscreener/classes/MarginQualifiedLeverageObserver.py",
         "scripts/assess_exact_full_rank_paper.py",
         "scripts/assess_full_rank_contract_matrix.py",
         "scripts/assess_depth_executable_rank_strategy.py",
@@ -208,6 +210,7 @@ def assess(
         "scripts/assess_frozen_stop_avoidance_depth_forward.py",
         "scripts/assess_frozen_runner_qualified_stop_depth_forward.py",
         "scripts/assess_frozen_balanced_stop_portfolio_forward.py",
+        "scripts/assess_frozen_balanced_margin_forward.py",
         "scripts/assess_fixed_rank_first_forward.py",
         "scripts/assess_full_rank_entry_timing.py",
         "scripts/assess_full_rank_feature_gates.py",
@@ -234,6 +237,7 @@ def assess(
         "run_frozen_stop_avoidance_depth_forward",
         "run_frozen_runner_qualified_stop_depth_forward",
         "run_frozen_balanced_stop_portfolio_forward",
+        "run_frozen_balanced_margin_forward",
         "run_fixed_rank_first_forward",
         "run_full_rank_entry_timing",
         "run_full_rank_feature_gates",
@@ -443,6 +447,7 @@ def assess(
         "exact_ask_bid_observer": ("full_universe_rank_paper/status.json", "recording_exact_ask_to_bid_paper_outcomes", None, None),
         "exit_contract_matrix": ("full_universe_rank_contract_matrix/status.json", "recording_exact_exit_contract_matrix", "contracts", 9),
         "entry_timing_matrix": ("full_universe_rank_entry_timing/status.json", "recording_exact_entry_timing_matrix", "variants", 6),
+        "margin_leverage_contract_matrix": ("frozen_margin_leverage_contract_matrix/status.json", "recording_exact_exit_contract_matrix", "contracts", 9),
     }
     for name, (relative, expected_status, count_key, expected_count) in observers.items():
         status = load_json(data / relative)

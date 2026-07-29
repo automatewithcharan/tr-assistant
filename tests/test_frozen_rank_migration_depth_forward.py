@@ -228,3 +228,64 @@ def test_unfillable_exit_marks_whole_session_incomplete(tmp_path):
     assert int(daily.iloc[0]["exit_depth_failures"]) == 1
     assert not bool(daily.iloc[0]["execution_complete"])
     assert pd.isna(daily.iloc[0]["pnl"])
+
+
+def test_leveraged_replay_uses_notional_for_fill_and_base_for_return(
+    tmp_path,
+):
+    entry = _registration(FORWARD_START)
+    registrations = tmp_path / "registrations.csv"
+    outcomes = tmp_path / "outcomes.csv"
+    pd.DataFrame([entry]).to_csv(registrations, index=False)
+    pd.DataFrame([_outcome(entry, exit_quantity=10000)]).to_csv(
+        outcomes, index=False
+    )
+    _, events = load_depth_events(
+        [str(registrations)], [str(outcomes)]
+    )
+
+    daily, trades = replay_forward(
+        events,
+        [FORWARD_START],
+        capital=500_000.0,
+        execution_capital=750_000.0,
+    )
+
+    assert float(trades.iloc[0]["base_capital"]) == 500_000.0
+    assert float(trades.iloc[0]["execution_capital"]) == 750_000.0
+    assert float(trades.iloc[0]["deployed_capital"]) > 500_000.0
+    assert float(daily.iloc[0]["daily_return_pct"]) > 1.5
+
+
+def test_leverage_audit_rejects_registration_without_causal_margin(
+    tmp_path,
+):
+    root = tmp_path / "evidence"
+    root.mkdir()
+    entry = _registration(FORWARD_START)
+    entry["Source"] = f"{LANE_SOURCE}:mis_1_50x"
+    pd.DataFrame([entry]).to_csv(root / "registrations.csv", index=False)
+    pd.DataFrame([_outcome(entry)]).to_csv(
+        root / "outcomes.csv", index=False
+    )
+    pd.DataFrame(_raw_rows(FORWARD_START)).to_csv(
+        root / "raw.csv", index=False
+    )
+    _write_status(root / "status.json", FORWARD_START)
+    _write_model(root / "model.joblib")
+
+    status = run_audit(
+        registration_patterns=[str(root / "registrations.csv")],
+        outcome_patterns=[str(root / "outcomes.csv")],
+        raw_patterns=[str(root / "raw.csv")],
+        lane_status_patterns=[str(root / "status.json")],
+        model_path=root / "model.joblib",
+        output_dir=root / "audit",
+        lane_source=f"{LANE_SOURCE}:mis_1_50x",
+        notional_multiplier=1.5,
+    )
+
+    coverage = pd.read_csv(root / "audit" / "coverage.csv").iloc[0]
+    assert int(coverage["invalid_entry_evidence"]) == 1
+    assert status["eligible_sessions"] == 0
+    assert status["causal_margin_quote_required"] is True

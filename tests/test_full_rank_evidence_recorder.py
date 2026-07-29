@@ -55,6 +55,24 @@ class FakeFrozenRanker:
         return [{"event": "entry", "EventId": "frozen:TEST"}]
 
 
+class FakeMarginRecorder:
+    def __init__(self):
+        self.calls = []
+
+    def process(self, events, now=None):
+        self.calls.append((events, now))
+        return [{"Symbol": "TEST", "Status": "quoted"}]
+
+
+class FakeMarginLeverageObserver:
+    def __init__(self):
+        self.calls = []
+
+    def process(self, events, margin_rows, ticks, now=None):
+        self.calls.append((events, margin_rows, ticks, now))
+        return [{"event": "entry", "EventId": "margin:TEST"}]
+
+
 def test_worker_advances_all_paper_observers_and_publishes_safe_status(tmp_path):
     recorder = FakeRecorder()
     paper = FakePaper()
@@ -186,6 +204,69 @@ def test_worker_advances_runner_qualified_challenger_ledgers(tmp_path):
     assert payload["runner_qualified_stop_contract_events"] == 1
     assert payload["paper_only"] is True
     assert payload["alerts_allowed"] is False
+    assert payload["real_orders_allowed"] is False
+
+
+def test_worker_records_margin_evidence_from_both_frozen_lanes(tmp_path):
+    stop = FakeFrozenRanker()
+    runner = FakeFrozenRanker()
+    margin = FakeMarginRecorder()
+    worker = StandaloneFullRankEvidenceWorker(
+        output_dir=tmp_path,
+        recorder=FakeRecorder(),
+        paper=FakePaper(),
+        contracts=FakeObserver("contract_exit"),
+        timing=FakeObserver("timing_exit"),
+        stop_avoidance_ranker=stop,
+        stop_avoidance_contracts=FakeObserver("contract_exit"),
+        runner_qualified_ranker=runner,
+        runner_qualified_contracts=FakeObserver("contract_exit"),
+        margin_evidence_recorder=margin,
+    )
+
+    payload = worker.cycle(
+        {"TEST": {"last_price": 100.0}},
+        now=datetime(2026, 7, 30, 10, 0, 0),
+    )
+
+    assert len(margin.calls) == 1
+    assert len(margin.calls[0][0]) == 2
+    assert payload["margin_evidence_enabled"] is True
+    assert payload["margin_evidence_quotes_this_cycle"] == 1
+    assert payload["real_orders_allowed"] is False
+
+
+def test_worker_advances_post_margin_leverage_contracts(tmp_path):
+    margin = FakeMarginRecorder()
+    leverage = FakeMarginLeverageObserver()
+    contracts = FakeObserver("contract_exit")
+    worker = StandaloneFullRankEvidenceWorker(
+        output_dir=tmp_path,
+        recorder=FakeRecorder(),
+        paper=FakePaper(),
+        contracts=FakeObserver("contract_exit"),
+        timing=FakeObserver("timing_exit"),
+        stop_avoidance_ranker=FakeFrozenRanker(),
+        stop_avoidance_contracts=FakeObserver("contract_exit"),
+        runner_qualified_ranker=FakeFrozenRanker(),
+        runner_qualified_contracts=FakeObserver("contract_exit"),
+        margin_evidence_recorder=margin,
+        margin_leverage_observer=leverage,
+        margin_leverage_contracts=contracts,
+    )
+
+    payload = worker.cycle(
+        {"TEST": {"last_price": 100.0}},
+        now=datetime(2026, 7, 30, 10, 0, 0),
+    )
+
+    assert len(leverage.calls) == 1
+    assert len(leverage.calls[0][0]) == 2
+    assert leverage.calls[0][1][0]["Status"] == "quoted"
+    assert contracts.calls[0][0][0]["EventId"] == "margin:TEST"
+    assert payload["margin_leverage_enabled"] is True
+    assert payload["margin_leverage_entries_this_cycle"] == 1
+    assert payload["margin_leverage_contract_events"] == 1
     assert payload["real_orders_allowed"] is False
 
 

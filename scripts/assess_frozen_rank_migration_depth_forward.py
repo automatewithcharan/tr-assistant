@@ -90,6 +90,7 @@ def freeze_hypothesis(
     selection_cutoff: str | None = None,
     forward_start: str | None = None,
     model_trained_through: str | None = None,
+    notional_multiplier: float = 1.0,
 ) -> tuple[dict, bool]:
     lane_source = LANE_SOURCE if lane_source is None else lane_source
     contract = CONTRACT if contract is None else contract
@@ -131,6 +132,16 @@ def freeze_hypothesis(
         "paper_only": True,
         "real_orders_allowed": False,
     }
+    if float(notional_multiplier) != 1.0:
+        expected.update(
+            {
+                "notional_multiplier": float(notional_multiplier),
+                "execution_capital": round(
+                    float(capital) * float(notional_multiplier), 2
+                ),
+                "causal_margin_quote_required": True,
+            }
+        )
     metadata_valid = bool(
         str(metadata.get("trained_through", "") or "")
         == str(model_trained_through)
@@ -331,10 +342,16 @@ def replay_forward(
     min_slot_deployment_pct: float = MIN_SLOT_DEPLOYMENT_PCT,
     contract: str | None = None,
     score_threshold: float | None = None,
+    execution_capital: float | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     contract = CONTRACT if contract is None else contract
     score_threshold = (
         SCORE_THRESHOLD if score_threshold is None else score_threshold
+    )
+    execution_capital = (
+        float(capital)
+        if execution_capital is None
+        else float(execution_capital)
     )
     daily_rows = []
     trade_rows = []
@@ -373,13 +390,13 @@ def replay_forward(
                         continue
                     entry_fill = affordable_market_fill(
                         parse_depth_json(pick.get("EntryDepthJson")),
-                        float(capital),
+                        execution_capital,
                     )
                     quantity = int(entry_fill["filled_quantity"])
                     deployed = float(entry_fill["notional"])
                     deployment_pct = (
-                        deployed / float(capital) * 100.0
-                        if capital > 0 else 0.0
+                        deployed / execution_capital * 100.0
+                        if execution_capital > 0 else 0.0
                     )
                     if (
                         quantity < 1
@@ -418,6 +435,10 @@ def replay_forward(
                             "exit_time": pick["exit_time"],
                             "exit_reason": str(pick.get("ExitReason", "")),
                             "deployed_capital": round(deployed, 2),
+                            "base_capital": round(float(capital), 2),
+                            "execution_capital": round(
+                                execution_capital, 2
+                            ),
                             "deployment_pct": round(deployment_pct, 4),
                             "quantity": quantity,
                             "entry_vwap": float(entry_fill["vwap"]),
@@ -469,6 +490,7 @@ def run_audit(
     forward_start: str | None = None,
     model_trained_through: str | None = None,
     max_trades_per_day: int | None = None,
+    notional_multiplier: float = 1.0,
 ) -> dict[str, Any]:
     lane_source = LANE_SOURCE if lane_source is None else lane_source
     evidence_name = EVIDENCE_NAME if evidence_name is None else evidence_name
@@ -494,6 +516,8 @@ def run_audit(
         if max_trades_per_day is None
         else max_trades_per_day
     )
+    notional_multiplier = max(1.0, float(notional_multiplier))
+    execution_capital = float(capital) * notional_multiplier
     output_dir.mkdir(parents=True, exist_ok=True)
     metadata = model_metadata(model_path)
     frozen, hypothesis_valid = freeze_hypothesis(
@@ -507,6 +531,7 @@ def run_audit(
         selection_cutoff=selection_cutoff,
         forward_start=forward_start,
         model_trained_through=model_trained_through,
+        notional_multiplier=notional_multiplier,
     )
     expected_hash = str(frozen.get("model_source_sha256", "") or "")
 
@@ -537,6 +562,48 @@ def run_audit(
                 entries["ExpectedReturnPct"], errors="coerce"
             ).ge(score_threshold)
         ].copy()
+        if notional_multiplier > 1.0:
+            required_margin_columns = {
+                "OriginalEventId",
+                "MarginQuotedAt",
+                "MarginPct",
+                "RequiredMarginEstimate",
+                "NotionalMultiplier",
+                "BaseLaneCapital",
+            }
+            if not required_margin_columns.issubset(entries.columns):
+                entries = entries.iloc[0:0].copy()
+            else:
+                entry_at = pd.to_datetime(
+                    entries["EntryAt"], errors="coerce"
+                )
+                quoted_at = pd.to_datetime(
+                    entries["MarginQuotedAt"], errors="coerce"
+                )
+                multiplier = pd.to_numeric(
+                    entries["NotionalMultiplier"], errors="coerce"
+                )
+                base_capital = pd.to_numeric(
+                    entries["BaseLaneCapital"], errors="coerce"
+                )
+                margin_pct = pd.to_numeric(
+                    entries["MarginPct"], errors="coerce"
+                )
+                required_margin = pd.to_numeric(
+                    entries["RequiredMarginEstimate"], errors="coerce"
+                )
+                entries = entries[
+                    entry_at.notna()
+                    & quoted_at.notna()
+                    & entry_at.gt(quoted_at)
+                    & multiplier.sub(notional_multiplier).abs().lt(1e-9)
+                    & base_capital.sub(float(capital)).abs().lt(0.01)
+                    & margin_pct.gt(0.0)
+                    & margin_pct.le(100.0)
+                    & required_margin.gt(0.0)
+                    & required_margin.le(float(capital))
+                    & entries["OriginalEventId"].fillna("").astype(str).ne("")
+                ].copy()
     valid_ids = set(entries["EventId"].astype(str)) if not entries.empty else set()
     events = events[
         events["EventId"].astype(str).isin(valid_ids)
@@ -569,6 +636,7 @@ def run_audit(
         max_trades_per_day=max_trades_per_day,
         contract=contract,
         score_threshold=score_threshold,
+        execution_capital=execution_capital,
     )
     daily.to_csv(output_dir / "forward_daily.csv", index=False)
     trades.to_csv(output_dir / "forward_trades.csv", index=False)
@@ -596,6 +664,9 @@ def run_audit(
         "forward_start": forward_start,
         "execution_schema_version": EXECUTION_SCHEMA_VERSION,
         "capital": float(capital),
+        "notional_multiplier": notional_multiplier,
+        "execution_capital": execution_capital,
+        "causal_margin_quote_required": notional_multiplier > 1.0,
         "daily_goal": float(daily_goal),
         "slots": SLOTS,
         "max_trades_per_day": max_trades_per_day,

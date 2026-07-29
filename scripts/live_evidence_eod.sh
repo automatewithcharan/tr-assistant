@@ -305,6 +305,23 @@ run_frozen_balanced_stop_portfolio_forward() {
         >>"$LOG" 2>&1 || true
 }
 
+run_frozen_balanced_margin_forward() {
+    "$PYTHON" "$REPO/scripts/assess_frozen_balanced_margin_forward.py" \
+        --stop-registration-glob "$REPO/results/Data/frozen_stop_avoidance_contract_matrix/registrations_20*.csv" \
+        --stop-status-glob "$REPO/results/Data/frozen_stop_avoidance_contract_matrix/status_20*.json" \
+        --stop-model "$REPO/results/Data/live_stop_avoidance/frozen_stop_avoidance_model.joblib" \
+        --runner-registration-glob "$REPO/results/Data/frozen_runner_qualified_stop_contract_matrix/registrations_20*.csv" \
+        --runner-status-glob "$REPO/results/Data/frozen_runner_qualified_stop_contract_matrix/status_20*.json" \
+        --runner-model "$REPO/results/Data/live_stop_avoidance/frozen_runner_qualified_stop_model.joblib" \
+        --leverage-registration-glob "$REPO/results/Data/frozen_margin_leverage_contract_matrix/registrations_20*.csv" \
+        --leverage-outcome-glob "$REPO/results/Data/frozen_margin_leverage_contract_matrix/outcomes_20*.csv" \
+        --leverage-status-glob "$REPO/results/Data/frozen_margin_leverage_contract_matrix/status_20*.json" \
+        --raw-glob "$REPO/results/Data/live_feature_recorder/live_features_20*.csv" \
+        --output-dir "$REPO/results/Data/frozen_balanced_stop_margin_forward" \
+        --daily-goal 10000 --forward-sessions 20 --min-snapshots 1000 \
+        >>"$LOG" 2>&1 || true
+}
+
 run_fixed_rank_first_forward() {
     "$PYTHON" "$REPO/scripts/assess_fixed_rank_first_forward.py" \
         --entry-glob "$REPO/results/Data/full_universe_rank_paper/entries_20*.csv" \
@@ -453,6 +470,7 @@ if [ -f "$OUTPUT_ROOT/status.json" ]; then
         run_frozen_stop_avoidance_depth_forward
         run_frozen_runner_qualified_stop_depth_forward
         run_frozen_balanced_stop_portfolio_forward
+        run_frozen_balanced_margin_forward
         run_fixed_rank_first_forward
         run_full_rank_entry_timing
         run_full_rank_feature_gates
@@ -517,6 +535,7 @@ run_frozen_rank_migration_depth_forward
 run_frozen_stop_avoidance_depth_forward
 run_frozen_runner_qualified_stop_depth_forward
 run_frozen_balanced_stop_portfolio_forward
+run_frozen_balanced_margin_forward
 run_fixed_rank_first_forward
 run_full_rank_entry_timing
 run_full_rank_feature_gates
