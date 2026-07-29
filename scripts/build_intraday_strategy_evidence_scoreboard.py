@@ -355,6 +355,14 @@ def build_scoreboard(data_dir: Path) -> pd.DataFrame:
             relative_path="frozen_stop_avoidance_depth_forward/status.json",
             evidence_class="five_level_depth_executable_forward",
         ),
+        _forward_status_lane(
+            data_dir,
+            lane="Five-level runner-qualified stop",
+            relative_path=(
+                "frozen_runner_qualified_stop_depth_forward/status.json"
+            ),
+            evidence_class="five_level_depth_executable_forward",
+        ),
         _partial_capital_diagnostic(data_dir),
         _goal_status_lane(
             data_dir,

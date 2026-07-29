@@ -158,6 +158,37 @@ def test_worker_advances_stop_avoidance_paper_and_contract_ledgers(tmp_path):
     assert payload["real_orders_allowed"] is False
 
 
+def test_worker_advances_runner_qualified_challenger_ledgers(tmp_path):
+    challenger = FakeFrozenRanker()
+    challenger_contracts = FakeObserver("contract_exit")
+    worker = StandaloneFullRankEvidenceWorker(
+        output_dir=tmp_path,
+        recorder=FakeRecorder(),
+        paper=FakePaper(),
+        contracts=FakeObserver("contract_exit"),
+        timing=FakeObserver("timing_exit"),
+        runner_qualified_ranker=challenger,
+        runner_qualified_contracts=challenger_contracts,
+    )
+
+    payload = worker.cycle(
+        {"TEST": {"last_price": 100.0}},
+        now=datetime(2026, 7, 30, 10, 0, 0),
+    )
+
+    assert len(challenger.calls) == 1
+    assert challenger_contracts.calls[0][0] == [
+        {"event": "entry", "EventId": "frozen:TEST"}
+    ]
+    assert payload["runner_qualified_stop_enabled"] is True
+    assert payload["runner_qualified_stop_events"] == 1
+    assert payload["runner_qualified_stop_prediction_entries"] == 1
+    assert payload["runner_qualified_stop_contract_events"] == 1
+    assert payload["paper_only"] is True
+    assert payload["alerts_allowed"] is False
+    assert payload["real_orders_allowed"] is False
+
+
 def test_stale_tick_status_does_not_call_any_observer(tmp_path):
     recorder = FakeRecorder()
     paper = FakePaper()

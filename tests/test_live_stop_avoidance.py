@@ -7,10 +7,13 @@ from pkscreener.classes.FrozenMicrostructurePaperTrader import (
     RANK_MIGRATION_MODEL_FEATURES,
 )
 from pkscreener.classes.StopAvoidanceMicrostructureModel import (
+    RunnerQualifiedStopAvoidanceModel,
     StopAvoidanceProbabilityModel,
 )
 from scripts.assess_live_stop_avoidance import (
     ARTIFACT_TYPE,
+    CHALLENGER_ARTIFACT_TYPE,
+    train_frozen_challenger_model,
     train_frozen_model,
 )
 
@@ -36,6 +39,25 @@ def test_stop_avoidance_model_predicts_probability():
     assert probabilities[1] > probabilities[0]
 
 
+def test_runner_qualified_model_rejects_rows_below_stop_floor():
+    class FixedModel:
+        def __init__(self, values):
+            self.values = np.asarray(values, dtype=float)
+
+        def predict(self, _features):
+            return self.values
+
+    model = RunnerQualifiedStopAvoidanceModel(
+        stop_probability_floor=0.78
+    )
+    model.stop_model = FixedModel([0.77, 0.78, 0.90])
+    model.runner_model = FixedModel([0.99, 0.20, 0.60])
+
+    scores = model.predict(pd.DataFrame({"x": [1, 2, 3]}))
+
+    assert scores.tolist() == [-1.0, 0.20, 0.60]
+
+
 def test_frozen_stop_model_excludes_post_cutoff_rows_and_stays_paper_only():
     rows = []
     start = datetime(2026, 7, 16, 9, 20)
@@ -48,6 +70,7 @@ def test_frozen_stop_model_excludes_post_cutoff_rows_and_stays_paper_only():
                 "signal_time": current + timedelta(seconds=row_index),
                 "trade_return_pct": 1.5 if row_index % 2 else -1.0,
                 "avoid_stop": row_index % 2,
+                "reaches_five_pct_leader_state": int(row_index % 3 == 0),
             }
             row.update(
                 {
@@ -79,3 +102,19 @@ def test_frozen_stop_model_excludes_post_cutoff_rows_and_stays_paper_only():
     assert metadata["paper_only"] is True
     assert metadata["alerts_allowed"] is False
     assert metadata["real_orders_allowed"] is False
+
+    challenger, challenger_metadata = train_frozen_challenger_model(
+        frame,
+        selection_cutoff="2026-07-29",
+    )
+
+    assert isinstance(challenger, RunnerQualifiedStopAvoidanceModel)
+    assert challenger_metadata["artifact_type"] == CHALLENGER_ARTIFACT_TYPE
+    assert challenger_metadata["trained_through"] <= "2026-07-29"
+    assert challenger_metadata["training_rows"] == len(rows)
+    assert challenger_metadata["stop_probability_floor"] == 0.78
+    assert challenger_metadata["threshold"] == 0.0
+    assert challenger_metadata["max_trades_per_day"] == 10
+    assert challenger_metadata["paper_only"] is True
+    assert challenger_metadata["alerts_allowed"] is False
+    assert challenger_metadata["real_orders_allowed"] is False

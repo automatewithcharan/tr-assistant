@@ -54,3 +54,50 @@ class StopAvoidanceProbabilityModel:
             return np.zeros(len(features), dtype=float)
         return probabilities[:, classes.index(1)]
 
+
+class RunnerQualifiedStopAvoidanceModel:
+    """Rank continuation probability only after the stop-safety floor passes."""
+
+    def __init__(
+        self,
+        *,
+        stop_probability_floor: float = 0.78,
+        min_samples_leaf: int = 30,
+    ) -> None:
+        self.stop_probability_floor = float(stop_probability_floor)
+        self.stop_model = StopAvoidanceProbabilityModel(
+            min_samples_leaf=min_samples_leaf
+        )
+        self.runner_model = StopAvoidanceProbabilityModel(
+            min_samples_leaf=min_samples_leaf
+        )
+
+    def fit(
+        self,
+        features: Any,
+        avoid_stop_labels: Any,
+        runner_labels: Any,
+        *,
+        sample_weight: Any = None,
+    ) -> "RunnerQualifiedStopAvoidanceModel":
+        self.stop_model.fit(
+            features,
+            avoid_stop_labels,
+            sample_weight=sample_weight,
+        )
+        self.runner_model.fit(
+            features,
+            runner_labels,
+            sample_weight=sample_weight,
+        )
+        return self
+
+    def predict(self, features: Any) -> np.ndarray:
+        """Return runner score for safe rows and -1 for rejected rows."""
+        stop_probability = self.stop_model.predict(features)
+        runner_probability = self.runner_model.predict(features)
+        return np.where(
+            stop_probability >= self.stop_probability_floor,
+            runner_probability,
+            -1.0,
+        )

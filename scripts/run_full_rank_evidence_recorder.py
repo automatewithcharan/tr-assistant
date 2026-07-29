@@ -94,6 +94,8 @@ class StandaloneFullRankEvidenceWorker:
         rank_migration_contracts: FullUniverseRankContractMatrixObserver | None = None,
         stop_avoidance_ranker: FrozenMicrostructurePaperTrader | None = None,
         stop_avoidance_contracts: FullUniverseRankContractMatrixObserver | None = None,
+        runner_qualified_ranker: FrozenMicrostructurePaperTrader | None = None,
+        runner_qualified_contracts: FullUniverseRankContractMatrixObserver | None = None,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.universe = str(universe or "all").strip().lower()
@@ -360,6 +362,62 @@ class StandaloneFullRankEvidenceWorker:
                     ],
                 )
             )
+        self.runner_qualified_ranker = runner_qualified_ranker
+        if (
+            self.runner_qualified_ranker is None
+            and _truthy(
+                "SIGNALMONITOR_ENABLE_RUNNER_QUALIFIED_STOP_PAPER", "1"
+            )
+        ):
+            runner_qualified_model = Path(
+                str(
+                    os.environ.get(
+                        "SIGNALMONITOR_RUNNER_QUALIFIED_STOP_MODEL",
+                        self.output_dir
+                        / "live_stop_avoidance"
+                        / "frozen_runner_qualified_stop_model.joblib",
+                    )
+                    or ""
+                )
+            )
+            if runner_qualified_model.is_file():
+                self.runner_qualified_ranker = (
+                    FrozenMicrostructurePaperTrader(
+                        output_dir=str(self.output_dir),
+                        model_path=str(runner_qualified_model),
+                        capital=capital,
+                        threshold=0.0,
+                        max_trades_per_day=10,
+                        root_name="frozen_runner_qualified_stop_paper",
+                        model_features=RANK_MIGRATION_MODEL_FEATURES,
+                        model_artifact_type=(
+                            "prior_session_runner_qualified_stop_avoidance"
+                        ),
+                        source_name=(
+                            "prior_session_runner_qualified_stop_avoidance"
+                        ),
+                    )
+                )
+        self.runner_qualified_contracts = runner_qualified_contracts
+        if (
+            self.runner_qualified_contracts is None
+            and self.runner_qualified_ranker is not None
+        ):
+            self.runner_qualified_contracts = (
+                FullUniverseRankContractMatrixObserver(
+                    output_dir=str(self.output_dir),
+                    stress_pct=stress,
+                    root_name=(
+                        "frozen_runner_qualified_stop_contract_matrix"
+                    ),
+                    metadata_columns=[
+                        "ExpectedReturnPct",
+                        "MoveBand",
+                        "ModelTrainedThrough",
+                        "ModelSourceSha256",
+                    ],
+                )
+            )
         self.status_path = (
             self.output_dir / "full_rank_evidence_runtime" / "status.json"
         )
@@ -436,6 +494,26 @@ class StandaloneFullRankEvidenceWorker:
                     now=now,
                 )
             )
+        runner_qualified_events = []
+        runner_qualified_entries = []
+        runner_qualified_contract_events = []
+        if self.runner_qualified_ranker is not None:
+            runner_qualified_events = self.runner_qualified_ranker.process(
+                rows,
+                ticks,
+                now=now,
+            )
+            runner_qualified_entries = (
+                self.runner_qualified_ranker.contract_entry_events(ticks)
+            )
+        if self.runner_qualified_contracts is not None:
+            runner_qualified_contract_events = (
+                self.runner_qualified_contracts.process(
+                    runner_qualified_entries,
+                    ticks,
+                    now=now,
+                )
+            )
         payload = {
             "status": "recording_standalone_full_rank_evidence",
             "owner": "standalone",
@@ -470,6 +548,18 @@ class StandaloneFullRankEvidenceWorker:
             ),
             "stop_avoidance_contract_events": int(
                 len(stop_avoidance_contract_events)
+            ),
+            "runner_qualified_stop_enabled": (
+                self.runner_qualified_ranker is not None
+            ),
+            "runner_qualified_stop_events": int(
+                len(runner_qualified_events)
+            ),
+            "runner_qualified_stop_prediction_entries": int(
+                len(runner_qualified_entries)
+            ),
+            "runner_qualified_stop_contract_events": int(
+                len(runner_qualified_contract_events)
             ),
             "cycle_ms": round((time.monotonic() - started) * 1000.0, 2),
             "feature_interval_seconds": float(self.recorder.interval_seconds),
