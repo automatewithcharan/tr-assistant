@@ -203,6 +203,7 @@ def assess(
         "pkscreener/classes/FullUniverseRankEntryTimingObserver.py",
         "pkscreener/classes/KiteMarginEvidenceRecorder.py",
         "pkscreener/classes/MarginQualifiedLeverageObserver.py",
+        "pkscreener/classes/FrozenRankDisplacementPaperTrader.py",
         "scripts/assess_exact_full_rank_paper.py",
         "scripts/assess_full_rank_contract_matrix.py",
         "scripts/assess_depth_executable_rank_strategy.py",
@@ -211,6 +212,8 @@ def assess(
         "scripts/assess_frozen_runner_qualified_stop_depth_forward.py",
         "scripts/assess_frozen_balanced_stop_portfolio_forward.py",
         "scripts/assess_frozen_balanced_margin_forward.py",
+        "scripts/assess_frozen_rank_displacement_forward.py",
+        "scripts/assess_historical_rank_displacement.py",
         "scripts/assess_fixed_rank_first_forward.py",
         "scripts/assess_full_rank_entry_timing.py",
         "scripts/assess_full_rank_feature_gates.py",
@@ -238,6 +241,8 @@ def assess(
         "run_frozen_runner_qualified_stop_depth_forward",
         "run_frozen_balanced_stop_portfolio_forward",
         "run_frozen_balanced_margin_forward",
+        "run_frozen_rank_displacement_forward",
+        "run_historical_rank_displacement_audit",
         "run_fixed_rank_first_forward",
         "run_full_rank_entry_timing",
         "run_full_rank_feature_gates",
@@ -459,6 +464,50 @@ def assess(
         passed = status.get("status") == expected_status and str(status.get("date")) == now.strftime("%Y-%m-%d") and age <= 180 and safe and count_ok and schema_ok
         count_detail = f", {count_key}={status.get(count_key)}" if count_key else ""
         checks.append(check(name, passed or not live_market, f"age={age:.0f}s, paper_only={safe}, execution_schema={status.get('execution_schema_version', 0)}{count_detail}" + ("" if live_market else "; freshness not required outside live market")))
+
+    displacement = load_json(
+        data / "frozen_stop_displacement_paper/status.json"
+    )
+    displacement_updated = parse_ist(
+        displacement.get("last_heartbeat_at")
+    )
+    displacement_age = (
+        (now - displacement_updated).total_seconds()
+        if displacement_updated
+        else float("inf")
+    )
+    displacement_safe = (
+        bool(displacement.get("paper_only"))
+        and not bool(displacement.get("alerts_allowed"))
+        and not bool(displacement.get("real_orders_allowed"))
+    )
+    displacement_ok = bool(
+        displacement.get("status")
+        == "collecting_frozen_rank_displacement_paper"
+        and str(displacement.get("date")) == now.strftime("%Y-%m-%d")
+        and displacement_age <= 180
+        and displacement_safe
+        and int(displacement.get("execution_schema_version") or 0) >= 2
+        and bool(displacement.get("requires_five_level_fillability"))
+        and str(displacement.get("policy_version") or "")
+        and str(displacement.get("policy_sha256") or "")
+    )
+    checks.append(
+        check(
+            "rank_displacement_paper",
+            displacement_ok or not live_market,
+            (
+                f"age={displacement_age:.0f}s, paper_only={displacement_safe}, "
+                f"policy={displacement.get('policy_version', 'missing')}, "
+                f"execution_schema={displacement.get('execution_schema_version', 0)}"
+                + (
+                    ""
+                    if live_market
+                    else "; freshness not required outside live market"
+                )
+            ),
+        )
+    )
 
     matrix_counts = {
         "contracts": dict_assignment_size(root / "pkscreener/classes/FullUniverseRankContractMatrixObserver.py", "CONTRACTS"),

@@ -73,6 +73,15 @@ class FakeMarginLeverageObserver:
         return [{"event": "entry", "EventId": "margin:TEST"}]
 
 
+class FakeRankDisplacementPaper:
+    def __init__(self):
+        self.calls = []
+
+    def process(self, events, ticks, now=None):
+        self.calls.append((events, ticks, now))
+        return [{"event": "exit", "symbol": "OLD"}]
+
+
 def test_worker_advances_all_paper_observers_and_publishes_safe_status(tmp_path):
     recorder = FakeRecorder()
     paper = FakePaper()
@@ -171,6 +180,35 @@ def test_worker_advances_stop_avoidance_paper_and_contract_ledgers(tmp_path):
     assert payload["stop_avoidance_events"] == 1
     assert payload["stop_avoidance_prediction_entries"] == 1
     assert payload["stop_avoidance_contract_events"] == 1
+    assert payload["paper_only"] is True
+    assert payload["alerts_allowed"] is False
+    assert payload["real_orders_allowed"] is False
+
+
+def test_worker_advances_rank_displacement_from_stop_candidates(tmp_path):
+    stop_ranker = FakeFrozenRanker()
+    displacement = FakeRankDisplacementPaper()
+    worker = StandaloneFullRankEvidenceWorker(
+        output_dir=tmp_path,
+        recorder=FakeRecorder(),
+        paper=FakePaper(),
+        contracts=FakeObserver("contract_exit"),
+        timing=FakeObserver("timing_exit"),
+        stop_avoidance_ranker=stop_ranker,
+        stop_avoidance_contracts=FakeObserver("contract_exit"),
+        rank_displacement_paper=displacement,
+    )
+
+    payload = worker.cycle(
+        {"TEST": {"last_price": 100.0}},
+        now=datetime(2026, 7, 30, 10, 0, 0),
+    )
+
+    assert displacement.calls[0][0] == [
+        {"event": "entry", "EventId": "frozen:TEST"}
+    ]
+    assert payload["rank_displacement_enabled"] is True
+    assert payload["rank_displacement_events"] == 1
     assert payload["paper_only"] is True
     assert payload["alerts_allowed"] is False
     assert payload["real_orders_allowed"] is False

@@ -34,6 +34,9 @@ from pkscreener.classes.FrozenMicrostructurePaperTrader import (  # noqa: E402
     FrozenMicrostructurePaperTrader,
     RANK_MIGRATION_MODEL_FEATURES,
 )
+from pkscreener.classes.FrozenRankDisplacementPaperTrader import (  # noqa: E402
+    FrozenRankDisplacementPaperTrader,
+)
 from pkscreener.classes.KiteTickerStream import load_latest_live_ticks  # noqa: E402
 from pkscreener.classes.KiteMarginEvidenceRecorder import (  # noqa: E402
     KiteMarginEvidenceRecorder,
@@ -102,6 +105,7 @@ class StandaloneFullRankEvidenceWorker:
         stop_avoidance_contracts: FullUniverseRankContractMatrixObserver | None = None,
         runner_qualified_ranker: FrozenMicrostructurePaperTrader | None = None,
         runner_qualified_contracts: FullUniverseRankContractMatrixObserver | None = None,
+        rank_displacement_paper: FrozenRankDisplacementPaperTrader | None = None,
         margin_evidence_recorder: KiteMarginEvidenceRecorder | None = None,
         margin_leverage_observer: MarginQualifiedLeverageObserver | None = None,
         margin_leverage_contracts: FullUniverseRankContractMatrixObserver | None = None,
@@ -427,6 +431,17 @@ class StandaloneFullRankEvidenceWorker:
                     ],
                 )
             )
+        self.rank_displacement_paper = rank_displacement_paper
+        if (
+            self.rank_displacement_paper is None
+            and self.stop_avoidance_ranker is not None
+            and _truthy("SIGNALMONITOR_ENABLE_RANK_DISPLACEMENT_PAPER", "1")
+        ):
+            self.rank_displacement_paper = (
+                FrozenRankDisplacementPaperTrader(
+                    output_dir=self.output_dir,
+                )
+            )
         self.margin_evidence_recorder = margin_evidence_recorder
         if (
             self.margin_evidence_recorder is None
@@ -592,6 +607,13 @@ class StandaloneFullRankEvidenceWorker:
                     now=now,
                 )
             )
+        rank_displacement_events = []
+        if self.rank_displacement_paper is not None:
+            rank_displacement_events = self.rank_displacement_paper.process(
+                stop_avoidance_entries,
+                ticks,
+                now=now,
+            )
         margin_evidence_rows = []
         if self.margin_evidence_recorder is not None:
             margin_evidence_rows = self.margin_evidence_recorder.process(
@@ -661,6 +683,12 @@ class StandaloneFullRankEvidenceWorker:
             ),
             "runner_qualified_stop_contract_events": int(
                 len(runner_qualified_contract_events)
+            ),
+            "rank_displacement_enabled": (
+                self.rank_displacement_paper is not None
+            ),
+            "rank_displacement_events": int(
+                len(rank_displacement_events)
             ),
             "margin_evidence_enabled": (
                 self.margin_evidence_recorder is not None

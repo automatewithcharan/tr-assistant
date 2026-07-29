@@ -238,3 +238,37 @@ def test_accepted_primary_post_margin_portfolio_becomes_comparable(
     assert row["StressAvgDailyPnl"] == 10_250
     assert row["StressLower95DailyPnl"] == 600.0
     assert not bool(row["RealOrdersAllowed"])
+
+
+def test_historical_rank_displacement_remains_diagnostic(tmp_path):
+    data = tmp_path / "Data"
+    _json(
+        data / "historical_rank_displacement/status.json",
+        {
+            "status": "supports_frozen_forward_collection",
+            "policy_version": "rank_displacement_v1_20260729",
+            "policy": {"capital": 500_000},
+            "displacement": {
+                "sessions": 9,
+                "trades": 45,
+                "avg_daily_pnl": 7_287.52,
+                "lower_95_pct": 0.73,
+                "positive_session_pct": 100,
+                "goal_hit_pct": 33.33,
+                "worst_session_pct": 0.40,
+            },
+            "paper_promotion_allowed": False,
+            "real_orders_allowed": False,
+        },
+    )
+
+    scoreboard = write_scoreboard(data, tmp_path / "out")
+    row = scoreboard[
+        scoreboard["Lane"].eq("Historical rank displacement")
+    ].iloc[0]
+
+    assert bool(row["MeasuredEvidence"])
+    assert bool(row["DiagnosticOnly"])
+    assert not bool(row["Accepted"])
+    assert not bool(row["PaperPromotionAllowed"])
+    assert not bool(row["RealOrdersAllowed"])

@@ -175,6 +175,17 @@ run_stop_avoidance_audit() {
         >>"$LOG" 2>&1 || true
 }
 
+run_historical_rank_displacement_audit() {
+    local predictions="$REPO/results/Data/live_stop_avoidance/selection_predictions.csv"
+    [[ -f "$predictions" ]] || return 0
+    "$PYTHON" "$REPO/scripts/assess_historical_rank_displacement.py" \
+        --predictions "$predictions" \
+        --raw-glob "$REPO/results/Data/live_feature_recorder/live_features_20*.csv" \
+        --output-dir "$REPO/results/Data/historical_rank_displacement" \
+        --daily-goal 10000 \
+        >>"$LOG" 2>&1 || true
+}
+
 run_prior_session_ranker_paper() {
     "$PYTHON" "$REPO/scripts/assess_prior_session_ranker_paper.py" \
         --prediction-glob "$REPO/results/Data/frozen_microstructure_paper/predictions_20*.csv" \
@@ -322,6 +333,15 @@ run_frozen_balanced_margin_forward() {
         >>"$LOG" 2>&1 || true
 }
 
+run_frozen_rank_displacement_forward() {
+    "$PYTHON" "$REPO/scripts/assess_frozen_rank_displacement_forward.py" \
+        --heartbeat-glob "$REPO/results/Data/frozen_stop_displacement_paper/heartbeats_20*.csv" \
+        --trade-glob "$REPO/results/Data/frozen_stop_displacement_paper/trades_20*.csv" \
+        --output-dir "$REPO/results/Data/frozen_rank_displacement_forward" \
+        --daily-goal 10000 \
+        >>"$LOG" 2>&1 || true
+}
+
 run_fixed_rank_first_forward() {
     "$PYTHON" "$REPO/scripts/assess_fixed_rank_first_forward.py" \
         --entry-glob "$REPO/results/Data/full_universe_rank_paper/entries_20*.csv" \
@@ -460,6 +480,7 @@ if [ -f "$OUTPUT_ROOT/status.json" ]; then
         run_event_shadow_rebuild
         run_rank_migration_audit
         run_stop_avoidance_audit
+        run_historical_rank_displacement_audit
         run_prior_session_ranker_paper
         run_frozen_ranker_prediction_matrix
         run_full_universe_rank_strategy
@@ -471,6 +492,7 @@ if [ -f "$OUTPUT_ROOT/status.json" ]; then
         run_frozen_runner_qualified_stop_depth_forward
         run_frozen_balanced_stop_portfolio_forward
         run_frozen_balanced_margin_forward
+        run_frozen_rank_displacement_forward
         run_fixed_rank_first_forward
         run_full_rank_entry_timing
         run_full_rank_feature_gates
@@ -525,6 +547,7 @@ run_live_microstructure_research
 run_event_shadow_rebuild
 run_rank_migration_audit
 run_stop_avoidance_audit
+run_historical_rank_displacement_audit
 run_prior_session_ranker_paper
 run_frozen_ranker_prediction_matrix
 run_full_universe_rank_strategy
@@ -536,6 +559,7 @@ run_frozen_stop_avoidance_depth_forward
 run_frozen_runner_qualified_stop_depth_forward
 run_frozen_balanced_stop_portfolio_forward
 run_frozen_balanced_margin_forward
+run_frozen_rank_displacement_forward
 run_fixed_rank_first_forward
 run_full_rank_entry_timing
 run_full_rank_feature_gates

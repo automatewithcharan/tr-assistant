@@ -242,6 +242,44 @@ def _partial_capital_diagnostic(data_dir: Path) -> Dict[str, Any]:
     )
 
 
+def _historical_displacement_diagnostic(
+    data_dir: Path,
+) -> Dict[str, Any]:
+    relative = "historical_rank_displacement/status.json"
+    status = _load_json(data_dir / relative)
+    result = status.get("displacement") or {}
+    capital = _number(
+        (status.get("policy") or {}).get("capital"), 0.0
+    )
+    return _row(
+        lane="Historical rank displacement",
+        variant=str(status.get("policy_version", "")),
+        evidence_class="post_hoc_top_book_diagnostic",
+        status=str(
+            status.get("status")
+            or ("missing" if not status else "collecting")
+        ),
+        sessions=result.get("sessions", 0),
+        trades=result.get("trades", 0),
+        avg=result.get("avg_daily_pnl", 0),
+        lower=_number(result.get("lower_95_pct"), 0.0)
+        * capital
+        / 100.0,
+        positive=result.get("positive_session_pct", 0),
+        goal=result.get("goal_hit_pct", 0),
+        worst=_number(result.get("worst_session_pct"), 0.0)
+        * capital
+        / 100.0,
+        accepted=False,
+        paper=False,
+        real=False,
+        measured=int(_number(result.get("trades", 0))) > 0,
+        comparable=False,
+        diagnostic=True,
+        source=relative,
+    )
+
+
 def _goal_status_lane(
     data_dir: Path,
     *,
@@ -379,6 +417,15 @@ def build_scoreboard(data_dir: Path) -> pd.DataFrame:
             ),
             evidence_class="five_level_depth_executable_forward",
         ),
+        _forward_status_lane(
+            data_dir,
+            lane="Five-level rank displacement",
+            relative_path=(
+                "frozen_rank_displacement_forward/status.json"
+            ),
+            evidence_class="five_level_depth_executable_forward",
+        ),
+        _historical_displacement_diagnostic(data_dir),
         _partial_capital_diagnostic(data_dir),
         _goal_status_lane(
             data_dir,
