@@ -46,6 +46,11 @@ HYPOTHESIS = {
         "chosen after observing the incomplete 2026-07-27 matrix; "
         "that session is diagnostic only"
     ),
+    "selection_data_executable": False,
+    "invalidation_reason": (
+        "the 2026-07-27 apparent winner used entries whose displayed "
+        "top-level ask quantity could not fill the simulated order"
+    ),
 }
 
 
@@ -88,23 +93,29 @@ def evaluate_fixed_hypothesis(
     )
     selection_result = metrics(selection_daily, daily_goal)
     forward_result = metrics(forward_daily, daily_goal)
+    selection_valid = bool(
+        HYPOTHESIS.get("selection_data_executable", False)
+    )
     accepted = bool(
-        len(forward_dates) >= int(forward_sessions_required)
+        selection_valid
+        and len(forward_dates) >= int(forward_sessions_required)
         and passes_goal_gate(
             forward_result,
             daily_goal,
             forward_sessions_required,
         )
     )
-    status_name = (
-        "accepted_fixed_rank_first_forward"
-        if accepted
-        else (
-            "fixed_rank_first_forward_rejected"
-            if len(forward_dates) >= int(forward_sessions_required)
-            else "collecting_fixed_rank_first_forward_sessions"
+    status_name = "invalidated_non_executable_selection"
+    if selection_valid:
+        status_name = (
+            "accepted_fixed_rank_first_forward"
+            if accepted
+            else (
+                "fixed_rank_first_forward_rejected"
+                if len(forward_dates) >= int(forward_sessions_required)
+                else "collecting_fixed_rank_first_forward_sessions"
+            )
         )
-    )
     status = {
         "evidence": "fixed_exact_rank_first_untouched_forward",
         "status": status_name,
@@ -113,6 +124,8 @@ def evaluate_fixed_hypothesis(
         "selection_uses_observed_outcome": True,
         "selection_excluded_from_forward_evidence": True,
         "multiple_comparison_selection": True,
+        "selection_data_executable": selection_valid,
+        "invalidation_reason": HYPOTHESIS["invalidation_reason"],
         "capital": float(capital),
         "daily_goal": float(daily_goal),
         "max_trades_per_day": int(max_trades_per_day),

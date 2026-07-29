@@ -88,6 +88,40 @@ def test_matrix_coverage_requires_every_predeclared_contract(tmp_path):
     assert not bool(coverage["eligible"])
 
 
+def test_unfillable_entry_does_not_invalidate_complete_executable_session(
+    tmp_path,
+):
+    date = "2026-07-22"
+    fillable = {
+        **_entry(date, "FILLABLE", 0),
+        "EntryTopLevelFillable": True,
+    }
+    unfillable = {
+        **_entry(date, "UNFILLABLE", 1),
+        "EntryTopLevelFillable": False,
+    }
+    pd.DataFrame([fillable, unfillable]).to_csv(
+        tmp_path / "entries.csv", index=False
+    )
+    pd.DataFrame(_matrix_outcomes(fillable)).to_csv(
+        tmp_path / "outcomes.csv", index=False
+    )
+
+    entries, events = load_matrix_events(
+        [str(tmp_path / "entries.csv")],
+        [str(tmp_path / "outcomes.csv")],
+    )
+    raw = pd.DataFrame(
+        [{"date": date, "full_session_eligible": True}]
+    )
+    coverage = matrix_session_coverage(entries, events, raw).iloc[0]
+
+    assert entries["Symbol"].tolist() == ["FILLABLE"]
+    assert coverage["entries"] == 1
+    assert coverage["complete_contracts"] == len(CONTRACTS)
+    assert bool(coverage["eligible"])
+
+
 def test_matrix_audit_freezes_combination_once_then_uses_forward_only(tmp_path):
     raw = tmp_path / "raw"
     paper = tmp_path / "paper"

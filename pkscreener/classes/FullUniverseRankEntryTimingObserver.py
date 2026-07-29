@@ -44,19 +44,20 @@ class FullUniverseRankEntryTimingObserver:
         "TimingId", "EventId", "Variant", "Date", "SignalAt", "EntryAt",
         "RecorderGeneration", "Exchange", "Symbol", "Cohort", "Source",
         "SignalAsk",
-        "EntryAsk", "EntryBid", "Quantity", "Capital", "TargetPrice",
+        "EntryAsk", "EntryBid", "EntryAskQty", "RequestedQuantity",
+        "EntryTopLevelFillable", "Quantity", "Capital", "TargetPrice",
         "StopPrice", "EntryDelayMinutes",
     ]
     NONFILL_COLUMNS = [
         "TimingId", "EventId", "Variant", "Date", "SignalAt", "ResolvedAt",
         "RecorderGeneration", "Exchange", "Symbol", "SignalAsk", "Reason",
-        "BestAskSeen",
-        "WorstAskSeen",
+        "BestAskSeen", "WorstAskSeen", "MaxAskQtySeen",
     ]
     OUTCOME_COLUMNS = [
         "TimingId", "EventId", "Variant", "Date", "SignalAt", "EntryAt",
         "RecorderGeneration", "Exchange", "ExitAt", "Symbol", "Cohort", "Source",
-        "SignalAsk", "EntryAsk", "ExitBid", "Quantity", "ExitReason",
+        "SignalAsk", "EntryAsk", "ExitBid", "EntryAskQty",
+        "RequestedQuantity", "EntryTopLevelFillable", "Quantity", "ExitReason",
         "EntryDelayMinutes", "HoldMinutes", "GrossReturnPct", "StressPct",
         "NetReturnPct", "GrossPnl", "StressCost", "NetPnl", "TargetPrice",
         "StopPrice",
@@ -159,6 +160,7 @@ class FullUniverseRankEntryTimingObserver:
                     "TroughAsk": signal_ask,
                     "BestAskSeen": signal_ask,
                     "WorstAskSeen": signal_ask,
+                    "MaxAskQtySeen": 0,
                 }
                 self.waiting[timing_id] = waiting
                 rows.append(
@@ -222,6 +224,9 @@ class FullUniverseRankEntryTimingObserver:
                     "Reason": "eod_unfilled" if eod else "entry_window_expired",
                     "BestAskSeen": candidate["BestAskSeen"],
                     "WorstAskSeen": candidate["WorstAskSeen"],
+                    "MaxAskQtySeen": int(
+                        self._number(candidate.get("MaxAskQtySeen"))
+                    ),
                 }
                 nonfill_rows.append(row)
                 emitted.append({"event": "entry_unfilled", **row})
@@ -229,6 +234,13 @@ class FullUniverseRankEntryTimingObserver:
                 continue
             if bid <= 0 or ask <= bid:
                 continue
+            _, ask_qty = LiveFeatureRecorder.best_bid_ask_quantities(
+                ticks.get(candidate["Symbol"], {})
+            )
+            candidate["MaxAskQtySeen"] = max(
+                int(self._number(candidate.get("MaxAskQtySeen"))),
+                int(ask_qty),
+            )
             entry_price = 0.0
             mode = candidate["Mode"]
             trigger = float(candidate["TriggerPrice"])
@@ -256,6 +268,8 @@ class FullUniverseRankEntryTimingObserver:
             quantity = int(self.capital // entry_price)
             if quantity < 1:
                 continue
+            if ask_qty < quantity:
+                continue
             delay = max(0.0, (now.timestamp() - float(candidate["SignalTs"])) / 60.0)
             position = {
                 **candidate,
@@ -269,6 +283,9 @@ class FullUniverseRankEntryTimingObserver:
                 "EntryTs": now.timestamp(),
                 "EntryAsk": round(entry_price, 2),
                 "EntryBid": round(bid, 2),
+                "EntryAskQty": int(ask_qty),
+                "RequestedQuantity": quantity,
+                "EntryTopLevelFillable": True,
                 "Quantity": quantity,
                 "Capital": round(quantity * entry_price, 2),
                 "TargetPrice": round(entry_price * (1.0 + self.target_pct / 100.0), 2),
@@ -338,6 +355,17 @@ class FullUniverseRankEntryTimingObserver:
                 "SignalAsk": position["SignalAsk"],
                 "EntryAsk": ask,
                 "ExitBid": round(bid, 2),
+                "EntryAskQty": int(
+                    self._number(position.get("EntryAskQty"))
+                ),
+                "RequestedQuantity": int(
+                    self._number(
+                        position.get("RequestedQuantity", quantity)
+                    )
+                ),
+                "EntryTopLevelFillable": bool(
+                    position.get("EntryTopLevelFillable", False)
+                ),
                 "Quantity": quantity,
                 "ExitReason": reason,
                 "EntryDelayMinutes": position["EntryDelayMinutes"],

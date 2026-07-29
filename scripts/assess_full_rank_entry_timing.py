@@ -50,10 +50,17 @@ def load_timing_events(
     outcome_patterns: Iterable[str],
     nonfill_patterns: Iterable[str],
 ) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
-    base_entries, _ = load_exact_events(entry_patterns, [])
+    base_entries, _ = load_exact_events(
+        entry_patterns,
+        [],
+        require_top_level_fillable=False,
+    )
     outcomes = _load_frames(
         outcome_patterns,
-        {"TimingId", "EventId", "Variant", "EntryAt", "ExitAt", "NetReturnPct"},
+        {
+            "TimingId", "EventId", "Variant", "EntryAt", "ExitAt",
+            "NetReturnPct", "EntryTopLevelFillable",
+        },
     )
     nonfills = _load_frames(
         nonfill_patterns,
@@ -67,6 +74,7 @@ def load_timing_events(
     outcome_columns = [
         "TimingId", "EventId", "Variant", "SignalAt", "EntryAt", "ExitAt",
         "ExitReason", "EntryAsk", "ExitBid", "EntryDelayMinutes", "HoldMinutes",
+        "EntryAskQty", "RequestedQuantity", "EntryTopLevelFillable",
         "GrossReturnPct", "NetReturnPct", "GrossPnl", "StressCost", "NetPnl",
     ]
     for column in outcome_columns:
@@ -83,6 +91,14 @@ def load_timing_events(
     events = entry_only.merge(outcomes[outcome_columns], on="EventId", how="inner")
     events["entry_time"] = pd.to_datetime(events["EntryAt"], errors="coerce")
     events["exit_time"] = pd.to_datetime(events["ExitAt"], errors="coerce")
+    events["EntryTopLevelFillable"] = (
+        events["EntryTopLevelFillable"]
+        .fillna(False)
+        .astype(str)
+        .str.strip()
+        .str.lower()
+        .isin({"1", "1.0", "true", "yes", "y", "on"})
+    )
     for column in (
         "EntryAsk", "ExitBid", "EntryDelayMinutes", "HoldMinutes",
         "GrossReturnPct", "NetReturnPct", "GrossPnl", "StressCost", "NetPnl",
@@ -93,6 +109,7 @@ def load_timing_events(
         & events["exit_time"].notna()
         & events["NetReturnPct"].notna()
         & (events["exit_time"] > events["entry_time"])
+        & events["EntryTopLevelFillable"]
         & events["Variant"].astype(str).isin(ENTRY_VARIANTS)
     ].copy()
     return base_entries, events.sort_values(

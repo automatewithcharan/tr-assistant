@@ -54,7 +54,7 @@ def test_fixed_hypothesis_excludes_selection_cutoff_from_forward():
     assert not status["real_orders_allowed"]
 
 
-def test_fixed_hypothesis_accepts_only_after_twenty_strong_forward_days():
+def test_invalidated_hypothesis_cannot_accept_even_after_strong_forward_days():
     dates = [
         stamp.strftime("%Y-%m-%d")
         for stamp in pd.bdate_range("2026-07-28", periods=20)
@@ -74,8 +74,10 @@ def test_fixed_hypothesis_accepts_only_after_twenty_strong_forward_days():
     assert len(forward_daily) == 20
     assert len(forward_trades) == 60
     assert status["forward"]["avg_daily_pnl"] == 10_500.0
-    assert status["accepted"]
-    assert status["paper_promotion_allowed"]
+    assert status["status"] == "invalidated_non_executable_selection"
+    assert not status["selection_data_executable"]
+    assert not status["accepted"]
+    assert not status["paper_promotion_allowed"]
     assert not status["real_orders_allowed"]
 
 
@@ -93,6 +95,6 @@ def test_future_results_cannot_change_frozen_hypothesis_definition():
 
     assert HYPOTHESIS == before
     assert status["hypothesis"] == before
-    assert status["status"] == "fixed_rank_first_forward_rejected"
+    assert status["status"] == "invalidated_non_executable_selection"
     assert not status["paper_promotion_allowed"]
     assert not status["real_orders_allowed"]

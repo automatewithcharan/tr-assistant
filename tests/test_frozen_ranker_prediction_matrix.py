@@ -6,6 +6,8 @@ from pkscreener.classes.FullUniverseRankContractMatrixObserver import (
 from scripts.assess_frozen_ranker_prediction_matrix import (
     SCORE_THRESHOLDS,
     build_assessment,
+    load_outcomes,
+    load_registrations,
     replay_policy,
     valid_session_data,
 )
@@ -169,6 +171,36 @@ def test_incomplete_contract_set_invalidates_session():
 
     assert valid is False
     assert any("contract set mismatch" in issue for issue in issues)
+
+
+def test_loaders_normalize_mixed_timezone_timestamps(tmp_path):
+    _, registrations, outcomes, _ = _evidence(session_count=1)
+    registrations["EntryAt"] = registrations["EntryAt"].dt.tz_localize(
+        "Asia/Kolkata"
+    )
+    outcomes["EntryAt"] = outcomes["EntryAt"].dt.tz_localize(
+        "Asia/Kolkata"
+    )
+    registrations.to_csv(tmp_path / "registrations.csv", index=False)
+    outcomes.to_csv(tmp_path / "outcomes.csv", index=False)
+
+    loaded_registrations = load_registrations(
+        [str(tmp_path / "registrations.csv")]
+    )
+    loaded_outcomes = load_outcomes([str(tmp_path / "outcomes.csv")])
+    valid, issues, _ = valid_session_data(
+        "2026-07-28",
+        pd.DataFrame(),
+        loaded_registrations,
+        loaded_outcomes,
+        threshold=0.2,
+        expected_contracts=set(CONTRACTS),
+    )
+
+    assert loaded_registrations["EntryAt"].dt.tz is None
+    assert loaded_outcomes["EntryAt"].dt.tz is None
+    assert loaded_outcomes["ExitAt"].dt.tz is None
+    assert "invalid contract outcome" not in issues
 
 
 def test_replay_enforces_slot_occupancy_and_same_time_score_order():

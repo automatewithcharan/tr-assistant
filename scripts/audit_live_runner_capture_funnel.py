@@ -12,10 +12,15 @@ import argparse
 import glob
 import json
 from pathlib import Path
+import sys
 from typing import Iterable
 
 import numpy as np
 import pandas as pd
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
 
 from scripts.assess_full_rank_feature_gates import (
     FEATURE_GATES,

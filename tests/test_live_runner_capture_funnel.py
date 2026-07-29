@@ -1,10 +1,29 @@
 import pandas as pd
+from pathlib import Path
+import subprocess
+import sys
 
 from scripts.audit_live_runner_capture_funnel import (
     build_capture_funnel,
     load_predictions,
     summarize_funnel,
 )
+
+
+def test_capture_funnel_cli_imports_from_any_working_directory(tmp_path):
+    script = (
+        Path(__file__).resolve().parents[1]
+        / "scripts/audit_live_runner_capture_funnel.py"
+    )
+    result = subprocess.run(
+        [sys.executable, str(script), "--help"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
 
 
 def _recall(symbol: str, **values) -> dict:

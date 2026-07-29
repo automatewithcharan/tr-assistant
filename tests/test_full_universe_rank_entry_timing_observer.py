@@ -9,11 +9,11 @@ from pkscreener.classes.FullUniverseRankEntryTimingObserver import (
 )
 
 
-def _tick(bid, ask):
+def _tick(bid, ask, quantity=10000):
     return {
         "depth": {
-            "buy": [{"price": bid, "quantity": 1000}],
-            "sell": [{"price": ask, "quantity": 1000}],
+            "buy": [{"price": bid, "quantity": quantity}],
+            "sell": [{"price": ask, "quantity": quantity}],
         }
     }
 
@@ -69,6 +69,42 @@ def test_dip_uses_conservative_limit_and_confirmation_uses_observed_ask(tmp_path
     assert confirm[0]["Variant"] == "confirm"
     assert confirm[0]["EntryAsk"] == 100.3
     assert confirm[0]["RecorderGeneration"] == 5
+
+
+def test_trigger_waits_until_displayed_ask_quantity_can_fill_order(tmp_path):
+    variants = {
+        "confirm": {
+            "mode": "confirm",
+            "offset_pct": 0.25,
+            "entry_window_minutes": 15,
+        },
+    }
+    observer = FullUniverseRankEntryTimingObserver(
+        str(tmp_path), variants=variants
+    )
+    now = datetime(2026, 7, 22, 9, 20)
+    observer.process(
+        [_entry(now)],
+        {"AAA": _tick(99.9, 100.0)},
+        now=now,
+    )
+
+    thin = observer.process(
+        [],
+        {"AAA": _tick(100.25, 100.3, quantity=100)},
+        now=now + timedelta(minutes=2),
+    )
+    fillable = observer.process(
+        [],
+        {"AAA": _tick(100.25, 100.3, quantity=10000)},
+        now=now + timedelta(minutes=3),
+    )
+
+    assert thin == []
+    assert fillable[0]["event"] == "entry_filled"
+    assert fillable[0]["EntryAskQty"] == 10000
+    assert fillable[0]["RequestedQuantity"] == 4985
+    assert fillable[0]["EntryTopLevelFillable"] is True
 
 
 def test_pullback_reclaim_requires_two_distinct_phases(tmp_path):

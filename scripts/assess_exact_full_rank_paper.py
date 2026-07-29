@@ -63,7 +63,10 @@ def _files(patterns: Iterable[str]) -> list[str]:
 
 
 def load_exact_events(
-    entry_patterns: Iterable[str], outcome_patterns: Iterable[str]
+    entry_patterns: Iterable[str],
+    outcome_patterns: Iterable[str],
+    *,
+    require_top_level_fillable: bool = True,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Return all entry labels and the subset with an exact observed exit."""
     entries = []
@@ -99,6 +102,16 @@ def load_exact_events(
         entry_data["Exchange"].fillna("").astype(str).str.strip().str.upper()
     )
     entry_data = entry_data[entry_data["Exchange"].eq("NSE")].copy()
+    if require_top_level_fillable and "EntryTopLevelFillable" in entry_data.columns:
+        fillable = (
+            entry_data["EntryTopLevelFillable"]
+            .fillna(False)
+            .astype(str)
+            .str.strip()
+            .str.lower()
+            .isin({"1", "1.0", "true", "yes", "y", "on"})
+        )
+        entry_data = entry_data[fillable].copy()
     entry_data = entry_data.drop_duplicates("EventId", keep="first").copy()
     if entry_data.empty:
         return pd.DataFrame(), pd.DataFrame()

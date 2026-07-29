@@ -45,6 +45,22 @@ def _files(patterns: Iterable[str]) -> list[str]:
     )
 
 
+def _market_naive(values: pd.Series) -> pd.Series:
+    """Normalize mixed timestamps to timezone-naive India market time."""
+    def normalize(value):
+        try:
+            parsed = pd.Timestamp(value)
+        except (TypeError, ValueError):
+            return pd.NaT
+        if pd.isna(parsed):
+            return pd.NaT
+        if parsed.tzinfo is not None:
+            return parsed.tz_convert("Asia/Kolkata").tz_localize(None)
+        return parsed
+
+    return pd.to_datetime(values.map(normalize), errors="coerce")
+
+
 def load_registrations(patterns: Iterable[str]) -> pd.DataFrame:
     frames = []
     for path in _files(patterns):
@@ -65,7 +81,7 @@ def load_registrations(patterns: Iterable[str]) -> pd.DataFrame:
         return pd.DataFrame()
     data = pd.concat(frames, ignore_index=True)
     data["Date"] = data["Date"].astype(str).str[:10]
-    data["EntryAt"] = pd.to_datetime(data["EntryAt"], errors="coerce")
+    data["EntryAt"] = _market_naive(data["EntryAt"])
     data["Symbol"] = data["Symbol"].astype(str).str.strip().str.upper()
     for column in ("EntryAsk", "ExpectedReturnPct"):
         data[column] = pd.to_numeric(data[column], errors="coerce")
@@ -97,8 +113,8 @@ def load_outcomes(patterns: Iterable[str]) -> pd.DataFrame:
         return pd.DataFrame()
     data = pd.concat(frames, ignore_index=True)
     data["Date"] = data["Date"].astype(str).str[:10]
-    data["EntryAt"] = pd.to_datetime(data["EntryAt"], errors="coerce")
-    data["ExitAt"] = pd.to_datetime(data["ExitAt"], errors="coerce")
+    data["EntryAt"] = _market_naive(data["EntryAt"])
+    data["ExitAt"] = _market_naive(data["ExitAt"])
     data["Symbol"] = data["Symbol"].astype(str).str.strip().str.upper()
     for column in ("NetReturnPct", "ExpectedReturnPct"):
         data[column] = pd.to_numeric(data[column], errors="coerce")
