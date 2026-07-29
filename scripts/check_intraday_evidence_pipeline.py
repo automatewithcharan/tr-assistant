@@ -236,8 +236,8 @@ def assess(
     ]
     absent_calls = [value for value in required_eod_calls if eod_script.count(value) < 2]
     checks.append(check("eod_judges_wired", not absent_calls, "all exact judges run after close" if not absent_calls else "missing calls: " + ", ".join(absent_calls)))
-    cron_ok = "5 10 * * 1-5" in cron_text and "scripts/live_evidence_eod.sh" in cron_text
-    checks.append(check("eod_schedule_installed", cron_ok, "15:35 IST weekday EOD judge installed" if cron_ok else "EOD evidence cron missing"))
+    cron_ok = "55 10 * * 1-5" in cron_text and "scripts/live_evidence_eod.sh" in cron_text
+    checks.append(check("eod_schedule_installed", cron_ok, "16:25 IST weekday EOD judge installed" if cron_ok else "EOD evidence cron missing or stale"))
 
     ticker = load_json(data / "kiteticker_all_status_latest.json")
     ticker_at = parse_ist(

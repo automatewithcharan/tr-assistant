@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
-# Install the independent 3:35 PM IST weekday live-evidence EOD job.
+# Install the independent 4:25 PM IST weekday live-evidence EOD job.
 
 set -euo pipefail
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-COMMAND="5 10 * * 1-5 $REPO/scripts/live_evidence_eod.sh >> /tmp/live_evidence_eod.log 2>&1"
-MARKER="# Live microstructure evidence backfill/evaluation at 3:35 PM IST (10:05 UTC) Mon-Fri"
+COMMAND="55 10 * * 1-5 $REPO/scripts/live_evidence_eod.sh >> /tmp/live_evidence_eod.log 2>&1"
+MARKER="# Live microstructure evidence backfill/evaluation at 4:25 PM IST (10:55 UTC) Mon-Fri"
 CURRENT="$(crontab -l 2>/dev/null || true)"
-
-if printf '%s\n' "$CURRENT" | grep -Fq "$REPO/scripts/live_evidence_eod.sh"; then
-    echo "Live evidence EOD cron already installed."
-    exit 0
-fi
+FILTERED="$(
+    printf '%s\n' "$CURRENT" |
+        grep -Fv "$REPO/scripts/live_evidence_eod.sh" |
+        grep -Fv "Live microstructure evidence backfill/evaluation" || true
+)"
 
 {
-    printf '%s\n' "$CURRENT"
+    printf '%s\n' "$FILTERED"
     printf '\n%s\n%s\n' "$MARKER" "$COMMAND"
 } | crontab -
 

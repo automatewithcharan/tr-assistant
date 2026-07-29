@@ -80,7 +80,7 @@ def fixture_root(tmp_path: Path) -> tuple[Path, datetime]:
 
 
 def run(root: Path, now: datetime):
-    return assess(root, now, cron_text="5 10 * * 1-5 /repo/scripts/live_evidence_eod.sh", service_active=True, start_timer_enabled=True, prewarm_timer_enabled=True, disk_free_gb=60, disk_used_pct=36)
+    return assess(root, now, cron_text="55 10 * * 1-5 /repo/scripts/live_evidence_eod.sh", service_active=True, start_timer_enabled=True, prewarm_timer_enabled=True, disk_free_gb=60, disk_used_pct=36)
 
 
 def test_ready_pipeline_is_not_strategy_acceptance(tmp_path):
@@ -358,7 +358,7 @@ def test_post_close_stale_feeds_are_expected_when_eod_completed(tmp_path):
     result = assess(
         root,
         now,
-        cron_text="5 10 * * 1-5 /repo/scripts/live_evidence_eod.sh",
+        cron_text="55 10 * * 1-5 /repo/scripts/live_evidence_eod.sh",
         service_active=False,
         start_timer_enabled=True,
         prewarm_timer_enabled=True,
@@ -375,7 +375,7 @@ def test_post_close_missing_eod_is_an_operational_issue(tmp_path):
     result = assess(
         root,
         now,
-        cron_text="5 10 * * 1-5 /repo/scripts/live_evidence_eod.sh",
+        cron_text="55 10 * * 1-5 /repo/scripts/live_evidence_eod.sh",
         service_active=False,
         start_timer_enabled=True,
         prewarm_timer_enabled=True,
