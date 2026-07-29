@@ -95,8 +95,11 @@ def test_do_send_buy_alert_pushes_formatted_message_to_channels():
 
     investor._do_send_buy_alert([candidate], is_followup=False)
 
-    investor._send_to_channels.assert_called_once()
-    message = investor._send_to_channels.call_args.args[0]
+    assert investor._send_to_channels.call_count == 2
+    paper_message = investor._send_to_channels.call_args_list[0].args[0]
+    message = investor._send_to_channels.call_args_list[1].args[0]
+    assert "BLIND-BUY ALERT" in paper_message
+    assert "WELCORP" in paper_message
     assert "BUY ALERT" in message
     assert "WELCORP" in message
     assert "Suggested: Buy" in message

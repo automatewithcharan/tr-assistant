@@ -17,7 +17,8 @@ def _entry(date, symbol, minute, rank=1, velocity=10.0):
         "EventId": f"{date}:{symbol}:cohort",
         "Date": date,
         "EntryAt": when,
-        "RecorderGeneration": 5,
+        "RecorderGeneration": 6,
+        "Exchange": "NSE",
         "Symbol": symbol,
         "Cohort": "rapid_rank_climber:r1_10:m1_2",
         "Source": "rapid_rank_climber",
@@ -60,7 +61,7 @@ def _raw(date):
         {
             "When": [start + pd.Timedelta(seconds=15 * i) for i in range(1440)],
             "DayChangeRank": [1] * 1440,
-            "RecorderGeneration": [5] * 1440,
+            "RecorderGeneration": [6] * 1440,
         }
     )
 
@@ -100,7 +101,7 @@ def test_exact_loader_rejects_entries_from_older_recorder_generation(tmp_path):
 
     assert entries["Symbol"].tolist() == ["CURRENT"]
     assert events["Symbol"].tolist() == ["CURRENT"]
-    assert entries["RecorderGeneration"].tolist() == [5]
+    assert entries["RecorderGeneration"].tolist() == [6]
 
 
 def test_one_slot_replay_uses_causal_selector_and_skips_overlaps(tmp_path):

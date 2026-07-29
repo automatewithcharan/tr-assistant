@@ -18,7 +18,7 @@ def _raw_rows(date: str, first="09:16", snapshots=1440):
         {
             "When": [start + pd.Timedelta(seconds=15 * index) for index in range(snapshots)],
             "DayChangeRank": [1] * snapshots,
-            "RecorderGeneration": [5] * snapshots,
+            "RecorderGeneration": [6] * snapshots,
         }
     )
 
@@ -44,7 +44,7 @@ def test_raw_coverage_rejects_mid_session_recorder_gap(tmp_path):
         {
             "When": [second_start + pd.Timedelta(seconds=15 * index) for index in range(840)],
             "DayChangeRank": [1] * 840,
-            "RecorderGeneration": [5] * 840,
+            "RecorderGeneration": [6] * 840,
         }
     )
     pd.concat([first, second], ignore_index=True).to_csv(
@@ -98,7 +98,7 @@ def test_complete_older_generation_is_not_selection_eligible(tmp_path):
     assert not bool(row["full_session_eligible"])
 
 
-def test_generation_five_requires_one_thousand_snapshots(tmp_path):
+def test_generation_six_requires_one_thousand_snapshots(tmp_path):
     date = "2026-07-22"
     timestamps = pd.date_range(
         f"{date} 09:16:00",
@@ -109,7 +109,7 @@ def test_generation_five_requires_one_thousand_snapshots(tmp_path):
         {
             "When": timestamps,
             "DayChangeRank": [1] * len(timestamps),
-            "RecorderGeneration": [5] * len(timestamps),
+            "RecorderGeneration": [6] * len(timestamps),
         }
     ).to_csv(tmp_path / f"live_features_{date}.csv", index=False)
 
@@ -130,6 +130,7 @@ def test_rank_outcomes_keep_only_buyable_executable_rank_states(tmp_path):
     base = {
         "Date": "2026-07-22",
         "When": "2026-07-22 10:00:00",
+        "Exchange": "NSE",
         "OutcomeAvailable": True,
         "EntryPrice": 100.0,
         "LastPrice": 100.0,
@@ -165,6 +166,7 @@ def test_outcome_coverage_rejects_missing_candidates_but_keeps_zero_trade_day(tm
     rows = [
         {
             "Date": "2026-07-22",
+            "Exchange": "NSE",
             "RankEvidenceBucket": "rapid|r011_025|m1_2",
             "OutcomeAvailable": False,
             "EntryPrice": 100.0,
@@ -177,6 +179,7 @@ def test_outcome_coverage_rejects_missing_candidates_but_keeps_zero_trade_day(tm
         },
         {
             "Date": "2026-07-23",
+            "Exchange": "NSE",
             "RankEvidenceBucket": "pool|r001_010|m1_2",
             "OutcomeAvailable": False,
             "EntryPrice": 20.0,
@@ -252,6 +255,7 @@ def _outcome_rows(date: str, count: int = 70):
                 "Date": date,
                 "When": when,
                 "Symbol": f"S{index:03d}",
+                "Exchange": "NSE",
                 "OutcomeAvailable": True,
                 "EntryPrice": 100.0,
                 "LastPrice": 100.0,

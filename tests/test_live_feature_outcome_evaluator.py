@@ -116,9 +116,10 @@ def test_evaluator_labels_target_before_stop(tmp_path):
     candle_dir.mkdir()
     pd.DataFrame(
         [
-            {
-                "When": "2026-07-06 09:20:00",
-                "Symbol": "AAA",
+                {
+                    "When": "2026-07-06 09:20:00",
+                    "Symbol": "AAA",
+                    "Exchange": "NSE",
                 "LastPrice": 100.0,
                 "MissedRunnerCandidate": True,
                 "OrderBookStable": True,
@@ -190,10 +191,11 @@ def test_evaluator_labels_stop_before_target(tmp_path):
 def test_summary_reports_bucket_hit_rates(tmp_path):
     features = pd.DataFrame(
         [
-            {
-                "When": pd.Timestamp("2026-07-06 09:20:00"),
-                "Date": "2026-07-06",
-                "Symbol": "AAA",
+                {
+                    "When": pd.Timestamp("2026-07-06 09:20:00"),
+                    "Date": "2026-07-06",
+                    "Symbol": "AAA",
+                    "Exchange": "NSE",
                 "LastPrice": 100.0,
                 "MissedRunnerCandidate": True,
                 "OrderBookStable": True,
@@ -206,10 +208,11 @@ def test_summary_reports_bucket_hit_rates(tmp_path):
                 "AlreadyAlertedToday": False,
                 "SectorTop2Count": 2,
             },
-            {
-                "When": pd.Timestamp("2026-07-06 09:20:00"),
-                "Date": "2026-07-06",
-                "Symbol": "BBB",
+                {
+                    "When": pd.Timestamp("2026-07-06 09:20:00"),
+                    "Date": "2026-07-06",
+                    "Symbol": "BBB",
+                    "Exchange": "NSE",
                 "LastPrice": 100.0,
                 "MissedRunnerCandidate": True,
                 "OrderBookStable": True,
