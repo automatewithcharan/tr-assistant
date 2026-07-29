@@ -14,6 +14,12 @@ from pkscreener.classes.FullUniverseRankPaperObserver import (
     FullUniverseRankPaperObserver,
 )
 from pkscreener.classes.LiveFeatureRecorder import LiveFeatureRecorder
+from pkscreener.classes.OrderBookExecution import (
+    EXECUTION_SCHEMA_VERSION,
+    depth_json,
+    depth_levels,
+    market_fill,
+)
 
 
 ENTRY_VARIANTS = {
@@ -45,7 +51,9 @@ class FullUniverseRankEntryTimingObserver:
         "RecorderGeneration", "Exchange", "Symbol", "Cohort", "Source",
         "SignalAsk",
         "EntryAsk", "EntryBid", "EntryAskQty", "RequestedQuantity",
-        "EntryTopLevelFillable", "Quantity", "Capital", "TargetPrice",
+        "EntryTopLevelFillable", "ExecutionSchemaVersion", "EntryDepthJson",
+        "EntryDepthQty", "EntryDepthFillable", "EntryDepthVwap",
+        "Quantity", "Capital", "TargetPrice",
         "StopPrice", "EntryDelayMinutes",
     ]
     NONFILL_COLUMNS = [
@@ -58,6 +66,9 @@ class FullUniverseRankEntryTimingObserver:
         "RecorderGeneration", "Exchange", "ExitAt", "Symbol", "Cohort", "Source",
         "SignalAsk", "EntryAsk", "ExitBid", "EntryAskQty",
         "RequestedQuantity", "EntryTopLevelFillable", "Quantity", "ExitReason",
+        "ExecutionSchemaVersion", "EntryDepthJson", "ExitDepthJson",
+        "EntryDepthQty", "ExitDepthQty", "EntryDepthFillable",
+        "ExitDepthFillable", "EntryDepthVwap", "ExitDepthVwap",
         "EntryDelayMinutes", "HoldMinutes", "GrossReturnPct", "StressPct",
         "NetReturnPct", "GrossPnl", "StressCost", "NetPnl", "TargetPrice",
         "StopPrice",
@@ -198,9 +209,8 @@ class FullUniverseRankEntryTimingObserver:
         nonfill_rows = []
         eod = now.hour * 60 + now.minute >= 15 * 60 + 25
         for timing_id, candidate in list(self.waiting.items()):
-            bid, ask = LiveFeatureRecorder.best_bid_ask(
-                ticks.get(candidate["Symbol"], {})
-            )
+            tick = ticks.get(candidate["Symbol"], {})
+            bid, ask = LiveFeatureRecorder.best_bid_ask(tick)
             if ask > 0:
                 candidate["BestAskSeen"] = min(float(candidate["BestAskSeen"]), ask)
                 candidate["WorstAskSeen"] = max(float(candidate["WorstAskSeen"]), ask)
@@ -235,23 +245,26 @@ class FullUniverseRankEntryTimingObserver:
             if bid <= 0 or ask <= bid:
                 continue
             _, ask_qty = LiveFeatureRecorder.best_bid_ask_quantities(
-                ticks.get(candidate["Symbol"], {})
+                tick
             )
             candidate["MaxAskQtySeen"] = max(
                 int(self._number(candidate.get("MaxAskQtySeen"))),
                 int(ask_qty),
             )
             entry_price = 0.0
+            maximum_fill_price = 0.0
             mode = candidate["Mode"]
             trigger = float(candidate["TriggerPrice"])
             if mode == "dip" and ask <= trigger:
                 # A resting limit may fill anywhere below its limit. Use the
                 # limit itself, not the better observed ask, to stay conservative.
                 entry_price = trigger
+                maximum_fill_price = trigger
             elif mode == "confirm" and ask >= trigger:
                 maximum = trigger * (1.0 + self.max_confirmation_slippage_pct / 100.0)
                 if ask <= maximum:
                     entry_price = ask
+                    maximum_fill_price = maximum
             elif mode == "pullback_reclaim":
                 if candidate["Phase"] == "waiting_pullback" and ask <= trigger:
                     candidate["Phase"] = "waiting_reclaim"
@@ -263,12 +276,19 @@ class FullUniverseRankEntryTimingObserver:
                     )
                     if ask >= reclaim and ask <= float(candidate["SignalAsk"]):
                         entry_price = ask
+                        maximum_fill_price = float(candidate["SignalAsk"])
             if entry_price <= 0:
                 continue
             quantity = int(self.capital // entry_price)
             if quantity < 1:
                 continue
-            if ask_qty < quantity:
+            entry_depth = [
+                level
+                for level in depth_levels(tick, "sell")
+                if float(level.get("price", 0) or 0) <= maximum_fill_price
+            ]
+            entry_fill = market_fill(entry_depth, quantity)
+            if not entry_fill["fillable"]:
                 continue
             delay = max(0.0, (now.timestamp() - float(candidate["SignalTs"])) / 60.0)
             position = {
@@ -285,7 +305,12 @@ class FullUniverseRankEntryTimingObserver:
                 "EntryBid": round(bid, 2),
                 "EntryAskQty": int(ask_qty),
                 "RequestedQuantity": quantity,
-                "EntryTopLevelFillable": True,
+                "EntryTopLevelFillable": bool(ask_qty >= quantity),
+                "ExecutionSchemaVersion": EXECUTION_SCHEMA_VERSION,
+                "EntryDepthJson": depth_json(entry_depth),
+                "EntryDepthQty": int(entry_fill["visible_quantity"]),
+                "EntryDepthFillable": True,
+                "EntryDepthVwap": float(entry_fill["vwap"]),
                 "Quantity": quantity,
                 "Capital": round(quantity * entry_price, 2),
                 "TargetPrice": round(entry_price * (1.0 + self.target_pct / 100.0), 2),
@@ -313,9 +338,8 @@ class FullUniverseRankEntryTimingObserver:
         rows = []
         eod = now.hour * 60 + now.minute >= 15 * 60 + 25
         for timing_id, position in list(self.positions.items()):
-            bid, _ = LiveFeatureRecorder.best_bid_ask(
-                ticks.get(position["Symbol"], {})
-            )
+            tick = ticks.get(position["Symbol"], {})
+            bid, _ = LiveFeatureRecorder.best_bid_ask(tick)
             if bid <= 0:
                 continue
             hold = max(0.0, (now.timestamp() - float(position["EntryTs"])) / 60.0)
@@ -332,6 +356,8 @@ class FullUniverseRankEntryTimingObserver:
                 continue
             ask = float(position["EntryAsk"])
             quantity = int(position["Quantity"])
+            exit_depth = depth_levels(tick, "buy")
+            exit_fill = market_fill(exit_depth, quantity)
             gross_return = (bid - ask) * 100.0 / ask
             gross_pnl = (bid - ask) * quantity
             stress_cost = ask * quantity * self.stress_pct / 100.0
@@ -367,6 +393,25 @@ class FullUniverseRankEntryTimingObserver:
                     position.get("EntryTopLevelFillable", False)
                 ),
                 "Quantity": quantity,
+                "ExecutionSchemaVersion": int(
+                    self._number(position.get("ExecutionSchemaVersion"))
+                ),
+                "EntryDepthJson": str(
+                    position.get("EntryDepthJson", "") or ""
+                ),
+                "ExitDepthJson": depth_json(exit_depth),
+                "EntryDepthQty": int(
+                    self._number(position.get("EntryDepthQty"))
+                ),
+                "ExitDepthQty": int(exit_fill["visible_quantity"]),
+                "EntryDepthFillable": bool(
+                    position.get("EntryDepthFillable", False)
+                ),
+                "ExitDepthFillable": bool(exit_fill["fillable"]),
+                "EntryDepthVwap": self._number(
+                    position.get("EntryDepthVwap")
+                ),
+                "ExitDepthVwap": float(exit_fill["vwap"]),
                 "ExitReason": reason,
                 "EntryDelayMinutes": position["EntryDelayMinutes"],
                 "HoldMinutes": round(hold, 3),
@@ -425,6 +470,7 @@ class FullUniverseRankEntryTimingObserver:
         payload = {
             "date": now.strftime("%Y-%m-%d"),
             "updated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "execution_schema_version": EXECUTION_SCHEMA_VERSION,
             "waiting": self.waiting,
             "positions": self.positions,
             "seen_events": sorted(self.seen_events),
@@ -444,6 +490,7 @@ class FullUniverseRankEntryTimingObserver:
             "status": "recording_exact_entry_timing_matrix",
             "date": now.strftime("%Y-%m-%d"),
             "updated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "execution_schema_version": EXECUTION_SCHEMA_VERSION,
             "variants": len(self.variants),
             "entry_labels": len(self.seen_events),
             "waiting": len(self.waiting),

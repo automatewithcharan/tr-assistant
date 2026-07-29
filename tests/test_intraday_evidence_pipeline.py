@@ -25,6 +25,7 @@ def fixture_root(tmp_path: Path) -> tuple[Path, datetime]:
     required = [
         "pkscreener/classes/FullUniverseRankPaperObserver.py",
         "scripts/assess_full_rank_contract_matrix.py",
+        "scripts/assess_depth_executable_rank_strategy.py",
         "scripts/assess_fixed_rank_first_forward.py",
         "scripts/assess_full_rank_entry_timing.py",
         "scripts/assess_full_rank_capital_allocation.py",
@@ -47,6 +48,10 @@ def fixture_root(tmp_path: Path) -> tuple[Path, datetime]:
         "SCORE_THRESHOLDS = (0.20, 0.25, 0.30, 0.40)\n",
     )
     write(
+        tmp_path / "scripts/assess_depth_executable_rank_strategy.py",
+        "PREDECLARED_COMBINATIONS = 144\n",
+    )
+    write(
         tmp_path / "scripts/assess_full_rank_integrated_policies.py",
         "INTEGRATED_POLICIES = {" + ",".join(f'\"p{i}\": {{}}' for i in range(10)) + "}\n",
     )
@@ -54,7 +59,7 @@ def fixture_root(tmp_path: Path) -> tuple[Path, datetime]:
     write(tmp_path / "pkscreener/classes/FullUniverseRankEntryTimingObserver.py", "ENTRY_VARIANTS = {" + ",".join(f'\"v{i}\": {{\"mode\": \"dip\"}}' for i in range(6)) + "}")
     write(tmp_path / "scripts/assess_full_rank_feature_gates.py", "FEATURE_GATES = {" + ",".join(f'\"g{i}\": \"gate\"' for i in range(12)) + "}")
     write(tmp_path / "scripts/assess_exact_full_rank_paper.py", "SELECTORS = {" + ",".join(f'\"s{i}\": \"selector\"' for i in range(4)) + "}")
-    calls = ["run_exact_full_rank_strategy", "run_full_rank_contract_matrix", "run_fixed_rank_first_forward", "run_full_rank_entry_timing", "run_full_rank_feature_gates", "run_full_rank_capital_allocation", "run_full_rank_integrated_policies", "run_full_rank_opportunity_ceiling", "run_frozen_ranker_prediction_matrix", "run_prior_session_ranker_paper", "run_intraday_capital_growth", "run_eod_integrity"]
+    calls = ["run_exact_full_rank_strategy", "run_full_rank_contract_matrix", "run_depth_executable_rank_strategy", "run_fixed_rank_first_forward", "run_full_rank_entry_timing", "run_full_rank_feature_gates", "run_full_rank_capital_allocation", "run_full_rank_integrated_policies", "run_full_rank_opportunity_ceiling", "run_frozen_ranker_prediction_matrix", "run_prior_session_ranker_paper", "run_intraday_capital_growth", "run_eod_integrity"]
     write(tmp_path / "scripts/live_evidence_eod.sh", "\n".join(calls + calls))
     data = tmp_path / "results/Data"
     stamp = "2026-07-23 10:00:00"
@@ -75,7 +80,7 @@ def fixture_root(tmp_path: Path) -> tuple[Path, datetime]:
         ("full_universe_rank_entry_timing/status.json", "recording_exact_entry_timing_matrix", {"variants": 6}),
     ]
     for name, status, extra in statuses:
-        write(data / name, {"status": status, "date": "2026-07-23", "updated_at": stamp, "paper_only": True, "alerts_allowed": False, "real_orders_allowed": False, **extra})
+        write(data / name, {"status": status, "date": "2026-07-23", "updated_at": stamp, "execution_schema_version": 2, "paper_only": True, "alerts_allowed": False, "real_orders_allowed": False, **extra})
     return tmp_path, now
 
 
@@ -371,7 +376,7 @@ def test_post_close_stale_feeds_are_expected_when_eod_completed(tmp_path):
 
 def test_post_close_missing_eod_is_an_operational_issue(tmp_path):
     root, _ = fixture_root(tmp_path)
-    now = datetime(2026, 7, 23, 16, 15, tzinfo=IST)
+    now = datetime(2026, 7, 23, 16, 45, tzinfo=IST)
     result = assess(
         root,
         now,

@@ -176,7 +176,7 @@ def assess(
     weekday = now.weekday() < 5
     live_market = weekday and time(9, 15) <= now.time() <= time(15, 30)
     service_required = weekday and time(8, 45) <= now.time() <= time(15, 30)
-    eod_due = weekday and now.time() >= time(16, 10)
+    eod_due = weekday and now.time() >= time(16, 40)
 
     unsafe = {
         key: env.get(key, "0")
@@ -203,6 +203,7 @@ def assess(
         "pkscreener/classes/FullUniverseRankEntryTimingObserver.py",
         "scripts/assess_exact_full_rank_paper.py",
         "scripts/assess_full_rank_contract_matrix.py",
+        "scripts/assess_depth_executable_rank_strategy.py",
         "scripts/assess_fixed_rank_first_forward.py",
         "scripts/assess_full_rank_entry_timing.py",
         "scripts/assess_full_rank_feature_gates.py",
@@ -223,6 +224,7 @@ def assess(
     required_eod_calls = [
         "run_exact_full_rank_strategy",
         "run_full_rank_contract_matrix",
+        "run_depth_executable_rank_strategy",
         "run_fixed_rank_first_forward",
         "run_full_rank_entry_timing",
         "run_full_rank_feature_gates",
@@ -438,9 +440,10 @@ def assess(
         age = (now - updated).total_seconds() if updated else float("inf")
         safe = bool(status.get("paper_only")) and not bool(status.get("alerts_allowed")) and not bool(status.get("real_orders_allowed"))
         count_ok = count_key is None or int(status.get(count_key) or 0) == expected_count
-        passed = status.get("status") == expected_status and str(status.get("date")) == now.strftime("%Y-%m-%d") and age <= 180 and safe and count_ok
+        schema_ok = int(status.get("execution_schema_version") or 0) >= 2
+        passed = status.get("status") == expected_status and str(status.get("date")) == now.strftime("%Y-%m-%d") and age <= 180 and safe and count_ok and schema_ok
         count_detail = f", {count_key}={status.get(count_key)}" if count_key else ""
-        checks.append(check(name, passed or not live_market, f"age={age:.0f}s, paper_only={safe}{count_detail}" + ("" if live_market else "; freshness not required outside live market")))
+        checks.append(check(name, passed or not live_market, f"age={age:.0f}s, paper_only={safe}, execution_schema={status.get('execution_schema_version', 0)}{count_detail}" + ("" if live_market else "; freshness not required outside live market")))
 
     matrix_counts = {
         "contracts": dict_assignment_size(root / "pkscreener/classes/FullUniverseRankContractMatrixObserver.py", "CONTRACTS"),
@@ -453,9 +456,17 @@ def assess(
             root / "scripts/assess_frozen_ranker_prediction_matrix.py",
             "SCORE_THRESHOLDS",
         ),
+        "depth_execution_combinations": (
+            144
+            if "PREDECLARED_COMBINATIONS = 144"
+            in (
+                root / "scripts/assess_depth_executable_rank_strategy.py"
+            ).read_text(errors="ignore")
+            else 0
+        ),
     }
-    matrix_ok = matrix_counts == {"contracts": 9, "variants": 6, "gates": 12, "selectors": 4, "slot_counts": 4, "integrated_policies": 10, "score_thresholds": 4}
-    checks.append(check("predeclared_search_space", matrix_ok, "9 exit contracts, 6 timing variants, 12 feature gates, 4 selectors, 4 capital slot counts, 10 integrated policies, 4 frozen score thresholds declared" if matrix_ok else "one or more predeclared matrices are incomplete"))
+    matrix_ok = matrix_counts == {"contracts": 9, "variants": 6, "gates": 12, "selectors": 4, "slot_counts": 4, "integrated_policies": 10, "score_thresholds": 4, "depth_execution_combinations": 144}
+    checks.append(check("predeclared_search_space", matrix_ok, "9 exit contracts, 6 timing variants, 12 feature gates, 4 selectors, 4 capital slot counts, 10 integrated policies, 4 frozen score thresholds, and 144 depth-execution combinations declared" if matrix_ok else "one or more predeclared matrices are incomplete"))
 
     eod = load_json(data / "intraday_evidence_pipeline" / "eod_latest.json")
     eod_status = str(eod.get("status") or "")
@@ -470,7 +481,7 @@ def assess(
             (
                 f"today EOD status={eod_status or 'missing'}"
                 if eod_due
-                else "EOD evidence not due until 16:10 IST"
+                else "EOD evidence not due until 16:40 IST"
             ),
         )
     )

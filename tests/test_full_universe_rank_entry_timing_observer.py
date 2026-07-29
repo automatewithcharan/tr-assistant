@@ -1,4 +1,5 @@
 from datetime import datetime, timedelta
+import json
 from pathlib import Path
 
 import pandas as pd
@@ -105,6 +106,9 @@ def test_trigger_waits_until_displayed_ask_quantity_can_fill_order(tmp_path):
     assert fillable[0]["EntryAskQty"] == 10000
     assert fillable[0]["RequestedQuantity"] == 4985
     assert fillable[0]["EntryTopLevelFillable"] is True
+    assert fillable[0]["ExecutionSchemaVersion"] == 2
+    assert fillable[0]["EntryDepthFillable"] is True
+    assert len(json.loads(fillable[0]["EntryDepthJson"])) == 1
 
 
 def test_pullback_reclaim_requires_two_distinct_phases(tmp_path):
@@ -146,6 +150,8 @@ def test_filled_variant_exits_at_bid_and_unfilled_variant_expires(tmp_path):
     assert exited[0]["event"] == "timing_exit"
     assert exited[0]["ExitReason"] == "target"
     assert exited[0]["ExitBid"] == 101.1
+    assert exited[0]["ExitDepthFillable"] is True
+    assert len(json.loads(exited[0]["ExitDepthJson"])) == 1
     assert exited[0]["RecorderGeneration"] == 5
 
 

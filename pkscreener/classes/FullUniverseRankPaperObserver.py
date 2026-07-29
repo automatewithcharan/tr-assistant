@@ -17,6 +17,12 @@ import pandas as pd
 from PKDevTools.classes.PKDateUtilities import PKDateUtilities
 from PKDevTools.classes.log import default_logger
 from pkscreener.classes.LiveFeatureRecorder import LiveFeatureRecorder
+from pkscreener.classes.OrderBookExecution import (
+    EXECUTION_SCHEMA_VERSION,
+    depth_json,
+    depth_levels,
+    market_fill,
+)
 
 
 class FullUniverseRankPaperObserver:
@@ -27,7 +33,9 @@ class FullUniverseRankPaperObserver:
         "InstrumentToken", "Symbol", "Sector",
         "Cohort", "Source",
         "EntryAsk", "EntryBid", "EntrySpreadBps", "EntryAskQty",
-        "RequestedQuantity", "EntryTopLevelFillable", "Quantity", "Capital",
+        "RequestedQuantity", "EntryTopLevelFillable", "ExecutionSchemaVersion",
+        "EntryDepthJson", "EntryDepthQty", "EntryDepthFillable",
+        "EntryDepthVwap", "Quantity", "Capital",
         "TargetPrice", "StopPrice", "TargetPct", "StopPct", "HorizonMinutes",
         "StressPct", "OpenChangePct", "PullbackFromHighPct", "DayChangePct",
         "UniverseSize", "DayChangeRank", "DayChangeRankPct", "PreviousDayChangeRank",
@@ -42,6 +50,9 @@ class FullUniverseRankPaperObserver:
         "EventId", "Date", "EntryAt", "ExitAt", "Symbol", "Cohort", "Source",
         "EntryAsk", "ExitBid", "EntryAskQty", "ExitBidQty",
         "EntryTopLevelFillable", "ExitTopLevelFillable",
+        "ExecutionSchemaVersion", "EntryDepthJson", "ExitDepthJson",
+        "EntryDepthQty", "ExitDepthQty", "EntryDepthFillable",
+        "ExitDepthFillable", "EntryDepthVwap", "ExitDepthVwap",
         "Quantity", "ExitReason", "HoldMinutes",
         "GrossReturnPct", "StressPct", "NetReturnPct", "GrossPnl", "StressCost",
         "NetPnl", "TargetPrice", "StopPrice",
@@ -144,6 +155,8 @@ class FullUniverseRankPaperObserver:
             quantity = int(self.capital // ask) if ask > 0 else 0
             if quantity < 1:
                 continue
+            entry_depth = depth_levels(tick, "sell")
+            entry_fill = market_fill(entry_depth, quantity)
             entry = {
                 "EventId": event_id,
                 "Date": now.strftime("%Y-%m-%d"),
@@ -166,6 +179,11 @@ class FullUniverseRankPaperObserver:
                 "EntryTopLevelFillable": bool(
                     ask_qty > 0 and ask_qty >= quantity
                 ),
+                "ExecutionSchemaVersion": EXECUTION_SCHEMA_VERSION,
+                "EntryDepthJson": depth_json(entry_depth),
+                "EntryDepthQty": int(entry_fill["visible_quantity"]),
+                "EntryDepthFillable": bool(entry_fill["fillable"]),
+                "EntryDepthVwap": float(entry_fill["vwap"]),
                 "Quantity": quantity,
                 "Capital": round(quantity * ask, 2),
                 "TargetPrice": round(ask * (1.0 + self.target_pct / 100.0), 2),
@@ -236,6 +254,8 @@ class FullUniverseRankPaperObserver:
                 continue
             ask = float(entry["EntryAsk"])
             quantity = int(entry["Quantity"])
+            exit_depth = depth_levels(exit_tick, "buy")
+            exit_fill = market_fill(exit_depth, quantity)
             gross_return = (bid - ask) * 100.0 / ask
             gross_pnl = (bid - ask) * quantity
             stress_cost = ask * quantity * self.stress_pct / 100.0
@@ -259,6 +279,23 @@ class FullUniverseRankPaperObserver:
                 "ExitTopLevelFillable": bool(
                     bid_qty > 0 and bid_qty >= quantity
                 ),
+                "ExecutionSchemaVersion": int(
+                    self._number(entry.get("ExecutionSchemaVersion"))
+                ),
+                "EntryDepthJson": str(entry.get("EntryDepthJson", "") or ""),
+                "ExitDepthJson": depth_json(exit_depth),
+                "EntryDepthQty": int(
+                    self._number(entry.get("EntryDepthQty"))
+                ),
+                "ExitDepthQty": int(exit_fill["visible_quantity"]),
+                "EntryDepthFillable": self._truthy(
+                    entry.get("EntryDepthFillable")
+                ),
+                "ExitDepthFillable": bool(exit_fill["fillable"]),
+                "EntryDepthVwap": self._number(
+                    entry.get("EntryDepthVwap")
+                ),
+                "ExitDepthVwap": float(exit_fill["vwap"]),
                 "Quantity": quantity,
                 "ExitReason": reason,
                 "HoldMinutes": round(hold_minutes, 3),
@@ -308,6 +345,7 @@ class FullUniverseRankPaperObserver:
         payload = {
             "date": now.strftime("%Y-%m-%d"),
             "updated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "execution_schema_version": EXECUTION_SCHEMA_VERSION,
             "active": self.active,
             "seen": sorted(self.seen),
             "alerts_allowed": False,
@@ -326,6 +364,7 @@ class FullUniverseRankPaperObserver:
             "status": "recording_exact_ask_to_bid_paper_outcomes",
             "date": now.strftime("%Y-%m-%d"),
             "updated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "execution_schema_version": EXECUTION_SCHEMA_VERSION,
             "entries": entries,
             "active": len(self.active),
             "closed": int(len(outcomes)),

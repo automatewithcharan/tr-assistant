@@ -14,6 +14,12 @@ from pkscreener.classes.FullUniverseRankPaperObserver import (
     FullUniverseRankPaperObserver,
 )
 from pkscreener.classes.LiveFeatureRecorder import LiveFeatureRecorder
+from pkscreener.classes.OrderBookExecution import (
+    EXECUTION_SCHEMA_VERSION,
+    depth_json,
+    depth_levels,
+    market_fill,
+)
 
 
 CONTRACTS = {
@@ -36,7 +42,9 @@ class FullUniverseRankContractMatrixObserver:
         "EventId", "Date", "EntryAt", "RecorderGeneration", "Exchange", "Symbol",
         "Cohort", "Source",
         "EntryAsk", "EntryBid", "EntryAskQty", "RequestedQuantity",
-        "EntryTopLevelFillable", "Quantity", "Capital", "DayChangePct",
+        "EntryTopLevelFillable", "ExecutionSchemaVersion", "EntryDepthJson",
+        "EntryDepthQty", "EntryDepthFillable", "EntryDepthVwap",
+        "Quantity", "Capital", "DayChangePct",
         "DayChangeRank", "RankImprovement", "RankVelocityPerMinute",
         "BuyerSellerRatio", "EntrySpreadBps",
     ]
@@ -45,6 +53,9 @@ class FullUniverseRankContractMatrixObserver:
         "RecorderGeneration", "Exchange", "ExitAt", "Symbol", "Cohort", "Source",
         "EntryAsk", "ExitBid", "EntryAskQty", "ExitBidQty",
         "EntryTopLevelFillable", "ExitTopLevelFillable", "Quantity",
+        "ExecutionSchemaVersion", "EntryDepthJson", "ExitDepthJson",
+        "EntryDepthQty", "ExitDepthQty", "EntryDepthFillable",
+        "ExitDepthFillable", "EntryDepthVwap", "ExitDepthVwap",
         "TargetPct", "StopPct", "HorizonMinutes", "ExitReason", "HoldMinutes",
         "GrossReturnPct", "StressPct", "NetReturnPct", "GrossPnl",
         "StressCost", "NetPnl",
@@ -139,6 +150,21 @@ class FullUniverseRankContractMatrixObserver:
                     "EntryTopLevelFillable": self._truthy(
                         event.get("EntryTopLevelFillable")
                     ),
+                    "ExecutionSchemaVersion": int(
+                        self._number(event.get("ExecutionSchemaVersion"))
+                    ),
+                    "EntryDepthJson": str(
+                        event.get("EntryDepthJson", "") or ""
+                    ),
+                    "EntryDepthQty": int(
+                        self._number(event.get("EntryDepthQty"))
+                    ),
+                    "EntryDepthFillable": self._truthy(
+                        event.get("EntryDepthFillable")
+                    ),
+                    "EntryDepthVwap": self._number(
+                        event.get("EntryDepthVwap")
+                    ),
                     "Quantity": quantity,
                     "TargetPct": target_pct,
                     "StopPct": stop_pct,
@@ -179,6 +205,8 @@ class FullUniverseRankContractMatrixObserver:
                 continue
             ask = float(entry["EntryAsk"])
             quantity = int(entry["Quantity"])
+            exit_depth = depth_levels(exit_tick, "buy")
+            exit_fill = market_fill(exit_depth, quantity)
             gross_return = (bid - ask) * 100.0 / ask
             gross_pnl = (bid - ask) * quantity
             stress_cost = ask * quantity * self.stress_pct / 100.0
@@ -211,6 +239,23 @@ class FullUniverseRankContractMatrixObserver:
                     bid_qty > 0 and bid_qty >= quantity
                 ),
                 "Quantity": quantity,
+                "ExecutionSchemaVersion": int(
+                    self._number(entry.get("ExecutionSchemaVersion"))
+                ),
+                "EntryDepthJson": str(entry.get("EntryDepthJson", "") or ""),
+                "ExitDepthJson": depth_json(exit_depth),
+                "EntryDepthQty": int(
+                    self._number(entry.get("EntryDepthQty"))
+                ),
+                "ExitDepthQty": int(exit_fill["visible_quantity"]),
+                "EntryDepthFillable": self._truthy(
+                    entry.get("EntryDepthFillable")
+                ),
+                "ExitDepthFillable": bool(exit_fill["fillable"]),
+                "EntryDepthVwap": self._number(
+                    entry.get("EntryDepthVwap")
+                ),
+                "ExitDepthVwap": float(exit_fill["vwap"]),
                 "TargetPct": entry["TargetPct"],
                 "StopPct": entry["StopPct"],
                 "HorizonMinutes": entry["HorizonMinutes"],
@@ -265,6 +310,7 @@ class FullUniverseRankContractMatrixObserver:
         payload = {
             "date": now.strftime("%Y-%m-%d"),
             "updated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "execution_schema_version": EXECUTION_SCHEMA_VERSION,
             "active": self.active,
             "seen_events": sorted(self.seen_events),
             "contracts": self.contracts,
@@ -281,6 +327,7 @@ class FullUniverseRankContractMatrixObserver:
             "status": "recording_exact_exit_contract_matrix",
             "date": now.strftime("%Y-%m-%d"),
             "updated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+            "execution_schema_version": EXECUTION_SCHEMA_VERSION,
             "contracts": len(self.contracts),
             "entry_labels": len(self.seen_events),
             "active_contracts": len(self.active),
