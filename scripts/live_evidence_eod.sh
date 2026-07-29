@@ -326,6 +326,13 @@ run_pullback_reclaim_audit() {
         >>"$LOG" 2>&1 || true
 }
 
+run_strategy_evidence_scoreboard() {
+    "$PYTHON" "$REPO/scripts/build_intraday_strategy_evidence_scoreboard.py" \
+        --data-dir "$REPO/results/Data" \
+        --output-dir "$REPO/results/Data/intraday_strategy_evidence_scoreboard" \
+        >>"$LOG" 2>&1 || true
+}
+
 run_pipeline_readiness() {
     "$PYTHON" "$REPO/scripts/check_intraday_evidence_pipeline.py" --allow-issues \
         >>"$LOG" 2>&1 || true
@@ -382,6 +389,7 @@ if [ -f "$OUTPUT_ROOT/status.json" ]; then
         run_full_rank_opportunity_ceiling
         run_intraday_capital_growth
         run_pullback_reclaim_audit
+        run_strategy_evidence_scoreboard
         run_eod_integrity
         run_pipeline_readiness
         send_eod_integrity_summary
@@ -440,6 +448,7 @@ run_full_rank_integrated_policies
 run_full_rank_opportunity_ceiling
 run_intraday_capital_growth
 run_pullback_reclaim_audit
+run_strategy_evidence_scoreboard
 run_eod_integrity
 run_pipeline_readiness
 send_eod_integrity_summary

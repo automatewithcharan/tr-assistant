@@ -212,6 +212,7 @@ def assess(
         "scripts/assess_full_rank_opportunity_ceiling.py",
         "scripts/assess_frozen_ranker_prediction_matrix.py",
         "scripts/assess_prior_session_ranker_paper.py",
+        "scripts/build_intraday_strategy_evidence_scoreboard.py",
         "scripts/project_intraday_capital_growth.py",
         "scripts/run_full_rank_evidence_recorder.py",
         "scripts/live_evidence_eod.sh",
@@ -233,6 +234,7 @@ def assess(
         "run_full_rank_opportunity_ceiling",
         "run_frozen_ranker_prediction_matrix",
         "run_prior_session_ranker_paper",
+        "run_strategy_evidence_scoreboard",
         "run_intraday_capital_growth",
         "run_eod_integrity",
     ]
