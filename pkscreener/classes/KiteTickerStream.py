@@ -53,6 +53,8 @@ UNIVERSE_FILES = {
     "all": os.path.join("results", "Indices", "NSE_BSE_COMBINED.csv"),
 }
 
+PERSISTED_DEPTH_LEVELS = 5
+
 
 def _output_dir() -> str:
     return Archiver.get_user_data_dir()
@@ -179,6 +181,8 @@ class KiteTickerStreamRunner:
             "last_tick_at": "",
             "last_save_at": "",
             "ticks_seen": 0,
+            "stream_mode": "full",
+            "persisted_depth_levels_per_side": PERSISTED_DEPTH_LEVELS,
             "api_user_id": report.get("saved_user_id", ""),
             "started_at": self._started_at.isoformat(timespec="seconds"),
         }
@@ -354,8 +358,22 @@ class KiteTickerStreamRunner:
     def _compact_tick(self, symbol: str, tick: Dict, received_at: str) -> Dict:
         ohlc = tick.get("ohlc", {}) or {}
         depth = tick.get("depth", {}) or {}
-        best_bid_level = (depth.get("buy") or [{}])[0] or {}
-        best_ask_level = (depth.get("sell") or [{}])[0] or {}
+        compact_depth = {
+            side: [
+                {
+                    "price": level.get("price"),
+                    "quantity": level.get("quantity"),
+                    "orders": level.get("orders"),
+                }
+                for level in list(depth.get(side) or [])[
+                    :PERSISTED_DEPTH_LEVELS
+                ]
+                if isinstance(level, dict)
+            ]
+            for side in ("buy", "sell")
+        }
+        best_bid_level = (compact_depth["buy"] or [{}])[0] or {}
+        best_ask_level = (compact_depth["sell"] or [{}])[0] or {}
         best_bid = best_bid_level.get("price")
         best_ask = best_ask_level.get("price")
         return {
@@ -382,6 +400,7 @@ class KiteTickerStreamRunner:
             "best_ask": best_ask,
             "best_bid_quantity": best_bid_level.get("quantity"),
             "best_ask_quantity": best_ask_level.get("quantity"),
+            "depth": compact_depth,
             "received_at": received_at,
         }
 
