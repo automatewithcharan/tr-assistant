@@ -51,7 +51,7 @@ class FakeFrozenRanker:
         self.calls.append((rows, ticks, now))
         return [{"event": "paper_entry", "symbol": "TEST"}]
 
-    def contract_entry_events(self):
+    def contract_entry_events(self, ticks=None):
         return [{"event": "entry", "EventId": "frozen:TEST"}]
 
 

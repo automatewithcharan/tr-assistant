@@ -336,7 +336,12 @@ class FullUniverseRankContractMatrixObserver:
             "alerts_allowed": False,
             "real_orders_allowed": False,
         }
-        self.status_path.write_text(json.dumps(payload, indent=2), encoding="utf-8")
+        content = json.dumps(payload, indent=2)
+        self.status_path.write_text(content, encoding="utf-8")
+        (self.root / f"status_{now:%Y-%m-%d}.json").write_text(
+            content,
+            encoding="utf-8",
+        )
 
     @staticmethod
     def _append_rows(path: Path, columns: List[str], rows: List[Dict[str, Any]]) -> None:

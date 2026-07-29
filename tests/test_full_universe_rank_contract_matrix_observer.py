@@ -59,6 +59,7 @@ def test_default_matrix_registers_every_frozen_contract(tmp_path):
     assert status["contracts"] == len(CONTRACTS)
     assert status["entry_labels"] == 1
     assert status["real_orders_allowed"] is False
+    assert (observer.root / "status_2026-07-22.json").exists()
     registrations = pd.read_csv(
         observer.root / "registrations_2026-07-22.csv"
     )

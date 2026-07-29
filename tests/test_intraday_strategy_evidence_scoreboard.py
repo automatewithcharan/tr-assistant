@@ -94,3 +94,69 @@ def test_only_accepted_five_level_forward_is_capital_comparable(tmp_path):
     assert status["goal_evidence_passes"] == 1
     assert status["best_comparable_lane"] == "Five-level full-universe rank"
     assert not status["real_orders_allowed"]
+
+
+def test_rank_migration_forward_is_visible_but_not_depth_comparable(tmp_path):
+    data = tmp_path / "Data"
+    _json(
+        data / "live_rank_migration/status.json",
+        {
+            "status": "collecting_forward_evidence",
+            "capital": 500_000,
+            "accepted": False,
+            "paper_promotion_allowed": False,
+            "real_orders_allowed": False,
+            "forward_stress": {
+                "sessions": 5,
+                "trades": 21,
+                "avg_daily_pnl": 3_403.59,
+                "lower_95_pct": -1.210176,
+                "positive_session_pct": 40,
+                "goal_hit_pct": 20,
+                "worst_session_pct": -0.629079,
+            },
+        },
+    )
+
+    scoreboard = write_scoreboard(data, tmp_path / "out")
+    row = scoreboard[scoreboard["Lane"].eq("Frozen rank migration")].iloc[0]
+
+    assert row["StressAvgDailyPnl"] == 3_403.59
+    assert row["StressLower95DailyPnl"] == -6_050.88
+    assert bool(row["MeasuredEvidence"])
+    assert bool(row["DiagnosticOnly"])
+    assert not bool(row["CapitalAllocationComparable"])
+
+
+def test_accepted_rank_migration_depth_forward_becomes_comparable(tmp_path):
+    data = tmp_path / "Data"
+    _json(
+        data / "frozen_rank_migration_depth_forward/status.json",
+        {
+            "status": "accepted_untouched_depth_forward",
+            "contract": "t1_5_s1_0_h60",
+            "execution_schema_version": 2,
+            "capital": 500_000,
+            "accepted": True,
+            "paper_promotion_allowed": True,
+            "real_orders_allowed": False,
+            "forward": {
+                "sessions": 20,
+                "trades": 60,
+                "avg_daily_pnl": 10_500,
+                "lower_95_pct": 0.1,
+                "positive_session_pct": 70,
+                "goal_hit_pct": 55,
+                "worst_session_pct": -1.0,
+            },
+        },
+    )
+
+    scoreboard = write_scoreboard(data, tmp_path / "out")
+    row = scoreboard[
+        scoreboard["Lane"].eq("Five-level frozen rank migration")
+    ].iloc[0]
+
+    assert bool(row["CapitalAllocationComparable"])
+    assert row["StressLower95DailyPnl"] == 500.0
+    assert not bool(row["RealOrdersAllowed"])

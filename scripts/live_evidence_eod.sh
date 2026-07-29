@@ -238,6 +238,19 @@ run_depth_executable_rank_strategy() {
         >>"$LOG" 2>&1 || true
 }
 
+run_frozen_rank_migration_depth_forward() {
+    "$PYTHON" "$REPO/scripts/assess_frozen_rank_migration_depth_forward.py" \
+        --registration-glob "$REPO/results/Data/frozen_rank_migration_contract_matrix/registrations_20*.csv" \
+        --outcome-glob "$REPO/results/Data/frozen_rank_migration_contract_matrix/outcomes_20*.csv" \
+        --raw-glob "$REPO/results/Data/live_feature_recorder/live_features_20*.csv" \
+        --lane-status-glob "$REPO/results/Data/frozen_rank_migration_contract_matrix/status_20*.json" \
+        --model "$REPO/results/Data/live_rank_migration/frozen_rank_migration_model.joblib" \
+        --output-dir "$REPO/results/Data/frozen_rank_migration_depth_forward" \
+        --capital 500000 --daily-goal 10000 \
+        --forward-sessions 20 --min-snapshots 1000 \
+        >>"$LOG" 2>&1 || true
+}
+
 run_fixed_rank_first_forward() {
     "$PYTHON" "$REPO/scripts/assess_fixed_rank_first_forward.py" \
         --entry-glob "$REPO/results/Data/full_universe_rank_paper/entries_20*.csv" \
@@ -381,6 +394,7 @@ if [ -f "$OUTPUT_ROOT/status.json" ]; then
         run_exact_full_rank_strategy
         run_full_rank_contract_matrix
         run_depth_executable_rank_strategy
+        run_frozen_rank_migration_depth_forward
         run_fixed_rank_first_forward
         run_full_rank_entry_timing
         run_full_rank_feature_gates
@@ -440,6 +454,7 @@ run_full_universe_rank_strategy
 run_exact_full_rank_strategy
 run_full_rank_contract_matrix
 run_depth_executable_rank_strategy
+run_frozen_rank_migration_depth_forward
 run_fixed_rank_first_forward
 run_full_rank_entry_timing
 run_full_rank_feature_gates

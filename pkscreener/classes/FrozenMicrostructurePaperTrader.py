@@ -12,6 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import joblib
 import numpy as np
 import pandas as pd
 
@@ -19,6 +20,12 @@ from pkscreener.classes.FrozenMicrostructureModel import (
     CONTRACT,
     MODEL_FEATURES,
     load_model_artifact,
+)
+from pkscreener.classes.OrderBookExecution import (
+    EXECUTION_SCHEMA_VERSION,
+    depth_json,
+    depth_levels,
+    market_fill,
 )
 
 
@@ -29,6 +36,18 @@ MOVE_BANDS = (
     (3.0, 5.000001, "3-5", "band_3_5"),
 )
 MIN_HISTORY_SAMPLE_SECONDS = 50.0
+RANK_MIGRATION_FEATURES = [
+    "CandidateRankPct15m",
+    "SectorCandidateRankPct15m",
+    "TradedValueRankPct15m",
+    "CandidateRankDelta",
+    "CandidateRankVelocityPerMinute",
+    "RepeatDayChangeVelocity",
+    "EnteredLeaderQuintile",
+    "RecentCandidateCount",
+    "RecentSectorCandidateCount",
+]
+RANK_MIGRATION_MODEL_FEATURES = [*MODEL_FEATURES, *RANK_MIGRATION_FEATURES]
 
 
 def _float(value: Any) -> float:
@@ -78,8 +97,10 @@ class FrozenMicrostructurePaperTrader:
         fee_pct: float = 0.10,
         horizon_minutes: int = 60,
         persist: bool = True,
+        root_name: str = "frozen_microstructure_paper",
+        model_features: Optional[List[str]] = None,
     ) -> None:
-        self.output_dir = Path(output_dir) / "frozen_microstructure_paper"
+        self.output_dir = Path(output_dir) / str(root_name)
         self.model_path = Path(model_path)
         self.capital = float(capital)
         self.threshold = float(threshold)
@@ -89,7 +110,15 @@ class FrozenMicrostructurePaperTrader:
         self.fee_pct = float(fee_pct)
         self.horizon_minutes = max(1, int(horizon_minutes))
         self.persist = bool(persist)
-        self.model, self.metadata = load_model_artifact(self.model_path)
+        self.model_features = list(model_features or MODEL_FEATURES)
+        self.model, self.metadata = self._load_model()
+        self.prediction_columns = [
+            "date", "when", "symbol", "move_band", "expected_return_pct",
+            "selected", "selection_reason", "entry_bid", "entry_ask",
+            "entry_bid_qty", "entry_ask_qty",
+            "recorder_generation", "exchange", "model_trained_through",
+            "model_source_sha256", *self.model_features,
+        ]
         self._model_mtime = self.model_path.stat().st_mtime
         self._date = ""
         self._history: Dict[str, List[Dict[str, Any]]] = {}
@@ -98,8 +127,29 @@ class FrozenMicrostructurePaperTrader:
         self.trades: List[Dict[str, Any]] = []
         self.latest_predictions: List[Dict[str, Any]] = []
         self._prediction_keys: set[str] = set()
+        self._rank_latest: Dict[str, Dict[str, Any]] = {}
+        self._rank_prior: Dict[str, Dict[str, Any]] = {}
         if self.persist:
             self.output_dir.mkdir(parents=True, exist_ok=True)
+
+    def _load_model(self):
+        if self.model_features == MODEL_FEATURES:
+            return load_model_artifact(self.model_path)
+        payload = joblib.load(self.model_path)
+        if not isinstance(payload, dict) or "model" not in payload:
+            raise ValueError("invalid frozen rank-migration model artifact")
+        metadata = payload.get("metadata")
+        if not isinstance(metadata, dict):
+            raise ValueError("frozen rank-migration model has no metadata")
+        if metadata.get("contract") != CONTRACT:
+            raise ValueError(f"unexpected model contract: {metadata.get('contract')}")
+        if list(metadata.get("features") or []) != self.model_features:
+            raise ValueError("frozen rank-migration feature contract mismatch")
+        if metadata.get("artifact_type") != "prior_session_candidate_rank_migration":
+            raise ValueError("unexpected frozen rank-migration artifact type")
+        if metadata.get("real_orders_allowed") is not False:
+            raise ValueError("frozen rank-migration model is not paper-only")
+        return payload["model"], metadata
 
     def process(
         self,
@@ -123,7 +173,11 @@ class FrozenMicrostructurePaperTrader:
                     candidates.append(candidate)
         if candidates:
             frame = pd.DataFrame(candidates)
-            frame["expected_return_pct"] = self.model.predict(frame[MODEL_FEATURES])
+            if self.model_features == RANK_MIGRATION_MODEL_FEATURES:
+                frame = self._add_causal_rank_features(frame, now)
+            frame["expected_return_pct"] = self.model.predict(
+                frame[self.model_features]
+            )
             selected_index = self._selected_index(frame)
             prediction_rows = []
             for index, row in frame.iterrows():
@@ -170,7 +224,7 @@ class FrozenMicrostructurePaperTrader:
         try:
             current_mtime = self.model_path.stat().st_mtime
             if current_mtime != self._model_mtime:
-                self.model, self.metadata = load_model_artifact(self.model_path)
+                self.model, self.metadata = self._load_model()
                 self._model_mtime = current_mtime
         except OSError:
             pass
@@ -180,6 +234,8 @@ class FrozenMicrostructurePaperTrader:
         self._traded_symbols = set()
         self.trades = []
         self._prediction_keys = set()
+        self._rank_latest = {}
+        self._rank_prior = {}
         if not self.persist:
             return
         trade_path = self.output_dir / f"trades_{today}.csv"
@@ -268,6 +324,8 @@ class FrozenMicrostructurePaperTrader:
         bs = _float(current.get("BuyerSellerRatio"))
         row = {
             "symbol": symbol,
+            "_sector": str(current.get("Sector", "") or ""),
+            "_traded_value": traded_value,
             "move_band": band[2],
             "entry_bid": best_bid,
             "entry_ask": best_ask,
@@ -309,9 +367,134 @@ class FrozenMicrostructurePaperTrader:
         row[band[3]] = 1.0
         return row
 
-    def contract_entry_events(self) -> List[Dict[str, Any]]:
+    @staticmethod
+    def _percentile(values: List[float], current: float) -> float:
+        clean = np.asarray(
+            [value for value in values if np.isfinite(value)],
+            dtype=float,
+        )
+        if not np.isfinite(current) or clean.size == 0:
+            return np.nan
+        return float(np.mean(clean <= float(current)))
+
+    def _add_causal_rank_features(
+        self,
+        frame: pd.DataFrame,
+        now: datetime,
+    ) -> pd.DataFrame:
+        """Rank a same-time candidate batch using only the preceding 15 minutes."""
+        current_at = pd.Timestamp(now)
+        cutoff = current_at - pd.Timedelta(minutes=15)
+        self._rank_latest = {
+            symbol: state
+            for symbol, state in self._rank_latest.items()
+            if pd.Timestamp(state["when"]) >= cutoff
+        }
+        for _, row in frame.iterrows():
+            symbol = str(row["symbol"])
+            self._rank_latest[symbol] = {
+                "when": current_at,
+                "sector": str(row.get("_sector", "") or ""),
+                "change": _float(row.get("DayChangePct")),
+                "traded_value": _float(row.get("_traded_value")),
+            }
+
+        all_changes = [
+            _float(state.get("change")) for state in self._rank_latest.values()
+        ]
+        all_values = [
+            _float(state.get("traded_value"))
+            for state in self._rank_latest.values()
+        ]
+        minimum = max(
+            1,
+            int(_float(self.metadata.get("candidate_rank_min_recent")) or 5),
+        )
+        output = []
+        for _, row in frame.iterrows():
+            record = row.to_dict()
+            symbol = str(row["symbol"])
+            sector = str(row.get("_sector", "") or "")
+            change = _float(row.get("DayChangePct"))
+            traded_value = _float(row.get("_traded_value"))
+            sector_states = [
+                state
+                for state in self._rank_latest.values()
+                if str(state.get("sector", "") or "") == sector
+            ]
+            recent_count = len(self._rank_latest)
+            sector_count = len(sector_states)
+            rank = (
+                self._percentile(all_changes, change)
+                if recent_count >= minimum
+                else np.nan
+            )
+            value_rank = (
+                self._percentile(all_values, traded_value)
+                if recent_count >= minimum
+                else np.nan
+            )
+            sector_rank = (
+                self._percentile(
+                    [_float(state.get("change")) for state in sector_states],
+                    change,
+                )
+                if sector_count >= 2
+                else np.nan
+            )
+            previous = self._rank_prior.get(symbol)
+            rank_delta = rank_velocity = repeat_velocity = np.nan
+            entered_leader = 0.0
+            if previous is not None:
+                elapsed = max(
+                    (
+                        current_at - pd.Timestamp(previous["when"])
+                    ).total_seconds()
+                    / 60.0,
+                    1e-6,
+                )
+                previous_rank = _float(previous.get("rank"))
+                if np.isfinite(rank) and np.isfinite(previous_rank):
+                    rank_delta = rank - previous_rank
+                    rank_velocity = rank_delta / elapsed
+                    entered_leader = float(
+                        rank >= 0.80 and previous_rank < 0.80
+                    )
+                previous_change = _float(previous.get("change"))
+                if np.isfinite(change) and np.isfinite(previous_change):
+                    repeat_velocity = (change - previous_change) / elapsed
+            record.update(
+                {
+                    "CandidateRankPct15m": rank,
+                    "SectorCandidateRankPct15m": sector_rank,
+                    "TradedValueRankPct15m": value_rank,
+                    "CandidateRankDelta": rank_delta,
+                    "CandidateRankVelocityPerMinute": rank_velocity,
+                    "RepeatDayChangeVelocity": repeat_velocity,
+                    "EnteredLeaderQuintile": entered_leader,
+                    "RecentCandidateCount": float(recent_count),
+                    "RecentSectorCandidateCount": float(sector_count),
+                }
+            )
+            self._rank_prior[symbol] = {
+                "when": current_at,
+                "rank": rank,
+                "change": change,
+            }
+            output.append(record)
+        return pd.DataFrame(output, index=frame.index)
+
+    def contract_entry_events(
+        self,
+        ticks: Optional[Dict[str, Dict[str, Any]]] = None,
+    ) -> List[Dict[str, Any]]:
         """Expose score-qualified labels to the paper-only contract observer."""
         events = []
+        normalized_ticks = {
+            str(symbol).strip().upper(): tick
+            for symbol, tick in (ticks or {}).items()
+            if str(symbol).strip() and isinstance(tick, dict)
+        }
         model_hash = str(self.metadata.get("source_sha256", "") or "")
         for row in self.latest_predictions:
             score = _float(row.get("expected_return_pct"))
@@ -325,6 +508,11 @@ class FrozenMicrostructurePaperTrader:
             move_band = str(row.get("move_band", "") or "")
             if quantity < 1 or not symbol or pd.isna(when):
                 continue
+            entry_depth = depth_levels(
+                normalized_ticks.get(symbol, {}),
+                "sell",
+            )
+            entry_fill = market_fill(entry_depth, quantity)
             events.append(
                 {
                     "event": "entry",
@@ -343,7 +531,11 @@ class FrozenMicrostructurePaperTrader:
                     ).strip().upper(),
                     "Symbol": symbol,
                     "Cohort": f"score_ge_{self.threshold:.2f}",
-                    "Source": "prior_session_frozen_ranker",
+                    "Source": (
+                        "prior_session_candidate_rank_migration"
+                        if self.model_features == RANK_MIGRATION_MODEL_FEATURES
+                        else "prior_session_frozen_ranker"
+                    ),
                     "EntryAsk": ask,
                     "EntryBid": _float(row.get("entry_bid")),
                     "EntryAskQty": ask_qty,
@@ -351,6 +543,11 @@ class FrozenMicrostructurePaperTrader:
                     "EntryTopLevelFillable": bool(
                         ask_qty > 0 and ask_qty >= quantity
                     ),
+                    "ExecutionSchemaVersion": EXECUTION_SCHEMA_VERSION,
+                    "EntryDepthJson": depth_json(entry_depth),
+                    "EntryDepthQty": int(entry_fill["visible_quantity"]),
+                    "EntryDepthFillable": bool(entry_fill["fillable"]),
+                    "EntryDepthVwap": float(entry_fill["vwap"]),
                     "Quantity": quantity,
                     "Capital": round(ask * quantity, 2),
                     "DayChangePct": _float(row.get("DayChangePct")),
@@ -533,7 +730,7 @@ class FrozenMicrostructurePaperTrader:
         if not unique:
             return
         path = self.output_dir / f"predictions_{self._date}.csv"
-        pd.DataFrame(unique, columns=self.PREDICTION_COLUMNS).to_csv(
+        pd.DataFrame(unique, columns=self.prediction_columns).to_csv(
             path, mode="a", header=not path.exists(), index=False
         )
 

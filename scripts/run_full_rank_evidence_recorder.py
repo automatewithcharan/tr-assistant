@@ -32,6 +32,7 @@ from pkscreener.classes.FullUniverseRankPaperObserver import (  # noqa: E402
 )
 from pkscreener.classes.FrozenMicrostructurePaperTrader import (  # noqa: E402
     FrozenMicrostructurePaperTrader,
+    RANK_MIGRATION_MODEL_FEATURES,
 )
 from pkscreener.classes.KiteTickerStream import load_latest_live_ticks  # noqa: E402
 from pkscreener.classes.LiveFeatureRecorder import LiveFeatureRecorder  # noqa: E402
@@ -89,6 +90,8 @@ class StandaloneFullRankEvidenceWorker:
         timing: FullUniverseRankEntryTimingObserver | None = None,
         frozen_ranker: FrozenMicrostructurePaperTrader | None = None,
         frozen_contracts: FullUniverseRankContractMatrixObserver | None = None,
+        rank_migration_ranker: FrozenMicrostructurePaperTrader | None = None,
+        rank_migration_contracts: FullUniverseRankContractMatrixObserver | None = None,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.universe = str(universe or "all").strip().lower()
@@ -256,6 +259,55 @@ class StandaloneFullRankEvidenceWorker:
                     "ModelSourceSha256",
                 ],
             )
+        self.rank_migration_ranker = rank_migration_ranker
+        if (
+            self.rank_migration_ranker is None
+            and _truthy("SIGNALMONITOR_ENABLE_RANK_MIGRATION_PAPER", "1")
+        ):
+            rank_model_path = Path(
+                str(
+                    os.environ.get(
+                        "SIGNALMONITOR_RANK_MIGRATION_MODEL",
+                        self.output_dir
+                        / "live_rank_migration"
+                        / "frozen_rank_migration_model.joblib",
+                    )
+                    or ""
+                )
+            )
+            if rank_model_path.is_file():
+                self.rank_migration_ranker = FrozenMicrostructurePaperTrader(
+                    output_dir=str(self.output_dir),
+                    model_path=str(rank_model_path),
+                    capital=capital,
+                    threshold=float(
+                        os.environ.get(
+                            "SIGNALMONITOR_RANK_MIGRATION_THRESHOLD", "0.20"
+                        )
+                        or 0.20
+                    ),
+                    max_trades_per_day=10,
+                    root_name="frozen_rank_migration_paper",
+                    model_features=RANK_MIGRATION_MODEL_FEATURES,
+                )
+        self.rank_migration_contracts = rank_migration_contracts
+        if (
+            self.rank_migration_contracts is None
+            and self.rank_migration_ranker is not None
+        ):
+            self.rank_migration_contracts = (
+                FullUniverseRankContractMatrixObserver(
+                    output_dir=str(self.output_dir),
+                    stress_pct=stress,
+                    root_name="frozen_rank_migration_contract_matrix",
+                    metadata_columns=[
+                        "ExpectedReturnPct",
+                        "MoveBand",
+                        "ModelTrainedThrough",
+                        "ModelSourceSha256",
+                    ],
+                )
+            )
         self.status_path = (
             self.output_dir / "full_rank_evidence_runtime" / "status.json"
         )
@@ -284,13 +336,33 @@ class StandaloneFullRankEvidenceWorker:
         if self.frozen_ranker is not None:
             frozen_events = self.frozen_ranker.process(rows, ticks, now=now)
             frozen_prediction_entries = (
-                self.frozen_ranker.contract_entry_events()
+                self.frozen_ranker.contract_entry_events(ticks)
             )
         if self.frozen_contracts is not None:
             frozen_contract_events = self.frozen_contracts.process(
                 frozen_prediction_entries,
                 ticks,
                 now=now,
+            )
+        rank_migration_events = []
+        rank_migration_entries = []
+        rank_migration_contract_events = []
+        if self.rank_migration_ranker is not None:
+            rank_migration_events = self.rank_migration_ranker.process(
+                rows,
+                ticks,
+                now=now,
+            )
+            rank_migration_entries = (
+                self.rank_migration_ranker.contract_entry_events(ticks)
+            )
+        if self.rank_migration_contracts is not None:
+            rank_migration_contract_events = (
+                self.rank_migration_contracts.process(
+                    rank_migration_entries,
+                    ticks,
+                    now=now,
+                )
             )
         payload = {
             "status": "recording_standalone_full_rank_evidence",
@@ -309,6 +381,14 @@ class StandaloneFullRankEvidenceWorker:
                 len(frozen_prediction_entries)
             ),
             "frozen_contract_events": int(len(frozen_contract_events)),
+            "rank_migration_enabled": self.rank_migration_ranker is not None,
+            "rank_migration_events": int(len(rank_migration_events)),
+            "rank_migration_prediction_entries": int(
+                len(rank_migration_entries)
+            ),
+            "rank_migration_contract_events": int(
+                len(rank_migration_contract_events)
+            ),
             "cycle_ms": round((time.monotonic() - started) * 1000.0, 2),
             "feature_interval_seconds": float(self.recorder.interval_seconds),
             "poll_interval_seconds": self.poll_seconds,

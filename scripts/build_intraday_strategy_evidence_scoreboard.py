@@ -242,6 +242,39 @@ def _partial_capital_diagnostic(data_dir: Path) -> Dict[str, Any]:
     )
 
 
+def _goal_status_lane(
+    data_dir: Path,
+    *,
+    lane: str,
+    relative_path: str,
+    evidence_class: str,
+) -> Dict[str, Any]:
+    status = _load_json(data_dir / relative_path)
+    result = status.get("goal_stress") or {}
+    capital = _number(status.get("capital"), 0.0)
+    accepted = bool(status.get("accepted", False))
+    return _row(
+        lane=lane,
+        variant=str(status.get("goal_contract") or status.get("strategy") or ""),
+        evidence_class=evidence_class,
+        status=str(status.get("status") or ("missing" if not status else "collecting")),
+        sessions=result.get("sessions", status.get("calendar_sessions", 0)),
+        trades=result.get("trades", 0),
+        avg=result.get("avg_daily_pnl", 0),
+        lower=_number(result.get("lower_95_pct"), 0.0) * capital / 100.0,
+        positive=result.get("positive_session_pct", 0),
+        goal=result.get("goal_hit_pct", 0),
+        worst=_number(result.get("worst_session_pct"), 0.0) * capital / 100.0,
+        accepted=accepted,
+        paper=status.get("paper_promotion_allowed", False),
+        real=status.get("real_orders_allowed", False),
+        measured=int(_number(result.get("trades", 0))) > 0,
+        comparable=False,
+        diagnostic=True,
+        source=relative_path,
+    )
+
+
 def build_scoreboard(data_dir: Path) -> pd.DataFrame:
     rows: List[Dict[str, Any]] = [
         _csv_lane(
@@ -294,6 +327,12 @@ def build_scoreboard(data_dir: Path) -> pd.DataFrame:
         ),
         _forward_status_lane(
             data_dir,
+            lane="Frozen rank migration",
+            relative_path="live_rank_migration/status.json",
+            evidence_class="live_forward_top_book_contract",
+        ),
+        _forward_status_lane(
+            data_dir,
             lane="Prior-session ranker",
             relative_path="prior_session_ranker_paper/status.json",
             evidence_class="live_forward_top_book_contract",
@@ -304,7 +343,19 @@ def build_scoreboard(data_dir: Path) -> pd.DataFrame:
             relative_path="full_universe_rank_depth_execution/status.json",
             evidence_class="five_level_depth_executable_forward",
         ),
+        _forward_status_lane(
+            data_dir,
+            lane="Five-level frozen rank migration",
+            relative_path="frozen_rank_migration_depth_forward/status.json",
+            evidence_class="five_level_depth_executable_forward",
+        ),
         _partial_capital_diagnostic(data_dir),
+        _goal_status_lane(
+            data_dir,
+            lane="Leader pullback reclaim",
+            relative_path="leader_pullback_reclaim_audit/status.json",
+            evidence_class="live_feature_minute_outcome_counterfactual",
+        ),
     ]
     scoreboard = pd.DataFrame(rows, columns=SCOREBOARD_COLUMNS)
     scoreboard.sort_values(
