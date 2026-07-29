@@ -77,35 +77,96 @@ def model_metadata(path: Path) -> dict[str, Any]:
     return metadata if isinstance(metadata, dict) else {}
 
 
-def freeze_hypothesis(output_dir: Path, metadata: dict[str, Any]) -> tuple[dict, bool]:
+def freeze_hypothesis(
+    output_dir: Path,
+    metadata: dict[str, Any],
+    *,
+    lane_source: str | None = None,
+    contract: str | None = None,
+    score_threshold: float | None = None,
+    slots: int | None = None,
+    capital: float = 500_000.0,
+    max_trades_per_day: int | None = None,
+    selection_cutoff: str | None = None,
+    forward_start: str | None = None,
+    model_trained_through: str | None = None,
+) -> tuple[dict, bool]:
+    lane_source = LANE_SOURCE if lane_source is None else lane_source
+    contract = CONTRACT if contract is None else contract
+    score_threshold = (
+        SCORE_THRESHOLD if score_threshold is None else score_threshold
+    )
+    slots = SLOTS if slots is None else slots
+    max_trades_per_day = (
+        MAX_TRADES_PER_DAY
+        if max_trades_per_day is None
+        else max_trades_per_day
+    )
+    selection_cutoff = (
+        SELECTION_CUTOFF
+        if selection_cutoff is None
+        else selection_cutoff
+    )
+    forward_start = (
+        FORWARD_START if forward_start is None else forward_start
+    )
+    model_trained_through = (
+        MODEL_TRAINED_THROUGH
+        if model_trained_through is None
+        else model_trained_through
+    )
     expected = {
-        "lane_source": LANE_SOURCE,
-        "contract": CONTRACT,
-        "score_threshold": SCORE_THRESHOLD,
-        "slots": SLOTS,
-        "capital": 500_000.0,
-        "max_trades_per_day": MAX_TRADES_PER_DAY,
+        "lane_source": lane_source,
+        "contract": contract,
+        "score_threshold": score_threshold,
+        "slots": slots,
+        "capital": float(capital),
+        "max_trades_per_day": max_trades_per_day,
         "minimum_slot_deployment_pct": MIN_SLOT_DEPLOYMENT_PCT,
-        "selection_cutoff": SELECTION_CUTOFF,
-        "forward_start": FORWARD_START,
-        "model_trained_through": MODEL_TRAINED_THROUGH,
+        "selection_cutoff": selection_cutoff,
+        "forward_start": forward_start,
+        "model_trained_through": model_trained_through,
         "model_source_sha256": str(metadata.get("source_sha256", "") or ""),
         "execution_schema_version": EXECUTION_SCHEMA_VERSION,
         "paper_only": True,
         "real_orders_allowed": False,
     }
+    metadata_valid = bool(
+        str(metadata.get("trained_through", "") or "")
+        == str(model_trained_through)
+        and str(metadata.get("valid_from", "") or "")
+        and str(metadata.get("valid_from", "") or "")
+        <= str(forward_start)
+        and _truthy(metadata.get("paper_only"))
+        and not _truthy(metadata.get("real_orders_allowed"))
+    )
     path = output_dir / "frozen_hypothesis.json"
     if path.exists():
         try:
             frozen = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             return {}, False
-        return frozen, bool(frozen == expected and expected["model_source_sha256"])
+        return frozen, bool(
+            frozen == expected
+            and expected["model_source_sha256"]
+            and metadata_valid
+        )
     path.write_text(json.dumps(expected, indent=2), encoding="utf-8")
-    return expected, bool(expected["model_source_sha256"])
+    return expected, bool(expected["model_source_sha256"] and metadata_valid)
 
 
-def load_registration_ledger(patterns: Iterable[str]) -> pd.DataFrame:
+def load_registration_ledger(
+    patterns: Iterable[str],
+    *,
+    lane_source: str | None = None,
+    forward_start: str | None = None,
+    score_threshold: float | None = None,
+) -> pd.DataFrame:
+    lane_source = LANE_SOURCE if lane_source is None else lane_source
+    forward_start = FORWARD_START if forward_start is None else forward_start
+    score_threshold = (
+        SCORE_THRESHOLD if score_threshold is None else score_threshold
+    )
     required = {
         "EventId", "Date", "RecorderGeneration", "Exchange", "Source",
         "ExecutionSchemaVersion", "ModelTrainedThrough",
@@ -134,13 +195,18 @@ def load_registration_ledger(patterns: Iterable[str]) -> pd.DataFrame:
         ledger["ExpectedReturnPct"], errors="coerce"
     ).fillna(-999.0)
     return ledger[
-        ledger["Date"].ge(FORWARD_START)
-        & ledger["Source"].eq(LANE_SOURCE)
-        & ledger["ExpectedReturnPct"].ge(SCORE_THRESHOLD)
+        ledger["Date"].ge(forward_start)
+        & ledger["Source"].eq(lane_source)
+        & ledger["ExpectedReturnPct"].ge(score_threshold)
     ].drop_duplicates("EventId", keep="first").copy()
 
 
-def load_lane_status(patterns: Iterable[str]) -> pd.DataFrame:
+def load_lane_status(
+    patterns: Iterable[str],
+    *,
+    forward_start: str | None = None,
+) -> pd.DataFrame:
+    forward_start = FORWARD_START if forward_start is None else forward_start
     rows = []
     for path in _files(patterns):
         try:
@@ -160,7 +226,7 @@ def load_lane_status(patterns: Iterable[str]) -> pd.DataFrame:
             {
                 "date": date,
                 "lane_heartbeat_complete": bool(
-                    date >= FORWARD_START
+                    date >= forward_start
                     and str(payload.get("status", ""))
                     == "recording_exact_exit_contract_matrix"
                     and int(_number(payload.get("execution_schema_version")))
@@ -193,7 +259,12 @@ def forward_coverage(
     ledger: pd.DataFrame,
     entries: pd.DataFrame,
     events: pd.DataFrame,
+    *,
+    forward_start: str | None = None,
+    contract: str | None = None,
 ) -> pd.DataFrame:
+    forward_start = FORWARD_START if forward_start is None else forward_start
+    contract = CONTRACT if contract is None else contract
     columns = [
         "date", "raw_full_session", "lane_heartbeat_complete",
         "score_qualified_entries", "schema_v2_entries",
@@ -206,7 +277,7 @@ def forward_coverage(
     rows = []
     for record in raw.to_dict(orient="records"):
         date = str(record.get("date", ""))
-        if date < FORWARD_START:
+        if date < forward_start:
             continue
         observed_ids = set(
             ledger.loc[ledger["Date"].eq(date), "EventId"].astype(str)
@@ -217,7 +288,7 @@ def forward_coverage(
         closed_ids = set(
             events.loc[
                 events["date"].eq(date)
-                & events["Contract"].astype(str).eq(CONTRACT),
+                & events["Contract"].astype(str).eq(contract),
                 "EventId",
             ].astype(str)
         ) if not events.empty else set()
@@ -258,20 +329,28 @@ def replay_forward(
     capital: float,
     max_trades_per_day: int = MAX_TRADES_PER_DAY,
     min_slot_deployment_pct: float = MIN_SLOT_DEPLOYMENT_PCT,
+    contract: str | None = None,
+    score_threshold: float | None = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
+    contract = CONTRACT if contract is None else contract
+    score_threshold = (
+        SCORE_THRESHOLD if score_threshold is None else score_threshold
+    )
     daily_rows = []
     trade_rows = []
     for date in sorted({str(value) for value in dates}):
         day = events[
             events["date"].eq(date)
-            & events["Contract"].astype(str).eq(CONTRACT)
+            & events["Contract"].astype(str).eq(contract)
         ].copy() if not events.empty else pd.DataFrame()
         if not day.empty:
             day["entry_batch"] = day["entry_time"].dt.floor("min")
             day["ExpectedReturnPct"] = pd.to_numeric(
                 day["ExpectedReturnPct"], errors="coerce"
             ).fillna(-999.0)
-            day = day[day["ExpectedReturnPct"].ge(SCORE_THRESHOLD)].copy()
+            day = day[
+                day["ExpectedReturnPct"].ge(score_threshold)
+            ].copy()
             day.sort_values(
                 ["entry_batch", "ExpectedReturnPct", "Symbol"],
                 ascending=[True, False, True],
@@ -382,13 +461,61 @@ def run_audit(
     daily_goal: float = 10_000.0,
     forward_sessions_required: int = FORWARD_SESSIONS_REQUIRED,
     min_snapshots: int = 1000,
+    lane_source: str | None = None,
+    evidence_name: str | None = None,
+    contract: str | None = None,
+    score_threshold: float | None = None,
+    selection_cutoff: str | None = None,
+    forward_start: str | None = None,
+    model_trained_through: str | None = None,
+    max_trades_per_day: int | None = None,
 ) -> dict[str, Any]:
+    lane_source = LANE_SOURCE if lane_source is None else lane_source
+    evidence_name = EVIDENCE_NAME if evidence_name is None else evidence_name
+    contract = CONTRACT if contract is None else contract
+    score_threshold = (
+        SCORE_THRESHOLD if score_threshold is None else score_threshold
+    )
+    selection_cutoff = (
+        SELECTION_CUTOFF
+        if selection_cutoff is None
+        else selection_cutoff
+    )
+    forward_start = (
+        FORWARD_START if forward_start is None else forward_start
+    )
+    model_trained_through = (
+        MODEL_TRAINED_THROUGH
+        if model_trained_through is None
+        else model_trained_through
+    )
+    max_trades_per_day = (
+        MAX_TRADES_PER_DAY
+        if max_trades_per_day is None
+        else max_trades_per_day
+    )
     output_dir.mkdir(parents=True, exist_ok=True)
     metadata = model_metadata(model_path)
-    frozen, hypothesis_valid = freeze_hypothesis(output_dir, metadata)
+    frozen, hypothesis_valid = freeze_hypothesis(
+        output_dir,
+        metadata,
+        lane_source=lane_source,
+        contract=contract,
+        score_threshold=score_threshold,
+        capital=capital,
+        max_trades_per_day=max_trades_per_day,
+        selection_cutoff=selection_cutoff,
+        forward_start=forward_start,
+        model_trained_through=model_trained_through,
+    )
     expected_hash = str(frozen.get("model_source_sha256", "") or "")
 
-    ledger = load_registration_ledger(registration_patterns)
+    ledger = load_registration_ledger(
+        registration_patterns,
+        lane_source=lane_source,
+        forward_start=forward_start,
+        score_threshold=score_threshold,
+    )
     entries, events = load_depth_events(
         registration_patterns, outcome_patterns
     )
@@ -400,25 +527,36 @@ def run_audit(
             if column not in entries.columns:
                 entries[column] = ""
         entries = entries[
-            entries["date"].ge(FORWARD_START)
-            & entries["Source"].astype(str).eq(LANE_SOURCE)
+            entries["date"].ge(forward_start)
+            & entries["Source"].astype(str).eq(lane_source)
             & entries["ModelTrainedThrough"].astype(str).eq(
-                MODEL_TRAINED_THROUGH
+                model_trained_through
             )
             & entries["ModelSourceSha256"].astype(str).eq(expected_hash)
             & pd.to_numeric(
                 entries["ExpectedReturnPct"], errors="coerce"
-            ).ge(SCORE_THRESHOLD)
+            ).ge(score_threshold)
         ].copy()
     valid_ids = set(entries["EventId"].astype(str)) if not entries.empty else set()
     events = events[
         events["EventId"].astype(str).isin(valid_ids)
-        & events["Contract"].astype(str).eq(CONTRACT)
+        & events["Contract"].astype(str).eq(contract)
     ].copy() if not events.empty else events
 
     raw = raw_session_coverage(raw_patterns, min_snapshots=min_snapshots)
-    lane_status = load_lane_status(lane_status_patterns)
-    coverage = forward_coverage(raw, lane_status, ledger, entries, events)
+    lane_status = load_lane_status(
+        lane_status_patterns,
+        forward_start=forward_start,
+    )
+    coverage = forward_coverage(
+        raw,
+        lane_status,
+        ledger,
+        entries,
+        events,
+        forward_start=forward_start,
+        contract=contract,
+    )
     coverage.to_csv(output_dir / "coverage.csv", index=False)
     eligible_dates = (
         coverage.loc[coverage["eligible"], "date"].astype(str).tolist()
@@ -428,7 +566,9 @@ def run_audit(
         events,
         eligible_dates,
         capital=capital,
-        max_trades_per_day=MAX_TRADES_PER_DAY,
+        max_trades_per_day=max_trades_per_day,
+        contract=contract,
+        score_threshold=score_threshold,
     )
     daily.to_csv(output_dir / "forward_daily.csv", index=False)
     trades.to_csv(output_dir / "forward_trades.csv", index=False)
@@ -448,17 +588,17 @@ def run_audit(
             if accepted else "rejected_untouched_depth_forward"
         )
     status = {
-        "evidence": EVIDENCE_NAME,
+        "evidence": evidence_name,
         "status": status_name,
-        "contract": CONTRACT,
-        "score_threshold": SCORE_THRESHOLD,
-        "selection_cutoff": SELECTION_CUTOFF,
-        "forward_start": FORWARD_START,
+        "contract": contract,
+        "score_threshold": score_threshold,
+        "selection_cutoff": selection_cutoff,
+        "forward_start": forward_start,
         "execution_schema_version": EXECUTION_SCHEMA_VERSION,
         "capital": float(capital),
         "daily_goal": float(daily_goal),
         "slots": SLOTS,
-        "max_trades_per_day": MAX_TRADES_PER_DAY,
+        "max_trades_per_day": max_trades_per_day,
         "minimum_slot_deployment_pct": MIN_SLOT_DEPLOYMENT_PCT,
         "forward_sessions_required": int(forward_sessions_required),
         "eligible_sessions": len(eligible_dates),

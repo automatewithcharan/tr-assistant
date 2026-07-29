@@ -85,6 +85,8 @@ def _write_model(path):
             "metadata": {
                 "source_sha256": MODEL_HASH,
                 "trained_through": "2026-07-21",
+                "valid_from": "2026-07-22",
+                "paper_only": True,
                 "real_orders_allowed": False,
             },
         },

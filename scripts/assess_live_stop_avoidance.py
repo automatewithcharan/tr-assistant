@@ -41,6 +41,7 @@ THRESHOLD = 0.78
 MAX_TRADES_PER_DAY = 5
 CHALLENGER_THRESHOLD = 0.0
 CHALLENGER_MAX_TRADES_PER_DAY = 10
+BALANCED_STOP_WEIGHT = 0.50
 MIN_TRAIN_DAYS = 8
 MIN_TRAIN_ROWS = 500
 
@@ -329,6 +330,38 @@ def run(
         capital=capital,
     )
     challenger_metrics = metrics(challenger_daily, daily_goal)
+    balanced_daily = daily.merge(
+        challenger_daily,
+        on="date",
+        how="inner",
+        suffixes=("_stop", "_runner"),
+    )
+    if not balanced_daily.empty:
+        balanced_daily["trades"] = (
+            pd.to_numeric(
+                balanced_daily["trades_stop"], errors="coerce"
+            ).fillna(0)
+            + pd.to_numeric(
+                balanced_daily["trades_runner"], errors="coerce"
+            ).fillna(0)
+        ).astype(int)
+        balanced_daily["pnl"] = (
+            BALANCED_STOP_WEIGHT
+            * pd.to_numeric(
+                balanced_daily["pnl_stop"], errors="coerce"
+            ).fillna(0.0)
+            + (1.0 - BALANCED_STOP_WEIGHT)
+            * pd.to_numeric(
+                balanced_daily["pnl_runner"], errors="coerce"
+            ).fillna(0.0)
+        )
+        balanced_daily["daily_return_pct"] = (
+            balanced_daily["pnl"] / float(capital) * 100.0
+        )
+        balanced_daily = balanced_daily[
+            ["date", "trades", "pnl", "daily_return_pct"]
+        ].copy()
+    balanced_metrics = metrics(balanced_daily, daily_goal)
     model, metadata = train_frozen_model(
         selection, selection_cutoff=SELECTION_CUTOFF
     )
@@ -366,6 +399,9 @@ def run(
     )
     challenger_trades.to_csv(
         output_dir / "challenger_selection_stress_trades.csv", index=False
+    )
+    balanced_daily.to_csv(
+        output_dir / "balanced_selection_stress_daily.csv", index=False
     )
     promising = bool(
         selection_metrics["sessions"] >= 8
@@ -418,6 +454,20 @@ def run(
             "diagnostic_forward_collection_allowed": (
                 challenger_diagnostic
             ),
+            "paper_promotion_allowed": False,
+            "alerts_allowed": False,
+            "real_orders_allowed": False,
+        },
+        "balanced_portfolio": {
+            "objective": (
+                "fixed_half_capital_per_frozen_selector_to_reduce_"
+                "correlated_drawdown"
+            ),
+            "stop_weight": BALANCED_STOP_WEIGHT,
+            "runner_weight": 1.0 - BALANCED_STOP_WEIGHT,
+            "selection": balanced_metrics,
+            "selection_is_not_forward_evidence": True,
+            "diagnostic_forward_collection_allowed": True,
             "paper_promotion_allowed": False,
             "alerts_allowed": False,
             "real_orders_allowed": False,

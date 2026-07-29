@@ -363,6 +363,14 @@ def build_scoreboard(data_dir: Path) -> pd.DataFrame:
             ),
             evidence_class="five_level_depth_executable_forward",
         ),
+        _forward_status_lane(
+            data_dir,
+            lane="Five-level balanced stop portfolio",
+            relative_path=(
+                "frozen_balanced_stop_portfolio_forward/status.json"
+            ),
+            evidence_class="five_level_depth_executable_forward",
+        ),
         _partial_capital_diagnostic(data_dir),
         _goal_status_lane(
             data_dir,
