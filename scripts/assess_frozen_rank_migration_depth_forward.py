@@ -36,7 +36,7 @@ from scripts.assess_full_universe_rank_strategy import raw_session_coverage
 
 LANE_SOURCE = "prior_session_candidate_rank_migration"
 CONTRACT = "t1_5_s1_0_h60"
-SCORE_THRESHOLD = 0.20
+SCORE_THRESHOLD = 0.25
 SELECTION_CUTOFF = "2026-07-29"
 FORWARD_START = "2026-07-30"
 MODEL_TRAINED_THROUGH = "2026-07-21"
