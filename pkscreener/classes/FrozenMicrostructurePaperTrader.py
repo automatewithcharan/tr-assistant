@@ -99,6 +99,8 @@ class FrozenMicrostructurePaperTrader:
         persist: bool = True,
         root_name: str = "frozen_microstructure_paper",
         model_features: Optional[List[str]] = None,
+        model_artifact_type: str = "prior_session_candidate_rank_migration",
+        source_name: str = "",
     ) -> None:
         self.output_dir = Path(output_dir) / str(root_name)
         self.model_path = Path(model_path)
@@ -111,6 +113,8 @@ class FrozenMicrostructurePaperTrader:
         self.horizon_minutes = max(1, int(horizon_minutes))
         self.persist = bool(persist)
         self.model_features = list(model_features or MODEL_FEATURES)
+        self.model_artifact_type = str(model_artifact_type or "").strip()
+        self.source_name = str(source_name or "").strip()
         self.model, self.metadata = self._load_model()
         self.prediction_columns = [
             "date", "when", "symbol", "move_band", "expected_return_pct",
@@ -145,7 +149,7 @@ class FrozenMicrostructurePaperTrader:
             raise ValueError(f"unexpected model contract: {metadata.get('contract')}")
         if list(metadata.get("features") or []) != self.model_features:
             raise ValueError("frozen rank-migration feature contract mismatch")
-        if metadata.get("artifact_type") != "prior_session_candidate_rank_migration":
+        if metadata.get("artifact_type") != self.model_artifact_type:
             raise ValueError("unexpected frozen rank-migration artifact type")
         if metadata.get("real_orders_allowed") is not False:
             raise ValueError("frozen rank-migration model is not paper-only")
@@ -532,9 +536,13 @@ class FrozenMicrostructurePaperTrader:
                     "Symbol": symbol,
                     "Cohort": f"score_ge_{self.threshold:.2f}",
                     "Source": (
-                        "prior_session_candidate_rank_migration"
-                        if self.model_features == RANK_MIGRATION_MODEL_FEATURES
-                        else "prior_session_frozen_ranker"
+                        self.source_name
+                        or (
+                            "prior_session_candidate_rank_migration"
+                            if self.model_features
+                            == RANK_MIGRATION_MODEL_FEATURES
+                            else "prior_session_frozen_ranker"
+                        )
                     ),
                     "EntryAsk": ask,
                     "EntryBid": _float(row.get("entry_bid")),

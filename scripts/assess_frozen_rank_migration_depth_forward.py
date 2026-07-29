@@ -35,6 +35,7 @@ from scripts.assess_full_universe_rank_strategy import raw_session_coverage
 
 
 LANE_SOURCE = "prior_session_candidate_rank_migration"
+EVIDENCE_NAME = "frozen_rank_migration_five_level_depth_forward"
 CONTRACT = "t1_5_s1_0_h60"
 SCORE_THRESHOLD = 0.25
 SELECTION_CUTOFF = "2026-07-29"
@@ -427,6 +428,7 @@ def run_audit(
         events,
         eligible_dates,
         capital=capital,
+        max_trades_per_day=MAX_TRADES_PER_DAY,
     )
     daily.to_csv(output_dir / "forward_daily.csv", index=False)
     trades.to_csv(output_dir / "forward_trades.csv", index=False)
@@ -446,7 +448,7 @@ def run_audit(
             if accepted else "rejected_untouched_depth_forward"
         )
     status = {
-        "evidence": "frozen_rank_migration_five_level_depth_forward",
+        "evidence": EVIDENCE_NAME,
         "status": status_name,
         "contract": CONTRACT,
         "score_threshold": SCORE_THRESHOLD,

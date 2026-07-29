@@ -163,6 +163,18 @@ run_rank_migration_audit() {
         >>"$LOG" 2>&1 || true
 }
 
+run_stop_avoidance_audit() {
+    local features="$REPO/results/Data/live_rank_migration/rank_migration_features.csv"
+    if [ ! -s "$features" ]; then
+        return
+    fi
+    "$PYTHON" "$REPO/scripts/assess_live_stop_avoidance.py" \
+        --input "$features" \
+        --output-dir "$REPO/results/Data/live_stop_avoidance" \
+        --capital 500000 --daily-goal 10000 --stress-cost-pct 0.10 \
+        >>"$LOG" 2>&1 || true
+}
+
 run_prior_session_ranker_paper() {
     "$PYTHON" "$REPO/scripts/assess_prior_session_ranker_paper.py" \
         --prediction-glob "$REPO/results/Data/frozen_microstructure_paper/predictions_20*.csv" \
@@ -246,6 +258,19 @@ run_frozen_rank_migration_depth_forward() {
         --lane-status-glob "$REPO/results/Data/frozen_rank_migration_contract_matrix/status_20*.json" \
         --model "$REPO/results/Data/live_rank_migration/frozen_rank_migration_model.joblib" \
         --output-dir "$REPO/results/Data/frozen_rank_migration_depth_forward" \
+        --capital 500000 --daily-goal 10000 \
+        --forward-sessions 20 --min-snapshots 1000 \
+        >>"$LOG" 2>&1 || true
+}
+
+run_frozen_stop_avoidance_depth_forward() {
+    "$PYTHON" "$REPO/scripts/assess_frozen_stop_avoidance_depth_forward.py" \
+        --registration-glob "$REPO/results/Data/frozen_stop_avoidance_contract_matrix/registrations_20*.csv" \
+        --outcome-glob "$REPO/results/Data/frozen_stop_avoidance_contract_matrix/outcomes_20*.csv" \
+        --raw-glob "$REPO/results/Data/live_feature_recorder/live_features_20*.csv" \
+        --lane-status-glob "$REPO/results/Data/frozen_stop_avoidance_contract_matrix/status_20*.json" \
+        --model "$REPO/results/Data/live_stop_avoidance/frozen_stop_avoidance_model.joblib" \
+        --output-dir "$REPO/results/Data/frozen_stop_avoidance_depth_forward" \
         --capital 500000 --daily-goal 10000 \
         --forward-sessions 20 --min-snapshots 1000 \
         >>"$LOG" 2>&1 || true
@@ -388,6 +413,7 @@ if [ -f "$OUTPUT_ROOT/status.json" ]; then
         run_live_microstructure_research
         run_event_shadow_rebuild
         run_rank_migration_audit
+        run_stop_avoidance_audit
         run_prior_session_ranker_paper
         run_frozen_ranker_prediction_matrix
         run_full_universe_rank_strategy
@@ -395,6 +421,7 @@ if [ -f "$OUTPUT_ROOT/status.json" ]; then
         run_full_rank_contract_matrix
         run_depth_executable_rank_strategy
         run_frozen_rank_migration_depth_forward
+        run_frozen_stop_avoidance_depth_forward
         run_fixed_rank_first_forward
         run_full_rank_entry_timing
         run_full_rank_feature_gates
@@ -448,6 +475,7 @@ run_ranked_replay
 run_live_microstructure_research
 run_event_shadow_rebuild
 run_rank_migration_audit
+run_stop_avoidance_audit
 run_prior_session_ranker_paper
 run_frozen_ranker_prediction_matrix
 run_full_universe_rank_strategy
@@ -455,6 +483,7 @@ run_exact_full_rank_strategy
 run_full_rank_contract_matrix
 run_depth_executable_rank_strategy
 run_frozen_rank_migration_depth_forward
+run_frozen_stop_avoidance_depth_forward
 run_fixed_rank_first_forward
 run_full_rank_entry_timing
 run_full_rank_feature_gates

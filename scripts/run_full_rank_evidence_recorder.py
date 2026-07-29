@@ -92,6 +92,8 @@ class StandaloneFullRankEvidenceWorker:
         frozen_contracts: FullUniverseRankContractMatrixObserver | None = None,
         rank_migration_ranker: FrozenMicrostructurePaperTrader | None = None,
         rank_migration_contracts: FullUniverseRankContractMatrixObserver | None = None,
+        stop_avoidance_ranker: FrozenMicrostructurePaperTrader | None = None,
+        stop_avoidance_contracts: FullUniverseRankContractMatrixObserver | None = None,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.universe = str(universe or "all").strip().lower()
@@ -308,6 +310,56 @@ class StandaloneFullRankEvidenceWorker:
                     ],
                 )
             )
+        self.stop_avoidance_ranker = stop_avoidance_ranker
+        if (
+            self.stop_avoidance_ranker is None
+            and _truthy("SIGNALMONITOR_ENABLE_STOP_AVOIDANCE_PAPER", "1")
+        ):
+            stop_avoidance_model = Path(
+                str(
+                    os.environ.get(
+                        "SIGNALMONITOR_STOP_AVOIDANCE_MODEL",
+                        self.output_dir
+                        / "live_stop_avoidance"
+                        / "frozen_stop_avoidance_model.joblib",
+                    )
+                    or ""
+                )
+            )
+            if stop_avoidance_model.is_file():
+                self.stop_avoidance_ranker = FrozenMicrostructurePaperTrader(
+                    output_dir=str(self.output_dir),
+                    model_path=str(stop_avoidance_model),
+                    capital=capital,
+                    threshold=0.78,
+                    max_trades_per_day=5,
+                    root_name="frozen_stop_avoidance_paper",
+                    model_features=RANK_MIGRATION_MODEL_FEATURES,
+                    model_artifact_type=(
+                        "prior_session_rank_migration_stop_avoidance"
+                    ),
+                    source_name=(
+                        "prior_session_rank_migration_stop_avoidance"
+                    ),
+                )
+        self.stop_avoidance_contracts = stop_avoidance_contracts
+        if (
+            self.stop_avoidance_contracts is None
+            and self.stop_avoidance_ranker is not None
+        ):
+            self.stop_avoidance_contracts = (
+                FullUniverseRankContractMatrixObserver(
+                    output_dir=str(self.output_dir),
+                    stress_pct=stress,
+                    root_name="frozen_stop_avoidance_contract_matrix",
+                    metadata_columns=[
+                        "ExpectedReturnPct",
+                        "MoveBand",
+                        "ModelTrainedThrough",
+                        "ModelSourceSha256",
+                    ],
+                )
+            )
         self.status_path = (
             self.output_dir / "full_rank_evidence_runtime" / "status.json"
         )
@@ -364,6 +416,26 @@ class StandaloneFullRankEvidenceWorker:
                     now=now,
                 )
             )
+        stop_avoidance_events = []
+        stop_avoidance_entries = []
+        stop_avoidance_contract_events = []
+        if self.stop_avoidance_ranker is not None:
+            stop_avoidance_events = self.stop_avoidance_ranker.process(
+                rows,
+                ticks,
+                now=now,
+            )
+            stop_avoidance_entries = (
+                self.stop_avoidance_ranker.contract_entry_events(ticks)
+            )
+        if self.stop_avoidance_contracts is not None:
+            stop_avoidance_contract_events = (
+                self.stop_avoidance_contracts.process(
+                    stop_avoidance_entries,
+                    ticks,
+                    now=now,
+                )
+            )
         payload = {
             "status": "recording_standalone_full_rank_evidence",
             "owner": "standalone",
@@ -388,6 +460,16 @@ class StandaloneFullRankEvidenceWorker:
             ),
             "rank_migration_contract_events": int(
                 len(rank_migration_contract_events)
+            ),
+            "stop_avoidance_enabled": (
+                self.stop_avoidance_ranker is not None
+            ),
+            "stop_avoidance_events": int(len(stop_avoidance_events)),
+            "stop_avoidance_prediction_entries": int(
+                len(stop_avoidance_entries)
+            ),
+            "stop_avoidance_contract_events": int(
+                len(stop_avoidance_contract_events)
             ),
             "cycle_ms": round((time.monotonic() - started) * 1000.0, 2),
             "feature_interval_seconds": float(self.recorder.interval_seconds),

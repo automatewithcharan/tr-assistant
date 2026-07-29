@@ -93,6 +93,31 @@ def _rank_artifact(tmp_path, trained_through="2026-07-21"):
     return path
 
 
+def _stop_avoidance_artifact(tmp_path, trained_through="2026-07-29"):
+    model = DummyRegressor(strategy="constant", constant=0.80)
+    model.fit(
+        pd.DataFrame(
+            [[0.0] * len(RANK_MIGRATION_MODEL_FEATURES)],
+            columns=RANK_MIGRATION_MODEL_FEATURES,
+        ),
+        [0.8],
+    )
+    metadata = {
+        "artifact_type": "prior_session_rank_migration_stop_avoidance",
+        "contract": CONTRACT,
+        "trained_through": trained_through,
+        "valid_from": "2026-07-30",
+        "features": RANK_MIGRATION_MODEL_FEATURES,
+        "source_sha256": "stop-test-hash",
+        "paper_only": True,
+        "alerts_allowed": False,
+        "real_orders_allowed": False,
+    }
+    path = tmp_path / "stop_model.joblib"
+    save_model_artifact(path, model, metadata)
+    return path
+
+
 def test_live_paper_prediction_precedes_executable_trade_and_exit(tmp_path):
     trader = FrozenMicrostructurePaperTrader(
         output_dir=str(tmp_path), model_path=str(_artifact(tmp_path)), persist=True
@@ -303,3 +328,51 @@ def test_rank_migration_mode_computes_causal_batch_ranks_separately(tmp_path):
     persisted = pd.read_csv(path)
     assert "CandidateRankVelocityPerMinute" in persisted.columns
     assert set(persisted["model_source_sha256"]) == {"rank-test-hash"}
+
+
+def test_custom_stop_avoidance_artifact_preserves_paper_source(tmp_path):
+    trader = FrozenMicrostructurePaperTrader(
+        output_dir=str(tmp_path),
+        model_path=str(_stop_avoidance_artifact(tmp_path)),
+        root_name="frozen_stop_avoidance_paper",
+        model_features=RANK_MIGRATION_MODEL_FEATURES,
+        model_artifact_type="prior_session_rank_migration_stop_avoidance",
+        source_name="prior_session_rank_migration_stop_avoidance",
+        threshold=0.78,
+        persist=False,
+    )
+    start = datetime(2026, 7, 30, 9, 18)
+    symbols = ["A", "B", "C", "D", "E"]
+    ticks = {
+        symbol: {
+            "best_bid": 99.9,
+            "best_bid_quantity": 10000,
+            "depth": {
+                "sell": [
+                    {"price": 100.1, "quantity": 10000, "orders": 2},
+                ]
+            },
+        }
+        for symbol in symbols
+    }
+    for offset, move in enumerate((0.55, 0.65, 0.75)):
+        now = start + timedelta(minutes=offset)
+        events = trader.process(
+            pd.DataFrame(
+                [
+                    _row(now, move + index * 0.01, symbol=symbol)
+                    for index, symbol in enumerate(symbols)
+                ]
+            ),
+            ticks,
+            now=now,
+        )
+
+    assert [event["event"] for event in events] == ["paper_entry"]
+    contract_entries = trader.contract_entry_events(ticks)
+    assert len(contract_entries) == 5
+    assert {
+        event["Source"] for event in contract_entries
+    } == {"prior_session_rank_migration_stop_avoidance"}
+    assert all(event["ExpectedReturnPct"] == 0.8 for event in contract_entries)
+    assert all(event["ExecutionSchemaVersion"] == 2 for event in contract_entries)
