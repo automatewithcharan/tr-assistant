@@ -16,11 +16,13 @@ def test_capacity_challenger_has_fixed_five_slot_paper_policies():
         "acceleration_t1_5_s1_0",
         "acceleration_t1_5_s1_5",
         "sector_rotation_t1_5_s1_0",
+        "sector_rotation_t1_5_s1_5",
         "rapid_climber_t1_0_s1_0",
     }
     assert POLICIES["sector_rotation_t1_5_s1_0"]["gate"] == "sector_rotation"
     assert POLICIES["rapid_climber_t1_0_s1_0"]["gate"] == "rapid_rank_climber"
     assert POLICIES["sector_rotation_t1_5_s1_0"]["slots"] == 3
+    assert POLICIES["sector_rotation_t1_5_s1_5"]["contract"] == "t1_5_s1_5_h60"
     assert POLICIES["rapid_climber_t1_0_s1_0"]["slots"] == 5
     assert all("gate" in policy for policy in POLICIES.values())
 

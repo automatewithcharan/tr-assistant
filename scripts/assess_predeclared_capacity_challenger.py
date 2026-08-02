@@ -58,6 +58,13 @@ POLICIES = {
         "slots": 3,
         "description": "sector breadth confirmation with a 1.0% stop",
     },
+    "sector_rotation_t1_5_s1_5": {
+        "gate": "sector_rotation",
+        "selector": "balanced_rank_acceleration",
+        "contract": "t1_5_s1_5_h60",
+        "slots": 3,
+        "description": "sector breadth confirmation with a 1.5% stop",
+    },
     "rapid_climber_t1_0_s1_0": {
         "gate": "rapid_rank_climber",
         "selector": "balanced_rank_acceleration",
