@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+from collections import Counter
 import csv
 import json
 import os
@@ -67,6 +68,67 @@ def rank_session_coverage(path: Path, session_date: str) -> tuple[bool, bool]:
     return True, value in {"1", "1.0", "true", "yes", "y", "on"}
 
 
+def ranked_paper_ledger_integrity(
+    path: Path,
+    session_date: str,
+) -> dict[str, Any]:
+    """Reconcile paper entries, exits, and the persisted daily summary."""
+    try:
+        with path.open("r", encoding="utf-8", newline="") as handle:
+            rows = [
+                row
+                for row in csv.DictReader(handle)
+                if str(row.get("timestamp") or "")[:10] == session_date
+            ]
+    except Exception:
+        rows = []
+
+    entries = [row for row in rows if row.get("event") == "paper_entry"]
+    exits = [row for row in rows if row.get("event") == "paper_exit"]
+    summaries = [
+        row for row in rows if row.get("event") == "paper_daily_summary"
+    ]
+    entry_symbols = Counter(
+        str(row.get("symbol") or "").strip().upper() for row in entries
+    )
+    exit_symbols = Counter(
+        str(row.get("symbol") or "").strip().upper() for row in exits
+    )
+    summary = summaries[-1] if summaries else {}
+    try:
+        details = json.loads(str(summary.get("details_json") or "{}"))
+    except (TypeError, ValueError, json.JSONDecodeError):
+        details = {}
+    try:
+        exit_net = round(sum(float(row.get("net_pnl") or 0.0) for row in exits), 2)
+    except (TypeError, ValueError):
+        exit_net = float("nan")
+    try:
+        summary_trades = int(details.get("trades", -1))
+        summary_net = round(float(details.get("net_pnl")), 2)
+    except (TypeError, ValueError):
+        summary_trades = -1
+        summary_net = float("nan")
+
+    passed = bool(
+        summaries
+        and entry_symbols == exit_symbols
+        and summary_trades == len(entries)
+        and abs(summary_net - exit_net) <= 0.01
+    )
+    return {
+        "passed": passed,
+        "entries": len(entries),
+        "exits": len(exits),
+        "summaries": len(summaries),
+        "summary_trades": summary_trades,
+        "exit_net_pnl": exit_net,
+        "summary_net_pnl": summary_net,
+        "unmatched_entries": sorted((entry_symbols - exit_symbols).elements()),
+        "unmatched_exits": sorted((exit_symbols - entry_symbols).elements()),
+    }
+
+
 def assess(root: Path, session_date: str, cutoff_epoch: float) -> dict[str, Any]:
     checks = []
     base_path = (
@@ -104,6 +166,26 @@ def assess(root: Path, session_date: str, cutoff_epoch: float) -> dict[str, Any]
             "detail": (
                 f"date_found={rank_date_found}, fresh_after_close={rank_coverage_fresh}, "
                 f"full_session_eligible={rank_full_session}"
+            ),
+        }
+    )
+
+    paper_ledger = ranked_paper_ledger_integrity(
+        root / "results/Data/ranked_confirmation_paper/events.csv",
+        session_date,
+    )
+    checks.append(
+        {
+            "name": "ranked_confirmation_paper_ledger",
+            "passed": bool(paper_ledger["passed"]),
+            "detail": (
+                f"entries={paper_ledger['entries']}, exits={paper_ledger['exits']}, "
+                f"summaries={paper_ledger['summaries']}, "
+                f"summary_trades={paper_ledger['summary_trades']}, "
+                f"exit_net_pnl={paper_ledger['exit_net_pnl']}, "
+                f"summary_net_pnl={paper_ledger['summary_net_pnl']}, "
+                f"unmatched_entries={paper_ledger['unmatched_entries']}, "
+                f"unmatched_exits={paper_ledger['unmatched_exits']}"
             ),
         }
     )

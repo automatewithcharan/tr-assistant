@@ -4,7 +4,11 @@ from datetime import date, datetime, time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
-from scripts.check_intraday_eod_evidence import ARTIFACTS, assess
+from scripts.check_intraday_eod_evidence import (
+    ARTIFACTS,
+    assess,
+    ranked_paper_ledger_integrity,
+)
 
 
 IST = ZoneInfo("Asia/Kolkata")
@@ -44,6 +48,15 @@ def fixture_root(tmp_path: Path, base_status: str = "complete") -> tuple[Path, f
         encoding="utf-8",
     )
     os.utime(coverage, (fresh, fresh))
+    events = tmp_path / "results/Data/ranked_confirmation_paper/events.csv"
+    events.parent.mkdir(parents=True, exist_ok=True)
+    events.write_text(
+        "timestamp,event,symbol,status,reason,price,rank_score,qty,gross_pnl,costs,net_pnl,details_json\n"
+        "2026-07-23T09:30:00+05:30,paper_entry,TEST,open,test,100,50,10,0,0,0,{}\n"
+        "2026-07-23T10:00:00+05:30,paper_exit,TEST,closed,target,101,50,10,10,1,9,{}\n"
+        '2026-07-23T15:10:00+05:30,paper_daily_summary,PORTFOLIO,complete,eod_summary,0,0,0,0,0,9,"{""trades"": 1, ""net_pnl"": 9.0}"\n',
+        encoding="utf-8",
+    )
     return tmp_path, cutoff
 
 
@@ -52,7 +65,7 @@ def test_complete_eligible_session_requires_every_fresh_artifact(tmp_path):
     result = assess(root, "2026-07-23", cutoff)
     assert result["status"] == "complete_eligible_session"
     assert result["session_evidence_eligible"] is True
-    assert result["artifacts_refreshed"] == result["artifacts_required"] == 25
+    assert result["artifacts_refreshed"] == result["artifacts_required"] == 26
     assert result["real_orders_allowed"] is False
 
 
@@ -87,4 +100,19 @@ def test_stale_or_unsafe_artifact_fails_integrity(tmp_path):
     write_json(unsafe, {"status": "collecting", "real_orders_allowed": True}, cutoff + 1)
     result = assess(root, "2026-07-23", cutoff)
     assert result["status"] == "incomplete_eod_pipeline"
-    assert result["artifacts_refreshed"] == 23
+    assert result["artifacts_refreshed"] == 24
+
+
+def test_paper_ledger_integrity_rejects_orphaned_entry(tmp_path):
+    path = tmp_path / "events.csv"
+    path.write_text(
+        "timestamp,event,symbol,net_pnl,details_json\n"
+        "2026-07-23T09:30:00+05:30,paper_entry,ORPHAN,0,{}\n"
+        '2026-07-23T15:10:00+05:30,paper_daily_summary,PORTFOLIO,0,"{""trades"": 0, ""net_pnl"": 0.0}"\n',
+        encoding="utf-8",
+    )
+
+    result = ranked_paper_ledger_integrity(path, "2026-07-23")
+
+    assert result["passed"] is False
+    assert result["unmatched_entries"] == ["ORPHAN"]
