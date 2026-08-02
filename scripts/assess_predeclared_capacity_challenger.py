@@ -37,6 +37,20 @@ SLOT_CAPITAL = CAPITAL / SLOTS
 MAX_TRADES_PER_DAY = 10
 FORWARD_START = "2026-08-03"
 POLICIES = {
+    "opening_ranked_t0_8_s0_5": {
+        "gate": "opening_ranked",
+        "selector": "rank_first",
+        "contract": "t0_8_s0_5_h30",
+        "slots": 3,
+        "description": "opening leaders with a short target and stop",
+    },
+    "early_rank_acceleration_t2_0_s1_0": {
+        "gate": "early_rank_acceleration",
+        "selector": "acceleration_first",
+        "contract": "t2_0_s1_0_h60",
+        "slots": 2,
+        "description": "early rank migration before a three-percent move",
+    },
     "acceleration_t1_5_s1_0": {
         "gate": "all_buyable",
         "selector": "acceleration_first",

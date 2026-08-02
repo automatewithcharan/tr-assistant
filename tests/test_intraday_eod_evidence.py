@@ -41,9 +41,11 @@ def fixture_root(tmp_path: Path, base_status: str = "complete") -> tuple[Path, f
         if relative == ARTIFACTS["predeclared_capacity_challenger"]:
             payload.update(
                 {
-                    "policy_count": 5,
+                    "policy_count": 7,
                     "policies": {
                         name: {} for name in [
+                            "opening_ranked_t0_8_s0_5",
+                            "early_rank_acceleration_t2_0_s1_0",
                             "acceleration_t1_5_s1_0",
                             "acceleration_t1_5_s1_5",
                             "sector_rotation_t1_5_s1_0",
@@ -151,10 +153,12 @@ def test_predeclared_capacity_integrity_rejects_partial_or_live_payload():
     }
     assert predeclared_capacity_integrity(payload)["passed"] is False
 
-    payload["policy_count"] = 5
+    payload["policy_count"] = 7
     payload["policies"] = {
         name: {}
         for name in [
+            "opening_ranked_t0_8_s0_5",
+            "early_rank_acceleration_t2_0_s1_0",
             "acceleration_t1_5_s1_0",
             "acceleration_t1_5_s1_5",
             "sector_rotation_t1_5_s1_0",

@@ -9,10 +9,12 @@ from scripts.assess_predeclared_capacity_challenger import (
 )
 
 
-def test_capacity_challenger_has_fixed_five_slot_paper_policies():
+def test_capacity_challenger_has_fixed_paper_policies():
     assert SLOTS == 5
     assert CAPITAL / SLOTS == 100000.0
     assert set(POLICIES) == {
+        "opening_ranked_t0_8_s0_5",
+        "early_rank_acceleration_t2_0_s1_0",
         "acceleration_t1_5_s1_0",
         "acceleration_t1_5_s1_5",
         "sector_rotation_t1_5_s1_0",
@@ -21,6 +23,10 @@ def test_capacity_challenger_has_fixed_five_slot_paper_policies():
     }
     assert POLICIES["sector_rotation_t1_5_s1_0"]["gate"] == "sector_rotation"
     assert POLICIES["rapid_climber_t1_0_s1_0"]["gate"] == "rapid_rank_climber"
+    assert POLICIES["opening_ranked_t0_8_s0_5"]["gate"] == "opening_ranked"
+    assert POLICIES["early_rank_acceleration_t2_0_s1_0"]["gate"] == "early_rank_acceleration"
+    assert POLICIES["opening_ranked_t0_8_s0_5"]["slots"] == 3
+    assert POLICIES["early_rank_acceleration_t2_0_s1_0"]["slots"] == 2
     assert POLICIES["sector_rotation_t1_5_s1_0"]["slots"] == 3
     assert POLICIES["sector_rotation_t1_5_s1_5"]["contract"] == "t1_5_s1_5_h60"
     assert POLICIES["rapid_climber_t1_0_s1_0"]["slots"] == 5

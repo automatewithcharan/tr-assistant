@@ -47,6 +47,8 @@ ARTIFACTS = {
 }
 
 PREDECLARED_POLICY_NAMES = {
+    "opening_ranked_t0_8_s0_5",
+    "early_rank_acceleration_t2_0_s1_0",
     "acceleration_t1_5_s1_0",
     "acceleration_t1_5_s1_5",
     "sector_rotation_t1_5_s1_0",
