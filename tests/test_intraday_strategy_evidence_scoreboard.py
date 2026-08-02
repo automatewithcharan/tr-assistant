@@ -162,7 +162,7 @@ def test_predeclared_capacity_policies_are_visible_but_not_comparable(tmp_path):
     rows = scoreboard[
         scoreboard["Lane"].eq("Predeclared capacity challenger")
     ]
-    assert len(rows) == 8
+    assert len(rows) == 9
     row = rows[rows["Variant"].str.startswith("opening_ranked_t0_8_s0_5")].iloc[0]
     assert row["StressAvgDailyPnl"] == 1_250
     assert row["StressLower95DailyPnl"] == -2_000.0

@@ -53,6 +53,7 @@ PREDECLARED_POLICY_NAMES = {
     "acceleration_t1_5_s1_5",
     "sector_rotation_t1_5_s1_0",
     "sector_rotation_acceleration_t1_5_s1_0",
+    "sector_rotation_acceleration_t1_5_s1_5",
     "sector_rotation_t1_5_s1_5",
     "rapid_climber_t1_0_s1_0",
 }

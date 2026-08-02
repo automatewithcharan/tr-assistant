@@ -19,11 +19,13 @@ def test_capacity_challenger_has_fixed_paper_policies():
         "acceleration_t1_5_s1_5",
         "sector_rotation_t1_5_s1_0",
         "sector_rotation_acceleration_t1_5_s1_0",
+        "sector_rotation_acceleration_t1_5_s1_5",
         "sector_rotation_t1_5_s1_5",
         "rapid_climber_t1_0_s1_0",
     }
     assert POLICIES["sector_rotation_t1_5_s1_0"]["gate"] == "sector_rotation"
     assert POLICIES["sector_rotation_acceleration_t1_5_s1_0"]["selector"] == "acceleration_first"
+    assert POLICIES["sector_rotation_acceleration_t1_5_s1_5"]["contract"] == "t1_5_s1_5_h60"
     assert POLICIES["rapid_climber_t1_0_s1_0"]["gate"] == "rapid_rank_climber"
     assert POLICIES["opening_ranked_t0_8_s0_5"]["gate"] == "opening_ranked"
     assert POLICIES["early_rank_acceleration_t2_0_s1_0"]["gate"] == "early_rank_acceleration"
