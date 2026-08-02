@@ -52,6 +52,23 @@ def fixture_root(tmp_path: Path) -> tuple[Path, datetime]:
     for name in required:
         write(tmp_path / name, "# present\n")
     write(
+        tmp_path / "scripts/assess_predeclared_capacity_challenger.py",
+        "POLICIES = {"
+        + ",".join(
+            f'"{name}": {{}}'
+            for name in [
+                "opening_ranked_t0_8_s0_5",
+                "early_rank_acceleration_t2_0_s1_0",
+                "acceleration_t1_5_s1_0",
+                "acceleration_t1_5_s1_5",
+                "sector_rotation_t1_5_s1_0",
+                "sector_rotation_t1_5_s1_5",
+                "rapid_climber_t1_0_s1_0",
+            ]
+        )
+        + "}\n",
+    )
+    write(
         tmp_path / "scripts/assess_full_rank_capital_allocation.py",
         "SLOT_COUNTS = (1, 2, 3, 5)\n",
     )
@@ -128,6 +145,25 @@ def test_ready_pipeline_is_not_strategy_acceptance(tmp_path):
     )
     assert search["passed"] is True
     assert "4 frozen score thresholds" in search["detail"]
+    registry = next(
+        item for item in result["checks"]
+        if item["name"] == "predeclared_capacity_registry"
+    )
+    assert registry["passed"] is True
+
+
+def test_partial_predeclared_registry_blocks_readiness(tmp_path):
+    root, now = fixture_root(tmp_path)
+    write(
+        root / "scripts/assess_predeclared_capacity_challenger.py",
+        'POLICIES = {"opening_ranked_t0_8_s0_5": {}}\n',
+    )
+    result = run(root, now)
+    registry = next(
+        item for item in result["checks"]
+        if item["name"] == "predeclared_capacity_registry"
+    )
+    assert registry["passed"] is False
 
 
 def test_unsafe_autotrade_flag_blocks_readiness(tmp_path):

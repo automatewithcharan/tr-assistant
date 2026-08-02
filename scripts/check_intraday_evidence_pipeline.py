@@ -19,6 +19,15 @@ from zoneinfo import ZoneInfo
 ROOT = Path(__file__).resolve().parents[1]
 IST = ZoneInfo("Asia/Kolkata")
 TRUTHY = {"1", "true", "yes", "y", "on"}
+PREDECLARED_CAPACITY_POLICY_NAMES = {
+    "opening_ranked_t0_8_s0_5",
+    "early_rank_acceleration_t2_0_s1_0",
+    "acceleration_t1_5_s1_0",
+    "acceleration_t1_5_s1_5",
+    "sector_rotation_t1_5_s1_0",
+    "sector_rotation_t1_5_s1_5",
+    "rapid_climber_t1_0_s1_0",
+}
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -74,6 +83,32 @@ def dict_assignment_size(path: Path, variable_name: str) -> int:
             continue
         return len(node.value.keys) if isinstance(node.value, ast.Dict) else 0
     return 0
+
+
+def dict_assignment_keys(path: Path, variable_name: str) -> set[str]:
+    """Return literal string keys from a top-level dictionary assignment."""
+    try:
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+    except Exception:
+        return set()
+    for node in tree.body:
+        if not isinstance(node, (ast.Assign, ast.AnnAssign)):
+            continue
+        targets = node.targets if isinstance(node, ast.Assign) else [node.target]
+        if not any(
+            isinstance(target, ast.Name) and target.id == variable_name
+            for target in targets
+        ):
+            continue
+        if not isinstance(node.value, ast.Dict):
+            return set()
+        keys = {
+            key.value
+            for key in node.value.keys
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+        return keys if len(keys) == len(node.value.keys) else set()
+    return set()
 
 
 def sequence_assignment_size(path: Path, variable_name: str) -> int:
@@ -231,6 +266,21 @@ def assess(
     ]
     missing = [value for value in required_files if not (root / value).is_file()]
     checks.append(check("required_code_present", not missing, "all evidence components present" if not missing else "missing: " + ", ".join(missing)))
+
+    predeclared_path = root / "scripts/assess_predeclared_capacity_challenger.py"
+    predeclared_names = dict_assignment_keys(predeclared_path, "POLICIES")
+    predeclared_ok = predeclared_names == PREDECLARED_CAPACITY_POLICY_NAMES
+    checks.append(
+        check(
+            "predeclared_capacity_registry",
+            predeclared_ok,
+            (
+                "seven fixed paper policies declared"
+                if predeclared_ok
+                else f"expected {len(PREDECLARED_CAPACITY_POLICY_NAMES)} fixed policies, found {len(predeclared_names)}"
+            ),
+        )
+    )
 
     eod_script = (root / "scripts/live_evidence_eod.sh").read_text(errors="ignore") if (root / "scripts/live_evidence_eod.sh").exists() else ""
     required_eod_calls = [
