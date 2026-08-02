@@ -32,6 +32,16 @@ SCOREBOARD_COLUMNS = [
     "Source",
 ]
 
+PREDECLARED_CAPACITY_POLICY_NAMES = (
+    "opening_ranked_t0_8_s0_5",
+    "early_rank_acceleration_t2_0_s1_0",
+    "acceleration_t1_5_s1_0",
+    "acceleration_t1_5_s1_5",
+    "sector_rotation_t1_5_s1_0",
+    "sector_rotation_t1_5_s1_5",
+    "rapid_climber_t1_0_s1_0",
+)
+
 
 def _number(value: Any, default: float = 0.0) -> float:
     try:
@@ -313,8 +323,75 @@ def _goal_status_lane(
     )
 
 
+def _predeclared_capacity_lanes(data_dir: Path) -> List[Dict[str, Any]]:
+    """Expose every fixed challenger policy without treating it as accepted."""
+    relative = "predeclared_capacity_challenger/status.json"
+    status = _load_json(data_dir / relative)
+    capital = _number(status.get("capital"), 500_000.0)
+    summaries = {
+        str(row.get("policy", "")): row
+        for row in status.get("policy_summaries", [])
+        if isinstance(row, dict)
+    }
+    overall_status = str(
+        status.get("status") or ("missing" if not status else "collecting")
+    )
+    rows: List[Dict[str, Any]] = []
+    for name in PREDECLARED_CAPACITY_POLICY_NAMES:
+        summary = summaries.get(name, {})
+        variant_parts = [name]
+        for key in ("gate", "selector", "contract", "slots"):
+            value = summary.get(key)
+            if value not in (None, ""):
+                variant_parts.append(str(value))
+        complete_sessions = summary.get(
+            "execution_complete_sessions", summary.get("sessions", 0)
+        )
+        trades = summary.get("trades", 0)
+        rows.append(
+            _row(
+                lane="Predeclared capacity challenger",
+                variant=" | ".join(variant_parts),
+                evidence_class="predeclared_capacity_forward",
+                status=overall_status,
+                sessions=complete_sessions,
+                trades=trades,
+                avg=summary.get("avg_daily_pnl", 0),
+                lower=(
+                    _number(summary.get("lower_95_pct"), 0.0)
+                    * capital
+                    / 100.0
+                ),
+                positive=summary.get("positive_session_pct", 0),
+                goal=summary.get("goal_hit_pct", 0),
+                worst=(
+                    _number(
+                        summary.get(
+                            "worst_session_pct",
+                            summary.get("worst_day_pct", 0),
+                        )
+                    )
+                    * capital
+                    / 100.0
+                ),
+                accepted=False,
+                paper=False,
+                real=False,
+                measured=(
+                    _number(complete_sessions) > 0
+                    and _number(trades) > 0
+                ),
+                comparable=False,
+                diagnostic=True,
+                source=relative,
+            )
+        )
+    return rows
+
+
 def build_scoreboard(data_dir: Path) -> pd.DataFrame:
     rows: List[Dict[str, Any]] = [
+        *_predeclared_capacity_lanes(data_dir),
         _csv_lane(
             data_dir,
             lane="Ranked Grade-B confirmation",

@@ -128,6 +128,51 @@ def test_rank_migration_forward_is_visible_but_not_depth_comparable(tmp_path):
     assert not bool(row["CapitalAllocationComparable"])
 
 
+def test_predeclared_capacity_policies_are_visible_but_not_comparable(tmp_path):
+    data = tmp_path / "Data"
+    _json(
+        data / "predeclared_capacity_challenger/status.json",
+        {
+            "status": "collecting_predeclared_capacity_forward_sessions",
+            "capital": 500_000,
+            "policy_summaries": [
+                {
+                    "policy": "opening_ranked_t0_8_s0_5",
+                    "gate": "opening_ranked",
+                    "selector": "rank_first",
+                    "contract": "t0_8_s0_5_h30",
+                    "slots": 3,
+                    "execution_complete_sessions": 4,
+                    "trades": 12,
+                    "avg_daily_pnl": 1_250,
+                    "lower_95_pct": -0.4,
+                    "positive_session_pct": 50,
+                    "goal_hit_pct": 0,
+                    "worst_session_pct": -1.2,
+                }
+            ],
+            "paper_only": True,
+            "alerts_allowed": False,
+            "paper_promotion_allowed": False,
+            "real_orders_allowed": False,
+        },
+    )
+
+    scoreboard = write_scoreboard(data, tmp_path / "out")
+    rows = scoreboard[
+        scoreboard["Lane"].eq("Predeclared capacity challenger")
+    ]
+    assert len(rows) == 7
+    row = rows[rows["Variant"].str.startswith("opening_ranked_t0_8_s0_5")].iloc[0]
+    assert row["StressAvgDailyPnl"] == 1_250
+    assert row["StressLower95DailyPnl"] == -2_000.0
+    assert bool(row["MeasuredEvidence"])
+    assert bool(row["DiagnosticOnly"])
+    assert not bool(row["CapitalAllocationComparable"])
+    assert not bool(row["PaperPromotionAllowed"])
+    assert not bool(row["RealOrdersAllowed"])
+
+
 def test_accepted_rank_migration_depth_forward_becomes_comparable(tmp_path):
     data = tmp_path / "Data"
     _json(
