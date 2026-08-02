@@ -7,6 +7,7 @@ from zoneinfo import ZoneInfo
 from scripts.check_intraday_eod_evidence import (
     ARTIFACTS,
     assess,
+    predeclared_capacity_integrity,
     ranked_paper_ledger_integrity,
 )
 
@@ -36,9 +37,29 @@ def fixture_root(tmp_path: Path, base_status: str = "complete") -> tuple[Path, f
         fresh,
     )
     for relative in ARTIFACTS.values():
+        payload = {"status": "collecting", "real_orders_allowed": False}
+        if relative == ARTIFACTS["predeclared_capacity_challenger"]:
+            payload.update(
+                {
+                    "policy_count": 5,
+                    "policies": {
+                        name: {} for name in [
+                            "acceleration_t1_5_s1_0",
+                            "acceleration_t1_5_s1_5",
+                            "sector_rotation_t1_5_s1_0",
+                            "sector_rotation_t1_5_s1_5",
+                            "rapid_climber_t1_0_s1_0",
+                        ]
+                    },
+                    "selection_uses_forward_outcomes": False,
+                    "paper_only": True,
+                    "alerts_allowed": False,
+                    "paper_promotion_allowed": False,
+                }
+            )
         write_json(
             tmp_path / relative,
-            {"status": "collecting", "real_orders_allowed": False},
+            payload,
             fresh,
         )
     coverage = tmp_path / "results/Data/full_universe_rank_strategy/session_coverage.csv"
@@ -116,3 +137,30 @@ def test_paper_ledger_integrity_rejects_orphaned_entry(tmp_path):
 
     assert result["passed"] is False
     assert result["unmatched_entries"] == ["ORPHAN"]
+
+
+def test_predeclared_capacity_integrity_rejects_partial_or_live_payload():
+    payload = {
+        "policy_count": 4,
+        "policies": {"only_one": {}},
+        "selection_uses_forward_outcomes": False,
+        "paper_only": True,
+        "alerts_allowed": False,
+        "paper_promotion_allowed": False,
+        "real_orders_allowed": False,
+    }
+    assert predeclared_capacity_integrity(payload)["passed"] is False
+
+    payload["policy_count"] = 5
+    payload["policies"] = {
+        name: {}
+        for name in [
+            "acceleration_t1_5_s1_0",
+            "acceleration_t1_5_s1_5",
+            "sector_rotation_t1_5_s1_0",
+            "sector_rotation_t1_5_s1_5",
+            "rapid_climber_t1_0_s1_0",
+        ]
+    }
+    payload["real_orders_allowed"] = True
+    assert predeclared_capacity_integrity(payload)["passed"] is False

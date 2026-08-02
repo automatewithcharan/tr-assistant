@@ -46,6 +46,14 @@ ARTIFACTS = {
     "strategy_evidence_scoreboard": "results/Data/intraday_strategy_evidence_scoreboard/status.json",
 }
 
+PREDECLARED_POLICY_NAMES = {
+    "acceleration_t1_5_s1_0",
+    "acceleration_t1_5_s1_5",
+    "sector_rotation_t1_5_s1_0",
+    "sector_rotation_t1_5_s1_5",
+    "rapid_climber_t1_0_s1_0",
+}
+
 
 def load_json(path: Path) -> dict[str, Any]:
     try:
@@ -130,6 +138,33 @@ def ranked_paper_ledger_integrity(
     }
 
 
+def predeclared_capacity_integrity(payload: dict[str, Any]) -> dict[str, Any]:
+    """Require the complete fixed paper policy set and paper-only flags."""
+    policies = payload.get("policies")
+    policy_names = set(policies) if isinstance(policies, dict) else set()
+    expected = PREDECLARED_POLICY_NAMES
+    passed = bool(
+        payload.get("policy_count") == len(expected)
+        and policy_names == expected
+        and payload.get("selection_uses_forward_outcomes") is False
+        and payload.get("paper_only") is True
+        and payload.get("alerts_allowed") is False
+        and payload.get("paper_promotion_allowed") is False
+        and payload.get("real_orders_allowed") is False
+    )
+    return {
+        "passed": passed,
+        "policy_count": payload.get("policy_count"),
+        "policy_names": sorted(policy_names),
+        "expected_policy_names": sorted(expected),
+        "paper_only": payload.get("paper_only"),
+        "alerts_allowed": payload.get("alerts_allowed"),
+        "selection_uses_forward_outcomes": payload.get(
+            "selection_uses_forward_outcomes"
+        ),
+    }
+
+
 def assess(root: Path, session_date: str, cutoff_epoch: float) -> dict[str, Any]:
     checks = []
     base_path = (
@@ -196,7 +231,19 @@ def assess(root: Path, session_date: str, cutoff_epoch: float) -> dict[str, Any]
         payload = load_json(path)
         fresh = path.exists() and path.stat().st_mtime >= cutoff_epoch
         unsafe = bool(payload.get("real_orders_allowed", False))
-        passed = bool(payload and fresh and not unsafe)
+        invariant = (
+            predeclared_capacity_integrity(payload)
+            if name == "predeclared_capacity_challenger"
+            else {"passed": True}
+        )
+        passed = bool(payload and fresh and not unsafe and invariant["passed"])
+        extra_detail = ""
+        if name == "predeclared_capacity_challenger":
+            extra_detail = (
+                f", policies={invariant['policy_count']}/"
+                f"{len(PREDECLARED_POLICY_NAMES)}, paper_only={invariant['paper_only']}, "
+                f"alerts_allowed={invariant['alerts_allowed']}"
+            )
         checks.append(
             {
                 "name": name,
@@ -204,6 +251,7 @@ def assess(root: Path, session_date: str, cutoff_epoch: float) -> dict[str, Any]
                 "detail": (
                     f"status={payload.get('status', payload.get('evidence_type', 'missing'))}, "
                     f"fresh_after_close={fresh}, real_orders_allowed={unsafe}"
+                    f"{extra_detail}"
                 ),
             }
         )
