@@ -207,11 +207,13 @@ def replay_depth_slots(
     capital: float = 500_000.0,
     max_trades_per_day: int = 10,
     min_slot_deployment_pct: float = MIN_SLOT_DEPLOYMENT_PCT,
+    allowed_slot_counts: Iterable[int] = SLOT_COUNTS,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Replay causal selection with actual five-level entry and exit VWAPs."""
     if selector not in SELECTORS:
         raise ValueError(f"unknown selector: {selector}")
-    if int(slots) not in SLOT_COUNTS:
+    allowed_slots = {int(value) for value in allowed_slot_counts}
+    if int(slots) not in allowed_slots:
         raise ValueError(f"unsupported slot count: {slots}")
     slot_capital = float(capital) / int(slots)
     config = SELECTORS[selector]

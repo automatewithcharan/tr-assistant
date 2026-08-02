@@ -22,6 +22,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from scripts.assess_depth_executable_rank_strategy import (
+    SLOT_COUNTS,
     depth_session_coverage,
     load_depth_events,
     replay_depth_slots,
@@ -100,6 +101,22 @@ POLICIES = {
         "slots": 5,
         "description": "rapid rank climbers spread across five slots",
     },
+    "reusable_50k_early_acceleration_t1_0_s0_5": {
+        "gate": "early_rank_acceleration",
+        "selector": "acceleration_first",
+        "contract": "t1_0_s0_5_h30",
+        "slots": 10,
+        "max_trades_per_day": 20,
+        "description": "ten reusable Rs 50k slots with a 1.0% target and 0.5% stop",
+    },
+    "reusable_50k_early_acceleration_t2_0_s1_0": {
+        "gate": "early_rank_acceleration",
+        "selector": "acceleration_first",
+        "contract": "t2_0_s1_0_h60",
+        "slots": 10,
+        "max_trades_per_day": 20,
+        "description": "ten reusable Rs 50k slots with a 2.0% target and 1.0% stop",
+    },
 }
 
 
@@ -176,13 +193,18 @@ def run_challenger(
         )
         policy_events = policy_events_for_replay(events, dates, policy)
         policy_slots = max(1, int(policy.get("slots", SLOTS)))
+        policy_max_trades = max(
+            1,
+            int(policy.get("max_trades_per_day", MAX_TRADES_PER_DAY)),
+        )
         daily, trades = replay_depth_slots(
             policy_events,
             dates,
             selector=str(policy["selector"]),
             slots=policy_slots,
             capital=CAPITAL,
-            max_trades_per_day=MAX_TRADES_PER_DAY,
+            max_trades_per_day=policy_max_trades,
+            allowed_slot_counts=(*SLOT_COUNTS, 10),
         )
         complete_daily = (
             daily[daily["execution_complete"].astype(bool)]
@@ -196,7 +218,7 @@ def run_challenger(
                 **policy,
                 "capital": CAPITAL,
                 "slot_capital": CAPITAL / policy_slots,
-                "max_trades_per_day": MAX_TRADES_PER_DAY,
+                "max_trades_per_day": policy_max_trades,
                 "forward_start": forward_start,
                 "eligible_sessions": len(dates),
                 "execution_complete_sessions": int(

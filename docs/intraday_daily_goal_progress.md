@@ -7929,3 +7929,26 @@ Live evidence architecture:
   then five-minute data and reruns the 1%-3% fixed target grid automatically.
   It never modifies `anomaly_history.csv`, never enables broker orders, and
   keeps the alert research synchronized with each newly completed session.
+
+### 2026-08-02: Rs 50,000 reusable-slot forward experiment
+
+- The requested capital model is now a predeclared paper experiment rather
+  than an assumption: Rs 500,000 total capital is divided into ten independent
+  Rs 50,000 slots. A slot becomes available again only after its recorded exit,
+  and the experiment permits at most twenty entries per session. It never uses
+  leverage and cannot deploy more than the account capital concurrently.
+- Two policies use the same causal `early_rank_acceleration` gate and
+  `acceleration_first` selector so the exit comparison is isolated:
+  `reusable_50k_early_acceleration_t1_0_s0_5` tests a 1.0% target / 0.5% stop
+  over 30 minutes; `reusable_50k_early_acceleration_t2_0_s1_0` tests a 2.0%
+  target / 1.0% stop over 60 minutes.
+- Both consume observed five-level ask and bid depth, affordable VWAP-sized
+  quantities, and stress costs. A unit replay proves that ten simultaneous
+  slots are released at their observed exits and can fund later entries.
+- This does not promise zero losses. The economic comparison includes loss
+  size: after costs, frequent small wins can still lose money when stopped
+  trades are larger. Neither policy can send an alert, promote itself, or place
+  a broker order. The untouched forward boundary remains 2026-08-03.
+- The capacity registry and EOD integrity invariant now require exactly eleven
+  policies, including both Rs 50,000 variants, before Monday's session is
+  considered healthy.

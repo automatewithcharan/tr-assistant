@@ -122,6 +122,45 @@ def test_complete_depth_replay_calculates_cost_adjusted_pnl(tmp_path):
     assert float(trades.iloc[0]["pnl"]) > 0.0
 
 
+def test_ten_50k_slots_are_released_and_reused(tmp_path):
+    contract = next(iter(CONTRACTS))
+    entries = []
+    outcomes = []
+    for index in range(11):
+        symbol = f"S{index:02d}"
+        entry = _entry(symbol=symbol)
+        entry["EntryAt"] = (
+            "2026-07-29 09:20:00" if index < 10
+            else "2026-07-29 09:26:00"
+        )
+        outcome = _outcome(entry, contract)
+        outcome["ExitAt"] = (
+            "2026-07-29 09:25:00" if index < 10
+            else "2026-07-29 09:31:00"
+        )
+        entries.append(entry)
+        outcomes.append(outcome)
+    pd.DataFrame(entries).to_csv(tmp_path / "entries.csv", index=False)
+    pd.DataFrame(outcomes).to_csv(tmp_path / "outcomes.csv", index=False)
+    _, events = load_depth_events(
+        [str(tmp_path / "entries.csv")],
+        [str(tmp_path / "outcomes.csv")],
+    )
+
+    daily, trades = replay_depth_slots(
+        events,
+        ["2026-07-29"],
+        selector="rank_first",
+        slots=10,
+        max_trades_per_day=20,
+        allowed_slot_counts=(10,),
+    )
+
+    assert int(daily.iloc[0]["trades"]) == 11
+    assert len(trades) == 11
+    assert float(daily.iloc[0]["slot_capital"]) == 50_000.0
+
+
 def test_loader_normalizes_mixed_naive_and_aware_ist_timestamps(tmp_path):
     entry = {
         **_entry(),

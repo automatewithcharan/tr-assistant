@@ -22,6 +22,8 @@ def test_capacity_challenger_has_fixed_paper_policies():
         "sector_rotation_acceleration_t1_5_s1_5",
         "sector_rotation_t1_5_s1_5",
         "rapid_climber_t1_0_s1_0",
+        "reusable_50k_early_acceleration_t1_0_s0_5",
+        "reusable_50k_early_acceleration_t2_0_s1_0",
     }
     assert POLICIES["sector_rotation_t1_5_s1_0"]["gate"] == "sector_rotation"
     assert POLICIES["sector_rotation_acceleration_t1_5_s1_0"]["selector"] == "acceleration_first"
@@ -34,6 +36,10 @@ def test_capacity_challenger_has_fixed_paper_policies():
     assert POLICIES["sector_rotation_t1_5_s1_0"]["slots"] == 3
     assert POLICIES["sector_rotation_t1_5_s1_5"]["contract"] == "t1_5_s1_5_h60"
     assert POLICIES["rapid_climber_t1_0_s1_0"]["slots"] == 5
+    assert POLICIES["reusable_50k_early_acceleration_t1_0_s0_5"]["slots"] == 10
+    assert POLICIES["reusable_50k_early_acceleration_t1_0_s0_5"]["max_trades_per_day"] == 20
+    assert POLICIES["reusable_50k_early_acceleration_t1_0_s0_5"]["contract"] == "t1_0_s0_5_h30"
+    assert POLICIES["reusable_50k_early_acceleration_t2_0_s1_0"]["contract"] == "t2_0_s1_0_h60"
     assert all("gate" in policy for policy in POLICIES.values())
 
 
