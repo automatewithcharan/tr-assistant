@@ -122,6 +122,30 @@ def test_complete_depth_replay_calculates_cost_adjusted_pnl(tmp_path):
     assert float(trades.iloc[0]["pnl"]) > 0.0
 
 
+def test_loader_normalizes_mixed_naive_and_aware_ist_timestamps(tmp_path):
+    entry = {
+        **_entry(),
+        "EntryAt": "2026-07-29 09:20:00",
+    }
+    contract = next(iter(CONTRACTS))
+    outcome = {
+        **_outcome(entry, contract),
+        "ExitAt": "2026-07-29T09:25:00+05:30",
+    }
+    pd.DataFrame([entry]).to_csv(tmp_path / "entries.csv", index=False)
+    pd.DataFrame([outcome]).to_csv(tmp_path / "outcomes.csv", index=False)
+
+    entries, events = load_depth_events(
+        [str(tmp_path / "entries.csv")],
+        [str(tmp_path / "outcomes.csv")],
+    )
+
+    assert len(events) == 1
+    assert entries["entry_time"].dt.tz is None
+    assert events["exit_time"].dt.tz is None
+    assert events.iloc[0]["exit_time"] - events.iloc[0]["entry_time"] == pd.Timedelta(minutes=5)
+
+
 def test_coverage_requires_all_contract_outcomes_for_schema_v2_entry():
     entry = _entry()
     entries = pd.DataFrame([{**entry, "date": entry["Date"]}])

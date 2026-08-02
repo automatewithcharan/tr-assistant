@@ -10,6 +10,7 @@ from scripts.assess_frozen_rank_migration_depth_forward import (
     FORWARD_START,
     LANE_SOURCE,
     forward_coverage,
+    load_registration_ledger,
     replay_forward,
     run_audit,
 )
@@ -163,6 +164,19 @@ def test_schema_v1_registration_makes_session_ineligible(tmp_path):
 
     assert int(coverage["invalid_entry_evidence"]) == 1
     assert not bool(coverage["eligible"])
+
+
+def test_registration_ledger_matches_declared_nse_execution_scope(tmp_path):
+    nse = _registration(FORWARD_START, "NSE_ONLY")
+    bse = {**_registration(FORWARD_START, "BSE_ONLY"), "Exchange": "BSE"}
+    old_nse = _registration(FORWARD_START, "OLD_NSE", schema=1)
+    path = tmp_path / "registrations.csv"
+    pd.DataFrame([nse, bse, old_nse]).to_csv(path, index=False)
+
+    ledger = load_registration_ledger([str(path)])
+
+    assert set(ledger["Symbol"]) == {"NSE_ONLY", "OLD_NSE"}
+    assert set(ledger["Exchange"]) == {"NSE"}
 
 
 def test_wrong_model_registration_cannot_masquerade_as_zero_trade_day():

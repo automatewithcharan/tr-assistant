@@ -56,6 +56,19 @@ def _load_frames(
     return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
+def _normalize_ist_wall_clock(values: pd.Series) -> pd.Series:
+    """Normalize mixed timestamp encodings without shifting naive IST values."""
+    def normalize(value):
+        parsed = pd.to_datetime(value, errors="coerce")
+        if pd.isna(parsed):
+            return pd.NaT
+        if parsed.tzinfo is None:
+            return parsed
+        return parsed.tz_convert("Asia/Kolkata").tz_localize(None)
+
+    return pd.to_datetime(values.map(normalize), errors="coerce")
+
+
 def load_depth_events(
     entry_patterns: Iterable[str],
     outcome_patterns: Iterable[str],
@@ -110,7 +123,7 @@ def load_depth_events(
             entries[column] = 0.0
         entries[column] = pd.to_numeric(entries[column], errors="coerce").fillna(0.0)
     entries["date"] = entries["Date"].astype(str)
-    entries["entry_time"] = pd.to_datetime(entries["EntryAt"], errors="coerce")
+    entries["entry_time"] = _normalize_ist_wall_clock(entries["EntryAt"])
     entries["Symbol"] = entries["Symbol"].astype(str).str.strip().str.upper()
     entries["BalancedScore"] = balanced_score(entries)
 
@@ -124,7 +137,7 @@ def load_depth_events(
         how="inner",
         suffixes=("", "_outcome"),
     )
-    events["exit_time"] = pd.to_datetime(events["ExitAt"], errors="coerce")
+    events["exit_time"] = _normalize_ist_wall_clock(events["ExitAt"])
     events = events[
         events["entry_time"].notna()
         & events["exit_time"].notna()

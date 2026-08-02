@@ -3,7 +3,14 @@
 
 from __future__ import annotations
 
-import scripts.assess_frozen_rank_migration_depth_forward as judge
+from pathlib import Path
+import sys
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+import scripts.assess_frozen_rank_migration_depth_forward as judge  # noqa: E402
 
 
 judge.LANE_SOURCE = "prior_session_rank_migration_stop_avoidance"

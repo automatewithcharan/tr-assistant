@@ -196,6 +196,9 @@ def load_registration_ledger(
     ledger = pd.concat(frames, ignore_index=True)
     ledger["Date"] = ledger["Date"].astype(str)
     ledger["Source"] = ledger["Source"].fillna("").astype(str)
+    ledger["Exchange"] = (
+        ledger["Exchange"].fillna("").astype(str).str.strip().str.upper()
+    )
     ledger["ModelTrainedThrough"] = (
         ledger["ModelTrainedThrough"].fillna("").astype(str)
     )
@@ -207,6 +210,7 @@ def load_registration_ledger(
     ).fillna(-999.0)
     return ledger[
         ledger["Date"].ge(forward_start)
+        & ledger["Exchange"].eq("NSE")
         & ledger["Source"].eq(lane_source)
         & ledger["ExpectedReturnPct"].ge(score_threshold)
     ].drop_duplicates("EventId", keep="first").copy()

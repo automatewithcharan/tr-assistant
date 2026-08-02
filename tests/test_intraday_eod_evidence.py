@@ -10,6 +10,12 @@ from scripts.check_intraday_eod_evidence import ARTIFACTS, assess
 IST = ZoneInfo("Asia/Kolkata")
 
 
+def test_entry_timing_artifact_points_to_observer_output():
+    assert ARTIFACTS["entry_timing_matrix"] == (
+        "results/Data/full_universe_rank_entry_timing/status.json"
+    )
+
+
 def write_json(path: Path, payload: dict, mtime: float) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload), encoding="utf-8")
