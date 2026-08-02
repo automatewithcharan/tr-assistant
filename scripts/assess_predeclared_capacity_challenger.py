@@ -27,6 +27,7 @@ from scripts.assess_depth_executable_rank_strategy import (
     replay_depth_slots,
 )
 from scripts.assess_leader_pullback_reclaim import metrics
+from scripts.assess_full_rank_feature_gates import apply_feature_gate
 from scripts.assess_full_universe_rank_strategy import raw_session_coverage
 
 
@@ -37,14 +38,32 @@ MAX_TRADES_PER_DAY = 10
 FORWARD_START = "2026-08-03"
 POLICIES = {
     "acceleration_t1_5_s1_0": {
+        "gate": "all_buyable",
         "selector": "acceleration_first",
         "contract": "t1_5_s1_0_h60",
+        "slots": 5,
         "description": "rank acceleration with a 1.0% stop",
     },
     "acceleration_t1_5_s1_5": {
+        "gate": "all_buyable",
         "selector": "acceleration_first",
         "contract": "t1_5_s1_5_h60",
+        "slots": 5,
         "description": "rank acceleration with a 1.5% stop",
+    },
+    "sector_rotation_t1_5_s1_0": {
+        "gate": "sector_rotation",
+        "selector": "balanced_rank_acceleration",
+        "contract": "t1_5_s1_0_h60",
+        "slots": 3,
+        "description": "sector breadth confirmation with a 1.0% stop",
+    },
+    "rapid_climber_t1_0_s1_0": {
+        "gate": "rapid_rank_climber",
+        "selector": "balanced_rank_acceleration",
+        "contract": "t1_0_s1_0_h60",
+        "slots": 5,
+        "description": "rapid rank climbers spread across five slots",
     },
 }
 
@@ -99,16 +118,21 @@ def run_challenger(
         dates = _policy_eligible_dates(
             entries, events, raw, str(policy["contract"]), forward_start
         )
-        policy_events = (
+        contract_events = (
             events[events["date"].isin(dates)].copy()
             if events is not None and not events.empty
             else events
         )
+        policy_events = apply_feature_gate(
+            contract_events,
+            str(policy.get("gate", "all_buyable")),
+        )
+        policy_slots = max(1, int(policy.get("slots", SLOTS)))
         daily, trades = replay_depth_slots(
             policy_events,
             dates,
             selector=str(policy["selector"]),
-            slots=SLOTS,
+            slots=policy_slots,
             capital=CAPITAL,
             max_trades_per_day=MAX_TRADES_PER_DAY,
         )
@@ -123,8 +147,7 @@ def run_challenger(
                 "policy": name,
                 **policy,
                 "capital": CAPITAL,
-                "slots": SLOTS,
-                "slot_capital": SLOT_CAPITAL,
+                "slot_capital": CAPITAL / policy_slots,
                 "max_trades_per_day": MAX_TRADES_PER_DAY,
                 "forward_start": forward_start,
                 "eligible_sessions": len(dates),

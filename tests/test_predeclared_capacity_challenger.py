@@ -14,8 +14,39 @@ def test_capacity_challenger_has_fixed_five_slot_paper_policies():
     assert set(POLICIES) == {
         "acceleration_t1_5_s1_0",
         "acceleration_t1_5_s1_5",
+        "sector_rotation_t1_5_s1_0",
+        "rapid_climber_t1_0_s1_0",
     }
-    assert all(policy["selector"] == "acceleration_first" for policy in POLICIES.values())
+    assert POLICIES["sector_rotation_t1_5_s1_0"]["gate"] == "sector_rotation"
+    assert POLICIES["rapid_climber_t1_0_s1_0"]["gate"] == "rapid_rank_climber"
+    assert POLICIES["sector_rotation_t1_5_s1_0"]["slots"] == 3
+    assert POLICIES["rapid_climber_t1_0_s1_0"]["slots"] == 5
+    assert all("gate" in policy for policy in POLICIES.values())
+
+
+def test_policy_gate_is_applied_before_replay():
+    from scripts.assess_full_rank_feature_gates import apply_feature_gate
+
+    events = pd.DataFrame(
+        [
+            {
+                "date": "2026-08-03",
+                "DayChangePct": 2.0,
+                "SectorTop2Count": 2,
+                "SectorBreadthPct": 55.0,
+            },
+            {
+                "date": "2026-08-03",
+                "DayChangePct": 2.0,
+                "SectorTop2Count": 1,
+                "SectorBreadthPct": 55.0,
+            },
+        ]
+    )
+
+    gated = apply_feature_gate(events, "sector_rotation")
+    assert len(gated) == 1
+    assert float(gated.iloc[0]["SectorTop2Count"]) == 2.0
 
 
 def test_policy_eligibility_requires_complete_contract_and_raw_session():
