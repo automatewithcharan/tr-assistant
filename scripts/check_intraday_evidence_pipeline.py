@@ -25,6 +25,7 @@ PREDECLARED_CAPACITY_POLICY_NAMES = {
     "acceleration_t1_5_s1_0",
     "acceleration_t1_5_s1_5",
     "sector_rotation_t1_5_s1_0",
+    "sector_rotation_acceleration_t1_5_s1_0",
     "sector_rotation_t1_5_s1_5",
     "rapid_climber_t1_0_s1_0",
 }
@@ -275,7 +276,7 @@ def assess(
             "predeclared_capacity_registry",
             predeclared_ok,
             (
-                "seven fixed paper policies declared"
+                "eight fixed paper policies declared"
                 if predeclared_ok
                 else f"expected {len(PREDECLARED_CAPACITY_POLICY_NAMES)} fixed policies, found {len(predeclared_names)}"
             ),

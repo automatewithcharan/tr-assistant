@@ -62,6 +62,7 @@ def fixture_root(tmp_path: Path) -> tuple[Path, datetime]:
                 "acceleration_t1_5_s1_0",
                 "acceleration_t1_5_s1_5",
                 "sector_rotation_t1_5_s1_0",
+                "sector_rotation_acceleration_t1_5_s1_0",
                 "sector_rotation_t1_5_s1_5",
                 "rapid_climber_t1_0_s1_0",
             ]

@@ -72,6 +72,13 @@ POLICIES = {
         "slots": 3,
         "description": "sector breadth confirmation with a 1.0% stop",
     },
+    "sector_rotation_acceleration_t1_5_s1_0": {
+        "gate": "sector_rotation",
+        "selector": "acceleration_first",
+        "contract": "t1_5_s1_0_h60",
+        "slots": 3,
+        "description": "sector breadth confirmation ranked by acceleration",
+    },
     "sector_rotation_t1_5_s1_5": {
         "gate": "sector_rotation",
         "selector": "balanced_rank_acceleration",
