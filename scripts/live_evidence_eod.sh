@@ -261,6 +261,16 @@ run_depth_executable_rank_strategy() {
         >>"$LOG" 2>&1 || true
 }
 
+run_predeclared_capacity_challenger() {
+    "$PYTHON" "$REPO/scripts/assess_predeclared_capacity_challenger.py" \
+        --entry-glob "$REPO/results/Data/full_universe_rank_paper/entries_20*.csv" \
+        --outcome-glob "$REPO/results/Data/full_universe_rank_contract_matrix/outcomes_20*.csv" \
+        --raw-glob "$REPO/results/Data/live_feature_recorder/live_features_20*.csv" \
+        --output-dir "$REPO/results/Data/predeclared_capacity_challenger" \
+        --forward-start 2026-08-03 --daily-goal 10000 \
+        >>"$LOG" 2>&1 || true
+}
+
 run_frozen_rank_migration_depth_forward() {
     "$PYTHON" "$REPO/scripts/assess_frozen_rank_migration_depth_forward.py" \
         --registration-glob "$REPO/results/Data/frozen_rank_migration_contract_matrix/registrations_20*.csv" \
@@ -487,6 +497,7 @@ if [ -f "$OUTPUT_ROOT/status.json" ]; then
         run_exact_full_rank_strategy
         run_full_rank_contract_matrix
         run_depth_executable_rank_strategy
+        run_predeclared_capacity_challenger
         run_frozen_rank_migration_depth_forward
         run_frozen_stop_avoidance_depth_forward
         run_frozen_runner_qualified_stop_depth_forward
@@ -554,6 +565,7 @@ run_full_universe_rank_strategy
 run_exact_full_rank_strategy
 run_full_rank_contract_matrix
 run_depth_executable_rank_strategy
+run_predeclared_capacity_challenger
 run_frozen_rank_migration_depth_forward
 run_frozen_stop_avoidance_depth_forward
 run_frozen_runner_qualified_stop_depth_forward

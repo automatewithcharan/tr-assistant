@@ -24,6 +24,7 @@ ARTIFACTS = {
     "exact_one_slot": "results/Data/full_universe_rank_exact_strategy/status.json",
     "exit_contract_matrix": "results/Data/full_universe_rank_contract_strategy/status.json",
     "depth_execution_matrix": "results/Data/full_universe_rank_depth_execution/status.json",
+    "predeclared_capacity_challenger": "results/Data/predeclared_capacity_challenger/status.json",
     "rank_migration_depth_forward": "results/Data/frozen_rank_migration_depth_forward/status.json",
     "stop_avoidance_depth_forward": "results/Data/frozen_stop_avoidance_depth_forward/status.json",
     "runner_qualified_stop_depth_forward": "results/Data/frozen_runner_qualified_stop_depth_forward/status.json",

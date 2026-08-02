@@ -65,7 +65,7 @@ def test_complete_eligible_session_requires_every_fresh_artifact(tmp_path):
     result = assess(root, "2026-07-23", cutoff)
     assert result["status"] == "complete_eligible_session"
     assert result["session_evidence_eligible"] is True
-    assert result["artifacts_refreshed"] == result["artifacts_required"] == 26
+    assert result["artifacts_refreshed"] == result["artifacts_required"] == 27
     assert result["real_orders_allowed"] is False
 
 
@@ -100,7 +100,7 @@ def test_stale_or_unsafe_artifact_fails_integrity(tmp_path):
     write_json(unsafe, {"status": "collecting", "real_orders_allowed": True}, cutoff + 1)
     result = assess(root, "2026-07-23", cutoff)
     assert result["status"] == "incomplete_eod_pipeline"
-    assert result["artifacts_refreshed"] == 24
+    assert result["artifacts_refreshed"] == 25
 
 
 def test_paper_ledger_integrity_rejects_orphaned_entry(tmp_path):
