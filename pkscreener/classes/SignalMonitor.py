@@ -623,7 +623,11 @@ class SignalMonitorRunner:
         self._save_outputs(report_df, actionable_df, merged_simple_df, merged_state_df, alerts_df, summary_df)
         self._print_summary(summary_df, merged_simple_df, alerts_df, scorecard_df)
         self._send_alerts(alerts_df, summary_df)
-        self._send_monitor_heartbeat(summary_df, alerts_df)
+        self._send_monitor_heartbeat(
+            summary_df,
+            alerts_df,
+            current_simple_df=merged_simple_df,
+        )
         self._cycle_number += 1
         return report_df, merged_simple_df, alerts_df, summary_df
 
@@ -5039,7 +5043,12 @@ class SignalMonitorRunner:
                 current_simple_df=getattr(self, "_last_simple_df", None),
             )
 
-    def _send_monitor_heartbeat(self, summary_df: pd.DataFrame, alerts_df: pd.DataFrame) -> None:
+    def _send_monitor_heartbeat(
+        self,
+        summary_df: pd.DataFrame,
+        alerts_df: pd.DataFrame,
+        current_simple_df: Optional[pd.DataFrame] = None,
+    ) -> None:
         """Send periodic Discord status so quiet periods do not look like downtime."""
         if "discord" not in self.alert_channels:
             return
@@ -5105,6 +5114,8 @@ class SignalMonitorRunner:
         if not bool(getattr(self, "goal_selector_validated", False)):
             selector_line = "Buy promotion `BLOCKED — selector not validated; paper evidence continues`"
 
+        board_lines = self._heartbeat_board_preview(current_simple_df)
+
         lines = [
             "**Intraday Goal Scanner Heartbeat**",
             f"Source `{self._alert_source_label()}` | Sent `{sent_at}`",
@@ -5117,11 +5128,67 @@ class SignalMonitorRunner:
             f"Goal alerts today `{len(goal_symbols)}/{max_goal}`",
             selector_line,
             status_line,
+            *board_lines,
             suppressed_line,
         ]
         self._send_discord_alert("\n".join(lines))
         self._last_discord_heartbeat_ts = now_ts
         self._save_last_heartbeat_ts(now_ts)
+
+    def _heartbeat_board_preview(
+        self,
+        current_simple_df: Optional[pd.DataFrame],
+        max_names: int = 8,
+    ) -> List[str]:
+        """Show representative board names without presenting them as trade alerts."""
+        if current_simple_df is None or current_simple_df.empty or "Stock" not in current_simple_df.columns:
+            return []
+
+        board = current_simple_df.copy()
+        board["Stock"] = board["Stock"].astype(str).str.strip().str.upper()
+        board = board[board["Stock"].ne("")].copy()
+        if board.empty:
+            return []
+
+        strength_column = "Signal Strength %"
+        if strength_column in board.columns:
+            board["_heartbeat_strength"] = pd.to_numeric(board[strength_column], errors="coerce").fillna(0.0)
+        else:
+            board["_heartbeat_strength"] = 0.0
+        board.sort_values(
+            by=["_heartbeat_strength", "Stock"],
+            ascending=[False, True],
+            inplace=True,
+        )
+
+        buy_mask = (
+            board["What To Do"].astype(str).eq("Buy Now")
+            if "What To Do" in board.columns
+            else pd.Series(False, index=board.index)
+        )
+        momentum_mask = (
+            board["Momentum Setup"].astype(str).eq("Momentum Buy")
+            if "Momentum Setup" in board.columns
+            else pd.Series(False, index=board.index)
+        )
+        buy_symbols = board.loc[buy_mask, "Stock"].drop_duplicates().tolist()
+        momentum_symbols = board.loc[momentum_mask, "Stock"].drop_duplicates().tolist()
+        buy_set = set(buy_symbols)
+        momentum_only = [symbol for symbol in momentum_symbols if symbol not in buy_set]
+        overlap_count = len(buy_set.intersection(momentum_symbols))
+
+        def preview(label: str, symbols: List[str]) -> str:
+            shown = symbols[:max(1, int(max_names or 1))]
+            remainder = len(symbols) - len(shown)
+            names = ", ".join(f"`{symbol}`" for symbol in shown) if shown else "`none`"
+            return f"{label}: {names}" + (f" ... +{remainder}" if remainder > 0 else "")
+
+        return [
+            "Board preview `status only — not approved buy signals`",
+            preview("Buy Now", buy_symbols),
+            preview("Momentum-only", momentum_only),
+            f"Buy/Momentum overlap `{overlap_count}`",
+        ]
 
     def _heartbeat_state_file(self) -> Path:
         path = str(getattr(self, "_heartbeat_state_path", "") or "").strip()

@@ -1055,6 +1055,38 @@ def test_monitor_heartbeat_explains_unvalidated_selector_lock(monkeypatch):
     assert "Buy promotion `BLOCKED — selector not validated; paper evidence continues`" in captured[0]
 
 
+def test_monitor_heartbeat_previews_board_names_and_overlap(monkeypatch):
+    runner = _make_runner()
+    runner.goal_selector_validated = False
+    runner._is_regular_market_hours = lambda: True
+    monkeypatch.setattr(runner, "_load_daily_symbol_set", lambda *_args, **_kwargs: set())
+    summary_df = pd.DataFrame(
+        [{"ScannedSymbols": 2925, "FreshAlertsThisRun": 0, "BuyNowCount": 3, "MomentumBuyCount": 4}]
+    )
+    simple_df = pd.DataFrame(
+        [
+            {"Stock": "BETA", "What To Do": "Buy Now", "Momentum Setup": "Momentum Buy", "Signal Strength %": 50},
+            {"Stock": "ALPHA", "What To Do": "Buy Now", "Momentum Setup": "Momentum Buy", "Signal Strength %": 80},
+            {"Stock": "GAMMA", "What To Do": "Buy Now", "Momentum Setup": "Momentum Buy", "Signal Strength %": 60},
+            {"Stock": "DELTA", "What To Do": "Hold / Do Nothing", "Momentum Setup": "Momentum Buy", "Signal Strength %": 70},
+        ]
+    )
+
+    captured = []
+    runner._send_discord_alert = captured.append
+    runner._send_monitor_heartbeat(
+        summary_df,
+        pd.DataFrame(columns=runner.ALERT_COLUMNS),
+        current_simple_df=simple_df,
+    )
+
+    assert len(captured) == 1
+    assert "Board preview `status only — not approved buy signals`" in captured[0]
+    assert "Buy Now: `ALPHA`, `GAMMA`, `BETA`" in captured[0]
+    assert "Momentum-only: `DELTA`" in captured[0]
+    assert "Buy/Momentum overlap `3`" in captured[0]
+
+
 def test_monitor_heartbeat_throttle_survives_runner_restart(monkeypatch, tmp_path):
     runner = _make_runner()
     runner.output_dir = str(tmp_path)
