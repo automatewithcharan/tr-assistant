@@ -8,6 +8,7 @@ import pandas as pd
 from pkscreener.classes.SignalMonitor import SignalMonitorRunner
 from scripts.run_full_rank_evidence_recorder import (
     StandaloneFullRankEvidenceWorker,
+    _depth_contract_health,
     _market_open,
     _tick_snapshot_age_seconds,
 )
@@ -376,6 +377,71 @@ def test_worker_market_window_is_weekday_intraday_only():
     assert _market_open(datetime(2026, 7, 27, 15, 30))
     assert not _market_open(datetime(2026, 7, 27, 9, 14))
     assert not _market_open(datetime(2026, 7, 26, 10, 0))
+
+
+def test_depth_contract_health_rejects_legacy_best_quote_only_ticks():
+    health = _depth_contract_health(
+        {
+            "OLD": {
+                "last_price": 100.0,
+                "best_bid": 99.9,
+                "best_ask": 100.1,
+            }
+        }
+    )
+
+    assert health["depth_contract_coverage_pct"] == 0.0
+    assert health["depth_contract_valid"] is False
+
+
+def test_depth_contract_health_accepts_structural_full_mode_snapshot():
+    ticks = {
+        f"TEST{index}": {
+            "depth": {
+                "buy": [{"price": 99.9, "quantity": 10}],
+                "sell": [{"price": 100.1, "quantity": 10}],
+            }
+        }
+        for index in range(8)
+    }
+    ticks["NO_DEPTH"] = {"last_price": 100.0}
+    ticks["EMPTY_BOOK"] = {"depth": {"buy": [], "sell": []}}
+
+    health = _depth_contract_health(ticks)
+
+    assert health["depth_contract_symbols"] == 9
+    assert health["two_sided_depth_symbols"] == 8
+    assert health["depth_contract_coverage_pct"] == 90.0
+    assert health["depth_contract_valid"] is True
+
+
+def test_missing_depth_status_is_safe_and_does_not_call_observers(tmp_path):
+    recorder = FakeRecorder()
+    paper = FakePaper()
+    contracts = FakeObserver("contract_exit")
+    timing = FakeObserver("timing_exit")
+    worker = StandaloneFullRankEvidenceWorker(
+        output_dir=tmp_path,
+        recorder=recorder,
+        paper=paper,
+        contracts=contracts,
+        timing=timing,
+    )
+    health = _depth_contract_health({"OLD": {"last_price": 100.0}})
+
+    worker.missing_depth_status(
+        now=datetime(2026, 7, 30, 9, 15),
+        health=health,
+    )
+
+    assert recorder.calls == []
+    assert paper.calls == []
+    assert contracts.calls == []
+    assert timing.calls == []
+    payload = json.loads(worker.status_path.read_text(encoding="utf-8"))
+    assert payload["status"] == "waiting_for_five_level_depth_snapshot"
+    assert payload["depth_contract_valid"] is False
+    assert payload["real_orders_allowed"] is False
 
 
 def test_signal_monitor_skips_duplicate_inline_snapshot_in_standalone_mode():

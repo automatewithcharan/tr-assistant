@@ -84,6 +84,43 @@ def _alerted_symbols(output_dir: Path, now: datetime) -> set[str]:
     return symbols
 
 
+def _depth_contract_health(
+    ticks: dict[str, dict[str, Any]],
+    *,
+    minimum_coverage_pct: float = 80.0,
+) -> dict[str, Any]:
+    """Verify the shared snapshot preserved the full-mode depth container."""
+    total = int(len(ticks or {}))
+    structural = 0
+    two_sided = 0
+    for tick in (ticks or {}).values():
+        if not isinstance(tick, dict):
+            continue
+        depth = tick.get("depth")
+        if not isinstance(depth, dict):
+            continue
+        buy = depth.get("buy")
+        sell = depth.get("sell")
+        if not isinstance(buy, list) or not isinstance(sell, list):
+            continue
+        structural += 1
+        if buy and sell:
+            two_sided += 1
+    coverage = structural * 100.0 / total if total > 0 else 0.0
+    return {
+        "tick_symbols": total,
+        "depth_contract_symbols": structural,
+        "two_sided_depth_symbols": two_sided,
+        "depth_contract_coverage_pct": round(coverage, 4),
+        "minimum_depth_contract_coverage_pct": float(
+            minimum_coverage_pct
+        ),
+        "depth_contract_valid": bool(
+            total > 0 and coverage >= float(minimum_coverage_pct)
+        ),
+    }
+
+
 class StandaloneFullRankEvidenceWorker:
     """Advance paper-only recorders from the shared local tick snapshot."""
 
@@ -523,6 +560,7 @@ class StandaloneFullRankEvidenceWorker:
         alerted_symbols: set[str] | None = None,
     ) -> dict[str, Any]:
         started = time.monotonic()
+        depth_health = _depth_contract_health(ticks)
         rows = self.recorder.record(
             ticks,
             alerted_symbols=alerted_symbols or set(),
@@ -644,6 +682,7 @@ class StandaloneFullRankEvidenceWorker:
             "updated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
             "universe": self.universe,
             "tick_symbols": int(len(ticks)),
+            **depth_health,
             "feature_rows": int(len(rows)),
             "paper_events": int(len(paper_events)),
             "contract_events": int(len(contract_events)),
@@ -738,6 +777,30 @@ class StandaloneFullRankEvidenceWorker:
             },
         )
 
+    def missing_depth_status(
+        self,
+        *,
+        now: datetime,
+        health: dict[str, Any],
+    ) -> None:
+        """Publish a fail-closed state without advancing evidence observers."""
+        _atomic_json(
+            self.status_path,
+            {
+                "status": "waiting_for_five_level_depth_snapshot",
+                "owner": "standalone",
+                "date": now.strftime("%Y-%m-%d"),
+                "updated_at": now.strftime("%Y-%m-%d %H:%M:%S"),
+                "universe": self.universe,
+                **health,
+                "feature_interval_seconds": float(self.recorder.interval_seconds),
+                "poll_interval_seconds": self.poll_seconds,
+                "paper_only": True,
+                "alerts_allowed": False,
+                "real_orders_allowed": False,
+            },
+        )
+
 
 def _tick_snapshot_age_seconds(
     output_dir: Path,
@@ -791,11 +854,18 @@ def main() -> int:
                 ticks = {}
                 worker.stale_tick_status(now=now, age_seconds=snapshot_age)
             if ticks:
-                payload = worker.cycle(
-                    ticks,
-                    now=now,
-                    alerted_symbols=_alerted_symbols(output_dir, now),
-                )
+                depth_health = _depth_contract_health(ticks)
+                if depth_health["depth_contract_valid"]:
+                    payload = worker.cycle(
+                        ticks,
+                        now=now,
+                        alerted_symbols=_alerted_symbols(output_dir, now),
+                    )
+                else:
+                    worker.missing_depth_status(
+                        now=now,
+                        health=depth_health,
+                    )
         if args.run_seconds > 0 and time.monotonic() - started >= args.run_seconds:
             break
         time.sleep(poll_seconds)

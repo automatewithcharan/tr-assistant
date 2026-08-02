@@ -309,6 +309,10 @@ def assess(
         and str(evidence_runtime.get("date")) == now.strftime("%Y-%m-%d")
         and evidence_age <= 30.0
         and int(evidence_runtime.get("tick_symbols") or 0) >= 2500
+        and bool(evidence_runtime.get("depth_contract_valid"))
+        and float(
+            evidence_runtime.get("depth_contract_coverage_pct") or 0.0
+        ) >= 80.0
         and float(evidence_runtime.get("feature_interval_seconds") or 0) <= 20.0
         and 0.0 < float(evidence_runtime.get("poll_interval_seconds") or 0) <= 5.0
         and (
@@ -323,6 +327,8 @@ def assess(
             f"standalone status={evidence_runtime.get('status') or 'missing'}, "
             f"owner={evidence_runtime.get('owner') or 'missing'}, "
             f"ticks={int(evidence_runtime.get('tick_symbols') or 0)}, "
+            f"depth_contract={bool(evidence_runtime.get('depth_contract_valid'))}, "
+            f"depth_coverage={float(evidence_runtime.get('depth_contract_coverage_pct') or 0):.1f}%, "
             f"age={evidence_age:.0f}s, "
             f"feature_interval={float(evidence_runtime.get('feature_interval_seconds') or 0):.1f}s, "
             f"poll={float(evidence_runtime.get('poll_interval_seconds') or 0):.1f}s, "
