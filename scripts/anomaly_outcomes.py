@@ -1,38 +1,57 @@
-"""Enrich anomaly_history.csv with same-day outcome columns.
+"""Enrich anomaly_history.csv with same-day forward outcome columns.
 
-For each row in anomaly_history.csv, looks up that date's daily OHLC bar
-from kite_history_cache/day/<SYMBOL>.csv and computes:
+For each row in anomaly_history.csv, looks up same-day 5-minute bars from the
+alert timestamp onward and computes:
 
   DayOpen, DayHigh, DayLow, DayClose
-  MaxFavExcursionPct  = (DayHigh - PriceNow) / PriceNow * 100
-  MaxAdvExcursionPct  = (DayLow  - PriceNow) / PriceNow * 100
-  EODReturnPct        = (DayClose - PriceNow) / PriceNow * 100
+  MaxFavExcursionPct  = (post-alert high - PriceNow) / PriceNow * 100
+  MaxAdvExcursionPct  = (post-alert low  - PriceNow) / PriceNow * 100
+  EODReturnPct        = (post-alert close - PriceNow) / PriceNow * 100
   Hit3pct             = YES if MaxFavExcursionPct >= 3 else NO
   Hit8pct             = YES if MaxFavExcursionPct >= 8 else NO
 
 Designed to be safe to re-run after EOD — it re-writes the CSV with the
 new columns appended, preserving all original detection columns.
 
-If a row's Symbol/Date is not in the day cache yet, outcome columns are
-left blank so the next run (after Kite refreshes the cache) fills them.
+If intraday data is not available it can fall back to daily OHLC, but that
+fallback is less accurate for stop/target testing because it cannot know
+whether the day's high/low occurred before or after the alert.
 """
 
 from __future__ import annotations
 
+import argparse
 import csv
 import os
-from typing import Dict, Optional
+from datetime import datetime
+from glob import glob
+from typing import Dict, List, Optional
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(ROOT, "results", "Data")
 HISTORY = os.path.join(DATA_DIR, "anomaly_history.csv")
 DAY_CACHE = os.path.join(DATA_DIR, "kite_history_cache", "day")
+INTRADAY_CACHE = os.path.join(DATA_DIR, "kite_history_backfill", "5minute")
 
 OUTCOME_FIELDS = [
     "DayOpen", "DayHigh", "DayLow", "DayClose",
     "MaxFavExcursionPct", "MaxAdvExcursionPct", "EODReturnPct",
     "Hit3pct", "Hit8pct",
+    "OutcomeSource", "OutcomeStart",
 ]
+
+
+def parse_dt(value: str) -> Optional[datetime]:
+    text = (value or "").strip()
+    if not text:
+        return None
+    try:
+        return datetime.fromisoformat(text.replace("Z", "+00:00")).replace(tzinfo=None)
+    except ValueError:
+        try:
+            return datetime.strptime(text[:19], "%Y-%m-%d %H:%M:%S")
+        except ValueError:
+            return None
 
 
 def load_day_bar(symbol: str, date: str) -> Optional[Dict[str, float]]:
@@ -54,12 +73,60 @@ def load_day_bar(symbol: str, date: str) -> Optional[Dict[str, float]]:
     return None
 
 
+def intraday_files(symbol: str, intraday_cache: str) -> List[str]:
+    return sorted(glob(os.path.join(intraday_cache, "*", f"{symbol}.csv")), reverse=True)
+
+
+def load_forward_intraday_bar(symbol: str, alert_when: str, intraday_cache: str) -> Optional[Dict[str, float]]:
+    alert_dt = parse_dt(alert_when)
+    if alert_dt is None:
+        return None
+    date = alert_dt.date().isoformat()
+    for fp in intraday_files(symbol, intraday_cache):
+        try:
+            rows = []
+            with open(fp) as f:
+                for row in csv.DictReader(f):
+                    row_dt = parse_dt(row.get("datetime", ""))
+                    if row_dt is None or row_dt.date().isoformat() != date or row_dt < alert_dt:
+                        continue
+                    rows.append(
+                        {
+                            "datetime": row_dt,
+                            "open": float(row["open"]),
+                            "high": float(row["high"]),
+                            "low": float(row["low"]),
+                            "close": float(row["close"]),
+                        }
+                    )
+            if not rows:
+                continue
+            return {
+                "open": rows[0]["open"],
+                "high": max(r["high"] for r in rows),
+                "low": min(r["low"] for r in rows),
+                "close": rows[-1]["close"],
+                "source": os.path.relpath(fp, DATA_DIR),
+                "start": rows[0]["datetime"].isoformat(sep=" "),
+            }
+        except Exception:
+            continue
+    return None
+
+
 def main() -> int:
-    if not os.path.exists(HISTORY):
-        print(f"[!] {HISTORY} not found — run seed_anomaly_history.py first.")
+    parser = argparse.ArgumentParser(description="Enrich anomaly_history.csv with post-alert intraday outcomes")
+    parser.add_argument("--input", default=HISTORY)
+    parser.add_argument("--intraday-cache", default=INTRADAY_CACHE)
+    parser.add_argument("--force", action="store_true", help="recompute existing outcome columns")
+    parser.add_argument("--no-daily-fallback", action="store_true", help="leave rows blank when post-alert intraday bars are missing")
+    args = parser.parse_args()
+
+    if not os.path.exists(args.input):
+        print(f"[!] {args.input} not found — run seed_anomaly_history.py first.")
         return 1
 
-    with open(HISTORY) as f:
+    with open(args.input) as f:
         reader = csv.DictReader(f)
         base_fields = list(reader.fieldnames or [])
         rows = list(reader)
@@ -68,13 +135,16 @@ def main() -> int:
 
     enriched = 0
     skipped = 0
+    intraday = 0
+    daily_fallback = 0
     for r in rows:
         # Skip if already enriched with valid numbers
         already = bool(r.get("DayHigh")) and bool(r.get("MaxFavExcursionPct"))
-        if already:
+        if already and not args.force:
             continue
         sym = (r.get("Symbol") or "").strip().upper()
         date = (r.get("Date") or "")[:10]
+        when = (r.get("When") or "").strip()
         try:
             price = float(r.get("PriceNow") or 0)
         except ValueError:
@@ -82,7 +152,15 @@ def main() -> int:
         if not sym or not date or price <= 0:
             skipped += 1
             continue
-        bar = load_day_bar(sym, date)
+        bar = load_forward_intraday_bar(sym, when, args.intraday_cache)
+        if bar is not None:
+            intraday += 1
+        elif not args.no_daily_fallback:
+            bar = load_day_bar(sym, date)
+            if bar is not None:
+                bar["source"] = "kite_history_cache/day"
+                bar["start"] = date
+                daily_fallback += 1
         if bar is None:
             skipped += 1
             continue
@@ -98,14 +176,20 @@ def main() -> int:
         r["EODReturnPct"] = round(eod, 2)
         r["Hit3pct"] = "YES" if mfe >= 3.0 else "NO"
         r["Hit8pct"] = "YES" if mfe >= 8.0 else "NO"
+        r["OutcomeSource"] = bar.get("source", "")
+        r["OutcomeStart"] = bar.get("start", "")
         enriched += 1
 
-    with open(HISTORY, "w", newline="") as f:
+    with open(args.input, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)
 
-    print(f"[+] enriched {enriched} rows, {skipped} still pending OHLC")
+    print(
+        f"[+] enriched {enriched} rows "
+        f"({intraday} post-alert intraday, {daily_fallback} daily fallback), "
+        f"{skipped} still pending OHLC"
+    )
 
     # Summary
     matched = [r for r in rows if r.get("Hit3pct") in ("YES", "NO")]

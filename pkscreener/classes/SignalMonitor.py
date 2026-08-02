@@ -226,6 +226,23 @@ class SignalMonitorRunner:
         self.goal_target2_pct = max(self.goal_target1_pct, float(os.environ.get("SIGNALMONITOR_GOAL_TARGET2_PCT", "3.0") or "3.0"))
         self.goal_anomaly_only = str(os.environ.get("SIGNALMONITOR_GOAL_ANOMALY_ONLY", "0") or "0").strip().lower() in {"1", "true", "yes", "y", "on"}
         self.goal_allow_direct_buy = str(os.environ.get("SIGNALMONITOR_GOAL_ALLOW_DIRECT_BUY", "1") or "1").strip().lower() not in {"0", "false", "no", "n", "off"}
+        self.anomaly_alert_only = self._env_truthy("SIGNALMONITOR_ANOMALY_ALERT_ONLY", "0")
+        self.anomaly_alert_only_max_per_day = max(
+            0,
+            int(float(os.environ.get("SIGNALMONITOR_ANOMALY_ALERT_ONLY_MAX_PER_DAY", "20") or "20")),
+        )
+        self.anomaly_alert_stop_pct = max(
+            0.25,
+            float(os.environ.get("SIGNALMONITOR_ANOMALY_ALERT_STOP_PCT", "1.0") or "1.0"),
+        )
+        self.anomaly_alert_target1_pct = max(
+            0.5,
+            float(os.environ.get("SIGNALMONITOR_ANOMALY_ALERT_TARGET1_PCT", "1.0") or "1.0"),
+        )
+        self.anomaly_alert_target2_pct = max(
+            self.anomaly_alert_target1_pct,
+            float(os.environ.get("SIGNALMONITOR_ANOMALY_ALERT_TARGET2_PCT", "3.0") or "3.0"),
+        )
         self.radar_max_alerts_per_day = max(0, int(float(os.environ.get("SIGNALMONITOR_RADAR_MAX_ALERTS_PER_DAY", "3") or "3")))
         self.radar_min_strength = max(0.0, float(os.environ.get("SIGNALMONITOR_RADAR_MIN_STRENGTH", "38") or "38"))
         self.radar_min_volume_ratio = max(0.0, float(os.environ.get("SIGNALMONITOR_RADAR_MIN_VOLUME_RATIO", "1.0") or "1.0"))
@@ -2310,8 +2327,15 @@ class SignalMonitorRunner:
         sell_rows: List[Dict] = []
         candidates: List[Tuple[float, Dict]] = []
         radar_candidates: List[Tuple[float, Dict]] = []
+        anomaly_watch_candidates: List[Tuple[float, Dict]] = []
         suppressed: List[str] = []
         self._last_goal_suppressed_reasons = []
+        max_anomaly_watches = max(
+            0,
+            int(getattr(self, "anomaly_alert_only_max_per_day", 20) or 0),
+        )
+        already_anomaly_watches = self._load_daily_symbol_set("anomaly_alert_only", today=today)
+        remaining_anomaly_watches = max(0, max_anomaly_watches - len(already_anomaly_watches))
 
         for row in alerts_df.to_dict(orient="records"):
             action = str(row.get("NowAction", "") or "").strip()
@@ -2321,6 +2345,17 @@ class SignalMonitorRunner:
                 continue
             if not self._is_goal_mode_buy_action(action):
                 suppressed.append(f"{symbol} ({action or 'unknown'})")
+                continue
+            if (
+                bool(getattr(self, "anomaly_alert_only", False))
+                and self._is_volume_anomaly_action(action)
+            ):
+                if symbol in already_anomaly_watches:
+                    suppressed.append(f"{symbol} (anomaly watch already sent today)")
+                    continue
+                tuned = self._tune_anomaly_alert_only_row(row)
+                score = self._to_float(row.get("SignalStrengthPct"))
+                anomaly_watch_candidates.append((score, tuned))
                 continue
             qualifies, score, reason = self._intraday_goal_decision(row)
             if not qualifies:
@@ -2363,6 +2398,20 @@ class SignalMonitorRunner:
             f"{str(row.get('Symbol', '')).strip().upper()} (daily radar slots full)"
             for _, row in radar_candidates[remaining_radar_slots:]
         )
+        anomaly_watch_candidates.sort(
+            key=lambda item: (-item[0], str(item[1].get("Symbol", "")))
+        )
+        selected_anomaly_watches = []
+        for _, row in anomaly_watch_candidates[:remaining_anomaly_watches]:
+            selected_anomaly_watches.append(row)
+            symbol = str(row.get("Symbol", "") or "").strip().upper()
+            if symbol:
+                already_anomaly_watches.add(symbol)
+                self._append_daily_symbol("anomaly_alert_only", symbol, today=today)
+        suppressed.extend(
+            f"{str(row.get('Symbol', '')).strip().upper()} (daily anomaly watch slots full)"
+            for _, row in anomaly_watch_candidates[remaining_anomaly_watches:]
+        )
         self._last_goal_suppressed_reasons = suppressed[:25]
 
         if suppressed:
@@ -2383,12 +2432,45 @@ class SignalMonitorRunner:
                 f"{len(selected_radar_rows)}/{max_radar_per_day} separate radar candidate(s) selected — "
                 + ", ".join(str(r.get("Symbol", "")).strip().upper() for r in selected_radar_rows)
             )
+        if selected_anomaly_watches:
+            OutputControls().printOutput(
+                "  [+] Anomaly alert-only mode: "
+                f"{len(selected_anomaly_watches)} watch alert(s) selected; broker orders disabled — "
+                + ", ".join(
+                    str(r.get("Symbol", "")).strip().upper()
+                    for r in selected_anomaly_watches
+                )
+            )
 
-        return pd.DataFrame(sell_rows + selected_rows + selected_radar_rows, columns=self.ALERT_COLUMNS)
+        return pd.DataFrame(
+            sell_rows + selected_rows + selected_radar_rows + selected_anomaly_watches,
+            columns=self.ALERT_COLUMNS,
+        )
 
     @staticmethod
     def _is_radar_action(action: str) -> bool:
         return "radar" in str(action or "").strip().lower()
+
+    @staticmethod
+    def _is_volume_anomaly_action(action: str) -> bool:
+        text = str(action or "").strip()
+        lower = text.lower()
+        return (
+            "grade-a" in lower
+            or "grade-b" in lower
+            or "pre-move" in lower
+            or "volume anomaly" in lower
+            or text.startswith("🔥")
+            or text.startswith("⚡")
+            or text.startswith("👀")
+        )
+
+    @staticmethod
+    def _is_alert_only_action(action: str, checks: str = "") -> bool:
+        return (
+            "alert only" in str(action or "").strip().lower()
+            or "alertonly" in str(checks or "").strip().lower()
+        )
 
     @staticmethod
     def _is_goal_mode_buy_action(action: str) -> bool:
@@ -2665,6 +2747,38 @@ class SignalMonitorRunner:
         why = str(tuned.get("Why", "") or "").strip()
         radar_why = f"Radar mode: {reason}; separate from the 20 day-goal basket, optional only"
         tuned["Why"] = f"{radar_why} | {why}" if why else radar_why
+        return tuned
+
+    def _tune_anomaly_alert_only_row(self, row: Dict) -> Dict:
+        """Label an anomaly as a research watch without authorizing a trade."""
+        tuned = dict(row)
+        action = str(tuned.get("NowAction", "Volume Anomaly") or "Volume Anomaly").strip()
+        if "alert only" not in action.lower():
+            tuned["NowAction"] = f"{action} — ALERT ONLY"
+
+        entry = self._to_float(tuned.get("PriceNow")) or self._to_float(tuned.get("BuyAbove"))
+        stop_pct = float(getattr(self, "anomaly_alert_stop_pct", 1.0) or 1.0)
+        target1_pct = float(getattr(self, "anomaly_alert_target1_pct", 1.0) or 1.0)
+        target2_pct = float(getattr(self, "anomaly_alert_target2_pct", 3.0) or 3.0)
+        if entry > 0:
+            tuned["BuyAbove"] = round(entry, 2)
+            tuned["SellIfBelow"] = round(entry * (1.0 - stop_pct / 100.0), 2)
+            tuned["TakeProfit1"] = round(entry * (1.0 + target1_pct / 100.0), 2)
+            tuned["TakeProfit2"] = round(entry * (1.0 + target2_pct / 100.0), 2)
+        tuned["SuggestedQty"] = 0
+
+        checks = str(tuned.get("Checks", "") or "").strip()
+        watch_check = (
+            "AlertOnly no auto-buy | research ladder 1% / 2% / 3% | "
+            f"reference stop {stop_pct:.1f}%"
+        )
+        tuned["Checks"] = f"{watch_check} | {checks}" if checks else watch_check
+        why = str(tuned.get("Why", "") or "").strip()
+        watch_why = (
+            "Anomaly notification only; the profitable selector is not validated "
+            "and this row is excluded from broker automation"
+        )
+        tuned["Why"] = f"{watch_why} | {why}" if why else watch_why
         return tuned
 
     @staticmethod
@@ -4456,6 +4570,9 @@ class SignalMonitorRunner:
         expires_ts = now.timestamp() + float(self.autotrade_entry_window_minutes) * 60.0
         for row in alerts_df.to_dict(orient="records"):
             action = str(row.get("NowAction", "") or "")
+            checks = str(row.get("Checks", "") or "")
+            if self._is_alert_only_action(action, checks):
+                continue
             if "grade-b" not in action.lower():
                 continue
             symbol = str(row.get("Symbol", "") or "").strip().upper()
@@ -4944,8 +5061,22 @@ class SignalMonitorRunner:
         max_goal = max(1, int(getattr(self, "goal_max_trades_per_day", 1) or 1))
         fresh_alerts = int(summary.get("FreshAlertsThisRun", 0) or 0)
         buy_alerts = 0
+        anomaly_watch_alerts = 0
         if alerts_df is not None and not alerts_df.empty and "NowAction" in alerts_df.columns:
-            buy_alerts = int(alerts_df["NowAction"].astype(str).apply(self._is_goal_mode_buy_action).sum())
+            alert_only_mask = alerts_df.apply(
+                lambda row: self._is_alert_only_action(
+                    str(row.get("NowAction", "") or ""),
+                    str(row.get("Checks", "") or ""),
+                ),
+                axis=1,
+            )
+            anomaly_watch_alerts = int(alert_only_mask.sum())
+            buy_alerts = int(
+                (
+                    alerts_df["NowAction"].astype(str).apply(self._is_goal_mode_buy_action)
+                    & ~alert_only_mask
+                ).sum()
+            )
 
         try:
             sent_at = PKDateUtilities.currentDateTime().strftime("%Y-%m-%d %H:%M:%S")
@@ -4955,6 +5086,11 @@ class SignalMonitorRunner:
         status_line = "No fresh goal buy sent this cycle"
         if buy_alerts > 0:
             status_line = f"Fresh goal buy alert(s) sent this cycle: `{buy_alerts}`"
+        elif anomaly_watch_alerts > 0:
+            status_line = (
+                f"Fresh anomaly watch alert(s): `{anomaly_watch_alerts}`; "
+                "auto-buy `DISABLED`"
+            )
         elif fresh_alerts > 0:
             status_line = f"Fresh non-buy alert(s) this cycle: `{fresh_alerts}`"
 
@@ -5535,7 +5671,10 @@ class SignalMonitorRunner:
                 rr_text = ""
             # Simplify action label
             action = str(row["NowAction"])
-            if action == "Strong Buy Now":
+            alert_only = self._is_alert_only_action(action, checks)
+            if alert_only:
+                action_emoji = "🟡"
+            elif action == "Strong Buy Now":
                 action_emoji = "🟢🟢"
             elif action == "Buy Now":
                 action_emoji = "🟢"
@@ -5570,7 +5709,10 @@ class SignalMonitorRunner:
                 _buy_above_val = 0.0
             _buy_ceiling_val = _buy_above_val * 1.015 if _buy_above_val > 0 else 0.0
             trade_lane_line = self._trade_lane_line(action, checks=checks)
-            zone_label = "BUY ZONE" if self._is_direct_buy_action(action) else "ENTRY ZONE"
+            if alert_only:
+                zone_label = "WATCH RANGE"
+            else:
+                zone_label = "BUY ZONE" if self._is_direct_buy_action(action) else "ENTRY ZONE"
             if _buy_above_val > 0:
                 buy_zone_line = (
                     f"🎯 **{zone_label}**: ₹{self._fmt_price(_buy_above_val)} – ₹{self._fmt_price(_buy_ceiling_val)}  "
@@ -5602,7 +5744,6 @@ class SignalMonitorRunner:
                     f"Target 1 `{self._fmt_price(row['TakeProfit1'])}` | "
                     f"Target 2 `{self._fmt_price(row['TakeProfit2'])}`{rr_text}"
                 )
-            qty_label = self._qty_label(action)
             block_lines = [
                 f"{action_emoji} **{action}** `{row['Symbol']}` — Strength `{strength}`",
             ]
@@ -5612,8 +5753,11 @@ class SignalMonitorRunner:
                 buy_zone_line,
                 f"At scan: ₹{self._fmt_price(row['PriceNow'])}{day_pct_text}",
                 sl_t_line,
-                f"{qty_label} `{qty}`",
             ])
+            if alert_only:
+                block_lines.append("Auto-buy `DISABLED` | Broker quantity `0`")
+            else:
+                block_lines.append(f"{self._qty_label(action)} `{qty}`")
             if "goalmode" in checks.lower():
                 block_lines.append("Plan: book `70-80%` at Target 1, keep only runner for Target 2, move runner stop near entry")
             if "OB" in action:
@@ -5635,6 +5779,8 @@ class SignalMonitorRunner:
     def _trade_lane_line(self, action: str, checks: str = "") -> str:
         """Make risk lane explicit so alerts are not all read as swing buys."""
         text = str(action or "").strip()
+        if self._is_alert_only_action(text, checks):
+            return "**ANOMALY ALERT ONLY** — no broker order; wait for your own confirmation"
         if "goalmode" in str(checks or "").lower():
             return "**🎯 DAY-GOAL SCALP + RUNNER** — intraday only; lock the first spike, runner is optional"
         if "Early Breakout" in text:

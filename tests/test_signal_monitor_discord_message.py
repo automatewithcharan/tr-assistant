@@ -30,6 +30,11 @@ def _make_runner() -> SignalMonitorRunner:
     runner.goal_target2_pct = 3.0
     runner.goal_anomaly_only = False
     runner.goal_allow_direct_buy = True
+    runner.anomaly_alert_only = False
+    runner.anomaly_alert_only_max_per_day = 20
+    runner.anomaly_alert_stop_pct = 1.0
+    runner.anomaly_alert_target1_pct = 1.0
+    runner.anomaly_alert_target2_pct = 3.0
     runner.radar_max_alerts_per_day = 3
     runner.monitor_heartbeat_minutes = 10
     runner._last_discord_heartbeat_ts = 0.0
@@ -683,6 +688,25 @@ def test_discord_message_labels_anomaly_as_watch_not_swing_buy():
     assert "SWING BUY CANDIDATE" not in message
 
 
+def test_discord_message_makes_alert_only_anomaly_non_tradeable():
+    runner = _make_runner()
+    alert = _alert("UNOMINDA", "⚡ Grade-B Anomaly — ALERT ONLY", 52.0)
+    alert["SuggestedQty"] = 0
+    alert["Checks"] = "AlertOnly no auto-buy | research ladder 1% / 2% / 3%"
+    alerts_df = pd.DataFrame([alert], columns=runner.ALERT_COLUMNS)
+
+    message = runner._build_discord_monitor_message(
+        alerts_df,
+        {"ScannedSymbols": 2990, "FreshAlertsThisRun": 1},
+    )
+
+    assert "ANOMALY ALERT ONLY" in message
+    assert "WATCH RANGE" in message
+    assert "Auto-buy `DISABLED`" in message
+    assert "Broker quantity `0`" in message
+    assert "BUY ZONE" not in message
+
+
 def test_discord_message_labels_orderbook_as_intraday_scalp():
     runner = _make_runner()
     alerts_df = pd.DataFrame(
@@ -1103,6 +1127,45 @@ def test_intraday_goal_mode_blocks_buys_without_validated_selector():
     out = runner._apply_intraday_goal_mode(alerts_df)
 
     assert out.empty
+
+
+def test_intraday_goal_mode_allows_anomaly_watch_without_trade_promotion(monkeypatch):
+    runner = _make_runner()
+    runner.goal_selector_validated = False
+    runner.anomaly_alert_only = True
+    monkeypatch.setattr(runner, "_load_daily_symbol_set", lambda *_args, **_kwargs: set())
+    persisted = []
+    monkeypatch.setattr(runner, "_append_daily_symbol", lambda kind, symbol, **_kwargs: persisted.append((kind, symbol)))
+    alert = _alert("AEROFLEX", "⚡ Grade-B Anomaly", 72.0)
+    alert["PriceNow"] = 100.0
+    alert["BuyAbove"] = 100.0
+    alert["Checks"] = "Q:72/100 [B] | Vol 8.9x | +1.2% | B/S 2.1x"
+    alerts_df = pd.DataFrame([alert], columns=runner.ALERT_COLUMNS)
+
+    out = runner._apply_intraday_goal_mode(alerts_df)
+
+    assert len(out) == 1
+    row = out.iloc[0]
+    assert "ALERT ONLY" in row["NowAction"]
+    assert "AlertOnly no auto-buy" in row["Checks"]
+    assert int(row["SuggestedQty"]) == 0
+    assert float(row["SellIfBelow"]) == 99.0
+    assert float(row["TakeProfit1"]) == 101.0
+    assert float(row["TakeProfit2"]) == 103.0
+    assert persisted == [("anomaly_alert_only", "AEROFLEX")]
+
+
+def test_alert_only_anomaly_never_registers_for_autotrade():
+    runner = _make_runner()
+    runner._autotrade_candidates = {}
+    runner.autotrade_entry_window_minutes = 15.0
+    alert = _alert("AEROFLEX", "⚡ Grade-B Anomaly — ALERT ONLY", 72.0)
+    alert["Checks"] = "AlertOnly no auto-buy"
+    alerts_df = pd.DataFrame([alert], columns=runner.ALERT_COLUMNS)
+
+    runner._register_autotrade_candidates(alerts_df)
+
+    assert runner._autotrade_candidates == {}
 
 
 def test_goal_selector_accepts_profitable_forward_backtest_summary(tmp_path):
