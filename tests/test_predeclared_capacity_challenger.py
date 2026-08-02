@@ -5,6 +5,7 @@ from scripts.assess_predeclared_capacity_challenger import (
     POLICIES,
     SLOTS,
     _policy_eligible_dates,
+    policy_events_for_replay,
 )
 
 
@@ -47,6 +48,37 @@ def test_policy_gate_is_applied_before_replay():
     gated = apply_feature_gate(events, "sector_rotation")
     assert len(gated) == 1
     assert float(gated.iloc[0]["SectorTop2Count"]) == 2.0
+
+
+def test_policy_replay_filters_declared_contract_before_gate():
+    events = pd.DataFrame(
+        [
+            {
+                "date": "2026-08-03",
+                "Contract": "t1_5_s1_0_h60",
+                "Symbol": "SECTOR",
+                "DayChangePct": 2.0,
+                "SectorTop2Count": 2,
+                "SectorBreadthPct": 55.0,
+            },
+            {
+                "date": "2026-08-03",
+                "Contract": "t0_5_s0_5_h15",
+                "Symbol": "WRONG_CONTRACT",
+                "DayChangePct": 2.0,
+                "SectorTop2Count": 2,
+                "SectorBreadthPct": 55.0,
+            },
+        ]
+    )
+
+    gated = policy_events_for_replay(
+        events,
+        ["2026-08-03"],
+        POLICIES["sector_rotation_t1_5_s1_0"],
+    )
+    assert gated["Symbol"].tolist() == ["SECTOR"]
+    assert gated["Contract"].tolist() == ["t1_5_s1_0_h60"]
 
 
 def test_policy_eligibility_requires_complete_contract_and_raw_session():

@@ -68,6 +68,27 @@ POLICIES = {
 }
 
 
+def policy_events_for_replay(
+    events: pd.DataFrame,
+    dates: Iterable[str],
+    policy: dict,
+) -> pd.DataFrame:
+    """Return only the declared contract and causal gate for one policy."""
+    if events is None or events.empty:
+        return pd.DataFrame()
+    if "date" not in events.columns or "Contract" not in events.columns:
+        return pd.DataFrame()
+    date_set = {str(value) for value in dates}
+    contract_events = events[
+        events["date"].astype(str).isin(date_set)
+        & events["Contract"].astype(str).eq(str(policy["contract"]))
+    ].copy()
+    return apply_feature_gate(
+        contract_events,
+        str(policy.get("gate", "all_buyable")),
+    )
+
+
 def _policy_eligible_dates(
     entries: pd.DataFrame,
     events: pd.DataFrame,
@@ -118,15 +139,7 @@ def run_challenger(
         dates = _policy_eligible_dates(
             entries, events, raw, str(policy["contract"]), forward_start
         )
-        contract_events = (
-            events[events["date"].isin(dates)].copy()
-            if events is not None and not events.empty
-            else events
-        )
-        policy_events = apply_feature_gate(
-            contract_events,
-            str(policy.get("gate", "all_buyable")),
-        )
+        policy_events = policy_events_for_replay(events, dates, policy)
         policy_slots = max(1, int(policy.get("slots", SLOTS)))
         daily, trades = replay_depth_slots(
             policy_events,
