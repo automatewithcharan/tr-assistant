@@ -24,14 +24,16 @@ import argparse
 import csv
 import os
 from datetime import datetime
+from functools import lru_cache
 from glob import glob
-from typing import Dict, List, Optional
+from typing import Dict, Optional
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DATA_DIR = os.path.join(ROOT, "results", "Data")
 HISTORY = os.path.join(DATA_DIR, "anomaly_history.csv")
 DAY_CACHE = os.path.join(DATA_DIR, "kite_history_cache", "day")
 INTRADAY_CACHE = os.path.join(DATA_DIR, "kite_history_backfill", "5minute")
+LIVE_INTRADAY_CACHE = os.path.join(DATA_DIR, "kite_history_backfill", "minute")
 
 OUTCOME_FIELDS = [
     "DayOpen", "DayHigh", "DayLow", "DayClose",
@@ -73,8 +75,11 @@ def load_day_bar(symbol: str, date: str) -> Optional[Dict[str, float]]:
     return None
 
 
-def intraday_files(symbol: str, intraday_cache: str) -> List[str]:
-    return sorted(glob(os.path.join(intraday_cache, "*", f"{symbol}.csv")), reverse=True)
+@lru_cache(maxsize=None)
+def intraday_files(symbol: str, intraday_cache: str) -> tuple[str, ...]:
+    return tuple(
+        sorted(glob(os.path.join(intraday_cache, "*", f"{symbol}.csv")), reverse=True)
+    )
 
 
 def load_forward_intraday_bar(symbol: str, alert_when: str, intraday_cache: str) -> Optional[Dict[str, float]]:
@@ -117,7 +122,20 @@ def load_forward_intraday_bar(symbol: str, alert_when: str, intraday_cache: str)
 def main() -> int:
     parser = argparse.ArgumentParser(description="Enrich anomaly_history.csv with post-alert intraday outcomes")
     parser.add_argument("--input", default=HISTORY)
-    parser.add_argument("--intraday-cache", default=INTRADAY_CACHE)
+    parser.add_argument(
+        "--intraday-cache",
+        action="append",
+        default=[],
+        help=(
+            "intraday cache root; may be repeated. Defaults to the live minute "
+            "cache followed by the historical 5-minute cache"
+        ),
+    )
+    parser.add_argument(
+        "--output",
+        default="",
+        help="write enriched rows here instead of replacing --input",
+    )
     parser.add_argument("--force", action="store_true", help="recompute existing outcome columns")
     parser.add_argument("--no-daily-fallback", action="store_true", help="leave rows blank when post-alert intraday bars are missing")
     args = parser.parse_args()
@@ -152,7 +170,12 @@ def main() -> int:
         if not sym or not date or price <= 0:
             skipped += 1
             continue
-        bar = load_forward_intraday_bar(sym, when, args.intraday_cache)
+        cache_roots = args.intraday_cache or [LIVE_INTRADAY_CACHE, INTRADAY_CACHE]
+        bar = None
+        for cache_root in cache_roots:
+            bar = load_forward_intraday_bar(sym, when, cache_root)
+            if bar is not None:
+                break
         if bar is not None:
             intraday += 1
         elif not args.no_daily_fallback:
@@ -180,7 +203,10 @@ def main() -> int:
         r["OutcomeStart"] = bar.get("start", "")
         enriched += 1
 
-    with open(args.input, "w", newline="") as f:
+    output_path = args.output or args.input
+    output_dir = os.path.dirname(os.path.abspath(output_path))
+    os.makedirs(output_dir, exist_ok=True)
+    with open(output_path, "w", newline="") as f:
         w = csv.DictWriter(f, fieldnames=fieldnames, extrasaction="ignore")
         w.writeheader()
         w.writerows(rows)
@@ -188,7 +214,7 @@ def main() -> int:
     print(
         f"[+] enriched {enriched} rows "
         f"({intraday} post-alert intraday, {daily_fallback} daily fallback), "
-        f"{skipped} still pending OHLC"
+        f"{skipped} still pending OHLC; saved {output_path}"
     )
 
     # Summary

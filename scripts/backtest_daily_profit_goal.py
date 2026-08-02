@@ -83,7 +83,17 @@ def _filter_alerts(df: pd.DataFrame, action_filter: str, min_quality: float, out
     if outcome_source_filter == "post_alert_intraday":
         if "OutcomeSource" not in out.columns:
             return out.iloc[0:0].copy()
-        out = out[out["OutcomeSource"].astype(str).str.contains("5minute", case=False, na=False)].copy()
+        sources = out["OutcomeSource"].astype(str)
+        intraday_source = (
+            sources.str.contains("5minute", case=False, na=False)
+            | sources.str.contains(
+                r"(?:^|[/\\])minute(?:[/\\]|$)",
+                case=False,
+                na=False,
+                regex=True,
+            )
+        )
+        out = out[intraday_source].copy()
     elif outcome_source_filter == "any":
         pass
     else:

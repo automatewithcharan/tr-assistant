@@ -297,6 +297,7 @@ def assess(
         "run_frozen_balanced_margin_forward",
         "run_frozen_rank_displacement_forward",
         "run_historical_rank_displacement_audit",
+        "run_anomaly_alert_only_audit",
         "run_fixed_rank_first_forward",
         "run_full_rank_entry_timing",
         "run_full_rank_feature_gates",

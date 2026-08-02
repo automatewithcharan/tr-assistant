@@ -186,6 +186,31 @@ run_historical_rank_displacement_audit() {
         >>"$LOG" 2>&1 || true
 }
 
+run_anomaly_alert_only_audit() {
+    local history="$REPO/results/Data/anomaly_history.csv"
+    local output_dir="$REPO/results/Data/anomaly_alert_only_research"
+    local enriched="$output_dir/anomaly_history_post_alert_audit.csv"
+    [[ -s "$history" ]] || return 0
+    mkdir -p "$output_dir"
+    "$PYTHON" "$REPO/scripts/anomaly_outcomes.py" \
+        --input "$history" \
+        --output "$enriched" \
+        --intraday-cache "$REPO/results/Data/kite_history_backfill/minute" \
+        --intraday-cache "$REPO/results/Data/kite_history_backfill/5minute" \
+        --force --no-daily-fallback \
+        >>"$LOG" 2>&1 || true
+    "$PYTHON" "$REPO/scripts/backtest_daily_profit_goal.py" \
+        --input "$enriched" \
+        --out-prefix "$output_dir/anomaly_alert_only_goal" \
+        --capital 500000 --tickets 50000,100000 \
+        --goal-pct 1,2,3 --target-pct 1,1.5,2,3 \
+        --stop-pct 0.5,0.8,1,1.5,2 --min-quality 0,40,50,60,70 \
+        --action-filters all,grade_a,grade_ab,no_premove,premove \
+        --outcome-source-filter post_alert_intraday --rank-by quality,time \
+        --cost-pct 0.15 --compound \
+        >>"$LOG" 2>&1 || true
+}
+
 run_prior_session_ranker_paper() {
     "$PYTHON" "$REPO/scripts/assess_prior_session_ranker_paper.py" \
         --prediction-glob "$REPO/results/Data/frozen_microstructure_paper/predictions_20*.csv" \
@@ -491,6 +516,7 @@ if [ -f "$OUTPUT_ROOT/status.json" ]; then
         run_rank_migration_audit
         run_stop_avoidance_audit
         run_historical_rank_displacement_audit
+        run_anomaly_alert_only_audit
         run_prior_session_ranker_paper
         run_frozen_ranker_prediction_matrix
         run_full_universe_rank_strategy
@@ -559,6 +585,7 @@ run_event_shadow_rebuild
 run_rank_migration_audit
 run_stop_avoidance_audit
 run_historical_rank_displacement_audit
+run_anomaly_alert_only_audit
 run_prior_session_ranker_paper
 run_frozen_ranker_prediction_matrix
 run_full_universe_rank_strategy

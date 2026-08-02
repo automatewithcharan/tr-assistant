@@ -1,6 +1,6 @@
 import pandas as pd
 
-from scripts.backtest_daily_profit_goal import simulate
+from scripts.backtest_daily_profit_goal import _filter_alerts, simulate
 
 
 def test_empty_qualified_configuration_returns_complete_zero_summary():
@@ -41,3 +41,21 @@ def test_empty_qualified_configuration_returns_complete_zero_summary():
     assert summary["worst_day_pct"] == 0.0
     assert summary["total_pnl"] == 0.0
     assert summary["ending_capital"] == 500000.0
+
+
+def test_post_alert_filter_accepts_minute_and_five_minute_sources():
+    frame = pd.DataFrame(
+        {
+            "QualityScore": [60, 60, 60],
+            "Action": ["Grade-B Anomaly"] * 3,
+            "OutcomeSource": [
+                "kite_history_backfill/minute/2026-07-31/AAA.csv",
+                "kite_history_backfill/5minute/history/BBB.csv",
+                "kite_history_cache/day/CCC.csv",
+            ],
+        }
+    )
+
+    filtered = _filter_alerts(frame, "all", 0, "post_alert_intraday")
+
+    assert filtered.index.tolist() == [0, 1]
