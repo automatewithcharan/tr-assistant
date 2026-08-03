@@ -71,6 +71,35 @@ def test_direct_lifecycle_recorder_failure_is_non_blocking(lane):
     ) == ""
 
 
+def test_lifecycle_initialization_failure_is_non_blocking(monkeypatch):
+    warnings = []
+
+    class FailingRecorder:
+        def __init__(self, *_args, **_kwargs):
+            raise OSError("evidence storage unavailable")
+
+    monkeypatch.setattr(signal_monitor_module, "TopGainerLifecycleRecorder", FailingRecorder)
+    monkeypatch.setattr(
+        signal_monitor_module,
+        "default_logger",
+        lambda: SimpleNamespace(warning=lambda message: warnings.append(message)),
+    )
+    monkeypatch.setenv("SIGNALMONITOR_ENABLE_LIVE_FEATURE_RECORDER", "0")
+
+    runner = SignalMonitorRunner(
+        config_manager=None,
+        universe="all",
+        limit=0,
+        use_live_kite=False,
+        alert_channels="none",
+    )
+
+    assert runner._top_gainer_lifecycle_recorder is None
+    assert warnings == [
+        "Lifecycle evidence initialization failed: evidence storage unavailable"
+    ]
+
+
 def test_paper_tracking_env_override_can_enable_fast_mode(monkeypatch):
     monkeypatch.setattr(SignalMonitorRunner, "FAST_MODE", True)
     monkeypatch.setenv("SIGNALMONITOR_ENABLE_PAPER_TRACKING", "1")

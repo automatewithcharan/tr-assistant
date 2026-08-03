@@ -316,9 +316,15 @@ class SignalMonitorRunner:
             if self.enable_live_feature_recorder
             else None
         )
-        self._top_gainer_lifecycle_recorder = (
-            TopGainerLifecycleRecorder(self.output_dir)
-        )
+        try:
+            self._top_gainer_lifecycle_recorder = TopGainerLifecycleRecorder(
+                self.output_dir
+            )
+        except Exception as exc:
+            default_logger().warning(
+                f"Lifecycle evidence initialization failed: {exc}"
+            )
+            self._top_gainer_lifecycle_recorder = None
         self._full_rank_paper_observer = (
             FullUniverseRankPaperObserver(
                 output_dir=self.output_dir,
