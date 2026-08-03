@@ -6,6 +6,8 @@ from types import SimpleNamespace
 import pkscreener.classes.SignalMonitor as signal_monitor_module
 from pkscreener.classes.LiveFeatureRecorder import LiveFeatureRecorder
 from pkscreener.classes.SignalMonitor import SignalMonitorRunner
+from pkscreener.classes.TopGainerLifecycleRecorder import TopGainerLifecycleRecorder
+import pytest
 
 
 def _make_runner() -> SignalMonitorRunner:
@@ -53,6 +55,20 @@ def _make_runner() -> SignalMonitorRunner:
     runner._leader_last_ticks_by_symbol = {}
     runner._leader_ignition_state_path = f"{runner.output_dir}/signalmonitor_leader_ignition_state.json"
     return runner
+
+
+@pytest.mark.parametrize("lane", ["early_breakout", "top_gainer_radar"])
+def test_direct_lifecycle_recorder_failure_is_non_blocking(lane):
+    runner = _make_runner()
+
+    class FailingRecorder:
+        def record_observation(self, *args, **kwargs):
+            raise OSError("evidence storage unavailable")
+
+    runner._top_gainer_lifecycle_recorder = FailingRecorder()
+    assert runner._record_direct_lane_observation(
+        lane, {"symbol": "FAIL", "feature_available_at": runner.run_at}, "qualified"
+    ) == ""
 
 
 def test_paper_tracking_env_override_can_enable_fast_mode(monkeypatch):
@@ -134,6 +150,7 @@ def _alert(symbol: str, action: str, strength: float) -> dict:
 
 def test_discord_message_prioritizes_fresh_buy_now_over_anomaly():
     runner = _make_runner()
+    runner._top_gainer_lifecycle_recorder = TopGainerLifecycleRecorder(runner.output_dir)
     alerts_df = pd.DataFrame(
         [
             _alert("AEROFLEX", "⚡ Grade-B Anomaly", 65.0),
@@ -236,6 +253,7 @@ def test_discord_message_shows_current_buy_board_when_fresh_alert_is_anomaly_onl
 
 def test_runner_continuation_surfaces_five_to_twelve_percent_runner():
     runner = _make_runner()
+    runner._top_gainer_lifecycle_recorder = TopGainerLifecycleRecorder(runner.output_dir)
     runner.actionable_runner = SimpleNamespace(
         live_ticks={
             "BBOX": {
@@ -284,6 +302,7 @@ def test_early_breakout_surfaces_one_to_three_percent_mover(monkeypatch):
         staticmethod(lambda: datetime(2026, 5, 8, 9, 32, 0)),
     )
     runner = _make_runner()
+    runner._top_gainer_lifecycle_recorder = TopGainerLifecycleRecorder(runner.output_dir)
     runner.actionable_runner = SimpleNamespace(
         live_ticks={
             "RICOAUTO": {
@@ -323,6 +342,8 @@ def test_early_breakout_surfaces_one_to_three_percent_mover(monkeypatch):
     assert list(alerts["Symbol"]) == ["RICOAUTO"]
     assert alerts.iloc[0]["NowAction"] == "🌱 Early Breakout"
     assert alerts.iloc[0]["TakeProfit1"] == 103.53
+    assert alerts.iloc[0]["LifecycleObservationId"]
+    assert runner._top_gainer_lifecycle_recorder.replay()[0]["source_lane"] == "early_breakout"
 
 
 def test_early_breakout_blocks_already_ran_mover(monkeypatch):
@@ -370,6 +391,7 @@ def test_top_gainer_radar_surfaces_watch_mover_from_live_ticks(monkeypatch):
         staticmethod(lambda: datetime(2026, 5, 8, 9, 42, 0)),
     )
     runner = _make_runner()
+    runner._top_gainer_lifecycle_recorder = TopGainerLifecycleRecorder(runner.output_dir)
     runner.use_live_kite = True
     runner._is_regular_market_hours = lambda: True
     runner.enable_live_feature_recorder = True
@@ -424,6 +446,12 @@ def test_top_gainer_radar_surfaces_watch_mover_from_live_ticks(monkeypatch):
 
     assert list(alerts["Symbol"]) == ["CUPID"]
     assert alerts.iloc[0]["NowAction"] == "📡 Top Gainer Radar"
+    assert alerts.iloc[0]["LifecycleObservationId"]
+    assert runner._top_gainer_lifecycle_recorder.replay()[0]["source_lane"] == "top_gainer_radar"
+    evidence = runner._top_gainer_lifecycle_recorder.replay()[0]["signal_time_fields"]
+    assert evidence["volume"] == 175000
+    assert evidence["bid"] == 136.80
+    assert evidence["ask"] == 136.90
     journal = pd.read_csv(f"{runner.output_dir}/live_feature_recorder/lane_decisions_2026-05-08.csv")
     assert list(journal["Lane"]) == ["top_gainer_radar"]
     assert list(journal["Symbol"]) == ["CUPID"]

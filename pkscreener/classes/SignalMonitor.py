@@ -32,6 +32,7 @@ from pkscreener.classes.FullUniverseRankContractMatrixObserver import FullUniver
 from pkscreener.classes.FullUniverseRankEntryTimingObserver import FullUniverseRankEntryTimingObserver
 from pkscreener.classes.FullUniverseRankPaperObserver import FullUniverseRankPaperObserver
 from pkscreener.classes.LiveFeatureRecorder import LiveFeatureRecorder
+from pkscreener.classes.TopGainerLifecycleRecorder import TopGainerLifecycleRecorder
 from pkscreener.classes.IntradayEventShadowRecorder import IntradayEventShadowRecorder
 from pkscreener.classes.PaperTradeTracker import PaperTradeTracker
 from pkscreener.classes.RiskGuardrails import LiveTradingGuardrails
@@ -314,6 +315,9 @@ class SignalMonitorRunner:
             )
             if self.enable_live_feature_recorder
             else None
+        )
+        self._top_gainer_lifecycle_recorder = (
+            TopGainerLifecycleRecorder(self.output_dir)
         )
         self._full_rank_paper_observer = (
             FullUniverseRankPaperObserver(
@@ -606,6 +610,7 @@ class SignalMonitorRunner:
         # Paper evidence must continue collecting even when the live selector
         # is revoked. Goal alerts and any real-order lane remain behind the
         # causal validation gate below.
+        self._record_lifecycle_alerts(alerts_df)
         self._run_ranked_confirmation_paper_lane(alerts_df)
         alerts_df = self._apply_intraday_goal_mode(alerts_df)
         self._run_autotrade_lane(alerts_df)
@@ -3039,6 +3044,31 @@ class SignalMonitorRunner:
             )
         return mom_df[self.ALERT_COLUMNS].copy()
 
+    def _record_direct_lane_observation(
+        self,
+        source_lane: str,
+        snapshot: Dict[str, Any],
+        qualification_reason: str,
+        observation_timestamp: Optional[Any] = None,
+    ) -> str:
+        """Record a paper observation at a lane's qualification boundary."""
+        lifecycle = getattr(self, "_top_gainer_lifecycle_recorder", None)
+        if lifecycle is None:
+            return ""
+        payload = dict(snapshot)
+        payload["qualification_reason"] = str(qualification_reason or "")
+        timestamp = observation_timestamp or self.run_at
+        try:
+            return lifecycle.record_observation(
+                payload,
+                source_lane=source_lane,
+                observation_timestamp=timestamp,
+                universe_id=self.universe,
+            )
+        except Exception as exc:
+            default_logger().warning(f"Lifecycle evidence unavailable for {source_lane}: {exc}")
+            return ""
+
     def _build_early_breakout_alerts(self, current_simple_df: pd.DataFrame) -> pd.DataFrame:
         """Catch fresh +1% to +3.5% movers before they become top-gainer chases."""
         if not getattr(self, "enable_early_breakout_alerts", True):
@@ -3081,6 +3111,13 @@ class SignalMonitorRunner:
             total_buy = self._to_float(tick.get("total_buy_quantity", 0))
             total_sell = self._to_float(tick.get("total_sell_quantity", 0))
             bs_ratio = total_buy / total_sell if total_sell > 0 else (9.99 if total_buy > 0 else 0.0)
+            depth = tick.get("depth") if isinstance(tick.get("depth"), dict) else {}
+            best_bid = tick.get("best_bid")
+            best_ask = tick.get("best_ask")
+            if best_bid is None and depth.get("buy"):
+                best_bid = depth["buy"][0].get("price")
+            if best_ask is None and depth.get("sell"):
+                best_ask = depth["sell"][0].get("price")
 
             try:
                 now_ist = PKDateUtilities.currentDateTime()
@@ -3128,8 +3165,45 @@ class SignalMonitorRunner:
             if day_high > 0:
                 breakout_checks.append(f"near high pullback {pullback:.1f}%")
 
+            lifecycle_id = self._record_direct_lane_observation(
+                "early_breakout",
+                {
+                    "symbol": sym,
+                    "feature_available_at": self.run_at,
+                    "current_price": entry,
+                    "return_from_previous_close": change_pct,
+                    "return_from_open": rec.get("Open Change %"),
+                    "gap_pct": rec.get("Gap %"),
+                    "opening_range_position": rec.get("Opening Range Position"),
+                    "volume": rec.get("Volume") if rec.get("Volume") is not None else tick.get("volume_traded", tick.get("volume")),
+                    "relative_volume": volume_ratio,
+                    "volume_acceleration": rec.get("Volume Acceleration"),
+                    "traded_value": rec.get("Traded Value"),
+                    "vwap": rec.get("VWAP"),
+                    "vwap_distance": rec.get("VWAP Distance"),
+                    "day_high_known": day_high,
+                    "pullback_pct": pullback,
+                    "bid": best_bid, "ask": best_ask,
+                    "buy_quantity": total_buy, "sell_quantity": total_sell,
+                    "order_book_ratio": bs_ratio,
+                    "sector": rec.get("Sector"),
+                    "sector_strength": rec.get("Sector Avg Change %"),
+                    "benchmark_strength": rec.get("Market Breadth %"),
+                    "stale_data": rec.get("StaleData"),
+                    "source_watermark": self.run_at,
+                    "missing_reasons": [
+                        field for field in ("VWAP", "Sector", "Market Breadth %")
+                        if field not in rec or pd.isna(rec.get(field))
+                    ],
+                },
+                "early breakout qualification passed",
+                observation_timestamp=self.run_at,
+            )
             rows.append(
                 {
+                    "Lane": "early_breakout",
+                    "LifecycleObservationId": lifecycle_id,
+                    "LifecycleTimestamp": self.run_at.isoformat(timespec="microseconds"),
                     "When": self.run_at_str,
                     "Symbol": sym,
                     "PreviousAction": action or setup or "None",
@@ -3154,6 +3228,9 @@ class SignalMonitorRunner:
             return pd.DataFrame(columns=self.ALERT_COLUMNS)
 
         out = pd.DataFrame(rows, columns=self.ALERT_COLUMNS)
+        out["Lane"] = [row.get("Lane", "early_breakout") for row in rows]
+        out["LifecycleObservationId"] = [row.get("LifecycleObservationId", "") for row in rows]
+        out["LifecycleTimestamp"] = [row.get("LifecycleTimestamp", "") for row in rows]
         out.sort_values(
             by=["SignalStrengthPct", "ChangePct", "Symbol"],
             ascending=[False, False, True],
@@ -3168,7 +3245,7 @@ class SignalMonitorRunner:
             "  [+] Early breakout alert(s): "
             + ", ".join(f"{r['Symbol']} (+{float(r['ChangePct']):.1f}%)" for _, r in out.iterrows())
         )
-        return out[self.ALERT_COLUMNS].copy()
+        return out.copy()
 
     def _run_leader_ignition_lane(self) -> pd.DataFrame:
         """Raw-tick early leader research lane.
@@ -3697,6 +3774,13 @@ class SignalMonitorRunner:
             total_buy = self._to_float(tick.get("total_buy_quantity", 0))
             total_sell = self._to_float(tick.get("total_sell_quantity", 0))
             bs_ratio = total_buy / total_sell if total_sell > 0 else (9.99 if total_buy > 0 else 0.0)
+            depth = tick.get("depth") if isinstance(tick.get("depth"), dict) else {}
+            best_bid = tick.get("best_bid")
+            best_ask = tick.get("best_ask")
+            if best_bid is None and depth.get("buy"):
+                best_bid = depth["buy"][0].get("price")
+            if best_ask is None and depth.get("sell"):
+                best_ask = depth["sell"][0].get("price")
 
             def audit(decision: str, reason: str) -> None:
                 audit_rows.append(
@@ -3782,8 +3866,47 @@ class SignalMonitorRunner:
                 f"B/S {bs_ratio:.1f}x",
                 f"pullback {pullback:.1f}%",
             ]
+            lifecycle_id = self._record_direct_lane_observation(
+                "top_gainer_radar",
+                {
+                    "symbol": sym,
+                    "feature_available_at": self.run_at,
+                    "current_price": price_now,
+                    "previous_close": tick.get("ohlc", {}).get("close") if isinstance(tick.get("ohlc"), dict) else rec.get("Previous Close"),
+                    "day_open": tick.get("ohlc", {}).get("open") if isinstance(tick.get("ohlc"), dict) else rec.get("Open"),
+                    "return_from_previous_close": change_pct,
+                    "return_from_open": rec.get("Open Change %"),
+                    "current_rank": rec.get("Rank"),
+                    "rank_percentile": rec.get("Rank %"),
+                    "rank_improvement": rec.get("Rank Improvement"),
+                    "volume": tick.get("volume_traded", tick.get("volume")),
+                    "relative_volume": volume_ratio,
+                    "traded_value": rec.get("Traded Value"),
+                    "bid": best_bid, "ask": best_ask,
+                    "buy_quantity": total_buy, "sell_quantity": total_sell,
+                    "order_book_ratio": bs_ratio,
+                    "vwap": tick.get("average_traded_price"),
+                    "vwap_distance": ((price_now / tick.get("average_traded_price") - 1.0) * 100.0) if self._to_float(tick.get("average_traded_price")) > 0 else None,
+                    "day_high_known": day_high,
+                    "pullback_pct": pullback,
+                    "sector": rec.get("Sector"),
+                    "sector_strength": rec.get("Sector Avg Change %"),
+                    "benchmark_strength": rec.get("Market Breadth %"),
+                    "stale_data": rec.get("StaleData"),
+                    "source_watermark": self.run_at,
+                    "missing_reasons": [
+                        field for field in ("Previous Close", "Open", "Sector", "Market Breadth %")
+                        if field not in rec or pd.isna(rec.get(field))
+                    ],
+                },
+                "top-gainer radar qualification passed",
+                observation_timestamp=self.run_at,
+            )
             rows.append(
                 {
+                    "Lane": "top_gainer_radar",
+                    "LifecycleObservationId": lifecycle_id,
+                    "LifecycleTimestamp": self.run_at.isoformat(timespec="microseconds"),
                     "When": self.run_at_str,
                     "Symbol": sym,
                     "PreviousAction": str(rec.get("What To Do", "") or "None"),
@@ -3810,6 +3933,9 @@ class SignalMonitorRunner:
             return pd.DataFrame(columns=self.ALERT_COLUMNS)
 
         out = pd.DataFrame(rows, columns=self.ALERT_COLUMNS)
+        out["Lane"] = [row.get("Lane", "top_gainer_radar") for row in rows]
+        out["LifecycleObservationId"] = [row.get("LifecycleObservationId", "") for row in rows]
+        out["LifecycleTimestamp"] = [row.get("LifecycleTimestamp", "") for row in rows]
         out.sort_values(by=["SignalStrengthPct", "ChangePct", "Symbol"], ascending=[False, False, True], inplace=True)
         max_per_cycle = max(1, int(getattr(self, "TOP_GAINER_RADAR_MAX_PER_CYCLE", 4) or 4))
         out = out.head(max_per_cycle)
@@ -3826,7 +3952,7 @@ class SignalMonitorRunner:
                 audit_row["Decision"] = "reject"
                 audit_row["Reason"] = "cycle radar slot not selected"
         self._append_top_gainer_radar_audit(audit_rows, today=today)
-        return out[self.ALERT_COLUMNS].copy()
+        return out.copy()
 
     def _build_runner_continuation_alerts(self, current_simple_df: pd.DataFrame) -> pd.DataFrame:
         """Surface controlled continuation entries for stocks already up 5-12%.
@@ -4309,6 +4435,7 @@ class SignalMonitorRunner:
             return
         for event in events:
             event_name = str(event.get("event", "") or "")
+            self._record_ranked_paper_lifecycle_event(event)
             if event_name not in {"paper_entry", "paper_exit", "paper_daily_summary"}:
                 continue
             if event_name == "paper_daily_summary":
@@ -4365,6 +4492,124 @@ class SignalMonitorRunner:
                         "No broker order was placed."
                     )
 
+    def _record_ranked_paper_lifecycle_event(self, event: Dict[str, Any]) -> None:
+        lifecycle = getattr(self, "_top_gainer_lifecycle_recorder", None)
+        if lifecycle is None:
+            return
+        observation_id = str(event.get("observation_id", "") or "")
+        event_name = str(event.get("event", "") or "")
+        if not observation_id or event_name == "paper_daily_summary":
+            return
+        timestamp = event.get("timestamp") or self.run_at
+        details = event.get("details_json", "{}")
+        try:
+            details = json.loads(str(details or "{}")) if isinstance(details, str) else (details or {})
+        except Exception:
+            details = {}
+        try:
+            if event_name == "candidate_registered":
+                lifecycle.record_event(
+                    observation_id, "confirmation_armed", timestamp,
+                    "ranked_confirmation_paper", rule="ranked_sustained_grade_b",
+                    outcome="armed", rejection_reason=event.get("reason", ""),
+                )
+            elif event_name == "candidate_expired":
+                lifecycle.record_event(
+                    observation_id, "confirmation_failed", timestamp,
+                    "ranked_confirmation_paper", rule="ranked_sustained_grade_b",
+                    outcome="failed", rejection_reason=event.get("reason", ""),
+                )
+            elif event_name == "paper_entry":
+                lifecycle.record_event(
+                    observation_id, "confirmation_passed", timestamp,
+                    "ranked_confirmation_paper", rule="ranked_sustained_grade_b",
+                    outcome="passed", rank=event.get("rank_score"),
+                )
+                lifecycle.record_event(
+                    observation_id, "paper_entry_assumed", timestamp,
+                    "ranked_confirmation_paper", entry_event_id=event.get("event_id", ""),
+                    assumed_price=event.get("price"), price_source="paper_tick",
+                    fill_model="best_ask_plus_slippage", target=details.get("target"),
+                    stop=details.get("stop"), slippage_assumption=details.get("slippage_bps"),
+                    cost_assumption=event.get("costs", 0.0),
+                )
+            elif event_name == "paper_exit":
+                lifecycle.record_event(
+                    observation_id, "paper_exit", timestamp,
+                    "ranked_confirmation_paper", entry_event_id=event.get("entry_event_id", ""),
+                    exit_price=event.get("price"), exit_reason=event.get("reason", ""),
+                    gross_return=event.get("gross_pnl"), costs=event.get("costs"),
+                    net_return=event.get("net_pnl"), outcome_state="complete",
+                )
+        except Exception as exc:
+            default_logger().warning(f"Ranked paper lifecycle event rejected: {exc}")
+
+    def _record_lifecycle_alerts(self, alerts_df: pd.DataFrame) -> None:
+        """Assign lifecycle IDs at the alert boundary before paper lanes run."""
+        lifecycle = getattr(self, "_top_gainer_lifecycle_recorder", None)
+        if lifecycle is None or alerts_df is None:
+            return
+        if "LifecycleObservationId" not in alerts_df.columns:
+            alerts_df["LifecycleObservationId"] = ""
+        for index, alert in enumerate(alerts_df.to_dict(orient="records")):
+            symbol = str(alert.get("Symbol", "") or "").strip().upper()
+            if not symbol:
+                continue
+            raw_lane = alert.get("Lane")
+            lane = str(raw_lane).strip() if raw_lane is not None and not pd.isna(raw_lane) and str(raw_lane).strip() else "signal_monitor"
+            raw_timestamp = alert.get("LifecycleTimestamp")
+            if raw_timestamp is None or pd.isna(raw_timestamp) or not str(raw_timestamp).strip():
+                raw_timestamp = alert.get("When")
+            timestamp = raw_timestamp if raw_timestamp is not None and not pd.isna(raw_timestamp) and str(raw_timestamp).strip() else self.run_at
+            try:
+                raw_id = alert.get("LifecycleObservationId")
+                explicit_id = str(raw_id).strip() if raw_id is not None and not pd.isna(raw_id) else ""
+                if explicit_id:
+                    lifecycle.record_event(
+                        explicit_id, "alert_emitted", timestamp, lane,
+                        alert_type=str(alert.get("NowAction", alert.get("Action", ""))),
+                        rank=alert.get("DayChangeRank"),
+                        return_already_achieved=alert.get("ChangePct"),
+                    )
+                    continue
+                if lane in {"top_gainer_radar", "early_breakout"}:
+                    lifecycle.record_data_incomplete(
+                        timestamp, lane, symbol=symbol,
+                        reason="direct lane observation ID missing",
+                    )
+                    continue
+                lifecycle_id = lifecycle.record_observation(
+                    {
+                        "symbol": symbol,
+                        "feature_available_at": timestamp,
+                        "current_price": alert.get("PriceNow"),
+                        "return_from_previous_close": alert.get("ChangePct"),
+                        "current_rank": alert.get("DayChangeRank"),
+                        "rank_percentile": alert.get("DayChangeRankPct"),
+                        "missing_reasons": [
+                            field for field in ("PriceNow", "ChangePct")
+                            if field not in alert or pd.isna(alert.get(field))
+                        ],
+                    },
+                    source_lane=lane,
+                    observation_timestamp=timestamp,
+                    universe_id=self.universe,
+                )
+                alerts_df.at[index, "LifecycleObservationId"] = lifecycle_id
+                lifecycle.record_event(
+                    lifecycle_id,
+                    "alert_emitted",
+                    timestamp,
+                    lane,
+                    alert_type=str(alert.get("NowAction", alert.get("Action", ""))),
+                    rank=alert.get("DayChangeRank"),
+                    return_already_achieved=alert.get("ChangePct"),
+                )
+            except Exception as exc:
+                # No symbol/timestamp inference is permitted when identity cannot
+                # be created; downstream paper lanes receive an empty ID.
+                default_logger().debug("Lifecycle alert identity unavailable: %s", exc)
+
     def _record_live_feature_snapshot(self, alerts_df: pd.DataFrame) -> None:
         """Shadow-record live-only context for later strategy research."""
         recorder = getattr(self, "_live_feature_recorder", None)
@@ -4411,6 +4656,66 @@ class SignalMonitorRunner:
                 f"  [+] Live feature recorder: saved {len(rows_df)} row(s) "
                 f"(missed runners {missed_count}, stable OB {stable_count})"
             )
+            lifecycle = getattr(self, "_top_gainer_lifecycle_recorder", None)
+            if lifecycle is not None:
+                for row in rows_df.to_dict(orient="records"):
+                    symbol = str(row.get("Symbol", "") or "").strip().upper()
+                    if not symbol:
+                        continue
+                    try:
+                        lifecycle_id = lifecycle.record_observation(
+                            {
+                                "symbol": symbol,
+                                "feature_available_at": row.get("When"),
+                                "current_price": row.get("LastPrice"),
+                                "previous_close": row.get("PrevClose"),
+                                "day_open": row.get("Open"),
+                                "return_from_previous_close": row.get("DayChangePct"),
+                                "return_from_open": row.get("OpenChangePct"),
+                                "day_high_known": row.get("DayHigh"),
+                                "pullback_pct": row.get("PullbackFromHighPct"),
+                                "volume": row.get("Volume"),
+                                "traded_value": row.get("TradedValue"),
+                                "bid": row.get("BestBid"), "ask": row.get("BestAsk"),
+                                "spread": row.get("SpreadBps"),
+                                "buy_quantity": row.get("BuyQty"),
+                                "sell_quantity": row.get("SellQty"),
+                                "order_book_ratio": row.get("BuyerSellerRatio"),
+                                "order_book_stability": row.get("OrderBookStable"),
+                                "sector": row.get("Sector"),
+                                "sector_strength": row.get("SectorAvgChangePct"),
+                                "benchmark_strength": row.get("MarketBreadthPct"),
+                                "current_rank": row.get("DayChangeRank"),
+                                "rank_percentile": row.get("DayChangeRankPct"),
+                                "previous_rank": row.get("PreviousDayChangeRank"),
+                                "rank_improvement": row.get("RankImprovement"),
+                                "rank_velocity": row.get("RankVelocityPerMinute"),
+                                "stale_data": row.get("StaleData"),
+                                "source_watermark": row.get("When"),
+                                "missing_reasons": [
+                                    field for field in ("LastPrice", "PrevClose", "Open", "Volume")
+                                    if field not in row or pd.isna(row.get(field))
+                                ],
+                            },
+                            source_lane="live_feature_recorder",
+                            observation_timestamp=row.get("When"),
+                            universe_id=self.universe,
+                        )
+                        lifecycle.record_event(
+                            lifecycle_id, "candidate_ranked", row.get("When"),
+                            "live_feature_recorder", rank=row.get("DayChangeRank"),
+                            rank_percentile=row.get("DayChangeRankPct"),
+                        )
+                        if row.get("RankImprovement") is not None and not pd.isna(row.get("RankImprovement")):
+                            lifecycle.record_event(
+                                lifecycle_id, "rank_changed", row.get("When"),
+                                "live_feature_recorder",
+                                previous_rank=row.get("PreviousDayChangeRank"),
+                                current_rank=row.get("DayChangeRank"),
+                                rank_improvement=row.get("RankImprovement"),
+                            )
+                    except Exception as exc:
+                        default_logger().debug("Lifecycle observation skipped: %s", exc)
         observer = getattr(self, "_full_rank_paper_observer", None)
         paper_events = []
         if observer is not None and getattr(self, "enable_full_rank_paper_observer", False):

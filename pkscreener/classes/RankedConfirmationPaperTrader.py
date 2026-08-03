@@ -8,6 +8,7 @@ and records simulated entries/exits with conservative costs.
 from __future__ import annotations
 
 import csv
+import hashlib
 import json
 import os
 import statistics
@@ -148,6 +149,8 @@ class RankedPaperCandidate:
     status_reason: str = "waiting_for_sustained_confirmation"
     observations: List[CandidateObservation] = field(default_factory=list)
     last_decision_at: str = ""
+    observation_id: str = ""
+    experiment_version: str = "canonical_v1"
 
 
 @dataclass
@@ -185,14 +188,18 @@ class RankedPaperTrade:
     lowest_price: float = 0.0
     protected_stop_price: float = 0.0
     closed: bool = False
+    observation_id: str = ""
+    experiment_version: str = "canonical_v1"
+    entry_event_id: str = ""
 
 
 class RankedConfirmationPaperTrader:
     """Stateful paper executor for sustained, ranked Grade-B confirmations."""
 
     EVENT_COLUMNS = [
-        "timestamp", "event", "symbol", "status", "reason", "price",
+        "event_id", "timestamp", "event", "symbol", "status", "reason", "price",
         "rank_score", "qty", "gross_pnl", "costs", "net_pnl", "details_json",
+        "observation_id", "experiment_version", "entry_event_id",
     ]
 
     def __init__(
@@ -273,9 +280,11 @@ class RankedConfirmationPaperTrader:
                 alert_price=round(alert_price, 4),
                 strength=_float(row.get("SignalStrengthPct")),
                 checks=str(row.get("Checks", "") or ""),
+                observation_id=str(row.get("LifecycleObservationId", "") or ""),
             )
             self.candidates[symbol] = candidate
-            events.append(self._event(now, "candidate_registered", symbol, "observing", candidate.status_reason, alert_price))
+            events.append(self._event(now, "candidate_registered", symbol, "observing", candidate.status_reason, alert_price,
+                                      observation_id=candidate.observation_id))
 
     def _observe_candidates(self, ticks: Dict[str, Dict[str, Any]], now: datetime) -> None:
         symbols = {
@@ -372,6 +381,10 @@ class RankedConfirmationPaperTrader:
                 entry_spread_bps=metrics["spread_bps"],
                 highest_price=round(entry, 4),
                 lowest_price=round(entry, 4),
+                observation_id=candidate.observation_id,
+                entry_event_id=hashlib.sha256(
+                    f"paper_entry|{candidate.observation_id}|{candidate.symbol}|{now.isoformat(timespec='microseconds')}".encode()
+                ).hexdigest()[:32],
             )
             self.trades[candidate.symbol] = trade
             candidate.status = "entered"
@@ -382,6 +395,7 @@ class RankedConfirmationPaperTrader:
                     candidate.status_reason, trade.entry_price,
                     rank_score=trade.rank_score, qty=qty,
                     details={"target": trade.target_price, "stop": trade.stop_price, **metrics},
+                    observation_id=trade.observation_id,
                 )
             )
 
@@ -585,6 +599,8 @@ class RankedConfirmationPaperTrader:
                 trade.exit_price, rank_score=trade.rank_score, qty=trade.qty,
                 gross_pnl=trade.gross_pnl, costs=trade.costs, net_pnl=trade.net_pnl,
                 details={"mfe_pct": trade.mfe_pct, "mae_pct": trade.mae_pct},
+                observation_id=trade.observation_id,
+                entry_event_id=trade.entry_event_id,
             )
         )
 
@@ -665,6 +681,7 @@ class RankedConfirmationPaperTrader:
                 self._event(
                     now, "candidate_expired", candidate.symbol, "expired",
                     candidate.status_reason, candidate.observations[-1].price if candidate.observations else candidate.alert_price,
+                    observation_id=candidate.observation_id,
                 )
             )
 
@@ -764,9 +781,15 @@ class RankedConfirmationPaperTrader:
         costs: float = 0.0,
         net_pnl: float = 0.0,
         details: Optional[Dict[str, Any]] = None,
+        observation_id: str = "",
+        experiment_version: str = "canonical_v1",
+        entry_event_id: str = "",
     ) -> Dict[str, Any]:
         row = {
-            "timestamp": now.isoformat(timespec="seconds"),
+            "event_id": hashlib.sha256(
+                f"{event}|{symbol}|{now.isoformat(timespec='microseconds')}|{observation_id}".encode()
+            ).hexdigest()[:32],
+            "timestamp": now.isoformat(timespec="microseconds"),
             "event": event,
             "symbol": symbol,
             "status": status,
@@ -778,6 +801,9 @@ class RankedConfirmationPaperTrader:
             "costs": round(costs, 2),
             "net_pnl": round(net_pnl, 2),
             "details_json": json.dumps(details or {}, sort_keys=True, default=str),
+            "observation_id": str(observation_id or ""),
+            "experiment_version": experiment_version,
+            "entry_event_id": str(entry_event_id or ""),
         }
         if self.persist:
             self._append_event(row)
