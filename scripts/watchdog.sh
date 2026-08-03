@@ -3,6 +3,16 @@
 # If either fails, kills stale state and restarts cleanly.
 
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+export KITE_EXECUTION_MODE=paper
+export KITE_DRY_RUN=1
+export KITE_LIVE_ACKNOWLEDGEMENT=""
+export KITE_LIVE_CALLER_ALLOWLIST=""
+export KITE_LIVE_STRATEGY_ALLOWLIST=""
+export SIGNALMONITOR_AUTOTRADE_ENABLED=0
+export SIGNALMONITOR_AUTOTRADE_REAL_ORDERS=0
+export KITE_AUTO_TRADE=0
+export KITE_AUTO_BUY=0
+export KITE_AUTO_SELL=0
 if [ -x "$REPO/.venv/bin/python3" ]; then
     PYTHON="$REPO/.venv/bin/python3"
 elif [ -x "$REPO/venv/bin/python3" ]; then
@@ -45,8 +55,7 @@ restart_assistant() {
             --assistantautotune \
             --assistantbudget 100000 \
             --assistantinterval 60 \
-            --assistantalerts discord \
-            --assistantautopilot >> "$LOG" 2>&1
+            --assistantalerts discord >> "$LOG" 2>&1
     fi
 }
 

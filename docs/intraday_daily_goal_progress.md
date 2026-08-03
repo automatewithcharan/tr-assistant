@@ -1,5 +1,10 @@
 # Intraday Daily Goal Progress
 
+> **Historical research/evidence log.** Labels such as accepted, validated,
+> promotable, or production-ready do not authorize real orders. Current runtime
+> safety status is in `docs/intraday_real_trading_start.md`; no strategy is on
+> the live execution allowlist.
+
 Last updated: 2026-07-27
 
 ## Goal

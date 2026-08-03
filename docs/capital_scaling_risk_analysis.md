@@ -1,5 +1,10 @@
 # Capital Scaling Risk Analysis
 
+> **Historical research only.** This document is not execution authorization.
+> Live-looking examples below are superseded by
+> `docs/intraday_real_trading_start.md`; no strategy is currently authorized
+> for real broker orders.
+
 **Date**: April 11, 2026  
 **System**: Gap + ORB Combined Strategy  
 **Baseline**: ₹75,000/trade, 5× MIS leverage  

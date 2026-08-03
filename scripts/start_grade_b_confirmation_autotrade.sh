@@ -1,42 +1,17 @@
 #!/usr/bin/env bash
-# Start the controlled Grade-B confirmation real-order lane from tr-assistant.
+# Start the Grade-B confirmation paper-evidence lane.
 #
-# This does not enable the old assistant autopilot. It runs SignalMonitor
-# directly and only allows the Grade-B confirmation lane to place bot-owned MIS
-# entries/exits.
+# This does not enable the old assistant autopilot. It runs the normal intraday
+# goal monitor with Grade-B observations retained for paper evidence only.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-if [[ -f .env.dev ]]; then
-    set -a
-    source .env.dev
-    set +a
-fi
-
-PYTHON="$REPO_ROOT/.venv/bin/python3"
-if [[ ! -x "$PYTHON" ]]; then
-    echo "ERROR: venv not found at $REPO_ROOT/.venv"
-    exit 1
-fi
-
-export SIGNALMONITOR_FAST_MODE="${SIGNALMONITOR_FAST_MODE:-1}"
-export SIGNALMONITOR_INTRADAY_GOAL_MODE="${SIGNALMONITOR_INTRADAY_GOAL_MODE:-1}"
-export SIGNALMONITOR_GOAL_MAX_TRADES_PER_DAY="${SIGNALMONITOR_GOAL_MAX_TRADES_PER_DAY:-50}"
-export SIGNALMONITOR_GOAL_STOP_PCT="${SIGNALMONITOR_GOAL_STOP_PCT:-1.0}"
-export SIGNALMONITOR_GOAL_TARGET1_PCT="${SIGNALMONITOR_GOAL_TARGET1_PCT:-1.5}"
-export SIGNALMONITOR_GOAL_TARGET2_PCT="${SIGNALMONITOR_GOAL_TARGET2_PCT:-3.0}"
-export SIGNALMONITOR_GOAL_ANOMALY_ONLY="${SIGNALMONITOR_GOAL_ANOMALY_ONLY:-1}"
-export SIGNALMONITOR_GOAL_ALLOW_DIRECT_BUY="${SIGNALMONITOR_GOAL_ALLOW_DIRECT_BUY:-0}"
-export SIGNALMONITOR_MAX_CHANGED_PER_CYCLE="${SIGNALMONITOR_MAX_CHANGED_PER_CYCLE:-40}"
-export SIGNALMONITOR_STREAM_BOOTSTRAP_MAX_SYMBOLS="${SIGNALMONITOR_STREAM_BOOTSTRAP_MAX_SYMBOLS:-40}"
-export SIGNALMONITOR_REPEAT_BUY_ALERT_SECONDS="${SIGNALMONITOR_REPEAT_BUY_ALERT_SECONDS:-60}"
-export SIGNALMONITOR_ALERT_SOURCE="${SIGNALMONITOR_ALERT_SOURCE:-intraday-goal-autotrade}"
-
-export SIGNALMONITOR_AUTOTRADE_ENABLED="${SIGNALMONITOR_AUTOTRADE_ENABLED:-1}"
-export SIGNALMONITOR_AUTOTRADE_REAL_ORDERS="${SIGNALMONITOR_AUTOTRADE_REAL_ORDERS:-1}"
+export SIGNALMONITOR_AUTOTRADE_ENABLED=0
+export SIGNALMONITOR_AUTOTRADE_OBSERVATION_ENABLED=1
+export SIGNALMONITOR_AUTOTRADE_REAL_ORDERS=0
 export SIGNALMONITOR_AUTOTRADE_STRATEGY="${SIGNALMONITOR_AUTOTRADE_STRATEGY:-grade_b_confirmation}"
 export SIGNALMONITOR_AUTOTRADE_CONFIRM_PCT="${SIGNALMONITOR_AUTOTRADE_CONFIRM_PCT:-0.25}"
 export SIGNALMONITOR_AUTOTRADE_TARGET_PCT="${SIGNALMONITOR_AUTOTRADE_TARGET_PCT:-0.7}"
@@ -44,9 +19,14 @@ export SIGNALMONITOR_AUTOTRADE_STOP_PCT="${SIGNALMONITOR_AUTOTRADE_STOP_PCT:-2.5
 export SIGNALMONITOR_AUTOTRADE_ENTRY_WINDOW_MINUTES="${SIGNALMONITOR_AUTOTRADE_ENTRY_WINDOW_MINUTES:-15}"
 export SIGNALMONITOR_AUTOTRADE_MAX_ENTRY_SLIPPAGE_PCT="${SIGNALMONITOR_AUTOTRADE_MAX_ENTRY_SLIPPAGE_PCT:-0.4}"
 
-export KITE_AUTO_TRADE="${KITE_AUTO_TRADE:-1}"
-export KITE_AUTO_BUY="${KITE_AUTO_BUY:-1}"
-export KITE_AUTO_SELL="${KITE_AUTO_SELL:-1}"
+export KITE_EXECUTION_MODE=paper
+export KITE_DRY_RUN=1
+export KITE_LIVE_ACKNOWLEDGEMENT=""
+export KITE_LIVE_CALLER_ALLOWLIST=""
+export KITE_LIVE_STRATEGY_ALLOWLIST=""
+export KITE_AUTO_TRADE=0
+export KITE_AUTO_BUY=0
+export KITE_AUTO_SELL=0
 export KITE_PRODUCT_TYPE="${KITE_PRODUCT_TYPE:-MIS}"
 export KITE_INTRADAY_CAPITAL="${KITE_INTRADAY_CAPITAL:-200000}"
 export KITE_INTRADAY_MAX_ORDER_VALUE="${KITE_INTRADAY_MAX_ORDER_VALUE:-50000}"
@@ -55,35 +35,16 @@ export KITE_MAX_DAILY_ORDERS="${KITE_MAX_DAILY_ORDERS:-3}"
 export KITE_ORDER_TYPE="${KITE_ORDER_TYPE:-LIMIT}"
 export KITE_CANCEL_UNFILLED_LIMIT="${KITE_CANCEL_UNFILLED_LIMIT:-1}"
 
-REAL_BUDGET="${INTRADAY_REAL_BUDGET:-50000}"
-MAX_DAILY_LOSS="${INTRADAY_REAL_MAX_DAILY_LOSS:-1000}"
-MAX_CONSECUTIVE_LOSSES="${INTRADAY_REAL_MAX_CONSECUTIVE_LOSSES:-1}"
-WORKERS="${INTRADAY_REAL_WORKERS:-24}"
-INTERVAL="${INTRADAY_REAL_INTERVAL:-3}"
-
-echo "Starting Grade-B confirmation autotrade lane..."
+echo "Starting Grade-B confirmation paper-evidence lane..."
+echo "  Broker mutations: disabled; this strategy is not approved for live orders"
 echo "  Entry: Grade-B alert +${SIGNALMONITOR_AUTOTRADE_CONFIRM_PCT}% confirmation"
 echo "  Target: +${SIGNALMONITOR_AUTOTRADE_TARGET_PCT}% from executed entry"
 echo "  Stop: -${SIGNALMONITOR_AUTOTRADE_STOP_PCT}% from executed entry"
 echo "  Max entry chase: +${SIGNALMONITOR_AUTOTRADE_MAX_ENTRY_SLIPPAGE_PCT}% beyond trigger"
+echo "  Kite product: ${KITE_PRODUCT_TYPE}"
 echo "  Per-order cap: Rs ${KITE_INTRADAY_MAX_ORDER_VALUE}"
 echo "  Max open positions: ${KITE_INTRADAY_MAX_OPEN_POSITIONS}"
 echo "  Max daily orders: ${KITE_MAX_DAILY_ORDERS}"
 echo ""
 
-exec "$PYTHON" -m pkscreener.pkscreenercli \
-    --signalmonitor all \
-    --signalmonitorlivekite \
-    --signalmonitoralerts discord \
-    --signalmonitorbudget "$REAL_BUDGET" \
-    --signalmonitorriskpct 1.0 \
-    --signalmonitorminconfidence 15.0 \
-    --signalmonitorminliquidity 50000000 \
-    --signalmonitorminvolratio 2.0 \
-    --signalmonitorworkers "$WORKERS" \
-    --signalmonitorlimit 0 \
-    --signalmonitoraccount main \
-    --signalmonitormaxdailyloss "$MAX_DAILY_LOSS" \
-    --signalmonitormaxconsecutivelosses "$MAX_CONSECUTIVE_LOSSES" \
-    -c "$INTERVAL" \
-    -a Y
+exec bash scripts/start_intraday_goal_monitor.sh

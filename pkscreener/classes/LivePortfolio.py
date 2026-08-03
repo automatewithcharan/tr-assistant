@@ -945,6 +945,31 @@ class LivePortfolioRunner(PaperTradingRunner):
 
         trades_df.to_csv(paths["trades_latest"], index=False)
         trades_df.to_csv(paths["trades_dated"], index=False)
+        # Publish one explicit current-day risk snapshot. This is authoritative
+        # for entry guardrails; the CSV above remains an operational report.
+        from pkscreener.classes.RiskGuardrails import LiveTradingGuardrails
+        _risk = LiveTradingGuardrails(account_name=self.account_name)
+        _risk.output_dir = self._portfolio_output_dir
+        _now = PKDateUtilities.currentDateTime()
+        _minutes = _now.hour * 60 + _now.minute
+        _session_state = "open" if _now.weekday() < 5 and 555 <= _minutes <= 930 else (
+            "preopen" if _minutes < 555 else "closed"
+        )
+        _closed_today = pd.DataFrame()
+        if not trades_df.empty and {"Status", "ExitDate"}.issubset(trades_df.columns):
+            _closed_today = trades_df[
+                trades_df["Status"].fillna("").astype(str).str.upper().eq("CLOSED")
+                & pd.to_datetime(trades_df["ExitDate"], errors="coerce").dt.strftime("%Y-%m-%d").eq(
+                    _now.strftime("%Y-%m-%d")
+                )
+            ]
+        _risk.write_evidence_contract(
+            daily_realized_pnl=_risk._daily_realized_pnl(trades_df),
+            consecutive_losses=_risk._consecutive_losses(trades_df),
+            sequence=len(_closed_today),
+            session_state=_session_state,
+            zero_trade=_closed_today.empty,
+        )
         cashflows_df.to_csv(paths["cashflows_latest"], index=False)
         cashflows_df.to_csv(paths["cashflows_dated"], index=False)
         positions_df.to_csv(paths["positions_latest"], index=False)

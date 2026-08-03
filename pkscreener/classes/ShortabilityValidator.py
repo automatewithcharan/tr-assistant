@@ -20,9 +20,15 @@ import os
 import threading
 from dataclasses import dataclass
 from datetime import datetime, date
-from typing import Dict, Optional, Set
+from typing import Any, Callable, Dict, Optional, Protocol, Set, Tuple
 
 from PKDevTools.classes import Archiver
+
+if os.environ.get("PKSCREENER_TEST_OFFLINE") == "1":
+    from pkscreener.offline_test_guard import assert_runtime_path as _assert_runtime_path
+else:
+    def _assert_runtime_path(path):
+        return path
 
 _log = logging.getLogger(__name__)
 
@@ -48,6 +54,31 @@ class ShortabilityResult:
     avg_value_cr: float  # 0 if not known
 
 
+class SurveillanceProvider(Protocol):
+    """Acquires raw ASM/GSM payloads; parsing and decisions stay local."""
+
+    def fetch(self) -> Tuple[Any, Any]: ...
+
+
+class NSESurveillanceProvider:
+    """Production NSE-backed surveillance acquisition adapter."""
+
+    def fetch(self) -> Tuple[Any, Any]:
+        import requests
+
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/120.0 Safari/537.36",
+            "Accept": "application/json, */*",
+            "Accept-Language": "en-US,en;q=0.9",
+            "Referer": "https://www.nseindia.com/",
+        }
+        session = requests.Session()
+        session.get(_NSE_BASE, headers=headers, timeout=8)
+        asm = session.get(_ASM_API, headers=headers, timeout=12)
+        gsm = session.get(_GSM_API, headers=headers, timeout=12)
+        return (asm.json() if asm.status_code == 200 else {}), (gsm.json() if gsm.status_code == 200 else {})
+
+
 # ---------------------------------------------------------------------------
 # Validator
 # ---------------------------------------------------------------------------
@@ -66,9 +97,14 @@ class ShortabilityValidator:
 
     MIN_LIQUIDITY_CR = 10.0   # Stocks with avg daily value < ₹10 Cr are too illiquid to short safely
 
-    def __init__(self, data_dir: Optional[str] = None) -> None:
+    def __init__(
+        self, data_dir: Optional[str] = None, *,
+        surveillance_provider: Optional[SurveillanceProvider] = None,
+        clock: Callable[[], datetime] = datetime.now,
+    ) -> None:
         self._lock = threading.Lock()
-        self._data_dir = data_dir or os.path.join(Archiver.get_user_data_dir(), "shortability")
+        raw_data_dir = data_dir or os.path.join(Archiver.get_user_data_dir(), "shortability")
+        self._data_dir = str(_assert_runtime_path(raw_data_dir))
         os.makedirs(self._data_dir, exist_ok=True)
 
         self._asm_symbols:    Set[str] = set()
@@ -76,6 +112,9 @@ class ShortabilityValidator:
         self._liquidity_map:  Dict[str, float] = {}
         self._cache:          Dict[str, ShortabilityResult] = {}
         self._cache_date:     Optional[str] = None
+        self._surveillance_health = "unavailable"
+        self._surveillance_provider = surveillance_provider or NSESurveillanceProvider()
+        self._clock = clock
 
         self._rejection_log_path = os.path.join(self._data_dir, "rejected_signals.csv")
         self._ensure_rejection_log()
@@ -98,19 +137,20 @@ class ShortabilityValidator:
         if not sym:
             return ShortabilityResult(sym, False, "invalid", "Empty symbol", "validation", 0.0)
 
-        today = date.today().isoformat()
+        today = self._clock().date().isoformat()
         with self._lock:
-            if self._cache_date != today:
+            if self._cache_date != today or self._surveillance_health not in {"healthy_refresh", "healthy_cache"}:
                 self._cache.clear()
                 self._cache_date = today
                 self._refresh_surveillance_lists()
 
-            if sym in self._cache:
+            if sym in self._cache and self._surveillance_health in {"healthy_refresh", "healthy_cache"}:
                 return self._cache[sym]
 
         result = self._check(sym, avg_value_cr, kite_client)
         with self._lock:
-            self._cache[sym] = result
+            if self._surveillance_health in {"healthy_refresh", "healthy_cache"}:
+                self._cache[sym] = result
         return result
 
     def log_rejection(
@@ -195,6 +235,12 @@ class ShortabilityValidator:
         avg_value_cr: float,
         kite_client,
     ) -> ShortabilityResult:
+        if self._surveillance_health not in {"healthy_refresh", "healthy_cache"}:
+            return ShortabilityResult(
+                sym, False, "surveillance_unavailable",
+                f"{sym} shortability unknown — surveillance data unavailable ({self._surveillance_health})",
+                "surveillance", avg_value_cr,
+            )
         # 1. ASM check (intraday short restricted — forced delivery settlement)
         if sym in self._asm_symbols:
             return ShortabilityResult(
@@ -242,7 +288,7 @@ class ShortabilityValidator:
     def _refresh_surveillance_lists(self) -> None:
         """Load ASM/GSM lists from disk cache; refresh from NSE if stale."""
         cache_path = os.path.join(self._data_dir, "asm_gsm_cache.json")
-        now = datetime.now()
+        now = self._clock()
 
         if os.path.isfile(cache_path):
             try:
@@ -250,61 +296,66 @@ class ShortabilityValidator:
                     data = json.load(f)
                 cached_at = datetime.fromisoformat(data.get("cached_at", "2000-01-01"))
                 if (now - cached_at).total_seconds() / 3600 < _CACHE_MAX_AGE_HOURS:
-                    self._asm_symbols = set(data.get("asm", []))
-                    self._gsm_symbols = set(data.get("gsm", []))
+                    self._asm_symbols = self._parse_surveillance_payload({"data": data.get("asm", [])})
+                    self._gsm_symbols = self._parse_surveillance_payload({"data": data.get("gsm", [])})
+                    if (not self._valid_surveillance_payload({"data": data.get("asm")}) or
+                            not self._valid_surveillance_payload({"data": data.get("gsm")})):
+                        self._surveillance_health = "cache_corrupt"
+                        return
+                    self._surveillance_health = "healthy_cache"
                     _log.debug(
                         f"[Shortability] Surveillance cache hit: "
                         f"{len(self._asm_symbols)} ASM, {len(self._gsm_symbols)} GSM"
                     )
                     return
             except Exception:
-                pass
+                self._surveillance_health = "cache_corrupt"
+                return
 
         self._fetch_nse_surveillance(cache_path, now)
 
+    @staticmethod
+    def _parse_surveillance_payload(payload: Any) -> Set[str]:
+        """Parse a representative NSE response conservatively and deterministically."""
+        if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+            return set()
+        symbols: Set[str] = set()
+        for item in payload["data"]:
+            raw = item.get("symbol", "") if isinstance(item, dict) else item if isinstance(item, str) else ""
+            symbol = str(raw or "").strip().upper()
+            if symbol:
+                symbols.add(symbol)
+        return symbols
+
+    @staticmethod
+    def _valid_surveillance_payload(payload: Any) -> bool:
+        if not isinstance(payload, dict) or not isinstance(payload.get("data"), list):
+            return False
+        for item in payload["data"]:
+            if isinstance(item, str):
+                if not item.strip():
+                    return False
+            elif isinstance(item, dict):
+                if not str(item.get("symbol", "") or "").strip():
+                    return False
+            else:
+                return False
+        return True
+
     def _fetch_nse_surveillance(self, cache_path: str, now: datetime) -> None:
-        """Fetch ASM/GSM lists from NSE API. Silently degrades if offline."""
+        """Acquire, parse, and cache lists without converting failures to empty data."""
         try:
-            import requests
-
-            headers = {
-                "User-Agent": (
-                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                    "AppleWebKit/537.36 (KHTML, like Gecko) "
-                    "Chrome/120.0 Safari/537.36"
-                ),
-                "Accept": "application/json, */*",
-                "Accept-Language": "en-US,en;q=0.9",
-                "Referer": "https://www.nseindia.com/",
-            }
-            session = requests.Session()
-            # Prime NSE session cookies
-            session.get(_NSE_BASE, headers=headers, timeout=8)
-
-            asm_syms: Set[str] = set()
-            try:
-                r = session.get(_ASM_API, headers=headers, timeout=12)
-                if r.status_code == 200:
-                    for item in (r.json() or {}).get("data", []):
-                        s = str(item.get("symbol", "") or "").strip().upper()
-                        if s:
-                            asm_syms.add(s)
-            except Exception as exc:
-                _log.debug(f"[Shortability] ASM fetch error: {exc}")
-
-            gsm_syms: Set[str] = set()
-            try:
-                r2 = session.get(_GSM_API, headers=headers, timeout=12)
-                if r2.status_code == 200:
-                    for item in (r2.json() or {}).get("data", []):
-                        s = str(item.get("symbol", "") or "").strip().upper()
-                        if s:
-                            gsm_syms.add(s)
-            except Exception as exc:
-                _log.debug(f"[Shortability] GSM fetch error: {exc}")
+            asm_payload, gsm_payload = self._surveillance_provider.fetch()
+            if (not self._valid_surveillance_payload(asm_payload) or
+                    not self._valid_surveillance_payload(gsm_payload)):
+                self._surveillance_health = "malformed"
+                return
+            asm_syms = self._parse_surveillance_payload(asm_payload)
+            gsm_syms = self._parse_surveillance_payload(gsm_payload)
 
             self._asm_symbols = asm_syms
             self._gsm_symbols = gsm_syms
+            self._surveillance_health = "healthy_refresh"
 
             with open(cache_path, "w") as f:
                 json.dump({
@@ -319,9 +370,9 @@ class ShortabilityValidator:
             )
 
         except Exception as exc:
+            self._surveillance_health = "refresh_failed"
             _log.warning(
-                f"[Shortability] NSE surveillance fetch failed ({exc}). "
-                "Continuing without ASM/GSM filter — liquidity gate still active."
+                f"[Shortability] NSE surveillance fetch failed ({type(exc).__name__}); rejecting until refreshed."
             )
 
     def _ensure_rejection_log(self) -> None:

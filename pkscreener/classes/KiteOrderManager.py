@@ -12,8 +12,11 @@ import json
 import logging
 import math
 import os
+import re
 import threading
 import time
+import uuid
+from contextlib import contextmanager
 from datetime import datetime, date, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
@@ -21,14 +24,45 @@ from typing import Any, Dict, List, Optional, Tuple
 import pandas as pd
 
 from PKDevTools.classes import Archiver
+if os.environ.get("PKSCREENER_TEST_OFFLINE") == "1":
+    from pkscreener.offline_test_guard import assert_runtime_path
+else:
+    def assert_runtime_path(path):
+        return path
 
 _log = logging.getLogger(__name__)
+
+LIVE_ACKNOWLEDGEMENT_TOKEN = "I_ACKNOWLEDGE_REAL_KITE_ORDERS"
+BLOCKED_LIVE_STRATEGIES = {"grade_b_confirmation"}
+CANONICAL_ID_RE = re.compile(r"^[a-z][a-z0-9_.:-]*$")
+EXECUTION_JOURNAL_SCHEMA_VERSION = 1
+INTENT_TRANSITIONS = {
+    "reserved": {"submitted", "acknowledged", "rejected", "unresolved", "recovery_required"},
+    "submitted": {"acknowledged", "open", "partially_filled", "filled", "rejected", "cancelled", "unresolved", "recovery_required"},
+    "acknowledged": {"open", "partially_filled", "filled", "rejected", "cancelled", "unresolved", "recovery_required"},
+    "open": {"partially_filled", "filled", "rejected", "cancelled", "unresolved", "recovery_required"},
+    "partially_filled": {"filled", "cancelled", "unresolved", "recovery_required"},
+    "unresolved": {"acknowledged", "open", "partially_filled", "filled", "rejected", "cancelled", "recovery_required"},
+    "recovery_required": {"acknowledged", "open", "partially_filled", "filled", "rejected", "cancelled", "unresolved"},
+    "filled": set(), "rejected": set(), "cancelled": set(),
+}
+TERMINAL_INTENT_STATES = {"filled", "rejected", "cancelled"}
+
+
+class BrokerMutationError(RuntimeError):
+    """A broker mutation failed; ``proven_absent`` controls safe fallback."""
+
+    def __init__(self, message: str, *, proven_absent: bool = False):
+        super().__init__(message)
+        self.proven_absent = bool(proven_absent)
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 def _get_secret(name: str, default: str = "") -> str:
+    if _test_offline_mode():
+        return str(os.environ.get(name, default) or default).strip()
     value = str(os.environ.get(name, default) or default).strip()
     if value:
         return value
@@ -37,6 +71,19 @@ def _get_secret(name: str, default: str = "") -> str:
         return str(PKEnvironment().allSecrets.get(name, default) or default).strip()
     except Exception:
         return str(default).strip()
+
+
+def _get_raw_secret(name: str, default: str = "") -> str:
+    """Read safety identities without normalizing away invalid whitespace."""
+    if _test_offline_mode():
+        return str(os.environ.get(name, default) or default)
+    if name in os.environ:
+        return str(os.environ.get(name, default) or "")
+    try:
+        from PKDevTools.classes.Environment import PKEnvironment
+        return str(PKEnvironment().allSecrets.get(name, default) or "")
+    except Exception:
+        return str(default)
 
 
 def _secret_truthy(name: str, default: bool = False) -> bool:
@@ -108,6 +155,19 @@ def _normalize_gtt_trigger_id(value: Any) -> str:
 
 _discord_alerted_today: set = set()
 _discord_alerted_date: str = ""
+_test_notification_events: List[Dict[str, str]] = []
+
+
+def _test_offline_mode() -> bool:
+    """Test-only hard stop before any secret lookup or notification I/O."""
+    return os.environ.get("PKSCREENER_TEST_OFFLINE", "") == "1"
+
+
+def _drain_test_notification_events() -> List[Dict[str, str]]:
+    """Return and clear in-memory test notifications (never used in production)."""
+    events = list(_test_notification_events)
+    _test_notification_events.clear()
+    return events
 
 
 def _send_discord_alert(message: str, dedup_key: str = "") -> None:
@@ -121,6 +181,11 @@ def _send_discord_alert(message: str, dedup_key: str = "") -> None:
         return
     if dedup_key:
         _discord_alerted_today.add(dedup_key)
+    if _test_offline_mode():
+        _test_notification_events.append({
+            "channel": "discord", "message": str(message), "dedup_key": str(dedup_key),
+        })
+        return
     webhook_url = _get_secret("DISCORD_WEBHOOK_URL", "")
     if not webhook_url:
         return
@@ -331,26 +396,38 @@ class KiteOrderManager:
         KITE_SWING_FAILED_MIN_AGE_SEC=900    Swing failed-structure: min seconds held before eligible (default 15 min)
         KITE_SWING_FAILED_MIN_DROP_PCT=1.5   Swing failed-structure: min % drop below entry to trigger (default 1.5%)
         KITE_MAX_HOLD_DAYS=10           Max days to hold losing position before time-decay exit
-        KITE_DRY_RUN=0                  1=log orders without placing them
+        KITE_DRY_RUN=1                  1=log orders without placing them (default)
         KITE_PRODUCT_TYPE=MIS            MIS=intraday margin (5x leverage), CNC=delivery (full capital)
     """
 
     def __init__(self, output_dir: str = ""):
         self.output_dir = output_dir or Archiver.get_user_data_dir()
+        if _test_offline_mode():
+            self.output_dir = str(assert_runtime_path(self.output_dir))
         self._positions_file = Path(self.output_dir) / "kite_tracked_positions.json"
         self._orders_log_file = Path(self.output_dir) / "kite_orders_log.csv"
         self._autotrade_journal_file = Path(self.output_dir) / "autotrade_event_journal.csv"
         self._autotrade_journal_jsonl_file = Path(self.output_dir) / "autotrade_event_journal.jsonl"
-        self._pending_buys_file = Path(self.output_dir) / "kite_pending_buys.json"
-        self._lock = threading.Lock()
-        autotrade_signalmonitor_lane = (
-            _secret_truthy("SIGNALMONITOR_AUTOTRADE_ENABLED", False)
-            and _secret_truthy("SIGNALMONITOR_AUTOTRADE_REAL_ORDERS", False)
+        raw_account = _get_raw_secret("KITE_RISK_ACCOUNT", "main")
+        self.account_id, self._account_identity_error = self._canonical_identity(raw_account, "account")
+        if not self.account_id:
+            self.account_id = "invalid-account"
+        namespace_root = _get_secret(
+            "KITE_LIVE_NAMESPACE_ROOT",
+            str(Path(self.output_dir).parent / ".kite_live_accounts"),
         )
+        self._live_namespace = Path(namespace_root).expanduser().resolve() / self.account_id
+        self._authoritative_execution_journal = self._live_namespace / "kite_execution_journal.jsonl"
+        self._pending_buys_file = Path(self.output_dir) / "kite_pending_buys.json"
+        self._execution_state_file = self._live_namespace / "kite_execution_state.json"
+        self._execution_lock_file = self._live_namespace / "kite_execution.lock"
+        self._lock = threading.Lock()
+        self._execution_thread_lock = threading.RLock()
+        autotrade_signalmonitor_lane = False
 
         # Config from env
-        self.auto_trade = True if autotrade_signalmonitor_lane else _get_secret("KITE_AUTO_TRADE", "0") == "1"
-        self.dry_run = _get_secret("KITE_DRY_RUN", "0") == "1"
+        self.auto_trade = _get_secret("KITE_AUTO_TRADE", "0") == "1"
+        self.dry_run = _get_secret("KITE_DRY_RUN", "1") != "0"
         self.max_order_value = float(_get_secret("KITE_MAX_ORDER_VALUE", "5000"))
         self.max_daily_orders = int(
             "5" if autotrade_signalmonitor_lane else _get_secret("KITE_MAX_DAILY_ORDERS", "10")
@@ -417,12 +494,27 @@ class KiteOrderManager:
         self._pending_buys: Dict[str, Dict[str, Any]] = {}
         self._daily_order_count = 0
         self._daily_order_date = ""
+        self._order_intents: Dict[str, Dict[str, Any]] = {}
+        self._state_load_error = ""
+        self._entry_reconciliation_ok = False
+        self._entry_reconciliation_at = ""
+        self._risk_evidence_state: Dict[str, Any] = {}
+        self._critical_states: Dict[str, Dict[str, Any]] = {
+            "startup_reconciliation_required": {
+                "created_at": _ist_now().isoformat(timespec="seconds"),
+                "reason": "broker exposure and protection have not been reconciled in this process",
+            }
+        }
+        self._reconcile_attempts = max(3, int(_secret_float("KITE_AMBIGUOUS_RECONCILE_ATTEMPTS", 5)))
+        self._reconcile_interval_seconds = max(0.25, _secret_float("KITE_AMBIGUOUS_RECONCILE_INTERVAL_SECONDS", 1.0))
+        self._sleep = time.sleep
         self._client = None
         self._instrument_cache: Dict[str, Dict[str, Any]] = {}
         self._instrument_cache_loaded = False
         self._dead_symbols: set = set()  # symbols that failed with "expired/does not exist" today
         self._load_positions()
         self._load_pending_buys()
+        self._load_execution_state()
 
     # ------------------------------------------------------------------
     # Kite client
@@ -497,9 +589,12 @@ class KiteOrderManager:
         try:
             self._positions_file.parent.mkdir(parents=True, exist_ok=True)
             data = {k: v.to_dict() for k, v in self._positions.items()}
-            self._positions_file.write_text(
-                json.dumps(data, indent=2, default=str), encoding="utf-8"
-            )
+            temp = self._positions_file.with_suffix(".tmp")
+            with temp.open("w", encoding="utf-8") as fp:
+                json.dump(data, fp, indent=2, default=str, sort_keys=True)
+                fp.flush()
+                os.fsync(fp.fileno())
+            os.replace(temp, self._positions_file)
         except Exception as exc:
             _log.warning("Failed to save positions: %s", exc)
 
@@ -548,6 +643,745 @@ class KiteOrderManager:
             )
         except Exception as exc:
             _log.warning("Failed to save pending buys: %s", exc)
+
+    def _load_execution_state(self) -> None:
+        """Load restart-critical order state; corruption blocks all new entries."""
+        try:
+            journal_intents, journal_count = self._replay_execution_journal()
+            if not self._execution_state_file.exists():
+                if journal_intents:
+                    self._order_intents = journal_intents
+                    self._daily_order_date = _ist_now().date().isoformat()
+                    self._daily_order_count = journal_count
+                    self._persist_execution_state()
+                return
+            data = json.loads(self._execution_state_file.read_text(encoding="utf-8"))
+            if not isinstance(data, dict) or not isinstance(data.get("order_intents", {}), dict):
+                raise ValueError("invalid execution-state schema")
+            if str(data.get("account", "")) != self.account_id:
+                raise ValueError("execution-state account namespace mismatch")
+            self._order_intents = dict(data.get("order_intents", {}))
+            for item in self._order_intents.values():
+                item["state"] = self._intent_state(item)
+                item.pop("status", None)
+            self._risk_evidence_state = dict(data.get("risk_evidence_state", {}) or {})
+            self._critical_states.update(dict(data.get("critical_states", {}) or {}))
+            if str(data.get("daily_order_date", "")) == _ist_now().date().isoformat():
+                self._daily_order_date = str(data.get("daily_order_date", ""))
+                self._daily_order_count = int(data.get("daily_order_count", 0) or 0)
+            if set(self._order_intents) != set(journal_intents):
+                raise ValueError("execution state and authoritative journal diverge")
+            for key, item in self._order_intents.items():
+                if self._intent_state(item) != self._intent_state(journal_intents[key]):
+                    raise ValueError("execution state and authoritative journal state diverge")
+            if self._daily_order_date == _ist_now().date().isoformat() and self._daily_order_count < journal_count:
+                raise ValueError("daily quota is behind authoritative journal")
+        except Exception as exc:
+            # Preserve the last durable state even when journal cross-checking
+            # detects divergence; the preserved recovery marker must survive a
+            # restart and prevent any further broker mutation.
+            try:
+                if self._execution_state_file.exists():
+                    fallback = json.loads(self._execution_state_file.read_text(encoding="utf-8"))
+                    if isinstance(fallback, dict) and isinstance(fallback.get("order_intents"), dict):
+                        self._order_intents = dict(fallback["order_intents"])
+                        for item in self._order_intents.values():
+                            item["state"] = self._intent_state(item)
+                        self._critical_states.update(dict(fallback.get("critical_states", {}) or {}))
+            except Exception:
+                pass
+            self._state_load_error = f"execution state unavailable: {type(exc).__name__}"
+            _log.error("%s", self._state_load_error)
+
+    def _replay_execution_journal(self) -> Tuple[Dict[str, Dict[str, Any]], int]:
+        """Validate and replay the append-only journal; corruption is fail-closed."""
+        path = self._authoritative_execution_journal
+        if not path.exists():
+            return {}, 0
+        raw = path.read_bytes()
+        if not raw:
+            return {}, 0
+        if not raw.endswith(b"\n"):
+            raise ValueError("execution journal has a truncated trailing record")
+        intents: Dict[str, Dict[str, Any]] = {}
+        daily_count = 0
+        for line in raw.splitlines():
+            record = json.loads(line.decode("utf-8"))
+            if not isinstance(record, dict) or record.get("schema_version") != EXECUTION_JOURNAL_SCHEMA_VERSION:
+                raise ValueError("execution journal schema mismatch")
+            if record.get("account") != self.account_id:
+                raise ValueError("execution journal account namespace mismatch")
+            event = record.get("event")
+            if event == "journal_preflight":
+                continue
+            if event != "mutation_transition":
+                raise ValueError("unknown execution journal event")
+            correlation_id = str(record.get("correlation_id", "") or "")
+            state = str(record.get("state", "") or "").lower()
+            if state == "reserved":
+                intent = dict(record.get("intent") or {})
+                if not correlation_id or intent.get("correlation_id") != correlation_id or correlation_id in intents:
+                    raise ValueError("invalid or duplicate journal reservation")
+                if intent.get("account") != self.account_id:
+                    raise ValueError("journal reservation account mismatch")
+                intent["state"] = "reserved"
+                intents[correlation_id] = intent
+                if str(intent.get("kind", "")) in {"order", "protective_stop", "protective_stop_fallback"}:
+                    daily_count += 1
+                continue
+            if correlation_id not in intents:
+                raise ValueError("journal transition has no reservation")
+            current = self._intent_state(intents[correlation_id])
+            if state != current and state not in INTENT_TRANSITIONS.get(current, set()):
+                raise ValueError(f"invalid journal transition {current} -> {state}")
+            intents[correlation_id].update({k: v for k, v in record.items() if k not in {"event", "schema_version", "timestamp", "account", "state", "correlation_id"}})
+            intents[correlation_id]["state"] = state
+        return intents, daily_count
+
+    def _persist_execution_state(self) -> None:
+        """Atomically persist counters and intents, including an fsync before return."""
+        self._execution_state_file.parent.mkdir(parents=True, exist_ok=True)
+        payload = {
+            "version": 1,
+            "account": self.account_id,
+            "updated_at": _ist_now().isoformat(timespec="seconds"),
+            "daily_order_date": self._daily_order_date or _ist_now().date().isoformat(),
+            "daily_order_count": int(self._daily_order_count),
+            "order_intents": self._order_intents,
+            "entry_reconciliation_at": self._entry_reconciliation_at,
+            "risk_evidence_state": self._risk_evidence_state,
+            "critical_states": self._critical_states,
+        }
+        temp = self._execution_state_file.with_name(
+            f".{self._execution_state_file.name}.{os.getpid()}.{uuid.uuid4().hex}.tmp"
+        )
+        with temp.open("w", encoding="utf-8") as fp:
+            json.dump(payload, fp, indent=2, default=str, sort_keys=True)
+            fp.flush()
+            os.fsync(fp.fileno())
+        os.replace(temp, self._execution_state_file)
+        self._fsync_directory(self._execution_state_file.parent)
+
+    @staticmethod
+    def _fsync_directory(path: Path) -> None:
+        if os.name == "nt":
+            return
+        fd = os.open(str(path), os.O_RDONLY)
+        try:
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+
+    @contextmanager
+    def _account_execution_lock(self):
+        """Serialize execution across threads and processes (fcntl on Linux)."""
+        self._execution_lock_file.parent.mkdir(parents=True, exist_ok=True)
+        with self._execution_thread_lock:
+            fp = self._execution_lock_file.open("a+")
+            try:
+                if os.name == "nt":
+                    import msvcrt
+                    fp.seek(0)
+                    msvcrt.locking(fp.fileno(), msvcrt.LK_LOCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(fp.fileno(), fcntl.LOCK_EX)
+                self._load_execution_state()
+                yield
+            finally:
+                try:
+                    if os.name == "nt":
+                        import msvcrt
+                        fp.seek(0)
+                        msvcrt.locking(fp.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        import fcntl
+                        fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
+                finally:
+                    fp.close()
+
+    def _append_authoritative_transition(self, payload: Dict[str, Any]) -> None:
+        path = self._authoritative_execution_journal
+        path.parent.mkdir(parents=True, exist_ok=True)
+        created = not path.exists()
+        record = {
+            "schema_version": EXECUTION_JOURNAL_SCHEMA_VERSION,
+            "account": self.account_id,
+            "timestamp": _ist_now().isoformat(timespec="seconds"),
+            **payload,
+        }
+        with path.open("a", encoding="utf-8") as fp:
+            fp.write(json.dumps(record, default=str, sort_keys=True) + "\n")
+            fp.flush()
+            os.fsync(fp.fileno())
+        if created:
+            self._fsync_directory(path.parent)
+
+    def _journal_writable_preflight(self) -> Tuple[bool, str]:
+        try:
+            self._append_authoritative_transition({"event": "journal_preflight", "state": "acknowledged"})
+            return True, ""
+        except Exception as exc:
+            return False, f"execution journal is not writable: {type(exc).__name__}"
+
+    @staticmethod
+    def _canonical_identity(raw: str, label: str) -> Tuple[str, str]:
+        value = str(raw or "")
+        if not value:
+            return "", f"{label} identity is missing"
+        if value != value.strip() or value != value.lower() or not CANONICAL_ID_RE.fullmatch(value):
+            return "", f"{label} identity is not a canonical lowercase identifier"
+        return value, ""
+
+    @staticmethod
+    def _parse_identity_allowlist(raw: str, label: str) -> Tuple[set, List[str]]:
+        value = str(raw or "")
+        if not value:
+            return set(), [f"{label} is missing or empty"]
+        parts = value.split(",")
+        reasons: List[str] = []
+        parsed: List[str] = []
+        for part in parts:
+            if not part or part != part.strip() or part != part.lower() or not CANONICAL_ID_RE.fullmatch(part):
+                reasons.append(f"{label} contains a malformed identifier")
+            else:
+                parsed.append(part)
+        if len(parsed) != len(set(parsed)):
+            reasons.append(f"{label} contains duplicate identifiers")
+        return set(parsed), reasons
+
+    def authorize_broker_mutation(
+        self, *, caller: str, strategy: str, policy: str = "entry"
+    ) -> Dict[str, Any]:
+        """Single fail-closed authority for every real Kite mutation."""
+        caller_name, caller_error = self._canonical_identity(caller, "caller")
+        strategy_name, strategy_error = self._canonical_identity(strategy, "strategy")
+        reasons: List[str] = []
+        if caller_error:
+            reasons.append(caller_error)
+        if strategy_error:
+            reasons.append(strategy_error)
+        if self._account_identity_error:
+            reasons.append(self._account_identity_error)
+        current_account, account_error = self._canonical_identity(
+            _get_raw_secret("KITE_RISK_ACCOUNT", self.account_id), "account"
+        )
+        if account_error or current_account != self.account_id:
+            reasons.append(account_error or "account identity changed after startup")
+        if _get_raw_secret("KITE_EXECUTION_MODE", "paper") != "live":
+            reasons.append("KITE_EXECUTION_MODE is not exactly live")
+        if _get_raw_secret("KITE_DRY_RUN", "1") != "0" or self.dry_run:
+            reasons.append("KITE_DRY_RUN is not exactly 0")
+        if _get_raw_secret("KITE_AUTO_TRADE", "0") != "1" or not self.auto_trade:
+            reasons.append("KITE_AUTO_TRADE is not exactly 1")
+        if _get_raw_secret("KITE_LIVE_ACKNOWLEDGEMENT", "") != LIVE_ACKNOWLEDGEMENT_TOKEN:
+            reasons.append("live acknowledgement token is missing or invalid")
+        callers, caller_list_errors = self._parse_identity_allowlist(
+            _get_raw_secret("KITE_LIVE_CALLER_ALLOWLIST", ""), "KITE_LIVE_CALLER_ALLOWLIST"
+        )
+        strategies, strategy_list_errors = self._parse_identity_allowlist(
+            _get_raw_secret("KITE_LIVE_STRATEGY_ALLOWLIST", ""), "KITE_LIVE_STRATEGY_ALLOWLIST"
+        )
+        reasons.extend(caller_list_errors + strategy_list_errors)
+        if caller_name and caller_name not in callers:
+            reasons.append("caller is not independently allowlisted")
+        if strategy_name and strategy_name not in strategies:
+            reasons.append("strategy is not independently allowlisted")
+        if policy == "entry" and strategy_name in BLOCKED_LIVE_STRATEGIES:
+            reasons.append(f"strategy {strategy_name} is explicitly paper-only")
+        if self._state_load_error:
+            reasons.append(self._state_load_error)
+        journal_ok, journal_reason = self._journal_writable_preflight()
+        if not journal_ok:
+            reasons.append(journal_reason)
+        return {"authorized": not reasons, "reasons": reasons, "caller": caller_name, "strategy": strategy_name}
+
+    def _new_order_intent(
+        self, *, kind: str, symbol: str, side: str, qty: int, caller: str, strategy: str,
+        parameters: Dict[str, Any], reserve_daily_quota: bool = False,
+    ) -> Dict[str, Any]:
+        today = _ist_now().date().isoformat()
+        if self._daily_order_date != today:
+            self._daily_order_date = today
+            self._daily_order_count = 0
+        logical_key = "|".join(
+            [today, kind, str(symbol or "").upper(), str(side or "").upper(), str(int(qty or 0)),
+             caller, strategy, json.dumps(parameters, default=str, sort_keys=True)]
+        )
+        for existing in self._order_intents.values():
+            if existing.get("logical_key") == logical_key and existing.get("state") not in {"rejected", "cancelled"}:
+                raise BrokerMutationError("duplicate logical mutation is already reserved or completed")
+        if reserve_daily_quota:
+            if self._daily_order_count >= self.max_daily_orders:
+                raise BrokerMutationError(f"daily order limit reached ({self.max_daily_orders})")
+            self._daily_order_count += 1
+        existing_tags = {str(item.get("tag", "")) for item in self._order_intents.values()}
+        for _ in range(16):
+            correlation_id = uuid.uuid4().hex
+            tag = f"PK{correlation_id[:18]}"
+            if correlation_id not in self._order_intents and tag not in existing_tags:
+                break
+        else:
+            raise BrokerMutationError("could not allocate a collision-free broker tag")
+        intent = {
+            "account": self.account_id,
+            "correlation_id": correlation_id,
+            "tag": tag,
+            "logical_key": logical_key,
+            "kind": kind,
+            "symbol": str(symbol or "").upper(),
+            "side": str(side or "").upper(),
+            "qty": int(qty or 0),
+            "caller": caller,
+            "strategy": strategy,
+            "state": "reserved",
+            "created_at": _ist_now().isoformat(timespec="seconds"),
+            "parameters": parameters,
+        }
+        self._order_intents[correlation_id] = intent
+        try:
+            self._append_authoritative_transition({
+                "event": "mutation_transition", "state": "reserved", "intent": intent,
+            })
+            self._persist_execution_state()
+        except Exception:
+            self._critical_states[f"intent:{correlation_id}"] = {
+                "reason": "authoritative intent journal write failed", "state": "recovery_required"
+            }
+            try:
+                self._persist_execution_state()
+            except Exception:
+                pass
+            raise
+        return intent
+
+    def _update_intent(self, intent: Dict[str, Any], status: str, **details: Any) -> None:
+        current = str(intent.get("state", "reserved") or "reserved")
+        target = str(status or "unresolved").lower()
+        if target not in INTENT_TRANSITIONS.get(current, set()) and target != current:
+            raise RuntimeError(f"invalid mutation transition {current} -> {target}")
+        intent.update(state=target, updated_at=_ist_now().isoformat(timespec="seconds"), **details)
+        try:
+            self._append_authoritative_transition({
+                "event": "mutation_transition", "state": target,
+                "correlation_id": intent.get("correlation_id", ""), **details,
+            })
+            self._persist_execution_state()
+        except Exception:
+            intent["state"] = "recovery_required"
+            self._critical_states[f"intent:{intent.get('correlation_id', '')}"] = {
+                "reason": f"could not persist transition to {target}", "state": "recovery_required"
+            }
+            try:
+                self._persist_execution_state()
+            except Exception:
+                pass
+            raise
+
+    @staticmethod
+    def _intent_state(intent: Dict[str, Any]) -> str:
+        legacy = str(intent.get("state", intent.get("status", "")) or "").lower()
+        return {"complete": "filled", "not_accepted": "rejected", "ambiguous": "unresolved",
+                "reconciled": "acknowledged", "submitting": "reserved"}.get(legacy, legacy)
+
+    def _bounded_regular_reconciliation(self, client: Any, intent: Dict[str, Any]) -> Tuple[str, str]:
+        consistent_absence = 0
+        for attempt in range(self._reconcile_attempts):
+            try:
+                orders = client.orders()
+                if not isinstance(orders, list):
+                    raise TypeError("orders response is not a list")
+                match = next((row for row in orders if str((row or {}).get("tag", "")) == intent["tag"]), None)
+                if match:
+                    order_id = str(match.get("order_id", "") or "")
+                    status = str(match.get("status", "") or "").upper()
+                    if status == "REJECTED":
+                        return "rejected", order_id
+                    if status == "CANCELLED":
+                        return "cancelled", order_id
+                    return "acknowledged", order_id
+                consistent_absence += 1
+            except Exception:
+                consistent_absence = 0
+            if attempt + 1 < self._reconcile_attempts:
+                self._sleep(self._reconcile_interval_seconds)
+        if consistent_absence == self._reconcile_attempts:
+            return "rejected", ""
+        return "unresolved", ""
+
+    def _submit_order_once(
+        self, client: Any, order_params: Dict[str, Any], *, caller: str, strategy: str,
+        kind: str = "order", reconciliation_policy: str = "entry",
+        position: Optional["TrackedPosition"] = None,
+    ) -> str:
+        with self._account_execution_lock():
+            auth = self.authorize_broker_mutation(
+                caller=caller, strategy=strategy,
+                policy="entry" if reconciliation_policy == "entry" else "risk_reducing",
+            )
+            if not auth["authorized"]:
+                raise BrokerMutationError("execution denied: " + "; ".join(auth["reasons"]))
+            if reconciliation_policy == "entry":
+                risk_config_reasons = self._entry_risk_configuration_reasons()
+                if risk_config_reasons:
+                    raise BrokerMutationError("execution denied: " + "; ".join(risk_config_reasons))
+                risk_status = self._entry_risk_status().evaluate()
+                if risk_status.buy_paused:
+                    raise BrokerMutationError("execution denied: " + "; ".join(risk_status.reasons))
+                feed_ok, feed_reason = self._market_data_is_fresh(
+                    str(order_params.get("tradingsymbol", ""))
+                )
+                if not feed_ok:
+                    raise BrokerMutationError("execution denied: " + feed_reason)
+            context = self._reconcile_for_mutation(
+                client, policy=reconciliation_policy,
+                symbol=str(order_params.get("tradingsymbol", "")),
+                qty=int(order_params.get("quantity", 0) or 0),
+                position=position, product=str(order_params.get("product", "")),
+            )
+            if not context.get("valid"):
+                raise BrokerMutationError("reconciliation denied: " + str(context.get("reason", "unknown")))
+            intent = self._new_order_intent(
+                kind=kind, symbol=str(order_params.get("tradingsymbol", "")),
+                side=str(order_params.get("transaction_type", "")),
+                qty=int(order_params.get("quantity", 0) or 0), caller=caller, strategy=strategy,
+                parameters={k: v for k, v in order_params.items() if k not in {"api_key", "access_token"}},
+                reserve_daily_quota=reconciliation_policy == "entry",
+            )
+            submitted = dict(order_params)
+            submitted.setdefault("tag", intent["tag"])
+            try:
+                self._update_intent(intent, "submitted")
+                order_id = str(client.place_order(**submitted) or "")
+                if not order_id:
+                    raise RuntimeError("broker returned an empty order id")
+                self._update_intent(intent, "acknowledged", order_id=order_id)
+                return order_id
+            except Exception as exc:
+                if self._intent_state(intent) in {"reserved", "submitted"}:
+                    self._update_intent(intent, "unresolved", error=f"{type(exc).__name__}: {exc}")
+                resolved_state, order_id = self._bounded_regular_reconciliation(client, intent)
+                if resolved_state == "acknowledged":
+                    self._update_intent(intent, "acknowledged", order_id=order_id)
+                    return order_id
+                if resolved_state in {"rejected", "cancelled"}:
+                    self._update_intent(intent, resolved_state, order_id=order_id)
+                    raise BrokerMutationError(str(exc), proven_absent=True) from exc
+                raise BrokerMutationError("ambiguous broker result; no replacement allowed") from exc
+
+    @staticmethod
+    def _broker_exposure_from_snapshot(holdings: List[Dict], positions: Dict) -> Dict[str, Dict[str, Any]]:
+        exposure: Dict[str, Dict[str, Any]] = {}
+        for row in holdings:
+            sym = str((row or {}).get("tradingsymbol", "") or "").strip().upper()
+            qty = int((row or {}).get("quantity", 0) or 0) + int((row or {}).get("t1_quantity", 0) or 0)
+            if sym and qty:
+                exposure[sym] = {"qty": qty, "product": "CNC"}
+        for row in positions.get("net", []):
+            sym = str((row or {}).get("tradingsymbol", "") or "").strip().upper()
+            qty = int((row or {}).get("quantity", 0) or 0)
+            if sym and qty:
+                product = str((row or {}).get("product", "") or "").upper()
+                if product in {"CNC", "NRML"} and sym in exposure:
+                    if int(exposure[sym]["qty"]) != qty:
+                        raise ValueError(f"contradictory holdings/positions exposure for {sym}")
+                    continue
+                exposure[sym] = {"qty": qty, "product": product}
+        return exposure
+
+    @staticmethod
+    def _gtt_quantity(row: Dict[str, Any]) -> int:
+        orders = (row or {}).get("orders", []) or []
+        quantities = {int((item or {}).get("quantity", 0) or 0) for item in orders}
+        return quantities.pop() if len(quantities) == 1 else 0
+
+    @staticmethod
+    def _price_matches(expected: float, actual: Any, tolerance: float = 0.05) -> bool:
+        try:
+            return float(expected or 0) > 0 and math.isclose(float(actual), float(expected), abs_tol=tolerance)
+        except Exception:
+            return False
+
+    def _protective_regular_matches(self, row: Dict[str, Any], pos: "TrackedPosition") -> bool:
+        status = str(row.get("status", "") or "").upper()
+        order_type = str(row.get("order_type", "") or "").upper()
+        return (
+            status in {"OPEN", "PENDING", "TRIGGER PENDING", "VALIDATION PENDING", "AMO REQ RECEIVED", "PUT ORDER REQ RECEIVED"}
+            and str(row.get("order_id", "")) == str(getattr(pos, "protective_stop_order_id", ""))
+            and str(row.get("tradingsymbol", "") or "").upper() == str(pos.symbol).upper()
+            and str(row.get("transaction_type", "") or "").upper() == "SELL"
+            and str(row.get("product", "") or "").upper() == "MIS"
+            and str(row.get("variety", "") or "").lower() == "regular"
+            and order_type in {"SL", "SL-M"}
+            and int(row.get("quantity", 0) or 0) == int(pos.qty)
+            and self._price_matches(getattr(pos, "protective_stop_trigger", 0), row.get("trigger_price", 0))
+        )
+
+    def _protective_gtt_matches(self, row: Dict[str, Any], pos: "TrackedPosition") -> bool:
+        condition = (row or {}).get("condition", {}) or {}
+        orders = (row or {}).get("orders", []) or []
+        values = [float(v) for v in condition.get("trigger_values", []) or []]
+        expected = [float(getattr(pos, "stop_loss", 0) or 0), float(getattr(pos, "target2", 0) or 0)]
+        return (
+            str(row.get("id", "")) == str(getattr(pos, "gtt_trigger_id", ""))
+            and str(row.get("status", "") or "").lower() == "active"
+            and str(condition.get("tradingsymbol", "") or "").upper() == str(pos.symbol).upper()
+            and len(values) == 2 and all(self._price_matches(a, b) for a, b in zip(expected, values))
+            and len(orders) == 2
+            and all(int(item.get("quantity", 0) or 0) == int(pos.qty) for item in orders)
+            and all(str(item.get("transaction_type", "") or "").upper() == "SELL" for item in orders)
+            and all(str(item.get("product", "") or "").upper() == str(pos.product_type).upper() for item in orders)
+            and {str(item.get("order_type", "") or "").upper() for item in orders} == {"MARKET", "LIMIT"}
+        )
+
+    def _reconcile_for_mutation(
+        self, client: Any, *, policy: str, symbol: str = "", qty: int = 0,
+        position: Optional["TrackedPosition"] = None, product: str = "", order_id: str = "",
+    ) -> Dict[str, Any]:
+        """Return a same-lock reconciliation generation appropriate to a mutation."""
+        try:
+            positions = client.positions()
+            orders = client.orders()
+            if not isinstance(positions, dict) or not isinstance(positions.get("net"), list):
+                raise TypeError("positions response is malformed")
+            if not isinstance(orders, list):
+                raise TypeError("orders response is malformed")
+            needs_holdings = (
+                str(product or getattr(position, "product_type", "") or "").upper() != "MIS"
+                or any(
+                    p.status == "open"
+                    and str(getattr(p, "product_type", "") or "").upper() != "MIS"
+                    for p in self._positions.values()
+                )
+            )
+            holdings = client.holdings() if needs_holdings or policy == "entry" and product.upper() != "MIS" else []
+            if not isinstance(holdings, list):
+                raise TypeError("holdings response is malformed")
+            needs_gtts = policy in {"entry", "gtt", "gtt_delete"}
+            gtts = client.get_gtts() if needs_gtts else []
+            if not isinstance(gtts, list):
+                raise TypeError("GTT response is malformed")
+            exposure = self._broker_exposure_from_snapshot(holdings, positions)
+        except Exception as exc:
+            return {"valid": False, "reason": f"{type(exc).__name__}: {exc}"}
+
+        known_tags = {str(item.get("tag", "")) for item in self._order_intents.values() if item.get("tag")}
+        known_order_ids = {
+            str(item.get("order_id", "")) for item in self._order_intents.values()
+            if item.get("order_id")
+        } | {
+            str(getattr(pos, "protective_stop_order_id", "") or "")
+            for pos in self._positions.values()
+        }
+        active_statuses = {"OPEN", "PENDING", "TRIGGER PENDING", "VALIDATION PENDING", "AMO REQ RECEIVED", "PUT ORDER REQ RECEIVED"}
+        for row in orders:
+            status = str((row or {}).get("status", "") or "").upper()
+            tag = str((row or {}).get("tag", "") or "")
+            row_id = str((row or {}).get("order_id", "") or "")
+            row_symbol = str((row or {}).get("tradingsymbol", "") or "").upper()
+            owned = tag in known_tags or row_id in known_order_ids
+            relevant_unknown = policy == "entry" or (
+                policy in {"protective", "gtt"} and row_symbol == str(symbol or "").upper()
+            )
+            if status in active_statuses and relevant_unknown and not owned:
+                return {"valid": False, "reason": f"unknown active broker order {row_id or tag or row_symbol}"}
+
+        orders_by_tag = {str((row or {}).get("tag", "")): row for row in orders if (row or {}).get("tag")}
+        for item in self._order_intents.values():
+            state = self._intent_state(item)
+            if state in TERMINAL_INTENT_STATES:
+                continue
+            row = orders_by_tag.get(str(item.get("tag", "")))
+            if not row:
+                continue
+            broker_status = str(row.get("status", "") or "").upper()
+            target = {
+                "COMPLETE": "filled", "REJECTED": "rejected", "CANCELLED": "cancelled",
+                "OPEN": "open", "TRIGGER PENDING": "open",
+            }.get(broker_status, "acknowledged")
+            if target != state and target in INTENT_TRANSITIONS.get(state, set()):
+                self._update_intent(item, target, order_id=str(row.get("order_id", "") or ""))
+
+        # GTTs have no regular-order tag. An ambiguous create is never adopted
+        # from attributes alone: without the original trigger id ownership is
+        # unproven and replacing it could duplicate protection.
+        for item in self._order_intents.values():
+            state = self._intent_state(item)
+            if state in TERMINAL_INTENT_STATES:
+                continue
+            kind = str(item.get("kind", "") or "")
+            params = item.get("parameters", {}) or {}
+            if kind == "gtt_create":
+                self._critical_states[f"intent:{item.get('correlation_id', '')}"] = {
+                    "state": "recovery_required", "reason": "ambiguous GTT create ownership cannot be proven"
+                }
+            elif kind == "gtt_delete":
+                trigger_id = str(params.get("trigger_id", "") or "")
+                consistent_absence = 0
+                exists = True
+                for attempt in range(self._reconcile_attempts):
+                    try:
+                        rows = gtts if attempt == 0 else client.get_gtts()
+                        if not isinstance(rows, list):
+                            raise TypeError("GTT response is malformed")
+                        exists = any(str((row or {}).get("id", "")) == trigger_id for row in rows)
+                        consistent_absence = 0 if exists else consistent_absence + 1
+                    except Exception:
+                        consistent_absence = 0
+                    if exists or attempt + 1 == self._reconcile_attempts:
+                        break
+                    self._sleep(self._reconcile_interval_seconds)
+                if trigger_id and consistent_absence == self._reconcile_attempts:
+                    self._update_intent(item, "filled", trigger_id=trigger_id)
+
+        unresolved = [
+            item for item in self._order_intents.values()
+            if self._intent_state(item) not in TERMINAL_INTENT_STATES
+            and not (policy == "cancel" and str(item.get("order_id", "")) == str(order_id))
+        ]
+        if unresolved:
+            return {"valid": False, "reason": "unresolved mutation intents require recovery"}
+
+        symbol = str(symbol or "").upper()
+        if policy == "entry":
+            contradictions: List[str] = []
+            orders_by_id = {str((row or {}).get("order_id", "")): row for row in orders}
+            gtts_by_id = {str((row or {}).get("id", "")): row for row in gtts}
+            for sym, pos in self._positions.items():
+                if pos.status != "open":
+                    continue
+                broker_qty = int((exposure.get(sym) or {}).get("qty", 0) or 0)
+                if broker_qty != int(pos.qty):
+                    contradictions.append(f"{sym} qty local={pos.qty} broker={broker_qty}")
+                if bool(getattr(pos, "bot_owned", False)):
+                    if str(getattr(pos, "product_type", "") or "").upper() == "MIS":
+                        stop_id = str(getattr(pos, "protective_stop_order_id", "") or "")
+                        row = orders_by_id.get(stop_id) if stop_id else None
+                        if not row or not self._protective_regular_matches(row, pos):
+                            contradictions.append(f"{sym} bot position lacks confirmed active protective order")
+                        else:
+                            self._critical_states.pop(f"protection:{sym}", None)
+                    else:
+                        gtt_id = str(getattr(pos, "gtt_trigger_id", "") or "")
+                        row = gtts_by_id.get(gtt_id) if gtt_id else None
+                        if not row or not self._protective_gtt_matches(row, pos):
+                            contradictions.append(f"{sym} bot position lacks confirmed active GTT")
+                        else:
+                            self._critical_states.pop(f"protection:{sym}", None)
+            for row in gtts:
+                if str((row or {}).get("status", "") or "").lower() != "active":
+                    continue
+                gtt_symbol = str(((row or {}).get("condition", {}) or {}).get("tradingsymbol", "") or "").upper()
+                local = self._positions.get(gtt_symbol)
+                if local is None or local.status != "open" or not bool(getattr(local, "bot_owned", False)):
+                    continue
+                expected_id = str(getattr(local, "gtt_trigger_id", "") or "")
+                if str((row or {}).get("id", "") or "") != expected_id:
+                    contradictions.append(f"{gtt_symbol} has an unexpected active GTT")
+            local_open = {sym for sym, pos in self._positions.items() if pos.status == "open"}
+            for sym, data in exposure.items():
+                if int(data.get("qty", 0) or 0) and sym not in local_open:
+                    contradictions.append(f"{sym} broker exposure is not tracked locally")
+            if contradictions:
+                self._critical_states["protection_or_exposure"] = {
+                    "reason": "; ".join(contradictions), "state": "recovery_required",
+                    "updated_at": _ist_now().isoformat(timespec="seconds"),
+                }
+                self._persist_execution_state()
+                return {"valid": False, "reason": "; ".join(contradictions)}
+            self._critical_states.pop("startup_reconciliation_required", None)
+            self._critical_states.pop("protection_or_exposure", None)
+            self._persist_execution_state()
+        elif policy == "exit":
+            if position is None or not bool(getattr(position, "bot_owned", False)):
+                return {"valid": False, "reason": "exit is not proven to reduce a bot-owned position"}
+            broker_qty = int((exposure.get(symbol) or {}).get("qty", 0) or 0)
+            if broker_qty <= 0 or qty <= 0 or qty > broker_qty or qty > int(position.qty):
+                return {"valid": False, "reason": "exit quantity is not broker-backed risk reduction"}
+        elif policy == "protective":
+            broker_qty = int((exposure.get(symbol) or {}).get("qty", 0) or 0)
+            if position is None or not bool(getattr(position, "bot_owned", False)) or broker_qty < qty:
+                return {"valid": False, "reason": "protective order lacks broker-backed bot ownership"}
+        elif policy == "cancel":
+            row = next((row for row in orders if str((row or {}).get("order_id", "")) == str(order_id)), None)
+            if not row:
+                return {"valid": False, "reason": "cancel target is absent from reconciled broker orders"}
+            tag = str(row.get("tag", "") or "")
+            known_ids = {str(item.get("order_id", "")) for item in self._order_intents.values()}
+            known_protective = {
+                str(getattr(pos, "protective_stop_order_id", "") or "") for pos in self._positions.values()
+            }
+            if tag not in known_tags and str(order_id) not in known_ids | known_protective:
+                return {"valid": False, "reason": "cancel target is not owned by this execution account"}
+        elif policy == "gtt":
+            broker_qty = int((exposure.get(symbol) or {}).get("qty", 0) or 0)
+            local = self._positions.get(symbol)
+            if local is None or not bool(getattr(local, "bot_owned", False)) or broker_qty < qty:
+                return {"valid": False, "reason": "GTT protection lacks broker-backed bot ownership"}
+        elif policy == "gtt_delete":
+            owned_ids = {str(getattr(pos, "gtt_trigger_id", "") or "") for pos in self._positions.values()}
+            if str(order_id) not in owned_ids:
+                return {"valid": False, "reason": "GTT delete target is not locally owned"}
+            if not any(str((row or {}).get("id", "")) == str(order_id) for row in gtts):
+                return {"valid": False, "reason": "GTT delete target is absent before mutation"}
+
+        generation = uuid.uuid4().hex
+        self._entry_reconciliation_ok = policy == "entry"
+        self._entry_reconciliation_at = _ist_now().isoformat(timespec="seconds")
+        return {"valid": True, "generation": generation, "orders": orders, "gtts": gtts, "exposure": exposure}
+
+    def _entry_risk_status(self):
+        from pkscreener.classes.RiskGuardrails import LiveTradingGuardrails
+        return LiveTradingGuardrails(
+            account_name=_get_secret("KITE_RISK_ACCOUNT", "main"),
+            max_daily_loss_amount=_secret_float("ASSISTANT_MAX_DAILY_LOSS", 0.0),
+            max_daily_profit_amount=_secret_float("ASSISTANT_MAX_DAILY_PROFIT", 0.0),
+            max_consecutive_losses=int(_secret_float("ASSISTANT_MAX_CONSECUTIVE_LOSSES", 0)),
+            require_valid_evidence=True,
+            evidence_max_age_seconds=int(_secret_float("KITE_RISK_EVIDENCE_MAX_AGE_SECONDS", 900)),
+            evidence_path=str(Path(self.output_dir) / f"risk_evidence_{_get_secret('KITE_RISK_ACCOUNT', 'main')}.json"),
+        )
+
+    def _entry_risk_configuration_reasons(self) -> List[str]:
+        reasons: List[str] = []
+        if _secret_float("ASSISTANT_MAX_DAILY_LOSS", 0.0) <= 0:
+            reasons.append("ASSISTANT_MAX_DAILY_LOSS must be a positive number for live entries")
+        if int(_secret_float("ASSISTANT_MAX_CONSECUTIVE_LOSSES", 0)) <= 0:
+            reasons.append("ASSISTANT_MAX_CONSECUTIVE_LOSSES must be a positive integer for live entries")
+        return reasons
+
+    def _set_intent_from_order(self, order_id: str, status: str) -> None:
+        mapped = {
+            "COMPLETE": "filled", "REJECTED": "rejected", "CANCELLED": "cancelled",
+            "OPEN": "open", "TRIGGER PENDING": "open", "PARTIAL": "partially_filled",
+            "PARTIAL_FILLED_CANCELLED": "partially_filled", "ERROR": "unresolved",
+            "UNKNOWN": "unresolved",
+        }.get(str(status or "").upper(), "acknowledged")
+        for intent in self._order_intents.values():
+            if str(intent.get("order_id", "")) == str(order_id):
+                self._update_intent(intent, mapped)
+                return
+
+    def _market_data_is_fresh(self, symbol: str) -> Tuple[bool, str]:
+        max_age = max(1, int(_secret_float("KITE_MARKET_DATA_MAX_AGE_SECONDS", 60)))
+        symbol = str(symbol or "").upper()
+        for universe in ("all", "allstocks", "nifty500", "nifty100", "nifty50", "main"):
+            path = Path(self.output_dir) / f"kiteticker_{universe}_ticks_latest.json"
+            if not path.exists() or time.time() - path.stat().st_mtime > max_age:
+                continue
+            try:
+                payload = json.loads(path.read_text(encoding="utf-8"))
+                row = payload.get(symbol) if isinstance(payload, dict) else None
+                if isinstance(row, dict) and float(row.get("last_price", 0) or 0) > 0:
+                    return True, ""
+            except Exception:
+                continue
+        return False, f"market data for {symbol} is missing, malformed, or older than {max_age}s"
+
+    def _reconcile_entry_state(self, client: Any) -> Tuple[bool, str]:
+        """Retrieve all broker state needed for entries; any partial result denies."""
+        context = self._reconcile_for_mutation(client, policy="entry", product=self.product_type)
+        return bool(context.get("valid")), str(context.get("reason", ""))
 
     def _log_order(self, result: OrderResult):
         """Append order to CSV log."""
@@ -647,12 +1481,51 @@ class KiteOrderManager:
                 return status
             time.sleep(0.5)
 
-    def _cancel_order_best_effort(self, client: Any, order_id: str) -> bool:
+    def _cancel_order_best_effort(
+        self, client: Any, order_id: str, *, caller: str = "", strategy: str = ""
+    ) -> bool:
         """Cancel an unfilled regular order without hiding failures."""
         try:
-            client.cancel_order(variety="regular", order_id=order_id)
-            return True
+            with self._account_execution_lock():
+                auth = self.authorize_broker_mutation(caller=caller, strategy=strategy, policy="risk_reducing")
+                if not auth["authorized"]:
+                    _log.error("Cancel denied for %s: %s", order_id, "; ".join(auth["reasons"]))
+                    return False
+                context = self._reconcile_for_mutation(client, policy="cancel", order_id=order_id)
+                if not context.get("valid"):
+                    return False
+                intent = self._new_order_intent(
+                    kind="order_cancel", symbol="", side="", qty=0, caller=caller,
+                    strategy=strategy, parameters={"order_id": str(order_id)},
+                )
+                try:
+                    self._update_intent(intent, "submitted")
+                    client.cancel_order(variety="regular", order_id=order_id)
+                except Exception as exc:
+                    self._update_intent(intent, "unresolved", error=f"{type(exc).__name__}: {exc}")
+                for attempt in range(self._reconcile_attempts):
+                    try:
+                        rows = client.orders()
+                        if not isinstance(rows, list):
+                            raise TypeError("orders response is malformed")
+                        row = next((r for r in rows if str((r or {}).get("order_id", "")) == str(order_id)), None)
+                        status = str((row or {}).get("status", "") or "").upper()
+                        if status == "CANCELLED":
+                            self._update_intent(intent, "filled", order_id=str(order_id))
+                            return True
+                        if status in {"COMPLETE", "REJECTED"}:
+                            self._update_intent(intent, "rejected", order_id=str(order_id))
+                            return False
+                    except Exception:
+                        pass
+                    if attempt + 1 < self._reconcile_attempts:
+                        self._sleep(self._reconcile_interval_seconds)
+                if self._intent_state(intent) == "submitted":
+                    self._update_intent(intent, "unresolved", error="cancellation not confirmed")
+                return False
         except Exception as exc:
+            if "intent" in locals() and str(intent.get("status", "")) == "submitting":
+                self._update_intent(intent, "ambiguous", error=f"{type(exc).__name__}: {exc}")
             _log.warning("Could not cancel unfilled order %s: %s", order_id, exc)
             return False
 
@@ -667,7 +1540,9 @@ class KiteOrderManager:
             and str(getattr(pos, "status", "") or "") == "open"
         )
 
-    def _place_protective_stop_order(self, pos: "TrackedPosition", client: Any = None) -> bool:
+    def _place_protective_stop_order(
+        self, pos: "TrackedPosition", client: Any = None, *, caller: str = "protective_stop"
+    ) -> bool:
         """Place a broker-side MIS stop for bot-owned intraday positions."""
         if self.dry_run:
             return False
@@ -707,14 +1582,22 @@ class KiteOrderManager:
 
             try:
                 order_params = _params(order_type)
-                order_id = str(client.place_order(**order_params) or "")
+                order_id = self._submit_order_once(
+                    client, order_params, caller=caller,
+                    strategy="position_protection", kind="protective_stop",
+                    reconciliation_policy="protective", position=pos,
+                )
             except Exception as first_exc:
-                if order_type != "SL-M":
+                if order_type != "SL-M" or not bool(getattr(first_exc, "proven_absent", False)):
                     raise
-                _log.warning("%s SL-M protective stop failed, retrying as SL: %s", symbol, first_exc)
+                _log.warning("%s SL-M was proved absent; submitting SL fallback: %s", symbol, first_exc)
                 order_type = "SL"
                 order_params = _params(order_type)
-                order_id = str(client.place_order(**order_params) or "")
+                order_id = self._submit_order_once(
+                    client, order_params, caller=caller,
+                    strategy="position_protection", kind="protective_stop_fallback",
+                    reconciliation_policy="protective", position=pos,
+                )
 
             status = "TRIGGER PENDING"
             try:
@@ -732,6 +1615,8 @@ class KiteOrderManager:
                     current.protective_stop_updated_at = _ist_now().isoformat(timespec="seconds")
                     current.protective_stop_last_error = ""
                     self._save_positions()
+            self._critical_states.pop(f"protection:{symbol}", None)
+            self._persist_execution_state()
             _log.info(
                 "%s protective MIS stop placed: order_id=%s type=%s trigger=₹%.2f%s",
                 symbol,
@@ -764,6 +1649,11 @@ class KiteOrderManager:
                     current.protective_stop_last_error = msg
                     current.protective_stop_updated_at = _ist_now().isoformat(timespec="seconds")
                     self._save_positions()
+            self._critical_states[f"protection:{symbol}"] = {
+                "state": "recovery_required", "reason": msg,
+                "updated_at": _ist_now().isoformat(timespec="seconds"),
+            }
+            self._persist_execution_state()
             _send_discord_alert(
                 f"🚨 **PROTECTIVE STOP FAILED — {symbol}**\n"
                 f"Bot position is open but broker-side stop could not be placed.\n"
@@ -851,7 +1741,9 @@ class KiteOrderManager:
             _log.debug("Could not refresh protective stop %s for %s: %s", order_id, symbol, exc)
             return ""
 
-    def _cancel_protective_stop_best_effort(self, pos: "TrackedPosition", reason: str = "") -> bool:
+    def _cancel_protective_stop_best_effort(
+        self, pos: "TrackedPosition", reason: str = "", *, caller: str = "protective_stop_cancel"
+    ) -> bool:
         order_id = str(getattr(pos, "protective_stop_order_id", "") or "")
         if not order_id:
             return True
@@ -859,7 +1751,10 @@ class KiteOrderManager:
             return True
         try:
             client = self._get_client()
-            cancelled = self._cancel_order_best_effort(client, order_id)
+            cancelled = self._cancel_order_best_effort(
+                client, order_id, caller=caller,
+                strategy="risk_reducing_exit",
+            )
             if cancelled:
                 with self._lock:
                     current = self._positions.get(pos.symbol)
@@ -1212,6 +2107,7 @@ class KiteOrderManager:
         bot_owned: bool = False,
         auto_exit_allowed: bool = False,
         strategy: str = "",
+        caller: str = "direct_buy",
         error_message: str = "",
         retry_minutes: int = 20,
     ) -> None:
@@ -1299,6 +2195,7 @@ class KiteOrderManager:
                 bot_owned=bool(item.get("bot_owned", False)),
                 auto_exit_allowed=bool(item.get("auto_exit_allowed", False)),
                 strategy=str(item.get("strategy", "") or ""),
+                caller="pending_buy_retry",
             )
             if result.success:
                 self._drop_pending_buy(symbol)
@@ -1328,6 +2225,7 @@ class KiteOrderManager:
         if self._daily_order_date != today:
             self._daily_order_date = today
             self._daily_order_count = 0
+            self._persist_execution_state()
         return self._daily_order_count < self.max_daily_orders
 
     # ------------------------------------------------------------------
@@ -1415,6 +2313,7 @@ class KiteOrderManager:
         bot_owned: bool = False,
         auto_exit_allowed: bool = False,
         strategy: str = "",
+        caller: str = "",
     ) -> OrderResult:
         """Place a buy order on NSE via Kite Connect.
 
@@ -1454,6 +2353,14 @@ class KiteOrderManager:
                     message="Auto-trade is disabled (set KITE_AUTO_TRADE=1)",
                 )
             )
+
+        # Temporary safety model: one bot-owned position per symbol.  This
+        # central boundary is deliberately before any broker reconciliation.
+        if symbol in self._positions and self._positions[symbol].status == "open":
+            return self._return_logged_result(OrderResult(
+                False, symbol=symbol, side="BUY", qty=qty, price=price,
+                status="SKIPPED", message="Already holding this stock; one position per symbol",
+            ))
 
         if not _is_market_open():
             return self._return_logged_result(
@@ -1817,6 +2724,33 @@ class KiteOrderManager:
 
         # Place real order via Kite
         try:
+            auth = self.authorize_broker_mutation(caller=caller, strategy=strategy)
+            if not auth["authorized"]:
+                return self._return_logged_result(OrderResult(
+                    False, symbol=symbol, side="BUY", qty=qty, price=price,
+                    status="DENIED", message="Execution denied: " + "; ".join(auth["reasons"]),
+                ))
+            feed_ok, feed_reason = self._market_data_is_fresh(symbol)
+            if not feed_ok:
+                return self._return_logged_result(OrderResult(
+                    False, symbol=symbol, side="BUY", qty=qty, price=price,
+                    status="DENIED", message=feed_reason,
+                ))
+            risk_config_reasons = self._entry_risk_configuration_reasons()
+            if risk_config_reasons:
+                return self._return_logged_result(OrderResult(
+                    False, symbol=symbol, side="BUY", qty=qty, price=price,
+                    status="DENIED", message="; ".join(risk_config_reasons),
+                ))
+            risk_status = self._entry_risk_status().evaluate()
+            self._risk_evidence_state = risk_status.as_dict()
+            self._risk_evidence_state["checked_at"] = _ist_now().isoformat(timespec="seconds")
+            self._persist_execution_state()
+            if risk_status.buy_paused:
+                return self._return_logged_result(OrderResult(
+                    False, symbol=symbol, side="BUY", qty=qty, price=price,
+                    status="DENIED", message="; ".join(risk_status.reasons),
+                ))
             client = self._get_client()
             reference_price = float(price or 0.0)
             if reference_price <= 0 and order_type == "MARKET":
@@ -1844,9 +2778,11 @@ class KiteOrderManager:
             if kite_order_type == "LIMIT" and reference_price > 0:
                 order_params["price"] = aggressive_limit_price or _round_to_tick(reference_price, tick_size, direction="up")
 
-            order_id = client.place_order(**order_params)
-            order_id = str(order_id or "")
+            order_id = self._submit_order_once(
+                client, order_params, caller=caller, strategy=strategy, kind="entry"
+            )
             fill_status = self._wait_for_order_status(client, order_id)
+            self._set_intent_from_order(order_id, str(fill_status.get("status", "UNKNOWN")))
 
             _log.info(
                 "BUY order placed: %s x%d, order_id=%s, type=%s%s, fill_status=%s",
@@ -1863,7 +2799,9 @@ class KiteOrderManager:
             status_text = str(fill_status.get("status", "UNKNOWN") or "UNKNOWN").upper()
             if filled_qty > 0:
                 if status_text != "COMPLETE" and kite_order_type == "LIMIT" and self.cancel_unfilled_limit_orders:
-                    cancelled = self._cancel_order_best_effort(client, order_id)
+                    cancelled = self._cancel_order_best_effort(
+                        client, order_id, caller=caller, strategy=strategy
+                    )
                     status_text = "PARTIAL_FILLED_CANCELLED" if cancelled else f"{status_text}_PARTIAL_FILLED"
                 fill_label = "filled" if status_text == "COMPLETE" else "partially filled"
                 result = OrderResult(
@@ -1881,11 +2819,12 @@ class KiteOrderManager:
                     auto_exit_allowed=auto_exit_allowed,
                     strategy=strategy,
                 )
-                self._daily_order_count += 1
                 return result
 
             if kite_order_type == "LIMIT" and self.cancel_unfilled_limit_orders and status_text not in {"REJECTED", "CANCELLED"}:
-                cancelled = self._cancel_order_best_effort(client, order_id)
+                cancelled = self._cancel_order_best_effort(
+                    client, order_id, caller=caller, strategy=strategy
+                )
                 status_text = "CANCELLED_UNFILLED" if cancelled else f"{status_text}_UNFILLED"
 
             result = OrderResult(
@@ -1898,7 +2837,6 @@ class KiteOrderManager:
                     f"{fill_status.get('message', '')}".strip()
                 ),
             )
-            self._daily_order_count += 1
             return self._return_logged_result(result)
 
         except Exception as exc:
@@ -1922,6 +2860,8 @@ class KiteOrderManager:
         price: float = 0.0,
         reason: str = "",
         order_type: str = "MARKET",
+        caller: str = "direct_sell",
+        strategy: str = "",
     ) -> OrderResult:
         """Place a sell order for a tracked position.
 
@@ -2023,6 +2963,15 @@ class KiteOrderManager:
             return result
 
         try:
+            effective_strategy = strategy
+            auth = self.authorize_broker_mutation(
+                caller=caller, strategy=effective_strategy, policy="risk_reducing"
+            )
+            if not auth["authorized"]:
+                return self._return_logged_result(OrderResult(
+                    False, symbol=symbol, side="SELL", qty=sell_qty, price=price,
+                    status="DENIED", message="Execution denied: " + "; ".join(auth["reasons"]),
+                ))
             client = self._get_client()
             circuit_blocked, circuit_reason = self._is_at_circuit_limit(symbol)
             if circuit_blocked:
@@ -2040,7 +2989,14 @@ class KiteOrderManager:
                     )
                 )
             if str(reason or "").lower() != SellReason.STOP_LOSS:
-                self._cancel_protective_stop_best_effort(pos, reason=reason)
+                if not self._cancel_protective_stop_best_effort(
+                    pos, reason=reason, caller=caller
+                ):
+                    return self._return_logged_result(OrderResult(
+                        False, symbol=symbol, side="SELL", qty=sell_qty, price=price,
+                        status="DENIED",
+                        message="Sell denied because protective stop cancellation was not confirmed",
+                    ))
             reference_price = float(price or 0.0)
             exchange, tick_size = self._resolve_exchange_and_tick_size(symbol)
             if reference_price <= 0:
@@ -2072,9 +3028,12 @@ class KiteOrderManager:
             if kite_order_type == "LIMIT" and reference_price > 0:
                 order_params["price"] = aggressive_limit_price or _round_to_tick(reference_price, tick_size, direction="down")
             
-            order_id = client.place_order(**order_params)
-            order_id = str(order_id or "")
+            order_id = self._submit_order_once(
+                client, order_params, caller=caller, strategy=effective_strategy, kind="exit",
+                reconciliation_policy="exit", position=pos,
+            )
             fill_status = self._wait_for_order_status(client, order_id)
+            self._set_intent_from_order(order_id, str(fill_status.get("status", "UNKNOWN")))
 
             _log.info(
                 "SELL order placed: %s x%d, order_id=%s, fill_status=%s — %s",
@@ -2090,7 +3049,9 @@ class KiteOrderManager:
             status_text = str(fill_status.get("status", "UNKNOWN") or "UNKNOWN").upper()
             if filled_qty > 0:
                 if status_text != "COMPLETE" and kite_order_type == "LIMIT" and self.cancel_unfilled_limit_orders:
-                    cancelled = self._cancel_order_best_effort(client, order_id)
+                    cancelled = self._cancel_order_best_effort(
+                        client, order_id, caller=caller, strategy=effective_strategy
+                    )
                     status_text = "PARTIAL_FILLED_CANCELLED" if cancelled else f"{status_text}_PARTIAL_FILLED"
                 fill_label = "filled" if status_text == "COMPLETE" else "partially filled"
                 result = OrderResult(
@@ -2103,7 +3064,9 @@ class KiteOrderManager:
                 return result
 
             if kite_order_type == "LIMIT" and self.cancel_unfilled_limit_orders and status_text not in {"REJECTED", "CANCELLED"}:
-                cancelled = self._cancel_order_best_effort(client, order_id)
+                cancelled = self._cancel_order_best_effort(
+                    client, order_id, caller=caller, strategy=effective_strategy
+                )
                 status_text = "CANCELLED_UNFILLED" if cancelled else f"{status_text}_UNFILLED"
 
             result = OrderResult(
@@ -2306,7 +3269,6 @@ class KiteOrderManager:
             if (
                 self._is_bot_intraday_position(pos)
                 and not str(getattr(pos, "protective_stop_order_id", "") or "")
-                and str(getattr(pos, "protective_stop_status", "") or "").upper() != "FAILED"
                 and float(getattr(pos, "stop_loss", 0) or 0) > 0
                 and live_price > float(getattr(pos, "stop_loss", 0) or 0)
             ):
@@ -2537,10 +3499,79 @@ class KiteOrderManager:
         results = []
 
         for sym, reason, price, qty in signals:
-            result = self.place_sell_order(symbol=sym, qty=qty, price=price, reason=reason)
+            result = self.place_sell_order(
+                symbol=sym, qty=qty, price=price, reason=reason,
+                caller="automated_exit", strategy="risk_reducing_exit",
+            )
             results.append(result)
 
         return results
+
+    def emergency_close_bot_position(
+        self, symbol: str, qty: int = 0, *, caller: str = "emergency_close",
+        strategy: str = "risk_reducing_exit",
+    ) -> OrderResult:
+        """Close only exposure whose ownership can be rebuilt from broker-tagged entry history."""
+        symbol = str(symbol or "").strip().upper()
+        auth = self.authorize_broker_mutation(
+            caller=caller, strategy=strategy, policy="risk_reducing"
+        )
+        if not auth["authorized"]:
+            return OrderResult(False, symbol=symbol, side="SELL", status="DENIED",
+                               message="Execution denied: " + "; ".join(auth["reasons"]))
+        try:
+            client = self._get_client()
+            positions = client.positions()
+            holdings = client.holdings()
+            orders = client.orders()
+            if not isinstance(orders, list):
+                raise TypeError("orders response is malformed")
+            exposure = self._broker_exposure_from_snapshot(holdings, positions)
+            broker_qty = int((exposure.get(symbol) or {}).get("qty", 0) or 0)
+            owned_intents = [
+                item for item in self._order_intents.values()
+                if item.get("kind") == "entry"
+                and self._intent_state(item) == "filled"
+                and str(item.get("symbol", "") or "").upper() == symbol
+            ]
+            matching_order = next((
+                row for row in orders
+                if str((row or {}).get("tag", "") or "") in {
+                    str(item.get("tag", "") or "") for item in owned_intents
+                }
+                and str((row or {}).get("transaction_type", "") or "").upper() == "BUY"
+                and str((row or {}).get("status", "") or "").upper() == "COMPLETE"
+            ), None)
+            if broker_qty <= 0 or not matching_order:
+                raise BrokerMutationError("broker history does not prove bot ownership")
+            close_qty = int(qty or broker_qty)
+            if close_qty <= 0 or close_qty > broker_qty:
+                raise BrokerMutationError("exit quantity is not broker-backed risk reduction")
+            pos = self._positions.get(symbol)
+            if pos is None or pos.status != "open" or not pos.bot_owned:
+                pos = TrackedPosition(
+                    symbol=symbol, qty=broker_qty,
+                    buy_price=float(matching_order.get("average_price", 0) or 0),
+                    buy_order_id=str(matching_order.get("order_id", "") or ""),
+                    product_type=str((exposure.get(symbol) or {}).get("product", "MIS") or "MIS"),
+                    bot_owned=True, auto_exit_allowed=True,
+                    strategy="reconstructed_bot_entry",
+                    reasons="broker-backed emergency ownership reconstruction",
+                )
+                self._positions[symbol] = pos
+                self._critical_states[f"reconstructed:{symbol}"] = {
+                    "state": "recovery_required",
+                    "reason": "local position reconstructed from filled PK-tagged broker entry",
+                    "updated_at": _ist_now().isoformat(timespec="seconds"),
+                }
+                self._save_positions()
+                self._persist_execution_state()
+            return self.place_sell_order(
+                symbol=symbol, qty=close_qty, reason="emergency_close",
+                caller=caller, strategy=strategy,
+            )
+        except Exception as exc:
+            return OrderResult(False, symbol=symbol, side="SELL", status="DENIED", message=str(exc))
 
     # ------------------------------------------------------------------
     # Auto-buy from alert candidates
@@ -2561,6 +3592,7 @@ class KiteOrderManager:
         bot_owned: bool = False,
         auto_exit_allowed: bool = False,
         strategy: str = "",
+        caller: str = "signalmonitor_autotrade",
     ) -> OrderResult:
         """Auto-buy a stock from a blind-buy candidate alert.
 
@@ -2645,6 +3677,7 @@ class KiteOrderManager:
             bot_owned=bot_owned,
             auto_exit_allowed=auto_exit_allowed,
             strategy=strategy,
+            caller=caller,
         )
         if (not result.success) and self._looks_like_funds_shortage(result.message):
             available = self._extract_available_funds()
@@ -2915,9 +3948,10 @@ class KiteOrderManager:
         exposure: Dict[str, Dict[str, Any]] = {}
 
         # Delivery holdings, including unsettled T1 quantity.
-        try:
-            holdings = client.holdings() or []
-            for row in holdings:
+        holdings = client.holdings()
+        if not isinstance(holdings, list):
+            raise RuntimeError("Kite holdings response is unavailable or malformed")
+        for row in holdings:
                 sym = str(row.get("tradingsymbol", "")).strip().upper()
                 qty = int(row.get("quantity", 0) or 0) + int(row.get("t1_quantity", 0) or 0)
                 if not sym or qty <= 0:
@@ -2930,14 +3964,12 @@ class KiteOrderManager:
                     "product": "CNC",
                     "source": "holdings",
                 }
-        except Exception as exc:
-            _log.debug("Holdings lookup failed: %s", exc)
-
         # Net positions for intraday / derivatives.
-        try:
-            kite_positions = client.positions() or {}
-            net_positions = kite_positions.get("net", []) if isinstance(kite_positions, dict) else []
-            for row in net_positions:
+        kite_positions = client.positions()
+        if not isinstance(kite_positions, dict) or not isinstance(kite_positions.get("net"), list):
+            raise RuntimeError("Kite positions response is unavailable or malformed")
+        net_positions = kite_positions["net"]
+        for row in net_positions:
                 sym = str(row.get("tradingsymbol", "")).strip().upper()
                 qty = int(row.get("quantity", 0) or 0)
                 if not sym or qty == 0:
@@ -2950,9 +3982,6 @@ class KiteOrderManager:
                     "product": str(row.get("product", "") or ""),
                     "source": "positions",
                 }
-        except Exception as exc:
-            _log.debug("Positions lookup failed: %s", exc)
-
         return exposure
 
     # ------------------------------------------------------------------
@@ -3000,6 +4029,8 @@ class KiteOrderManager:
         exchange: str = "NSE",
         product_type: str = "",
         current_price: float = 0.0,
+        caller: str = "direct_gtt",
+        strategy: str = "",
     ) -> Dict[str, Any]:
         """Place a Kite GTT OCO (One-Cancels-Other) order for stop-loss AND target.
 
@@ -3055,16 +4086,11 @@ class KiteOrderManager:
             if not exchange or exchange == "NSE":
                 exchange = resolved_exchange
             # Kite OCO: trigger_values = [stop_loss, target] (ascending order required by API)
-            trigger_response = client.place_gtt(
-                trigger_type=client.GTT_TYPE_OCO,
-                tradingsymbol=symbol,
-                exchange=exchange,
-                trigger_values=[
-                    _round_to_tick(stop_loss, tick_size, direction="down"),
-                    _round_to_tick(target, tick_size, direction="up"),
-                ],
-                last_price=_round_to_tick(last_price_ref, tick_size, direction="nearest"),
-                orders=[
+            trigger_values = [
+                _round_to_tick(stop_loss, tick_size, direction="down"),
+                _round_to_tick(target, tick_size, direction="up"),
+            ]
+            gtt_orders = [
                     # Leg 1: stop-loss — fires when price <= stop_loss
                     {
                         "transaction_type": "SELL",
@@ -3083,9 +4109,45 @@ class KiteOrderManager:
                         "product": order_product,
                         "price": _round_to_tick(target, tick_size, direction="up"),
                     },
-                ],
-            )
-            trigger_id = _normalize_gtt_trigger_id(trigger_response)
+            ]
+            with self._account_execution_lock():
+                auth = self.authorize_broker_mutation(
+                    caller=caller, strategy=strategy, policy="risk_reducing"
+                )
+                if not auth["authorized"]:
+                    return {"success": False, "message": "Execution denied: " + "; ".join(auth["reasons"])}
+                context = self._reconcile_for_mutation(
+                    client, policy="gtt", symbol=symbol, qty=qty, product=order_product
+                )
+                if not context.get("valid"):
+                    return {"success": False, "message": "Reconciliation denied: " + str(context.get("reason", ""))}
+                intent = self._new_order_intent(
+                    kind="gtt_create", symbol=symbol, side="SELL", qty=qty,
+                    caller=caller, strategy=strategy,
+                    parameters={"trigger_values": trigger_values, "product": order_product},
+                )
+                try:
+                    self._update_intent(intent, "submitted")
+                    trigger_response = client.place_gtt(
+                        trigger_type=client.GTT_TYPE_OCO,
+                        tradingsymbol=symbol,
+                        exchange=exchange,
+                        trigger_values=trigger_values,
+                        last_price=_round_to_tick(last_price_ref, tick_size, direction="nearest"),
+                        orders=gtt_orders,
+                    )
+                    trigger_id = _normalize_gtt_trigger_id(trigger_response)
+                    if not trigger_id:
+                        raise RuntimeError("broker returned an empty GTT trigger id")
+                    self._update_intent(intent, "filled", trigger_id=trigger_id)
+                except Exception as exc:
+                    if self._intent_state(intent) == "submitted":
+                        self._update_intent(intent, "unresolved", error=f"{type(exc).__name__}: {exc}")
+                    self._critical_states[f"intent:{intent['correlation_id']}"] = {
+                        "state": "recovery_required", "reason": "ambiguous GTT result; original trigger id is required"
+                    }
+                    self._persist_execution_state()
+                    return {"success": False, "message": "Ambiguous GTT result; original trigger id required"}
             _log.info(
                 "GTT OCO placed for %s x%d: SL=%.2f TARGET=%.2f — trigger_id=%s",
                 symbol, qty, stop_loss, target, trigger_id,
@@ -3101,13 +4163,18 @@ class KiteOrderManager:
             _log.error("GTT OCO failed for %s: %s", symbol, exc)
             return {"success": False, "message": str(exc)}
 
-    def get_gtts(self) -> List[Dict]:
+    def get_gtts(self, *, strict: bool = False) -> List[Dict]:
         """List all active GTT triggers on Kite."""
         try:
             client = self._get_client()
-            return client.get_gtts() or []
+            rows = client.get_gtts()
+            if not isinstance(rows, list):
+                raise TypeError("GTT response is malformed")
+            return rows
         except Exception as exc:
             _log.error("get_gtts failed: %s", exc)
+            if strict:
+                raise
             return []
 
     def get_gtt(self, trigger_id: str) -> Dict[str, Any]:
@@ -3123,15 +4190,54 @@ class KiteOrderManager:
             _log.error("get_gtt failed for %s: %s", trigger_id, exc)
             return {}
 
-    def delete_gtt(self, trigger_id: str) -> bool:
+    def delete_gtt(
+        self, trigger_id: str, *, caller: str = "", strategy: str = ""
+    ) -> bool:
         """Delete a broker-side GTT trigger by id."""
         try:
             trigger_id = str(trigger_id or "").strip()
             if not trigger_id:
                 return False
             client = self._get_client()
-            client.delete_gtt(trigger_id)
-            return True
+            with self._account_execution_lock():
+                auth = self.authorize_broker_mutation(
+                    caller=caller, strategy=strategy, policy="risk_reducing"
+                )
+                if not auth["authorized"]:
+                    _log.error("delete_gtt denied: %s", "; ".join(auth["reasons"]))
+                    return False
+                context = self._reconcile_for_mutation(
+                    client, policy="gtt_delete", order_id=trigger_id
+                )
+                if not context.get("valid"):
+                    return False
+                intent = self._new_order_intent(
+                    kind="gtt_delete", symbol="", side="", qty=0, caller=caller,
+                    strategy=strategy, parameters={"trigger_id": trigger_id},
+                )
+                try:
+                    self._update_intent(intent, "submitted")
+                    client.delete_gtt(trigger_id)
+                except Exception as exc:
+                    self._update_intent(intent, "unresolved", error=f"{type(exc).__name__}: {exc}")
+                consistent_absence = 0
+                for attempt in range(self._reconcile_attempts):
+                    try:
+                        rows = client.get_gtts()
+                        if not isinstance(rows, list):
+                            raise TypeError("GTT response is malformed")
+                        exists = any(str((row or {}).get("id", "")) == trigger_id for row in rows)
+                        consistent_absence = 0 if exists else consistent_absence + 1
+                    except Exception:
+                        consistent_absence = 0
+                    if attempt + 1 < self._reconcile_attempts:
+                        self._sleep(self._reconcile_interval_seconds)
+                if consistent_absence == self._reconcile_attempts:
+                    self._update_intent(intent, "filled", trigger_id=trigger_id)
+                    return True
+                if self._intent_state(intent) == "submitted":
+                    self._update_intent(intent, "unresolved", error="GTT deletion not confirmed")
+                return False
         except Exception as exc:
             _log.error("delete_gtt failed for %s: %s", trigger_id, exc)
             return False
@@ -3149,14 +4255,25 @@ class KiteOrderManager:
             return actions
 
         try:
-            all_gtts = self.get_gtts()
-        except Exception:
-            all_gtts = []
+            all_gtts = self.get_gtts(strict=True)
+            if not isinstance(all_gtts, list):
+                raise TypeError("GTT response is malformed")
+        except Exception as exc:
+            _log.error("GTT audit aborted because broker GTT state is unavailable: %s", exc)
+            return [{
+                "symbol": "", "action": "reconciliation_failed", "ok": False,
+                "message": "GTT state unavailable; no local position or GTT state changed",
+                "trigger_id": "",
+            }]
         try:
             broker_exposure = self._get_broker_exposure()
         except Exception as exc:
             _log.error("Broker exposure lookup failed during GTT audit: %s", exc)
-            broker_exposure = {}
+            return [{
+                "symbol": "", "action": "reconciliation_failed", "ok": False,
+                "message": "Broker exposure unavailable; no local position or GTT state changed",
+                "trigger_id": "",
+            }]
 
         gtt_by_id = {}
         active_by_symbol: Dict[str, List[Dict[str, Any]]] = {}
@@ -3200,7 +4317,20 @@ class KiteOrderManager:
             if getattr(pos, "gtt_needs_reissue", False):
                 old_id = str(getattr(pos, "gtt_trigger_id", "") or "")
                 if old_id:
-                    self.delete_gtt(old_id)
+                    deleted = self.delete_gtt(
+                        old_id, caller="gtt_repair", strategy="position_protection"
+                    )
+                    if not deleted:
+                        self.update_position_gtt(
+                            symbol, status="delete_unresolved",
+                            error="Old GTT deletion was not conclusively confirmed; replacement blocked",
+                        )
+                        actions.append({
+                            "symbol": symbol, "action": "delete_unresolved", "ok": False,
+                            "message": "Old GTT deletion was not confirmed; no replacement submitted",
+                            "trigger_id": old_id,
+                        })
+                        continue
                     _log.info("%s: cancelled stale GTT %s (qty mismatch after T1 partial)", symbol, old_id)
                 _new_sl = float(getattr(pos, "trailing_stop", 0) or 0)
                 _orig_sl = float(getattr(pos, "stop_loss", 0) or 0)
@@ -3215,6 +4345,8 @@ class KiteOrderManager:
                     target=float(getattr(pos, "target2", 0) or 0),
                     product_type=product,
                     current_price=_live_price,
+                    caller="gtt_repair",
+                    strategy="position_protection",
                 )
                 if _reissue.get("success"):
                     _new_id = str(_reissue.get("trigger_id", "") or "")
@@ -3246,36 +4378,25 @@ class KiteOrderManager:
                 gtt_data = self.get_gtt(trigger_id)
 
             if not gtt_data:
-                same_symbol = sorted(
-                    active_by_symbol.get(symbol, []),
-                    key=lambda x: str(x.get("updated_at", "") or x.get("created_at", "") or x.get("id", "")),
-                    reverse=True,
-                )
-                if same_symbol:
-                    adopted = same_symbol[0]
-                    adopted_id = str(adopted.get("id", "") or "")
-                    adopted_status = str(adopted.get("status", "") or "").lower()
-                    adopted_expiry = str(adopted.get("expires_at", "") or "")
-                    self.update_position_gtt(
-                        symbol,
-                        trigger_id=adopted_id,
-                        status=adopted_status,
-                        expires_at=adopted_expiry,
-                        error="",
-                    )
+                all_same_symbol = active_by_symbol.get(symbol, [])
+                if all_same_symbol:
+                    reason = "active same-symbol GTT ownership is ambiguous; original trigger id is required"
+                    self._critical_states[f"protection:{symbol}"] = {
+                        "state": "recovery_required", "reason": reason,
+                        "updated_at": _ist_now().isoformat(timespec="seconds"),
+                    }
+                    self._persist_execution_state()
+                    self.update_position_gtt(symbol, status="recovery_required", error=reason)
                     actions.append({
-                        "symbol": symbol,
-                        "action": "adopted_existing",
-                        "ok": True,
-                        "message": f"Adopted already-active broker GTT (ID {adopted_id})",
-                        "trigger_id": adopted_id,
+                        "symbol": symbol, "action": "ambiguous_existing", "ok": False,
+                        "message": reason, "trigger_id": trigger_id,
                     })
                     continue
 
             status = str(gtt_data.get("status", "") or "").lower()
             expires_at = str(gtt_data.get("expires_at", "") or "")
 
-            if gtt_data and status == "active":
+            if gtt_data and status == "active" and self._protective_gtt_matches(gtt_data, pos):
                 self.update_position_gtt(
                     symbol,
                     trigger_id=str(gtt_data.get("id", "") or trigger_id),
@@ -3317,6 +4438,8 @@ class KiteOrderManager:
                 target=float(getattr(pos, "target2", 0) or 0),
                 product_type=product,
                 current_price=_live_price_repair,
+                caller="gtt_repair",
+                strategy="position_protection",
             )
             repaired += 1
             if recreate.get("success"):

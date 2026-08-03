@@ -129,6 +129,7 @@ class AutoPilotConfig:
     alert_channels: str = "discord"
     cycle_interval_sec: int = 15
     max_buy_alerts_per_cycle: int = 3
+    broker_execution_enabled: bool = True
 
     def normalized(self) -> "AutoPilotConfig":
         strict_mode = bool(self.strict_mode or _env_truthy("ASSISTANT_STRICT_MODE", False))
@@ -161,6 +162,7 @@ class AutoPilotConfig:
             alert_channels=str(self.alert_channels or "discord").strip().lower(),
             cycle_interval_sec=max(10, int(self.cycle_interval_sec or 60)),
             max_buy_alerts_per_cycle=max(1, int(self.max_buy_alerts_per_cycle or 5)),
+            broker_execution_enabled=bool(self.broker_execution_enabled),
             strict_mode=strict_mode,
             morning_start_min=morning_start_min,
             morning_end_min=morning_end_min,
@@ -896,9 +898,13 @@ class AutoPilotInvestor:
         self._daily_internal_avoid: Set[str] = set()
         self._daily_no_buy_reasons: Counter = Counter()
 
-        # Kite auto-order manager (only if KITE_AUTO_TRADE=1)
+        # Kite order manager.  Discord scans explicitly disable construction so
+        # a scan command cannot inherit a live-capable parent environment.
         self._order_manager = None
         try:
+            if not self.config.broker_execution_enabled:
+                self._log("Kite order manager disabled for this scan-only runtime")
+                return
             from pkscreener.classes.KiteOrderManager import KiteOrderManager
             mgr = KiteOrderManager(output_dir=self.output_dir)
             self._order_manager = mgr
@@ -962,6 +968,8 @@ class AutoPilotInvestor:
             product_type=product_preference,
             holding_horizon=holding_horizon,
             max_hold_days=max_hold_days,
+            caller="autopilot",
+            strategy="autopilot_legacy",
         )
         if result.success:
             product_label = product_label or "AUTO"
@@ -977,6 +985,8 @@ class AutoPilotInvestor:
                     symbol=symbol, qty=result.qty,
                     buy_price=price, stop_loss=stop_loss, target=target2,
                     product_type=product_preference,
+                    caller="autopilot_protection",
+                    strategy="position_protection",
                 )
                 if gtt.get("success"):
                     self._order_manager.update_position_gtt(

@@ -10,7 +10,7 @@ This bot is intentionally focused on manual trade logging and portfolio review:
 
 import asyncio
 import os
-from typing import Optional, Tuple
+from typing import Any, Callable, Optional, Tuple
 
 import pandas as pd
 
@@ -40,13 +40,31 @@ def _get_secret(name: str, default: str = "") -> str:
 
 def _get_int_secret(name: str) -> Optional[int]:
     """Load an integer secret/setting if present."""
-    value = _get_secret(name, "")
+    value = str(os.environ[name]) if name in os.environ else _get_secret(name, "")
     if not value:
         return None
     try:
-        return int(str(value).strip())
+        if value != value.strip() or not value.isdigit() or int(value) <= 0:
+            return None
+        return int(value)
     except Exception:
         return None
+
+
+def _strict_discord_authorization(
+    interaction, allowed_user_id: Optional[int], allowed_channel_id: Optional[int]
+) -> Tuple[bool, str]:
+    """Fail closed for sensitive commands unless both exact Discord IDs match."""
+    if not allowed_user_id or not allowed_channel_id:
+        return False, "⛔ Sensitive commands are disabled: strict Discord user/channel allowlists are not configured."
+    try:
+        if int(interaction.user.id) != int(allowed_user_id):
+            return False, "⛔ You are not authorised to use this sensitive command."
+        if int(interaction.channel_id) != int(allowed_channel_id):
+            return False, f"⛔ Sensitive commands only work in <#{allowed_channel_id}>."
+    except (TypeError, ValueError, AttributeError):
+        return False, "⛔ Sensitive commands are disabled: malformed Discord identity/channel state."
+    return True, ""
 
 
 def _get_float_secret(name: str, default: float) -> float:
@@ -528,7 +546,14 @@ def _execute_live_portfolio_action(
     return runner, trades_df, positions_df, summary_df
 
 
-async def run_discord_trade_bot(account_name: str = "main", universe: str = "allstocks") -> None:
+async def run_discord_trade_bot(
+    account_name: str = "main",
+    universe: str = "allstocks",
+    *,
+    manager_factory: Optional[Callable[..., Any]] = None,
+    autopilot_factory: Optional[Callable[..., Any]] = None,
+    test_surface: Optional[Callable[[Any], Any]] = None,
+) -> None:
     """Run the Discord slash-command bot for live portfolio tracking."""
     try:
         import discord
@@ -670,6 +695,8 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
             self.periodic_health_check = _run_periodic_health_check
 
     bot = PKScreenerDiscordTradeBot()
+    manager_factory = manager_factory
+    autopilot_factory = autopilot_factory
 
     # Initialize health monitor
     output_dir = Archiver.get_user_outputs_dir()
@@ -704,6 +731,12 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
             channel_mention = f"<#{allowed_channel_id}>" if allowed_channel_id else "the configured trade channel"
             return False, f"⛔ Trade commands only work in {channel_mention}. Please go there and try again."
         return True, ""
+
+    def _authorize_broker_mutation(interaction) -> Tuple[bool, str]:
+        """Broker-changing commands require both configured allowlists."""
+        return _strict_discord_authorization(
+            interaction, allowed_user_id, allowed_channel_id
+        )
 
     async def _reply_unauthorized(interaction, reason: str):
         if interaction.response.is_done():
@@ -1044,7 +1077,9 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
 
     @bot.tree.command(name="autopilot", description="Scan for blind-buy opportunities and check portfolio for sell alerts")
     async def autopilot_cmd(interaction):  # type: ignore
-        ok, reason = _authorize(interaction)
+        ok, reason = _strict_discord_authorization(
+            interaction, allowed_user_id, allowed_channel_id
+        )
         if not ok:
             await _reply_unauthorized(interaction, reason)
             return
@@ -1057,8 +1092,10 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
                 universe=universe,
                 account_name=account_name,
                 alert_channels="none",  # we'll format the response ourselves
+                broker_execution_enabled=False,
             )
-            investor = AutoPilotInvestor(config=cfg)
+            investor_cls = autopilot_factory or AutoPilotInvestor
+            investor = investor_cls(config=cfg)
             return investor.run_once()
 
         result = await asyncio.to_thread(_run_autopilot)
@@ -1125,7 +1162,8 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
 
         try:
             from pkscreener.classes.KiteOrderManager import KiteOrderManager
-            mgr = KiteOrderManager(output_dir=Archiver.get_user_data_dir())
+            mgr_cls = manager_factory or KiteOrderManager
+            mgr = mgr_cls(output_dir=Archiver.get_user_data_dir())
             message = mgr.format_positions_summary()
         except Exception as exc:
             message = f"⚠️ kitepositions failed: {exc}"
@@ -1134,7 +1172,7 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
     @bot.tree.command(name="kitesell", description="Sell a Kite-tracked position via market order")
     @app_commands.describe(symbol="Stock symbol to sell")
     async def kitesell(interaction, symbol: str):  # type: ignore
-        ok, reason = _authorize(interaction)
+        ok, reason = _authorize_broker_mutation(interaction)
         if not ok:
             await _reply_unauthorized(interaction, reason)
             return
@@ -1142,7 +1180,8 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
         await interaction.response.defer(thinking=True)
         try:
             from pkscreener.classes.KiteOrderManager import KiteOrderManager
-            mgr = KiteOrderManager(output_dir=Archiver.get_user_data_dir())
+            mgr_cls = manager_factory or KiteOrderManager
+            mgr = mgr_cls(output_dir=Archiver.get_user_data_dir())
 
             # Snapshot system recommendation BEFORE executing the sell.
             # If the system wasn't flagging an exit, this is a manual override.
@@ -1166,7 +1205,10 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
                     _sys_rec = f"HOLD (stage={_stage}, no trail yet)"
                 # If stage is WEAKENING or empty, system may already agree — no override note
 
-            result = mgr.place_sell_order(symbol=symbol, reason="manual_sell")
+            result = mgr.place_sell_order(
+                symbol=symbol, reason="manual_sell", caller="discord_kitesell",
+                strategy="risk_reducing_exit",
+            )
             if result.success:
                 pos = mgr.get_position(_sym_upper)
                 pnl_text = f" | P/L: ₹{pos.pnl:+,.0f}" if pos and pos.sell_price > 0 else ""
@@ -1200,7 +1242,7 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
         amount="Approximate amount to invest (INR, default: max per trade setting)",
     )
     async def kitebuy(interaction, symbol: str, amount: Optional[float] = None):  # type: ignore
-        ok, reason = _authorize(interaction)
+        ok, reason = _authorize_broker_mutation(interaction)
         if not ok:
             await _reply_unauthorized(interaction, reason)
             return
@@ -1208,7 +1250,8 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
         await interaction.response.defer(thinking=True)
         try:
             from pkscreener.classes.KiteOrderManager import KiteOrderManager
-            mgr = KiteOrderManager(output_dir=Archiver.get_user_data_dir())
+            mgr_cls = manager_factory or KiteOrderManager
+            mgr = mgr_cls(output_dir=Archiver.get_user_data_dir())
 
             # Get live price from ticks
             ticks = mgr._load_ticks()
@@ -1220,7 +1263,8 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
                 invest = amount if amount and amount > 0 else mgr.max_order_value
                 qty = max(1, int(invest / live_price))
                 result = mgr.place_buy_order(
-                    symbol=symbol, qty=qty, price=live_price, order_type="MARKET"
+                    symbol=symbol, qty=qty, price=live_price, order_type="MARKET",
+                    caller="discord_kitebuy", strategy="manual_discord_entry",
                 )
                 if result.success:
                     message = f"✅ Bought `{symbol.upper()}` x{qty} @ market (ID: {result.order_id})"
@@ -1393,9 +1437,11 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
         if stop_loss > 0 and target > 0:
             try:
                 from pkscreener.classes.KiteOrderManager import KiteOrderManager
-                mgr = KiteOrderManager(output_dir=Archiver.get_user_data_dir())
+                mgr_cls = manager_factory or KiteOrderManager
+                mgr = mgr_cls(output_dir=Archiver.get_user_data_dir())
                 gtt = await asyncio.to_thread(
-                    mgr.place_gtt_oco, symbol, qty, price, stop_loss, target
+                    mgr.place_gtt_oco, symbol, qty, price, stop_loss, target,
+                    caller="discord_bought_confirmation", strategy="position_protection"
                 )
                 if gtt.get("success"):
                     reply_lines.append(
@@ -1417,7 +1463,8 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
         # Reconcile with Kite portfolio to confirm holding
         try:
             from pkscreener.classes.KiteOrderManager import KiteOrderManager
-            mgr = KiteOrderManager(output_dir=Archiver.get_user_data_dir())
+            mgr_cls = manager_factory or KiteOrderManager
+            mgr = mgr_cls(output_dir=Archiver.get_user_data_dir())
             rec = await asyncio.to_thread(mgr.reconcile_with_broker)
             kite_holdings = rec.get("broker_positions", []) or []
             found = any(
@@ -1449,10 +1496,12 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
         if message.author == bot.user:
             return
         # Only act in the configured trade channel (same guard as slash commands)
-        if allowed_channel_id and str(message.channel.id) != str(allowed_channel_id):
+        if not allowed_channel_id or not allowed_user_id:
+            return
+        if str(message.channel.id) != str(allowed_channel_id):
             return
         # Only act for the configured user (same guard as slash commands)
-        if allowed_user_id and str(message.author.id) != str(allowed_user_id):
+        if str(message.author.id) != str(allowed_user_id):
             return
 
         content = message.content.strip()
@@ -1489,6 +1538,14 @@ async def run_discord_trade_bot(account_name: str = "main", universe: str = "all
 
     # Assign health_monitor to bot instance before starting
     bot.health_monitor = health_monitor
+
+    # Test-only registration seam: expose the real registered bot before any
+    # network connection is attempted. Production callers leave this unset.
+    if test_surface is not None:
+        result = test_surface(bot)
+        if asyncio.iscoroutine(result):
+            await result
+        return
 
     try:
         await bot.start(token)

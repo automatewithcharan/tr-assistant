@@ -249,6 +249,9 @@ class SignalMonitorRunner:
         self.radar_min_bs_ratio = max(0.0, float(os.environ.get("SIGNALMONITOR_RADAR_MIN_BS_RATIO", "1.2") or "1.2"))
         self.monitor_heartbeat_minutes = max(0.0, float(os.environ.get("SIGNALMONITOR_HEARTBEAT_MINUTES", "10") or "10"))
         self.autotrade_enabled = self._env_truthy("SIGNALMONITOR_AUTOTRADE_ENABLED", "0")
+        self.autotrade_observation_enabled = self._env_truthy(
+            "SIGNALMONITOR_AUTOTRADE_OBSERVATION_ENABLED", "0"
+        )
         self.autotrade_real_orders = self._env_truthy("SIGNALMONITOR_AUTOTRADE_REAL_ORDERS", "0")
         self.autotrade_buy_enabled = self._env_truthy("KITE_AUTO_BUY", "0")
         self.autotrade_sell_enabled = self._env_truthy("KITE_AUTO_SELL", "0")
@@ -4261,7 +4264,10 @@ class SignalMonitorRunner:
 
     def _run_autotrade_lane(self, alerts_df: pd.DataFrame) -> None:
         """Optional real-order lane for the historically strongest Grade-B setup."""
-        if not getattr(self, "autotrade_enabled", False):
+        if not (
+            getattr(self, "autotrade_observation_enabled", False)
+            or getattr(self, "autotrade_enabled", False)
+        ):
             return
         if not self.use_live_kite or not self._is_regular_market_hours():
             return
@@ -4737,6 +4743,7 @@ class SignalMonitorRunner:
                 bot_owned=True,
                 auto_exit_allowed=True,
                 strategy=self.autotrade_strategy,
+                caller="signalmonitor_autotrade",
             )
             candidate["triggered_at"] = now.isoformat(timespec="seconds")
             candidate["triggered_price"] = round(live_price, 2)

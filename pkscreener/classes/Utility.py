@@ -86,6 +86,9 @@ def marketStatus(instrument_id=256265, prefix=""):
         str: Formatted string with trading symbol, close price, percent change, date and time.
         Example: "NIFTY 50 | 23142.15 | -2.10% | 25-03-13 | 15:30"
     """
+    # Imports must not make network calls in the repository's offline test mode.
+    if os.environ.get("PKSCREENER_TEST_OFFLINE", "") == "1":
+        return "N/A"
     url = "https://raw.githubusercontent.com/pkjmesra/PKBrokers/refs/heads/main/pkbrokers/kite/examples/results/Data/ticks.json"
     
     try:

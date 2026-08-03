@@ -11,7 +11,8 @@ import os
 import sys
 import tempfile
 import csv
-from datetime import date
+import json
+from datetime import date, datetime, timedelta
 from unittest.mock import patch, MagicMock
 
 import pytest
@@ -35,10 +36,28 @@ from pkscreener.classes.IntradayPaperTrader import (
 # ShortabilityValidator tests
 # ---------------------------------------------------------------------------
 
+class InMemorySurveillanceProvider:
+    def __init__(self, asm=None, gsm=None, error=None):
+        self.asm = {"data": []} if asm is None else asm
+        self.gsm = {"data": []} if gsm is None else gsm
+        self.error = error
+        self.calls = 0
+
+    def fetch(self):
+        self.calls += 1
+        if self.error:
+            raise self.error
+        return self.asm, self.gsm
+
+
 class TestShortabilityValidator:
 
-    def _make_validator(self, tmpdir) -> ShortabilityValidator:
-        v = ShortabilityValidator(data_dir=tmpdir)
+    def _make_validator(self, tmpdir, provider=None, clock=datetime.now) -> ShortabilityValidator:
+        v = ShortabilityValidator(
+            data_dir=tmpdir,
+            surveillance_provider=provider or InMemorySurveillanceProvider(),
+            clock=clock,
+        )
         return v
 
     def test_rejects_unknown_liquidity(self, tmp_path):
@@ -65,6 +84,7 @@ class TestShortabilityValidator:
         # Prime cache_date so _refresh_surveillance_lists() is skipped
         v._cache_date = date.today().isoformat()
         v._asm_symbols = {"ASMSTOCK"}
+        v._surveillance_health = "healthy_cache"
         result = v.validate("ASMSTOCK", avg_value_cr=100.0)
         assert not result.allowed
         assert result.status == "asm"
@@ -73,6 +93,7 @@ class TestShortabilityValidator:
         v = self._make_validator(str(tmp_path))
         v._cache_date = date.today().isoformat()
         v._gsm_symbols = {"GSMSTOCK"}
+        v._surveillance_health = "healthy_cache"
         result = v.validate("GSMSTOCK", avg_value_cr=100.0)
         assert not result.allowed
         assert result.status == "gsm"
@@ -81,6 +102,7 @@ class TestShortabilityValidator:
         v = self._make_validator(str(tmp_path))
         v._cache_date = date.today().isoformat()
         v._asm_symbols = {"BIGSTOCK"}
+        v._surveillance_health = "healthy_cache"
         result = v.validate("BIGSTOCK", avg_value_cr=1000.0)
         assert not result.allowed
         assert result.status == "asm"
@@ -117,14 +139,54 @@ class TestShortabilityValidator:
         assert result.avg_value_cr == pytest.approx(50.5)
 
     def test_cache_prevents_double_check(self, tmp_path):
-        v = self._make_validator(str(tmp_path))
-        v._asm_symbols = {"CACHED"}
+        provider = InMemorySurveillanceProvider({"data": [{"symbol": "CACHED"}]})
+        v = self._make_validator(str(tmp_path), provider=provider)
         r1 = v.validate("CACHED", avg_value_cr=100.0)
-        # Remove from ASM — cached result should still apply
+        # Remove from the loaded set — cached result must not call provider again.
         v._asm_symbols.clear()
         r2 = v.validate("CACHED", avg_value_cr=100.0)
         assert r1.allowed == r2.allowed
         assert r1.status  == r2.status
+        assert provider.calls == 1
+
+    def test_empty_and_malformed_payloads_are_deterministic(self, tmp_path):
+        empty = InMemorySurveillanceProvider({"data": []}, {"data": []})
+        malformed = InMemorySurveillanceProvider({"data": "bad"}, [])
+        assert self._make_validator(str(tmp_path / "empty"), empty).validate("SAFE", 20).allowed
+        malformed_result = self._make_validator(str(tmp_path / "malformed"), malformed).validate("SAFE", 20)
+        assert not malformed_result.allowed
+        assert malformed_result.status == "surveillance_unavailable"
+
+    def test_provider_exception_fails_closed(self, tmp_path):
+        provider = InMemorySurveillanceProvider(error=RuntimeError("fixture failure"))
+        result = self._make_validator(str(tmp_path), provider).validate("SAFE", 20)
+        assert not result.allowed and result.status == "surveillance_unavailable" and provider.calls == 1
+
+    def test_duplicate_symbols_and_normalization_block_once(self, tmp_path):
+        provider = InMemorySurveillanceProvider({"data": [{"symbol": " asmstock "}, {"symbol": "ASMSTOCK"}]})
+        result = self._make_validator(str(tmp_path), provider).validate(" asmstock ", 100)
+        assert not result.allowed and result.status == "asm" and provider.calls == 1
+
+    def test_stale_cache_refreshes_with_injected_clock(self, tmp_path):
+        now = datetime(2026, 1, 2, 10, 0)
+        provider = InMemorySurveillanceProvider({"data": [{"symbol": "FRESH"}]})
+        cache = tmp_path / "asm_gsm_cache.json"
+        cache.write_text(json.dumps({"cached_at": (now - timedelta(hours=5)).isoformat(), "asm": ["OLD"], "gsm": []}), encoding="utf-8")
+        result = self._make_validator(str(tmp_path), provider, clock=lambda: now).validate("FRESH", 100)
+        assert not result.allowed and provider.calls == 1
+
+    def test_valid_cache_reuses_without_provider(self, tmp_path):
+        now = datetime(2026, 1, 2, 10, 0)
+        provider = InMemorySurveillanceProvider(error=AssertionError("provider should not run"))
+        (tmp_path / "asm_gsm_cache.json").write_text(json.dumps({"cached_at": now.isoformat(), "asm": ["CACHED"], "gsm": []}), encoding="utf-8")
+        result = self._make_validator(str(tmp_path), provider, clock=lambda: now).validate("cached", 100)
+        assert not result.allowed and result.status == "asm" and provider.calls == 0
+
+    def test_offline_mode_remains_deterministic_with_injected_provider(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("PKSCREENER_TEST_OFFLINE", "1")
+        provider = InMemorySurveillanceProvider({"data": [{"symbol": "OFFLINE"}]})
+        result = self._make_validator(str(tmp_path), provider).validate("offline", 100)
+        assert not result.allowed and provider.calls == 1
 
 
 # ---------------------------------------------------------------------------
