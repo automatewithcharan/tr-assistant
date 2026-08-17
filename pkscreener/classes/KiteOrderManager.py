@@ -17,7 +17,7 @@ import threading
 import time
 import uuid
 from contextlib import contextmanager
-from datetime import datetime, date, timedelta
+from datetime import datetime, date, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -1904,15 +1904,28 @@ class KiteOrderManager:
             if received_at_str and max_stale_seconds > 0:
                 try:
                     received_dt = datetime.fromisoformat(received_at_str)
-                    age_seconds = (datetime.now() - received_dt).total_seconds()
+                except (TypeError, ValueError):
+                    # Preserve the existing fallback for historical malformed
+                    # metadata: price availability is decided by the caller's
+                    # other defenses when no usable received_at exists.
+                    received_dt = None
+                if received_dt is not None:
+                    if received_dt.tzinfo is None or received_dt.utcoffset() is None:
+                        # Historical snapshots used host-local naive values.
+                        # Keep that compatibility contract without assigning a
+                        # timezone retroactively.
+                        age_seconds = (datetime.now() - received_dt).total_seconds()
+                    else:
+                        age_seconds = (
+                            datetime.now(timezone.utc)
+                            - received_dt.astimezone(timezone.utc)
+                        ).total_seconds()
                     if age_seconds > max_stale_seconds:
                         _log.debug(
                             "%s tick is %.0fs stale (received_at=%s); ignoring",
                             symbol, age_seconds, received_at_str,
                         )
                         return 0.0
-                except Exception:
-                    pass
             return price
         except Exception:
             return 0.0

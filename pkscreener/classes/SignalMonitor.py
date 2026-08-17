@@ -37,6 +37,7 @@ from pkscreener.classes.IntradayEventShadowRecorder import IntradayEventShadowRe
 from pkscreener.classes.PaperTradeTracker import PaperTradeTracker
 from pkscreener.classes.RiskGuardrails import LiveTradingGuardrails
 from pkscreener.classes.SignalPerformanceTracker import SignalPerformanceTracker
+from pkscreener.classes.TickFreshnessDiagnostics import TickFreshnessDiagnostics
 
 
 class SignalMonitorRunner:
@@ -436,6 +437,10 @@ class SignalMonitorRunner:
         # move together — when 2 light up, scan all 30 PHARMA stocks immediately).
         self._hot_sectors: Set[str] = set()
         self._hot_sectors_refreshed_at: Optional[datetime] = None
+        self._tick_freshness_diagnostics = TickFreshnessDiagnostics(self.output_dir)
+        self._diagnostic_live_tick_applied_symbols: Set[str] = set()
+        self._tick_diagnostic_context_cycle = ""
+        self._tick_diagnostic_context: Dict[str, Any] = {}
 
     def run(
         self,
@@ -556,7 +561,9 @@ class SignalMonitorRunner:
         )
         self._last_simple_df = merged_simple_df
         alerts_df = self._build_alerts(previous_state_df, merged_state_df)
+        self._record_tick_freshness_diagnostics(alerts_df, "signal_monitor")
         early_breakout_alerts_df = self._build_early_breakout_alerts(merged_simple_df)
+        self._record_tick_freshness_diagnostics(early_breakout_alerts_df, "early_breakout")
         if not early_breakout_alerts_df.empty:
             already_alerted = set(alerts_df["Symbol"].astype(str).str.upper()) if not alerts_df.empty else set()
             if already_alerted:
@@ -566,6 +573,7 @@ class SignalMonitorRunner:
             if not early_breakout_alerts_df.empty:
                 alerts_df = pd.concat([alerts_df, early_breakout_alerts_df], ignore_index=True)
         top_gainer_radar_df = self._build_top_gainer_radar_alerts(merged_simple_df)
+        self._record_tick_freshness_diagnostics(top_gainer_radar_df, "top_gainer_radar")
         if not top_gainer_radar_df.empty:
             already_alerted = set(alerts_df["Symbol"].astype(str).str.upper()) if not alerts_df.empty else set()
             if already_alerted:
@@ -654,6 +662,71 @@ class SignalMonitorRunner:
         )
         self._cycle_number += 1
         return report_df, merged_simple_df, alerts_df, summary_df
+
+    def _record_tick_freshness_diagnostics(
+        self,
+        candidates_df: Optional[pd.DataFrame],
+        lane: str,
+    ) -> None:
+        """Observe constructed candidates without mutating or filtering them."""
+        diagnostics = getattr(self, "_tick_freshness_diagnostics", None)
+        if (
+            diagnostics is None
+            or not diagnostics.enabled
+            or candidates_df is None
+            or candidates_df.empty
+        ):
+            return
+        try:
+            cycle_key = str(getattr(self, "run_at", ""))
+            if getattr(self, "_tick_diagnostic_context_cycle", "") != cycle_key:
+                self._tick_diagnostic_context = diagnostics.snapshot_context(self.output_dir, self.universe)
+                self._tick_diagnostic_context_cycle = cycle_key
+            snapshot_context = getattr(self, "_tick_diagnostic_context", {})
+            live_ticks = getattr(getattr(self, "actionable_runner", None), "live_ticks", None) or {}
+            applied_symbols = getattr(self, "_diagnostic_live_tick_applied_symbols", set())
+            for row in candidates_df.to_dict(orient="records"):
+                symbol = str(row.get("Symbol", "") or "").strip().upper()
+                tick = live_ticks.get(symbol, {}) if isinstance(live_ticks, dict) else {}
+                live_tick_applied = symbol in applied_symbols
+                evaluation_timestamp = row.get("LifecycleTimestamp")
+                try:
+                    has_lifecycle_timestamp = (
+                        evaluation_timestamp is not None
+                        and not pd.isna(evaluation_timestamp)
+                        and bool(str(evaluation_timestamp).strip())
+                    )
+                except (TypeError, ValueError):
+                    has_lifecycle_timestamp = False
+                if not has_lifecycle_timestamp:
+                    evaluation_timestamp = row.get("When")
+                try:
+                    has_evaluation_timestamp = (
+                        evaluation_timestamp is not None
+                        and not pd.isna(evaluation_timestamp)
+                        and bool(str(evaluation_timestamp).strip())
+                    )
+                except (TypeError, ValueError):
+                    has_evaluation_timestamp = False
+                if not has_evaluation_timestamp:
+                    evaluation_timestamp = self.run_at
+                diagnostics.record(
+                    evaluation_timestamp=evaluation_timestamp,
+                    cycle_timestamp=self.run_at,
+                    lane=lane,
+                    symbol=symbol,
+                    tick=tick,
+                    snapshot_context=snapshot_context,
+                    live_price_used=row.get("PriceNow"),
+                    live_tick_applied=live_tick_applied,
+                    report_cache_fallback=not live_tick_applied,
+                    candidate_result=row.get("NowAction"),
+                    lifecycle_observation_id=row.get("LifecycleObservationId"),
+                )
+        except Exception:
+            # The recorder is best-effort; even malformed diagnostic state must
+            # never escape into candidate generation or lifecycle processing.
+            return
 
     def _record_intraday_event_shadow(self) -> None:
         """Record shared-engine events without creating alerts or broker orders."""
@@ -1179,6 +1252,10 @@ class SignalMonitorRunner:
         state_df: pd.DataFrame,
     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """Refresh visible prices from the latest live ticks without forcing a full recompute."""
+        diagnostics = getattr(self, "_tick_freshness_diagnostics", None)
+        track_diagnostics = diagnostics is not None and diagnostics.enabled
+        if track_diagnostics:
+            self._diagnostic_live_tick_applied_symbols = set()
         live_ticks = self.actionable_runner.live_ticks or {}
         if not live_ticks:
             return simple_df, state_df
@@ -1195,6 +1272,8 @@ class SignalMonitorRunner:
                 live_price = self._to_float(tick.get("last_price"))
                 if live_price <= 0:
                     continue
+                if track_diagnostics:
+                    self._diagnostic_live_tick_applied_symbols.add(symbol)
                 refreshed_simple_df.loc[index, "Price Now"] = round(live_price, 2)
                 buy_above = self._to_float(refreshed_simple_df.loc[index].get("Buy Above"))
                 if buy_above > 0 and "Entry Gap %" in refreshed_simple_df.columns:
@@ -1218,6 +1297,8 @@ class SignalMonitorRunner:
                 live_price = self._to_float(tick.get("last_price"))
                 if live_price <= 0:
                     continue
+                if track_diagnostics:
+                    self._diagnostic_live_tick_applied_symbols.add(symbol)
                 refreshed_state_df.loc[index, "PriceNow"] = round(live_price, 2)
                 # Always use tick's 'close' as PrevClose — it is Kite's official
                 # previous-session close, which is more reliable than OHLCV iloc[-2]
