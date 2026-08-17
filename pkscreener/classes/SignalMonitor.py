@@ -445,6 +445,7 @@ class SignalMonitorRunner:
         self.run_at = PKDateUtilities.currentDateTime()
         self.run_at_str = self.run_at.strftime("%Y-%m-%d %H:%M:%S")
         self.timestamp = self.run_at.strftime("%Y%m%d_%H%M%S")
+
         symbols = self.actionable_runner.get_universe_symbols()
         if self.limit and self.limit > 0:
             symbols = symbols[: self.limit]
@@ -470,7 +471,16 @@ class SignalMonitorRunner:
 
         previous_state_df = self._load_previous_state()
         previous_simple_df = self._load_previous_simple()
-        cycle_symbols = self._select_symbols_for_cycle(symbols, previous_simple_df)
+        # Keep the monitor process alive for post-market bookkeeping, but do
+        # not select or build intraday candidates outside the half-open NSE
+        # candidate window.  Routing through the existing no-changed-cycle
+        # path preserves state/output/EOD maintenance and its downstream
+        # defense-in-depth gates.
+        cycle_symbols = (
+            self._select_symbols_for_cycle(symbols, previous_simple_df)
+            if self._is_intraday_candidate_window()
+            else []
+        )
         self._record_intraday_event_shadow()
         cycle_total = len(cycle_symbols)
         if cycle_total == 0:
@@ -5554,6 +5564,24 @@ class SignalMonitorRunner:
             pass
         minute_of_day = int(now_ist.hour) * 60 + int(now_ist.minute)
         return self.MARKET_OPEN_MINUTES_IST <= minute_of_day <= self.MARKET_CLOSE_MINUTES_IST
+
+    def _is_intraday_candidate_window(self) -> bool:
+        """Return whether intraday candidates may be evaluated right now.
+
+        Candidate generation deliberately uses a half-open close boundary:
+        15:30:00 IST is outside the intraday window even though the existing
+        downstream market-hours helper retains its inclusive semantics.
+        """
+        now_ist = getattr(self, "run_at", None)
+        if now_ist is None:
+            try:
+                now_ist = PKDateUtilities.currentDateTime()
+            except Exception:
+                now_ist = datetime.now()
+        if now_ist.weekday() >= 5:
+            return False
+        minute_of_day = int(now_ist.hour) * 60 + int(now_ist.minute)
+        return self.MARKET_OPEN_MINUTES_IST <= minute_of_day < self.MARKET_CLOSE_MINUTES_IST
 
     def _alert_source_label(self) -> str:
         return str(
