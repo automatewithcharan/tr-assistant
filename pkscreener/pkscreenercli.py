@@ -163,15 +163,13 @@ from time import sleep
 
 # ── Load .env.dev (or .env) so Kite/Discord secrets are available ──
 try:
-    from dotenv import load_dotenv as _load_dotenv
     import pathlib as _pathlib
+    from pkscreener.classes.EnvironmentLoader import (
+        load_repository_environment as _load_repository_environment,
+    )
+
     _repo_root = _pathlib.Path(__file__).resolve().parent.parent
-    _env_dev = _repo_root / ".env.dev"
-    _env_file = _repo_root / ".env"
-    if _env_dev.exists():
-        _load_dotenv(_env_dev, override=True)
-    elif _env_file.exists():
-        _load_dotenv(_env_file, override=True)
+    _load_repository_environment(_repo_root)
 except Exception:
     pass
 
