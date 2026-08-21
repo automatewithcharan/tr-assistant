@@ -43,6 +43,8 @@ from pkscreener.classes.TickFreshnessDiagnostics import TickFreshnessDiagnostics
 class SignalMonitorRunner:
     """Continuously monitor a universe and alert on fresh Buy Now / Sell Now changes."""
 
+    CANDIDATE_ARTIFACT_SCHEMA_VERSION = "signalmonitor-candidates-v1"
+
     FULL_REFRESH_EVERY_CYCLES = int(os.environ.get("SIGNALMONITOR_FULL_REFRESH_EVERY_CYCLES", "200") or 200)
     MEANINGFUL_PRICE_MOVE_PCT = 0.5   # Tick-to-tick price move threshold (lowered for faster pick-up)
     TRIGGER_PROXIMITY_PCT = 1.0
@@ -4213,6 +4215,13 @@ class SignalMonitorRunner:
         actionable_to_save = actionable_df.copy()
         report_to_save.drop(columns=["ActionRank", "NowActionRank"], inplace=True, errors="ignore")
         actionable_to_save.drop(columns=["ActionRank", "NowActionRank"], inplace=True, errors="ignore")
+        # This is the completed candidate-cohort serialization boundary. Capture
+        # one aware timestamp here and repeat it verbatim on every candidate row.
+        # Partial/in-progress outputs deliberately remain legacy-ineligible.
+        report_to_save = self._prepare_candidate_artifact(
+            report_to_save,
+            generated_at=PKDateUtilities.currentDateTime(),
+        )
         momentum_df = (
             self._build_momentum_board(simple_df)
             if not self.fast_mode
@@ -4252,6 +4261,69 @@ class SignalMonitorRunner:
             report_to_save, actionable_to_save, simple_df,
             momentum_df, state_df, alerts_df, summary_df,
         )
+
+    def _prepare_candidate_artifact(
+        self,
+        report_df: pd.DataFrame,
+        generated_at: datetime,
+    ) -> pd.DataFrame:
+        """Add immutable cohort-level provenance to a newly completed export.
+
+        Existing files are never read or upgraded here. A naive clock is rejected
+        rather than emitting an artifact that could be mistaken for prospective
+        evidence.
+        """
+        if generated_at.tzinfo is None or generated_at.utcoffset() is None:
+            raise ValueError("candidate_generated_at must be timezone-aware")
+
+        source_commit, source_dirty = self._candidate_source_revision()
+        artifact = report_df.copy()
+        artifact["candidate_generated_at"] = generated_at.isoformat(timespec="microseconds")
+        artifact["candidate_artifact_row_count"] = int(len(artifact.index))
+        artifact["candidate_artifact_schema_version"] = self.CANDIDATE_ARTIFACT_SCHEMA_VERSION
+        artifact["candidate_source_runtime_commit"] = source_commit
+        artifact["candidate_source_runtime_dirty"] = bool(source_dirty)
+        return artifact
+
+    def _candidate_source_revision(self) -> Tuple[str, bool]:
+        """Return the checked-out source revision and whether tracked files differ."""
+        cached = getattr(self, "_candidate_source_revision_cache", None)
+        if cached is not None:
+            return cached
+
+        repo_root = Path(__file__).resolve().parents[2]
+        source_commit = "UNKNOWN"
+        source_dirty = True
+        try:
+            revision = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            candidate = revision.stdout.strip()
+            if revision.returncode == 0 and len(candidate) == 40 and all(
+                character in "0123456789abcdefABCDEF" for character in candidate
+            ):
+                source_commit = candidate.lower()
+
+            status = subprocess.run(
+                ["git", "status", "--porcelain", "--untracked-files=no"],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if status.returncode == 0:
+                source_dirty = bool(status.stdout.strip())
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+        self._candidate_source_revision_cache = (source_commit, source_dirty)
+        return self._candidate_source_revision_cache
 
     def _maybe_write_daily_snapshot(
         self,
