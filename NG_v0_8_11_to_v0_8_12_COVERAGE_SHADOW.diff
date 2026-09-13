@@ -1,0 +1,357 @@
+--- NG_Entry_Assistant_v0_8_11_CORRECTNESS_ONLY.pine
++++ NG_Entry_Assistant_v0_8_12_COVERAGE_SHADOW.pine
+@@ -1,8 +1,8 @@
+ //@version=6
+-indicator("NG Entry Assistant v0.8.11", shorttitle="NG Entry v0.8.11", overlay=true, max_labels_count=160, max_lines_count=30)
++indicator("NG Entry Assistant v0.8.12", shorttitle="NG Entry v0.8.12", overlay=true, max_labels_count=160, max_lines_count=30)
+ 
+ // ============================================================================
+-// NG Entry Assistant v0.8.11 — FROZEN ACTIONS + LANE-E SHADOW STOP STUDY
++// NG Entry Assistant v0.8.12 — FROZEN ACTIONS + COVERAGE SHADOW STUDIES
+ //
+ // Lane A/B/C qualification logic preserves the v0.5 legacy core; v0.8.2 retains the operational safety guards:
+ //   good context -> strong expansion -> first controlled pullback
+@@ -104,6 +104,21 @@
+ // All lanes remain PAPER ONLY until independently validated on forward NSE data.
+ // ============================================================================
+ //
++// v0.8.12 OBSERVABILITY / SHADOW-ONLY RELEASE:
++//   • LIVE A/B/C/D/E qualification, BUY, SELL, stop, target, sizing, session,
++//     one-BUY/day and Lane-E policies remain frozen from v0.8.11.
++//   • Adds forward-only Lane-C0 research: when the EXISTING Lane-C momentum bar
++//     fully qualifies/arms, C0 hypothetically enters at that same confirmed close
++//     instead of waiting for the later continuation close. This never creates a
++//     live position or actionable BUY/SELL alert.
++//   • C0 measures fixed +1%/+2%/+3% research targets versus the same structural
++//     stop, plus MFE/MAE and time-to-target. These are measurement levels only.
++//   • Dashboard Why now exposes A/C/D coverage diagnostics during Fast Mover
++//     episodes instead of hiding Lane-C rejection behind a generic message.
++//   • Optional C coverage research alerts default OFF. No actionable alert
++//     qualification/frequency is changed.
++// ============================================================================
++//
+ // v0.8.11 CORRECTNESS-ONLY RELEASE:
+ //   • A/B/C/D historical READY trigger consumption now mirrors the confirmed
+ //     bullish-close policy; a historical wick above entry no longer consumes READY.
+@@ -242,6 +257,17 @@
+ int   E_STUDY_SHADOW_LOOKBACK   = 3
+ float E_STUDY_SHADOW_BUFFER_ATR = 0.15
+ 
++grpCStudy = "10. Lane C Coverage Shadow Study"
++enableC0ShadowStudy = input.bool(true, "Track same-bar confirmed Lane C shadow entry", group=grpCStudy,
++     tooltip="Measurement only. Starts only when the EXISTING Lane-C setup fully qualifies/arms on a realtime confirmed bar. C0 hypothetically enters at that qualifying close while live Lane C remains unchanged and still waits for its existing continuation trigger.")
++enableCCoverageResearchAlerts = input.bool(false, "Send Lane C coverage research alerts", group=grpCStudy,
++     tooltip="Default OFF. When enabled, emits diagnostic C-attempt and C0-result research messages. These are never actionable BUY/SELL signals.")
++
++// Preregistered C0 measurement levels. These are NOT live trading parameters.
++float C0_STUDY_T1_PCT = 1.0
++float C0_STUDY_T2_PCT = 2.0
++float C0_STUDY_T3_PCT = 3.0
++
+ // ─────────────────────────────────────────────────────────────────────────────
+ // FROZEN v0.2 hypothesis constants. Do not tune from screenshots.
+ // ─────────────────────────────────────────────────────────────────────────────
+@@ -314,7 +340,7 @@
+ // ─────────────────────────────────────────────────────────────────────────────
+ // Helpers
+ // ─────────────────────────────────────────────────────────────────────────────
+-const string BUILD_ID = "v0.8.11"
++const string BUILD_ID = "v0.8.12"
+ 
+ maxPositionValue = capital * maxPositionPct / 100.0
+ 
+@@ -1372,6 +1398,37 @@
+ varip string cLastRejectReason = "—"
+ varip int    cLastRejectBar    = na
+ varip bool   cLiveEngineStarted = false
++
++// Lane-C0 coverage study — FORWARD MEASUREMENT ONLY.
++// It is intentionally independent from cState after launch and can never set
++// cState, consume the symbol BUY slot, size a live trade, or emit an actionable
++// BUY/SELL. The study starts only from an EXISTING Lane-C fully-qualified arm.
++varip bool   c0StudyActive        = false
++varip bool   c0StudyDone          = false
++varip int    c0StudyEntryBar      = na
++varip int    c0StudyEntryTime     = na
++varip float  c0StudyEntry         = na
++varip float  c0StudyStop          = na
++varip float  c0StudyRisk          = na
++varip float  c0StudyQty           = na
++varip float  c0StudyT1            = na
++varip float  c0StudyT2            = na
++varip float  c0StudyT3            = na
++varip float  c0StudyHighest       = na
++varip float  c0StudyLowest        = na
++varip bool   c0StudyT1Hit         = false
++varip bool   c0StudyT2Hit         = false
++varip bool   c0StudyT3Hit         = false
++varip bool   c0StudyStopHit       = false
++varip int    c0StudyT1Time        = na
++varip int    c0StudyT2Time        = na
++varip int    c0StudyT3Time        = na
++varip int    c0StudyStopTime      = na
++varip string c0StudyEndReason     = "—"
++varip string c0StudyLastSummary   = "—"
++varip int    c0StudyResultEventBar = na
++varip int    cCoverageAlertBar    = na
++
+ bool cResetToScan = false
+ 
+ if not symbolBuySlotOpen and cState != 3 and (cState == 1 or cState == 2)
+@@ -1400,6 +1457,31 @@
+     cLastExitReason  := ""
+     cLastRejectReason := "—"
+     cLastRejectBar    := na
++    c0StudyActive         := false
++    c0StudyDone           := false
++    c0StudyEntryBar       := na
++    c0StudyEntryTime      := na
++    c0StudyEntry          := na
++    c0StudyStop           := na
++    c0StudyRisk           := na
++    c0StudyQty            := na
++    c0StudyT1             := na
++    c0StudyT2             := na
++    c0StudyT3             := na
++    c0StudyHighest        := na
++    c0StudyLowest         := na
++    c0StudyT1Hit          := false
++    c0StudyT2Hit          := false
++    c0StudyT3Hit          := false
++    c0StudyStopHit        := false
++    c0StudyT1Time         := na
++    c0StudyT2Time         := na
++    c0StudyT3Time         := na
++    c0StudyStopTime       := na
++    c0StudyEndReason      := "—"
++    c0StudyLastSummary    := "—"
++    c0StudyResultEventBar := na
++    cCoverageAlertBar     := na
+ 
+ if (cState == 4 or cState == -1) and not na(cTerminalBar) and bar_index - cTerminalBar >= terminalCooldownBars
+     cResetToScan := true
+@@ -1478,6 +1560,40 @@
+     if cRiskOk and cRoomOk
+         cLastRejectReason := "QUALIFIED / ARMED"
+         cLastRejectBar    := bar_index
++
++        // C0 research launch: same EXISTING qualification, different timing only.
++        // Forward-only so the 1/2/3% vs stop event order is observed tick-by-tick,
++        // not inferred from historical OHLC ordering.
++        if enableC0ShadowStudy and barstate.isrealtime and not c0StudyActive
++            float c0EntryCandidate = close
++            float c0RiskCandidate  = c0EntryCandidate - cStopCandidate
++            float c0QtyCandidate   = calcQty(c0EntryCandidate, cStopCandidate)
++            if c0RiskCandidate > 0 and c0QtyCandidate >= 1
++                c0StudyActive         := true
++                c0StudyDone           := false
++                c0StudyEntryBar       := bar_index
++                c0StudyEntryTime      := time_close
++                c0StudyEntry          := c0EntryCandidate
++                c0StudyStop           := cStopCandidate
++                c0StudyRisk           := c0RiskCandidate
++                c0StudyQty            := c0QtyCandidate
++                c0StudyT1             := c0StudyEntry * (1.0 + C0_STUDY_T1_PCT / 100.0)
++                c0StudyT2             := c0StudyEntry * (1.0 + C0_STUDY_T2_PCT / 100.0)
++                c0StudyT3             := c0StudyEntry * (1.0 + C0_STUDY_T3_PCT / 100.0)
++                c0StudyHighest        := c0StudyEntry
++                c0StudyLowest         := c0StudyEntry
++                c0StudyT1Hit          := false
++                c0StudyT2Hit          := false
++                c0StudyT3Hit          := false
++                c0StudyStopHit        := false
++                c0StudyT1Time         := na
++                c0StudyT2Time         := na
++                c0StudyT3Time         := na
++                c0StudyStopTime       := na
++                c0StudyEndReason      := "RUNNING"
++                c0StudyLastSummary    := "RUNNING"
++                c0StudyResultEventBar := na
++
+         cState          := 2
+         cReadyToday    += 1
+         cLevelName      := cCandidateName
+@@ -1503,6 +1619,37 @@
+     else
+         cLastRejectReason := not cRiskOk ? "Risk > 0.90 ATR" : "Not enough room to resistance"
+         cLastRejectBar    := bar_index
++
++// Optional confirmed Fast-Mover coverage telemetry. Research only; OFF by
++// default. This deliberately probes bars that fail before cAttemptBar too, so
++// "no breakout", candle quality, context and extension misses are measurable.
++bool cCoverageProbeBar = barstate.isconfirmed and entryWindowOpen and fastMoverCore
++if enablePineAlerts and enableCCoverageResearchAlerts and barstate.isrealtime and cCoverageProbeBar and (na(cCoverageAlertBar) or cCoverageAlertBar != bar_index)
++    string cCoverageOutcome = cState == 2 and cReadyBar == bar_index ? "ARMED" :
++         not contextGood ? "CONTEXT BLOCK" :
++         close <= open ? "Need bullish close" :
++         na(priorHigh) or close <= priorHigh ? "No 8-bar breakout" :
++         na(atr) or atr <= 0 ? "ATR unavailable" :
++         barRange < atr * C_MIN_RANGE_ATR ? "Range < 1.0 ATR" :
++         bodyFraction < C_MIN_BODY_FRACTION ? "Body < 65%" :
++         closePosition < C_MIN_CLOSE_POSITION ? "Close < top 25%" :
++         na(completedBarVolRatio) or completedBarVolRatio < C_MIN_VOLUME_RATIO ? "Volume < 2.0x" :
++         na(rsSpreadPct) or rsSpreadPct < C_MIN_RS_PCT ? "Intraday RS < 1.0%" :
++         na(cEmaExtensionAtr) or cEmaExtensionAtr > C_MAX_CLOSE_ABOVE_EMA_ATR ? "Too extended from EMA" :
++         not na(cLastRejectBar) and cLastRejectBar == bar_index ? cLastRejectReason : "Momentum passed / arm blocked"
++    alert("NG RESEARCH C COVERAGE | " + syminfo.ticker +
++          " | Outcome " + cCoverageOutcome +
++          " | ExtEMA " + (na(cEmaExtensionAtr) ? "—" : str.tostring(cEmaExtensionAtr, "#.##") + "ATR") +
++          " | Range " + (na(atr) or atr <= 0 ? "—" : str.tostring(barRange / atr, "#.##") + "ATR") +
++          " | Body " + str.tostring(bodyFraction * 100.0, "#.#") + "%" +
++          " | ClosePos " + str.tostring(closePosition * 100.0, "#.#") + "%" +
++          " | Vol " + (na(completedBarVolRatio) ? "—" : str.tostring(completedBarVolRatio, "#.##") + "x") +
++          " | IntraRS " + (na(rsSpreadPct) ? "—" : str.tostring(rsSpreadPct, "#.##") + "%") +
++          " | AState " + str.tostring(autoState) +
++          " | DState " + str.tostring(dState) +
++          actionMeta("RESEARCH_C_COVERAGE", time),
++          alert.freq_all)
++    cCoverageAlertBar := bar_index
+ 
+ // Same fresh-load protection as the other lanes.
+ if barstate.isrealtime and not cLiveEngineStarted
+@@ -1669,6 +1816,81 @@
+     cTerminalBar     := na
+     cLastExitReason  := ""
+ 
++// Lane-C0 coverage tracker — MEASUREMENT ONLY.
++// The qualifying bar itself is excluded because the shadow entry is its close;
++// only subsequent realtime ticks can hit the research stop/targets.
++if enableC0ShadowStudy and c0StudyActive and barstate.isrealtime
++    bool c0PostEntry = not na(c0StudyEntryBar) and bar_index > c0StudyEntryBar
++
++    if c0PostEntry
++        c0StudyHighest := na(c0StudyHighest) ? close : math.max(c0StudyHighest, close)
++        c0StudyLowest  := na(c0StudyLowest)  ? close : math.min(c0StudyLowest, close)
++
++        if not c0StudyT1Hit and not na(c0StudyT1) and close >= c0StudyT1
++            c0StudyT1Hit  := true
++            c0StudyT1Time := timenow
++
++        if not c0StudyT2Hit and not na(c0StudyT2) and close >= c0StudyT2
++            c0StudyT2Hit  := true
++            c0StudyT2Time := timenow
++
++        if not c0StudyT3Hit and not na(c0StudyT3) and close >= c0StudyT3
++            c0StudyT3Hit  := true
++            c0StudyT3Time := timenow
++
++        if not c0StudyStopHit and not na(c0StudyStop) and close <= c0StudyStop
++            c0StudyStopHit  := true
++            c0StudyStopTime := timenow
++
++    bool c0FinishStop = c0PostEntry and c0StudyStopHit
++    bool c0FinishT3   = c0PostEntry and c0StudyT3Hit
++    bool c0FinishEod  = forceExitNow
++
++    if (c0FinishStop or c0FinishT3 or c0FinishEod) and (na(c0StudyResultEventBar) or c0StudyResultEventBar != bar_index)
++        float c0MfePct = not na(c0StudyHighest) and c0StudyEntry > 0 ? (c0StudyHighest / c0StudyEntry - 1.0) * 100.0 : na
++        float c0MaePct = not na(c0StudyLowest) and c0StudyEntry > 0 ? (c0StudyLowest / c0StudyEntry - 1.0) * 100.0 : na
++        float c0StopPct = c0StudyEntry > 0 and not na(c0StudyStop) ? (c0StudyStop / c0StudyEntry - 1.0) * 100.0 : na
++        float c0T1Min = not na(c0StudyT1Time) and not na(c0StudyEntryTime) ? (c0StudyT1Time - c0StudyEntryTime) / 60000.0 : na
++        float c0T2Min = not na(c0StudyT2Time) and not na(c0StudyEntryTime) ? (c0StudyT2Time - c0StudyEntryTime) / 60000.0 : na
++        float c0T3Min = not na(c0StudyT3Time) and not na(c0StudyEntryTime) ? (c0StudyT3Time - c0StudyEntryTime) / 60000.0 : na
++        bool c0T1BeforeStop = c0StudyT1Hit and (not c0StudyStopHit or c0StudyT1Time < c0StudyStopTime)
++        bool c0T2BeforeStop = c0StudyT2Hit and (not c0StudyStopHit or c0StudyT2Time < c0StudyStopTime)
++        bool c0T3BeforeStop = c0StudyT3Hit and (not c0StudyStopHit or c0StudyT3Time < c0StudyStopTime)
++
++        c0StudyEndReason := c0FinishStop ? "STOP" : c0FinishT3 ? "+3%" : "EOD"
++        c0StudyLastSummary := "End " + c0StudyEndReason +
++             " | +1 " + (c0T1BeforeStop ? "YES" : "NO") +
++             " | +2 " + (c0T2BeforeStop ? "YES" : "NO") +
++             " | +3 " + (c0T3BeforeStop ? "YES" : "NO")
++        c0StudyResultEventBar := bar_index
++        c0StudyDone   := true
++        c0StudyActive := false
++
++        if enablePineAlerts and enableCCoverageResearchAlerts
++            alert("NG RESEARCH C0 RESULT | " + syminfo.ticker +
++                  " | Entry " + str.tostring(c0StudyEntry, format.mintick) +
++                  " | Stop " + str.tostring(c0StudyStop, format.mintick) +
++                  " | StopPct " + (na(c0StopPct) ? "—" : str.tostring(c0StopPct, "#.##") + "%") +
++                  " | Qty " + (na(c0StudyQty) ? "—" : str.tostring(c0StudyQty, "#")) +
++                  " | End " + c0StudyEndReason +
++                  " | T1BeforeStop " + (c0T1BeforeStop ? "YES" : "NO") +
++                  " | T2BeforeStop " + (c0T2BeforeStop ? "YES" : "NO") +
++                  " | T3BeforeStop " + (c0T3BeforeStop ? "YES" : "NO") +
++                  " | T1Min " + (na(c0T1Min) ? "—" : str.tostring(c0T1Min, "#.#")) +
++                  " | T2Min " + (na(c0T2Min) ? "—" : str.tostring(c0T2Min, "#.#")) +
++                  " | T3Min " + (na(c0T3Min) ? "—" : str.tostring(c0T3Min, "#.#")) +
++                  " | MFE " + (na(c0MfePct) ? "—" : str.tostring(c0MfePct, "#.##") + "%") +
++                  " | MAE " + (na(c0MaePct) ? "—" : str.tostring(c0MaePct, "#.##") + "%") +
++                  actionMeta("RESEARCH_C0_RESULT", time),
++                  alert.freq_all)
++
++// Hidden research levels for Data Window inspection only.
++plot(enableC0ShadowStudy and (c0StudyActive or c0StudyDone) ? c0StudyEntry : na, title="C0 Study Entry", color=color.new(color.blue, 100), display=display.data_window)
++plot(enableC0ShadowStudy and (c0StudyActive or c0StudyDone) ? c0StudyStop  : na, title="C0 Study Stop",  color=color.new(color.red, 100), display=display.data_window)
++plot(enableC0ShadowStudy and (c0StudyActive or c0StudyDone) ? c0StudyT1    : na, title="C0 Study +1%",   color=color.new(color.green, 100), display=display.data_window)
++plot(enableC0ShadowStudy and (c0StudyActive or c0StudyDone) ? c0StudyT2    : na, title="C0 Study +2%",   color=color.new(color.green, 100), display=display.data_window)
++plot(enableC0ShadowStudy and (c0StudyActive or c0StudyDone) ? c0StudyT3    : na, title="C0 Study +3%",   color=color.new(color.green, 100), display=display.data_window)
++
+ // ─────────────────────────────────────────────────────────────────────────────
+ // Lane D — Opening Drive / Fast Mover continuation
+ // State: 0 scan, 1 impulse found/wait micro-pause, 2 ready, 3 in trade,
+@@ -1696,6 +1918,7 @@
+ varip int    dTerminalBar      = na
+ varip string dLastExitReason   = ""
+ varip string dLastRejectReason = "—"
++varip int    dLastRejectBar    = na
+ varip bool   dLiveEngineStarted = false
+ bool dResetToScan = false
+ 
+@@ -1726,6 +1949,7 @@
+     dTerminalBar      := na
+     dLastExitReason   := ""
+     dLastRejectReason := "—"
++    dLastRejectBar    := na
+ 
+ // Parallel monitoring: Lane D may form while legacy A/B/C are WAITING or READY.
+ // The one-position rule still guarantees only one live paper trade. A/B/C are
+@@ -1759,6 +1983,7 @@
+          closePosition < D_MIN_IMPULSE_CLOSE_POSITION ? "Impulse close weak" :
+          na(completedBarVolRatio) or completedBarVolRatio < D_MIN_COMPLETED_VOL_RATIO ? "Completed vol < 1.5x" :
+          "Impulse passed"
++    dLastRejectBar := bar_index
+ 
+ if dState == 0 and symbolBuySlotOpen and autoState != 3 and bState != 3 and cState != 3 and eState != 3 and dImpulseQuality
+     dState            := 1
+@@ -2814,6 +3039,16 @@
+      not sessionVolImpulseOk ? "E: wait session vol impulse" :
+      not eContextStrong ? "E: wait price/RS context" : "E: arm PB/base"
+ 
++// Coverage diagnostics are DISPLAY ONLY. Prefer the finalized remembered C/D
++// reason for a recent confirmed attempt so a forming next bar cannot hide why
++// the prior momentum bar failed. A uses its actual current state/blocker.
++string aCoverageDiag = autoState != 0 ? "A " + aStage : aBlocker
++string cCoverageDiag = cState != 0 ? "C " + cStage :
++     not na(cLastRejectBar) and bar_index - cLastRejectBar <= 2 ? "C: " + cLastRejectReason : cBlocker
++string dCoverageDiag = dState != 0 ? "D " + dStage :
++     not na(dLastRejectBar) and bar_index - dLastRejectBar <= 2 ? "D: " + dLastRejectReason : "D SCAN"
++string fastCoverageWhy = aCoverageDiag + " | " + cCoverageDiag + " | " + dCoverageDiag
++
+ string actionTxt = not isFiveMinute ? "NO TRADE" :
+      anySellNow ? "SELL NOW" :
+      anyBuyNow ? "BUY NOW" :
+@@ -2834,11 +3069,11 @@
+      cState == 2 ? "C ready: momentum trigger" :
+      dState == 2 ? "D ready: micro-PB trigger" :
+      eState == 1 ? eBlocker :
++     fastMoverCore and eWindowOpen ? "E seeks PB/base | " + cCoverageDiag :
++     fastMoverCore ? fastCoverageWhy :
+      autoState == 1 ? "A: waiting controlled PB" :
+      bState == 1 ? "B: waiting accept/retest" :
+      dState == 1 ? "D: waiting micro-PB" :
+-     fastMoverCore and eWindowOpen ? "Fast mover: E seeks new PB/base" :
+-     fastMoverCore ? "Fast mover: A/C/D evaluating" :
+      cBlocker != "CONTEXT OK" ? cBlocker : aBlocker
+ 
+ color actionBg = anySellNow ? badBg : anyBuyNow ? goodBg : anyInTrade ? goodBg : anyReady ? blueBg : anyWaiting or fastMoverCore ? warnBg : neutralBg
+@@ -2863,7 +3098,7 @@
+         string takeTxt = focusLane == 0 ? "—" : str.tostring(rrMultiple, "#.##") + "R " + fmtPx(focusTarget) + " | Q " + (na(focusPaperQty) ? "—" : str.tostring(focusPaperQty, "#"))
+         string riskTxt = focusLane == 0 or na(focusEffectiveRisk) ? "₹" + str.tostring(riskBudget, "#") + " max | ₹" + str.tostring(maxPositionValue, "#") + " cap" : "Risk ₹" + str.tostring(focusEffectiveRisk, "#") + " | Cap ₹" + str.tostring(maxPositionValue, "#")
+ 
+-        table.cell(dash, 0, 0, "NG v0.8.11", text_color=color.white, bgcolor=color.new(color.blue, 45), text_size=size.small)
++        table.cell(dash, 0, 0, "NG v0.8.12", text_color=color.white, bgcolor=color.new(color.blue, 45), text_size=size.small)
+         table.cell(dash, 1, 0, "PAPER • ACTION", text_color=color.white, bgcolor=color.new(color.blue, 45), text_size=size.small)
+         table.cell(dash, 0, 1, "Context", text_color=color.white, text_size=size.small)
+         table.cell(dash, 1, 1, ctxTxt, text_color=color.white, bgcolor=ctxBg, text_size=size.small)

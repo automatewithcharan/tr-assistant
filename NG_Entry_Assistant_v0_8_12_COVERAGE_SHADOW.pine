@@ -1,0 +1,3128 @@
+//@version=6
+indicator("NG Entry Assistant v0.8.12", shorttitle="NG Entry v0.8.12", overlay=true, max_labels_count=160, max_lines_count=30)
+
+// ============================================================================
+// NG Entry Assistant v0.8.12 — FROZEN ACTIONS + COVERAGE SHADOW STUDIES
+//
+// Lane A/B/C qualification logic preserves the v0.5 legacy core; v0.8.2 retains the operational safety guards:
+//   good context -> strong expansion -> first controlled pullback
+//   -> trigger -> PAPER BUY -> structural stop -> first R partial -> structural runner -> PAPER SELL
+//
+// Lane B is a NEW, separately tracked hypothesis:
+//   good context -> break above PDH/PWH -> acceptance/retest above that level
+//   -> trigger -> PAPER BUY -> structural stop -> first R partial -> structural runner -> PAPER SELL
+//
+// Lane B exists to test an opportunity family v0.2.1 could not cover.
+// It does NOT loosen or rewrite Lane A after seeing winners.
+//
+// Lane C is a NEW, separately tracked hypothesis:
+//   good context -> confirmed high-quality momentum expansion -> immediate
+//   continuation through the expansion high WITHOUT requiring a pullback
+//   -> PAPER BUY -> structural continuation stop -> first R partial -> structural runner -> PAPER SELL
+//
+// Lane C exists to test no-pullback momentum moves such as the coverage gap
+// observed in forward chart review. It does NOT loosen Lane A or Lane B.
+// Lane D adds a controlled Opening Drive / Fast Mover continuation:
+//   exceptional day strength + relative strength + abnormal volume + trend
+//   -> brief micro-pause -> break of pause high -> PAPER BUY.
+//
+// v0.8.8 keeps A/B/C/D frozen and hardens the Lane-E late-arrival hypothesis:
+//   • Lane E = post-10:30 late-arrival / second-leg re-acceleration. It never
+//     replays an old historical BUY. It starts from the first realtime bar seen
+//     by this script instance, waits for a NEW controlled pullback/base, and only
+//     buys a NEW local continuation trigger formed after that live start.
+//   • Lane E now remembers abnormal volume already demonstrated earlier in the
+//     CURRENT SESSION. It no longer requires the most recent/current bar to stay
+//     >=2x volume after the stock has already proved participation.
+//   • Pullback/base volume must be quieter than the remembered session impulse.
+//     At the new breakout, renewed volume versus the pullback is recorded as a
+//     quality diagnostic, not a hard veto. This matches the practitioner gene:
+//     expansion strong -> retracement quieter -> participation returns.
+//   • A/B/C/D volume gates remain byte-for-byte logically unchanged. No RSI,
+//     MACD, FVG or extra indicator cocktail is added merely because Plus allows it.
+//   • The compact 14-row dashboard now shows CURRENT pace and MOVER-QUALIFIED session volume
+//     memory separately so a 1.1x current bar cannot hide an earlier 5x impulse.
+//   • Session clock selection remains hardened: use wall clock only while timenow
+//     is genuinely inside the active candle; otherwise use that bar's close time.
+//
+// v0.8.6 preserves the frozen A/B/C/D BUY qualification rules while changing only sizing/exit management and dashboard clarity:
+//   • BUY/SELL alerts only by default; WATCH/READY/MISSED alert() messages are suppressed by a master switch;
+//   • v0.8.9 ACTION HARDENING: BUY requires a confirmed bullish 5m close through the trigger; intrabar wick/touch cannot buy;
+//   • v0.8.9 DE-DUP: default maximum one BUY per symbol per day across all lanes; protective SELL remains realtime;
+//   • opportunity/watch state still runs internally and remains visible on the dashboard;
+//   • account-capital default is ₹5,00,000 with a configurable 15% per-stock cap;
+//   • initial risk budget remains ₹500; sizing uses the smaller of risk-size and position-cap-size;
+//   • +2R is the first profit-take, not a mandatory full exit; a runner remains when quantity allows;
+//   • the runner is protected at breakeven after partial and trails completed-bar structure;
+//   • only backup BUY/SELL alertcondition() choices are exposed.
+//
+// Original opportunity-coverage behavior retained internally:
+//   • FAST MOVER informational alerts default ON so strong leaders are surfaced early;
+//   • one-shot SETUP READY alerts fire when A/B/C/D becomes armed;
+//   • a separate BREAKOUT / WATCH notification surfaces accepted 8-bar breakouts that
+//     have context + meaningful volume evidence even when they do not fit a BUY lane;
+//   • BREAKOUT / WATCH is informational only. It never creates a paper position;
+//   • existing BUY qualification, stop, target, no-chase and one-position rules stay unchanged.
+//
+// Audited reliability patch:
+//   • confirmed WATCH breakouts are allowed even while Fast Mover remains active;
+//   • only a same-update FAST MOVER event suppresses the duplicate breakout WATCH;
+//   • one-shot state/event guards own de-duplication, so informational alert() calls use
+//     alert.freq_all and cannot suppress another valid event later in the same 5m bar;
+//   • dashboard colors now distinguish positive RS from Fast-Mover-threshold RS;
+//   • volume color explicitly represents the Fast-Mover volume gate;
+//   • Lane D blocker now reports every actual impulse requirement instead of saying
+//     "qualifying" before range/body/close/current-bar-volume have passed.
+//
+// v0.8.4 adds diagnostics without changing trade qualification:
+//   • optional one-shot alert() pipeline self-test for temporary wiring verification;
+//   • named backup BUY/SELL alertcondition() conditions for independent diagnosis;
+//   • production BUY/SELL alert() calls remain permanently enabled internally;
+//   • no rollback to planned-fill sizing or long MISSED cooldowns.
+//
+// v0.8.3 keeps the actionable-alert model and preserves v0.5 Lane A/B/C qualification behavior:
+//   • actionable BUY/SELL alert code is always ON internally; it cannot be accidentally disabled by a saved input;
+//   • MISSED/no-chase events no longer impose the same cooldown as a real trade exit;
+//   • per-lane daily READY/BUY/REJECT counters make silent signal suppression visible;
+//   • the dashboard explicitly shows realtime/entry-window alert readiness.
+//
+// v0.8.2 behavior retained:
+//   • Lane A/B/C no longer use the new liquidity filter as a qualification gate;
+//   • Lane D may MONITOR in parallel with WAITING/READY legacy setups; the first valid trigger wins;
+//   • If two lanes trigger on the same realtime update, earlier legacy A/B/C evaluation wins;
+//   • Lane A remembers its latest expansion, pullback check and historical outcome for diagnostics;
+//   • BUY/SELL notifications remain ON by default;
+//   • dashboard wording says AUTO MONITORING rather than telling the user to WATCH.
+//
+// v0.7 safety improvements retained:
+//   • soft VWAP tolerance for FAST MOVER discovery and Lane D setup formation,
+//     while optionally requiring an actual VWAP reclaim before BUY;
+//   • safer live-volume gating so a few seconds of volume cannot falsely look huge;
+//   • repeatable watch episodes (capped per day) instead of one irreversible watch;
+//   • liquidity and extension guards for more realistic execution;
+//   • clearer VWAP/liquidity diagnostics and configurable dashboard position.
+// All lanes remain PAPER ONLY until independently validated on forward NSE data.
+// ============================================================================
+//
+// v0.8.12 OBSERVABILITY / SHADOW-ONLY RELEASE:
+//   • LIVE A/B/C/D/E qualification, BUY, SELL, stop, target, sizing, session,
+//     one-BUY/day and Lane-E policies remain frozen from v0.8.11.
+//   • Adds forward-only Lane-C0 research: when the EXISTING Lane-C momentum bar
+//     fully qualifies/arms, C0 hypothetically enters at that same confirmed close
+//     instead of waiting for the later continuation close. This never creates a
+//     live position or actionable BUY/SELL alert.
+//   • C0 measures fixed +1%/+2%/+3% research targets versus the same structural
+//     stop, plus MFE/MAE and time-to-target. These are measurement levels only.
+//   • Dashboard Why now exposes A/C/D coverage diagnostics during Fast Mover
+//     episodes instead of hiding Lane-C rejection behind a generic message.
+//   • Optional C coverage research alerts default OFF. No actionable alert
+//     qualification/frequency is changed.
+// ============================================================================
+//
+// v0.8.11 CORRECTNESS-ONLY RELEASE:
+//   • A/B/C/D historical READY trigger consumption now mirrors the confirmed
+//     bullish-close policy; a historical wick above entry no longer consumes READY.
+//   • Protective STOP retains first priority; mandatory EOD force-exit now precedes
+//     any new ordinary first-profit-take/partial event.
+//   • Daily var/varip resets are one-shot on the first execution of the new-day bar.
+//   • Actionable BUY/SELL alert() messages include static build/event/time metadata.
+//   • No thresholds, entry geometry, risk math, Lane-E policy, session windows,
+//     one-BUY/day count, realtime protective stops, or research hypotheses changed.
+// ============================================================================
+//
+// v0.8.10 RESEARCH INSTRUMENTATION ONLY:
+//   • The v0.8.9 actionable BUY/SELL predicates, A/B/C/D/E setup logic, actual
+//     stops, sizing, partial take and runner management are intentionally frozen.
+//   • Every LIVE Lane-E BUY starts a parallel shadow-stop study. Stop A is the
+//     actual v0.8.9 stop. Stop B is a wider, NON-TRADING research stop built from
+//     the lowest low of the prior 3 completed 5m bars minus a fixed 0.15 ATR buffer.
+//   • The study tracks first stop/2R event for A and B, A-stop-then-recovery-to-2R,
+//     MFE/MAE, +15m/+30m close outcomes and the 15:20 research mark.
+//   • Stop B NEVER changes an order, alert quantity, actual stop, target or runner.
+//   • Optional NG RESEARCH RESULT alert is OFF by default, preserving BUY/SELL-only
+//     phone behavior. Enable it only when deliberately collecting study logs.
+// ============================================================================
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Inputs
+// ─────────────────────────────────────────────────────────────────────────────
+grpContext = "1. Context"
+benchSym   = input.symbol("NSE:NIFTY", "Benchmark for intraday RS", group=grpContext)
+emaLen     = input.int(20, "EMA length", minval=2, group=grpContext)
+volLen     = input.int(20, "Volume baseline length", minval=2, group=grpContext)
+showPD     = input.bool(true, "Show previous-day high/low", group=grpContext)
+showPW     = input.bool(true, "Show previous-week high/low", group=grpContext)
+showVWAP   = input.bool(true, "Show session VWAP", group=grpContext)
+showEMA    = input.bool(true, "Show EMA", group=grpContext)
+showSetupGeometry = input.bool(true, "Show current setup entry/stop/target", group=grpContext)
+
+grpRisk    = "2. Paper Risk"
+rrMultiple = input.float(2.0, "First profit-take R", minval=1.0, step=0.25, group=grpRisk,
+     tooltip="This is no longer a hard full-exit target. At this R multiple the script takes a partial profit and keeps a runner when quantity allows.")
+capital    = input.float(500000.0, "Account capital (₹)", minval=0, step=1000, group=grpRisk,
+     tooltip="Account reference only. Each TradingView chart is independent and cannot see positions on other symbols.")
+maxPositionPct = input.float(15.0, "Max capital in one stock (%)", minval=1.0, maxval=100.0, step=1.0, group=grpRisk,
+     tooltip="Default 15% means a ₹5L account may use at most about ₹75,000 in one stock. This prevents a tiny stop from concentrating most of the account in one name.")
+riskBudget = input.float(500.0, "Max paper risk per trade (₹)", minval=0, step=50, group=grpRisk,
+     tooltip="Maximum planned initial loss if the structural stop fills near its level. Position sizing also respects the per-stock capital cap.")
+partialExitPct = input.float(50.0, "Sell at first profit-take (%)", minval=10.0, maxval=90.0, step=5.0, group=grpRisk,
+     tooltip="Default 50%: at the first profit-take level, bank half and keep the rest as a runner. If only one share fits, the position exits fully at the first profit-take.")
+enableRunnerTrail = input.bool(true, "Trail the runner after partial", group=grpRisk,
+     tooltip="After the partial, the remaining position's stop is raised to at least breakeven and may trail below the lowest low of recent completed 5m bars.")
+runnerLookbackBars = input.int(3, "Runner structural-low lookback bars", minval=2, maxval=8, group=grpRisk,
+     tooltip="Uses completed bars only. A 3-bar lookback gives the runner room while still ratcheting risk upward as the trend advances.")
+runnerStopBufferAtr = input.float(0.05, "Runner stop buffer (ATR)", minval=0.0, maxval=0.50, step=0.05, group=grpRisk)
+
+grpAlerts        = "3. Alerts"
+actionAlertsOnly = input.bool(true, "BUY/SELL alerts only", group=grpAlerts,
+     tooltip="When ON, only NG PAPER BUY NOW and NG PAPER SELL NOW alert() messages are sent. WATCH, BREAKOUT, SETUP READY and MISSED messages remain dashboard/internal states only.")
+// Actionable BUY/SELL alert calls are intentionally always enabled in code.
+// If a user does not want alerts, they simply do not create a TradingView alert.
+// This removes a hidden saved-input failure mode where a valid BUY could occur
+// while alert() was silently disabled inside the server-side script snapshot.
+bool enablePineAlerts = true
+enableFastMoverWatch = input.bool(true, "Send informational FAST MOVER alerts", group=grpAlerts,
+     tooltip="Only applies when BUY/SELL alerts only is OFF. Informational only: this is NOT a BUY signal.")
+enableSetupReadyAlerts = input.bool(true, "Send SETUP READY alerts", group=grpAlerts,
+     tooltip="Only applies when BUY/SELL alerts only is OFF. Sends one informational alert when Lane A/B/C/D/E becomes READY. The later PAPER BUY alert still requires the lane trigger.")
+enableBreakoutWatch = input.bool(true, "Send BREAKOUT / WATCH opportunity alerts", group=grpAlerts,
+     tooltip="Only applies when BUY/SELL alerts only is OFF. Surfaces a confirmed fresh 8-bar breakout with valid trend/RS context and meaningful volume evidence even if no BUY lane qualifies. Informational only; never enters a paper trade.")
+BREAKOUT_WATCH_MAX_DAY = input.int(3, "Maximum BREAKOUT / WATCH alerts per day", minval=1, maxval=10, group=grpAlerts)
+BREAKOUT_WATCH_REARM_BARS = input.int(2, "Rearm BREAKOUT / WATCH after N non-candidate bars", minval=1, maxval=12, group=grpAlerts)
+enableMissedAlerts = input.bool(false, "Send informational MISSED / NO-CHASE alerts", group=grpAlerts,
+     tooltip="Default OFF. These messages are diagnostic only and do not require an action.")
+enableAlertSelfTest = input.bool(false, "TEMP: one-shot alert pipeline self-test", group=grpAlerts,
+     tooltip="Diagnostic only and suppressed while BUY/SELL alerts only is ON. To test wiring, temporarily turn BUY/SELL alerts only OFF, enable this, and use a temporary Any alert() function call alert.")
+
+grpFast = "4. Fast Mover / Opening Drive"
+enableLaneD          = input.bool(true, "Enable Lane D Opening Drive", group=grpFast)
+FAST_MIN_DAY_PCT     = input.float(4.0, "Fast mover: minimum day change %", minval=0.5, step=0.5, group=grpFast)
+FAST_MIN_DAY_RS_PCT  = input.float(3.0, "Fast mover: minimum day RS vs benchmark %", minval=0.0, step=0.5, group=grpFast)
+FAST_MIN_INTRADAY_RS = input.float(0.5, "Fast mover: minimum intraday RS from open %", minval=-2.0, step=0.25, group=grpFast)
+FAST_MIN_VOL_PACE    = input.float(2.0, "Fast mover: minimum volume strength", minval=0.5, step=0.25, group=grpFast,
+     tooltip="Uses a recent completed-bar volume burst and, after enough of the live bar has elapsed, live volume pace.")
+FAST_MIN_LIVE_SECONDS  = input.int(60, "Fast mover: ignore live-bar pace for first N seconds", minval=0, maxval=240, step=15, group=grpFast)
+FAST_VWAP_TOL_ATR      = input.float(0.20, "Fast-mover VWAP tolerance (ATR)", minval=0.0, maxval=1.0, step=0.05, group=grpFast,
+     tooltip="Fast Mover/Lane D may stay valid slightly below VWAP by this ATR amount. This does not automatically authorize a BUY below VWAP.")
+D_REQUIRE_VWAP_RECLAIM = input.bool(true, "Lane D: require price back above VWAP at BUY", group=grpFast,
+     tooltip="Recommended ON. Setup formation can tolerate a shallow VWAP dip, but the actual Lane D BUY waits for price to reclaim VWAP.")
+D_MAX_EXTENSION_ATR    = input.float(3.0, "Lane D: maximum entry extension above EMA (ATR)", minval=1.0, maxval=6.0, step=0.25, group=grpFast,
+     tooltip="Prevents late opening-drive entries after price becomes excessively stretched above its EMA.")
+FAST_MAX_WATCHES_DAY   = input.int(2, "Maximum fast-mover episodes tracked per day", minval=1, maxval=5, group=grpFast)
+FAST_REARM_BARS        = input.int(3, "Rearm fast-mover episode after N non-qualifying bars", minval=1, maxval=12, group=grpFast)
+D_END_HOUR           = input.int(10, "Lane D end hour (IST)", minval=9, maxval=12, group=grpFast)
+D_END_MINUTE         = input.int(30, "Lane D end minute (IST)", minval=0, maxval=59, group=grpFast)
+
+grpLate = "5. Lane E / Re-Acceleration"
+enableLaneE = input.bool(true, "Enable Lane E late-arrival re-acceleration", group=grpLate,
+     tooltip="PAPER hypothesis for late Discord/TradingView arrival after the opening-drive window. It ignores old historical entries, remembers abnormal volume already demonstrated earlier in today's session, waits for a new post-live quieter pullback/base, then requires a fresh local continuation trigger.")
+
+grpSafety        = "6. Operational Safety"
+ENTRY_START_HOUR     = input.int(9, "Start entries after hour (IST)", minval=9, maxval=15, group=grpSafety)
+ENTRY_START_MINUTE   = input.int(20, "Start entries after minute (IST)", minval=0, maxval=59, group=grpSafety,
+     tooltip="Default 09:20 IST avoids entering during the still-forming opening 5-minute bar.")
+ENTRY_CUTOFF_HOUR    = input.int(15, "No new entries after hour (IST)", minval=9, maxval=15, group=grpSafety)
+ENTRY_CUTOFF_MINUTE  = input.int(0, "No new entries after minute (IST)", minval=0, maxval=59, group=grpSafety)
+FORCE_EXIT_HOUR      = input.int(15, "Force paper exit hour (IST)", minval=14, maxval=15, group=grpSafety)
+FORCE_EXIT_MINUTE    = input.int(20, "Force paper exit minute (IST)", minval=0, maxval=29, group=grpSafety,
+     tooltip="Default 15:20 IST closes any remaining paper trade before the NSE cash-session close.")
+terminalCooldownBars = input.int(3, "Cooldown bars after a LIVE trade exit", minval=0, maxval=24, group=grpSafety,
+     tooltip="Applies after an actual paper trade exits. Default 3 bars = 15 minutes on a 5-minute chart.")
+missedCooldownBars = input.int(0, "Cooldown bars after MISSED / no-chase", minval=0, maxval=6, group=grpSafety,
+     tooltip="Default 0. A rejected trigger did not create a position, so it should not silently block the lane for another 15 minutes.")
+freshScanOnLoad      = input.bool(false, "Require a completely new setup after symbol/script load", group=grpSafety,
+     tooltip="OFF keeps a still-valid, untouched setup reconstructed from earlier bars. Any setup whose trigger already traded is discarded. ON forces a brand-new setup after loading/switching symbols.")
+maxBuysPerSymbolPerDay = input.int(1, "Maximum BUY entries per symbol per day", minval=1, maxval=3, group=grpSafety,
+     tooltip="Default 1 prevents churn/re-entry alerts on the same stock after a stop. Increase only after forward evidence shows same-day re-entry adds expectancy.")
+enableLiquidityFilter = input.bool(true, "Lane D: require minimum average 5m turnover", group=grpSafety,
+     tooltip="Applies to Fast Mover/Lane D only. Legacy Lane A/B/C keep the v0.5 qualification behavior. The dashboard still shows liquidity as a warning.")
+minAvg5mTurnover      = input.float(250000.0, "Lane D minimum average 5m turnover (₹)", minval=0, step=50000, group=grpSafety)
+
+grpDisplay = "7. Dashboard"
+dashboardPosInput = input.string("Top Right", "Dashboard position",
+     options=["Top Right", "Top Left", "Middle Right", "Middle Left", "Bottom Right", "Bottom Left"], group=grpDisplay)
+showDashboard = input.bool(true, "Show dashboard", group=grpDisplay)
+
+grpDebug         = "8. Research / Debug"
+showDebugMarkers = input.bool(false, "Show EXP / READY / MISS markers", group=grpDebug)
+showTradeMarkers = input.bool(true, "Show live PAPER BUY / SELL markers", group=grpDebug)
+
+grpStudy = "9. Lane E Shadow Study"
+enableEShadowStudy = input.bool(true, "Track Lane E current stop vs wider shadow stop", group=grpStudy,
+     tooltip="Measurement only. Does NOT change BUY/SELL logic. Stop A is the actual Lane-E stop. Stop B is a wider 3-bar structural + 0.15 ATR shadow stop used only to learn whether A is too tight.")
+enableResearchResultAlerts = input.bool(false, "Send EOD research-result alert", group=grpStudy,
+     tooltip="Default OFF so normal alerts remain BUY/SELL only. If enabled, one NG RESEARCH RESULT message is emitted around the configured 15:20 safety-exit time for a Lane-E study.")
+
+// Preregistered measurement constants. These are NOT live trading parameters.
+int   E_STUDY_SHADOW_LOOKBACK   = 3
+float E_STUDY_SHADOW_BUFFER_ATR = 0.15
+
+grpCStudy = "10. Lane C Coverage Shadow Study"
+enableC0ShadowStudy = input.bool(true, "Track same-bar confirmed Lane C shadow entry", group=grpCStudy,
+     tooltip="Measurement only. Starts only when the EXISTING Lane-C setup fully qualifies/arms on a realtime confirmed bar. C0 hypothetically enters at that qualifying close while live Lane C remains unchanged and still waits for its existing continuation trigger.")
+enableCCoverageResearchAlerts = input.bool(false, "Send Lane C coverage research alerts", group=grpCStudy,
+     tooltip="Default OFF. When enabled, emits diagnostic C-attempt and C0-result research messages. These are never actionable BUY/SELL signals.")
+
+// Preregistered C0 measurement levels. These are NOT live trading parameters.
+float C0_STUDY_T1_PCT = 1.0
+float C0_STUDY_T2_PCT = 2.0
+float C0_STUDY_T3_PCT = 3.0
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FROZEN v0.2 hypothesis constants. Do not tune from screenshots.
+// ─────────────────────────────────────────────────────────────────────────────
+int   ATR_LEN                       = 14
+int   BREAKOUT_LOOKBACK             = 8
+float MIN_EXPANSION_RANGE_ATR       = 1.00
+float MIN_EXPANSION_BODY_FRACTION   = 0.60
+float MIN_EXPANSION_CLOSE_POSITION  = 0.70
+float MIN_EXPANSION_VOLUME_RATIO    = 1.50
+int   MAX_BARS_TO_FIRST_PULLBACK    = 4
+int   MAX_PULLBACK_BARS             = 3
+int   MAX_READY_BARS                = 4
+float MAX_PULLBACK_RETRACE_FRACTION = 0.55
+float MAX_PULLBACK_RANGE_VS_EXP     = 0.80
+float MAX_ENTRY_OVERSHOOT_R         = 0.25
+int   TERMINAL_COOLDOWN_BARS        = 12
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FROZEN v0.3 Lane B hypothesis constants. Do not tune from screenshots.
+// Important-level breakout -> acceptance/retest -> continuation.
+// ─────────────────────────────────────────────────────────────────────────────
+float B_BREAK_BUFFER_ATR          = 0.03
+float B_MIN_BODY_FRACTION        = 0.50
+float B_MIN_CLOSE_POSITION       = 0.60
+float B_MIN_VOLUME_RATIO         = 1.20
+int   B_MAX_BARS_TO_ACCEPT       = 4
+float B_LEVEL_TOUCH_TOL_ATR      = 0.15
+float B_MAX_UNDERCUT_ATR         = 0.10
+float B_MAX_ACCEPT_RANGE_ATR     = 0.80
+float B_MAX_ACCEPT_EXTENSION_ATR = 0.75
+int   B_MAX_READY_BARS           = 4
+float B_MAX_ENTRY_OVERSHOOT_R    = 0.25
+int   B_TERMINAL_COOLDOWN_BARS   = 12
+
+// ─────────────────────────────────────────────────────────────────────────────
+// FROZEN v0.4 Lane C hypothesis constants. Do not tune from screenshots.
+// Immediate momentum continuation: strong confirmed expansion -> break its high.
+// No pullback/retest is required.
+// ─────────────────────────────────────────────────────────────────────────────
+float C_MIN_RANGE_ATR             = 1.00
+float C_MIN_BODY_FRACTION         = 0.65
+float C_MIN_CLOSE_POSITION        = 0.75
+float C_MIN_VOLUME_RATIO          = 2.00
+float C_MIN_RS_PCT                = 1.00
+float C_MAX_CLOSE_ABOVE_EMA_ATR   = 2.00
+float C_STOP_BUFFER_ATR           = 0.05
+float C_MAX_RISK_ATR              = 0.90
+float C_MIN_ROOM_R                = 1.00
+int   C_MAX_TRIGGER_BARS          = 2
+float C_MAX_ENTRY_OVERSHOOT_R     = 0.25
+int   C_TERMINAL_COOLDOWN_BARS    = 12
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Lane D — Opening Drive / Fast Mover.
+// This lane does NOT buy the vertical impulse. It waits for a brief micro-pause
+// and then requires a fresh break of that pause high.
+// ─────────────────────────────────────────────────────────────────────────────
+float D_MIN_IMPULSE_RANGE_ATR      = 0.75
+float D_MIN_IMPULSE_BODY_FRACTION  = 0.50
+float D_MIN_IMPULSE_CLOSE_POSITION = 0.65
+float D_MIN_COMPLETED_VOL_RATIO    = 1.50
+float D_MAX_PAUSE_RANGE_VS_IMPULSE = 0.75
+float D_MAX_PAUSE_RETRACE          = 0.45
+int   D_MAX_BARS_TO_PAUSE          = 3
+int   D_MAX_READY_BARS             = 3
+float D_STOP_BUFFER_ATR            = 0.05
+float D_MAX_RISK_ATR               = 1.10
+float D_MAX_ENTRY_OVERSHOOT_R      = 0.25
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+const string BUILD_ID = "v0.8.12"
+
+maxPositionValue = capital * maxPositionPct / 100.0
+
+calcQty(float entryPrice, float stopPrice) =>
+    float riskPerShare = not na(entryPrice) and not na(stopPrice) and entryPrice > stopPrice ? entryPrice - stopPrice : na
+    float byRisk       = not na(riskPerShare) and riskPerShare > 0 ? math.floor(riskBudget / riskPerShare) : 0.0
+    float byPosition   = not na(entryPrice) and entryPrice > 0 ? math.floor(maxPositionValue / entryPrice) : 0.0
+    math.max(math.min(byRisk, byPosition), 0.0)
+
+calcPartialQty(float initialQty) =>
+    initialQty >= 2 ? math.max(math.floor(initialQty * partialExitPct / 100.0), 1.0) : initialQty
+
+calcRunnerStop(float entryPrice, float currentStop, float recentCompletedLow, float atrValue) =>
+    float buffer = not na(atrValue) ? atrValue * runnerStopBufferAtr : syminfo.mintick
+    float structuralCandidate = not na(recentCompletedLow) ? recentCompletedLow - buffer : entryPrice
+    math.max(currentStop, math.max(entryPrice, structuralCandidate))
+
+maxNa(float a, float b) =>
+    na(a) ? b : na(b) ? a : math.max(a, b)
+
+fmtTimeIST(int ts) =>
+    na(ts) ? "—" : str.tostring(hour(ts, "Asia/Kolkata"), "00") + ":" + str.tostring(minute(ts, "Asia/Kolkata"), "00")
+
+actionMeta(string eventType, int ts) =>
+    " | Build " + BUILD_ID + " | EventType " + eventType + " | Symbol " + syminfo.ticker + " | BarTime " + fmtTimeIST(ts)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Core context
+// ─────────────────────────────────────────────────────────────────────────────
+bool isFiveMinute = timeframe.isminutes and timeframe.multiplier == 5
+
+ema20 = ta.ema(close, emaLen)
+vwap  = ta.vwap(hlc3)
+atr   = ta.atr(ATR_LEN)
+
+// Previous COMPLETED higher-timeframe levels.
+pdh = request.security(syminfo.tickerid, "D", high[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+pdl = request.security(syminfo.tickerid, "D", low[1],  gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+pwh = request.security(syminfo.tickerid, "W", high[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+pwl = request.security(syminfo.tickerid, "W", low[1],  gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+
+// Full-day + intraday strength model:
+// 1) Full-day change: current price vs previous completed daily close.
+// 2) Full-day RS: stock full-day change minus benchmark full-day change.
+// 3) Intraday RS: stock move from today's open minus benchmark move from today's open.
+// Keeping both prevents large gap-up leaders from looking deceptively weak on the dashboard.
+stockDayOpen    = request.security(syminfo.tickerid, "D", open, gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+stockPrevClose  = request.security(syminfo.tickerid, "D", close[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+benchClose      = request.security(benchSym, timeframe.period, close, gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+benchDayOpen    = request.security(benchSym, "D", open, gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+benchPrevClose  = request.security(benchSym, "D", close[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+
+stockRetPct = not na(stockDayOpen) and stockDayOpen != 0 ? (close / stockDayOpen - 1.0) * 100.0 : na
+benchRetPct = not na(benchDayOpen) and benchDayOpen != 0 ? (benchClose / benchDayOpen - 1.0) * 100.0 : na
+rsSpreadPct = not na(stockRetPct) and not na(benchRetPct) ? stockRetPct - benchRetPct : na
+
+stockDayPct = not na(stockPrevClose) and stockPrevClose != 0 ? (close / stockPrevClose - 1.0) * 100.0 : na
+benchDayPct = not na(benchPrevClose) and benchPrevClose != 0 ? (benchClose / benchPrevClose - 1.0) * 100.0 : na
+dayRsPct    = not na(stockDayPct) and not na(benchDayPct) ? stockDayPct - benchDayPct : na
+
+// Completed-bar ratios remain the basis for the frozen A/B/C hypotheses.
+// Live pace is deliberately ignored during the first part of a realtime bar so
+// a handful of early prints cannot create an exaggerated FAST MOVER reading.
+completedVolAvg = ta.sma(volume[1], volLen)
+barSeconds      = timeframe.in_seconds(timeframe.period)
+elapsedSeconds  = barstate.isrealtime and barSeconds > 0 ? math.max((timenow - time) / 1000.0, 1.0) : barSeconds
+elapsedFracRaw  = barSeconds > 0 ? elapsedSeconds / barSeconds : 1.0
+elapsedFrac     = math.min(math.max(elapsedFracRaw, 0.05), 1.0)
+expectedVolNow  = not na(completedVolAvg) ? completedVolAvg * elapsedFrac : na
+volPace         = not na(volume) and not na(expectedVolNow) and expectedVolNow > 0 ? volume / expectedVolNow : na
+completedBarVolRatio = not na(completedVolAvg) and completedVolAvg > 0 ? volume / completedVolAvg : na
+recentCompletedVolBurst = ta.highest(completedBarVolRatio[1], 3)
+liveVolPaceUsable = (not barstate.isrealtime or elapsedSeconds >= FAST_MIN_LIVE_SECONDS) ? volPace : na
+fastVolStrength = maxNa(recentCompletedVolBurst, liveVolPaceUsable)
+
+// Runner trailing uses completed bars only; current partial-bar lows cannot tighten the stop.
+runnerRecentLow = ta.lowest(low[1], runnerLookbackBars)
+
+// Liquidity guard uses completed 5m bars so the current partial bar cannot
+// temporarily make a thin stock look liquid.
+completedTurnover = close[1] * volume[1]
+avg5mTurnover     = ta.sma(completedTurnover, volLen)
+liquidityOk       = not enableLiquidityFilter or (not na(avg5mTurnover) and avg5mTurnover >= minAvg5mTurnover)
+
+emaTrendUp = close > ema20 and ema20 > ema20[1]
+aboveVWAP  = close > vwap
+vwapTol    = not na(atr) ? atr * FAST_VWAP_TOL_ATR : 0.0
+nearVWAP   = not na(vwap) and close >= vwap - vwapTol
+fastVwapOk = aboveVWAP or nearVWAP
+rsLeader   = not na(rsSpreadPct) and rsSpreadPct > 0
+// IMPORTANT: contextGood is the v0.5 legacy A/B/C context. Do not add
+// Lane-D-only filters (such as liquidity) here, or they can suppress legacy trades.
+contextGood = isFiveMinute and emaTrendUp and aboveVWAP and rsLeader
+
+dayLeader = not na(dayRsPct) and dayRsPct > 0
+fastMoverCore = isFiveMinute and emaTrendUp and fastVwapOk and liquidityOk and
+     not na(stockDayPct) and stockDayPct >= FAST_MIN_DAY_PCT and
+     not na(dayRsPct) and dayRsPct >= FAST_MIN_DAY_RS_PCT and
+     not na(rsSpreadPct) and rsSpreadPct >= FAST_MIN_INTRADAY_RS and
+     not na(fastVolStrength) and fastVolStrength >= FAST_MIN_VOL_PACE
+
+// NSE cash-session and operational clocks.
+// Historical calculations use each bar's close time. Realtime calculations use
+// the actual wall clock so the 14:55 bar cannot remain entry-eligible at 15:00.
+bool inNseCashSession = not na(time(timeframe.period, "0915-1530:23456", "Asia/Kolkata"))
+bool wallClockInsideBar = timenow >= time and timenow < time_close
+sessionClock = wallClockInsideBar ? timenow : time_close
+istHour      = hour(sessionClock, "Asia/Kolkata")
+istMinute    = minute(sessionClock, "Asia/Kolkata")
+
+afterEntryStart = istHour > ENTRY_START_HOUR or (istHour == ENTRY_START_HOUR and istMinute >= ENTRY_START_MINUTE)
+beforeEntryCutoff = istHour < ENTRY_CUTOFF_HOUR or (istHour == ENTRY_CUTOFF_HOUR and istMinute < ENTRY_CUTOFF_MINUTE)
+beforeForceExit = istHour < FORCE_EXIT_HOUR or (istHour == FORCE_EXIT_HOUR and istMinute < FORCE_EXIT_MINUTE)
+entryWindowOpen = inNseCashSession and afterEntryStart and beforeEntryCutoff and beforeForceExit
+
+atOrAfterForceExit = istHour > FORCE_EXIT_HOUR or (istHour == FORCE_EXIT_HOUR and istMinute >= FORCE_EXIT_MINUTE)
+forceExitNow = barstate.isrealtime and inNseCashSession and atOrAfterForceExit
+
+newDay = ta.change(time("D")) != 0
+newDayReset = newDay and (not barstate.isrealtime or barstate.isnew)
+
+// Session volume memory for late-arrival logic. This is deliberately NOT the
+// raw highest-volume bar of the day. Opening volume is naturally large, so using
+// any session peak would make the 2x test almost meaningless by lunchtime.
+// Instead we remember volume only from bars that ALSO had the existing Fast-Mover
+// price/RS/trend/liquidity context. Historical reconstruction is causal because
+// each bar can only contribute its own completed information.
+var float sessionMoverVolPeak = na
+var int   sessionMoverVolBar  = na
+if newDayReset
+    sessionMoverVolPeak := na
+    sessionMoverVolBar := na
+
+completedMoverContext = barstate.isconfirmed and inNseCashSession and isFiveMinute and
+     emaTrendUp and close > vwap and liquidityOk and
+     not na(stockDayPct) and stockDayPct >= FAST_MIN_DAY_PCT and
+     not na(dayRsPct) and dayRsPct >= FAST_MIN_DAY_RS_PCT and
+     not na(rsSpreadPct) and rsSpreadPct >= FAST_MIN_INTRADAY_RS
+if completedMoverContext and not na(completedBarVolRatio)
+    if na(sessionMoverVolPeak) or completedBarVolRatio > sessionMoverVolPeak
+        sessionMoverVolPeak := completedBarVolRatio
+        sessionMoverVolBar := bar_index
+
+liveMoverContext = barstate.isrealtime and entryWindowOpen and isFiveMinute and
+     emaTrendUp and fastVwapOk and liquidityOk and
+     not na(stockDayPct) and stockDayPct >= FAST_MIN_DAY_PCT and
+     not na(dayRsPct) and dayRsPct >= FAST_MIN_DAY_RS_PCT and
+     not na(rsSpreadPct) and rsSpreadPct >= FAST_MIN_INTRADAY_RS
+liveMoverVolEvidence = liveMoverContext ? liveVolPaceUsable : na
+
+sessionVolStrength = maxNa(sessionMoverVolPeak, liveMoverVolEvidence)
+sessionVolImpulseOk = not na(sessionVolStrength) and sessionVolStrength >= FAST_MIN_VOL_PACE
+
+dBeforeEnd = istHour < D_END_HOUR or (istHour == D_END_HOUR and istMinute < D_END_MINUTE)
+dWindowOpen = entryWindowOpen and dBeforeEnd
+eWindowOpen = entryWindowOpen and not dBeforeEnd
+
+// Optional one-shot alert-pipeline diagnostic.
+// This does not participate in setup qualification and does not alter lane state.
+// It is intended for a TEMPORARY TradingView alert snapshot only.
+varip bool alertSelfTestSent = false
+alertSelfTestEligible = barstate.isrealtime and isFiveMinute and inNseCashSession
+alertSelfTestNow = not actionAlertsOnly and enableAlertSelfTest and alertSelfTestEligible and not alertSelfTestSent
+if alertSelfTestNow
+    alertSelfTestSent := true
+    alert("NG ALERT PIPELINE OK | " + syminfo.ticker +
+          " | " + timeframe.period +
+          " | alert() wiring is active",
+          alert.freq_all)
+
+// FAST MOVER episodes are tracked internally whether or not informational
+// notifications are enabled. An optional info alert may fire later in the
+// session only after the symbol has spent several confirmed bars outside the
+// qualifying state, and the daily count remains capped.
+varip int  fastWatchCount = 0
+varip int  fastWatchOffBars = 0
+varip bool fastWatchArmed = true
+varip int  fastWatchEventBar = na
+if newDayReset
+    fastWatchCount := 0
+    fastWatchOffBars := 0
+    fastWatchArmed := true
+    fastWatchEventBar := na
+
+if barstate.isconfirmed
+    if fastMoverCore
+        fastWatchOffBars := 0
+    else
+        fastWatchOffBars += 1
+        if fastWatchOffBars >= FAST_REARM_BARS
+            fastWatchArmed := true
+
+fastWatchNow = barstate.isrealtime and entryWindowOpen and fastMoverCore and fastWatchArmed and
+     fastWatchCount < FAST_MAX_WATCHES_DAY
+if fastWatchNow
+    fastWatchArmed := false
+    fastWatchCount += 1
+    fastWatchEventBar := bar_index
+    if enablePineAlerts and not actionAlertsOnly and enableFastMoverWatch
+        string vwapAlertState = aboveVWAP ? "ABOVE" : "NEAR"
+        alert("NG FAST MOVER / WATCH | " + syminfo.ticker +
+              " | Day " + str.tostring(stockDayPct, "#.##") + "%" +
+              " | DayRS " + str.tostring(dayRsPct, "#.##") + "%" +
+              " | IntraRS " + str.tostring(rsSpreadPct, "#.##") + "%" +
+              " | VolStrength " + str.tostring(fastVolStrength, "#.##") + "x" +
+              " | VWAP " + vwapAlertState +
+              " | EMA UP | WAIT FOR SAFE ENTRY",
+              alert.freq_all)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Frozen expansion definition
+// ─────────────────────────────────────────────────────────────────────────────
+barRange      = high - low
+bullBody      = close - open
+bodyFraction  = barRange > 0 ? bullBody / barRange : 0.0
+closePosition = barRange > 0 ? (close - low) / barRange : 0.5
+priorHigh     = ta.highest(high[1], BREAKOUT_LOOKBACK)
+
+expansionSignal = barstate.isconfirmed and contextGood and
+     close > open and
+     not na(priorHigh) and close > priorHigh and
+     not na(atr) and atr > 0 and barRange >= atr * MIN_EXPANSION_RANGE_ATR and
+     bodyFraction >= MIN_EXPANSION_BODY_FRACTION and
+     closePosition >= MIN_EXPANSION_CLOSE_POSITION and
+     not na(completedBarVolRatio) and completedBarVolRatio >= MIN_EXPANSION_VOLUME_RATIO
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Opportunity coverage watch (retained from v0.8.5)
+// This is deliberately NOT another BUY lane. Its job is to stop the assistant
+// from being silent when a stock breaks out with good context but misses one of
+// the frozen lane-specific shapes (range/body/current-bar-volume/pullback).
+//
+// We reuse thresholds that already existed in v0.8.4 rather than inventing a
+// screenshot-fitted rule: a fresh 8-bar breakout + legacy context + either the
+// Lane-B completed-bar volume floor OR the existing Fast-Mover volume-strength
+// floor. A Fast Mover may still receive a later confirmed breakout WATCH; only a
+// enabled FAST MOVER notification on the exact same update suppresses the duplicate WATCH.
+// ─────────────────────────────────────────────────────────────────────────────
+breakoutWatchCandidate = barstate.isconfirmed and entryWindowOpen and contextGood and
+     close > open and not na(priorHigh) and close > priorHigh and
+     ((not na(completedBarVolRatio) and completedBarVolRatio >= B_MIN_VOLUME_RATIO) or
+      (not na(fastVolStrength) and fastVolStrength >= FAST_MIN_VOL_PACE))
+
+varip int  breakoutWatchCount = 0
+varip int  breakoutWatchOffBars = 0
+varip bool breakoutWatchArmed = true
+varip int  breakoutWatchEventBar = na
+
+if newDayReset
+    breakoutWatchCount := 0
+    breakoutWatchOffBars := 0
+    breakoutWatchArmed := true
+    breakoutWatchEventBar := na
+
+if barstate.isconfirmed
+    if breakoutWatchCandidate
+        breakoutWatchOffBars := 0
+    else
+        breakoutWatchOffBars += 1
+        if breakoutWatchOffBars >= BREAKOUT_WATCH_REARM_BARS
+            breakoutWatchArmed := true
+
+breakoutWatchNow = barstate.isrealtime and breakoutWatchCandidate and breakoutWatchArmed and
+     not (fastWatchNow and enableFastMoverWatch) and breakoutWatchCount < BREAKOUT_WATCH_MAX_DAY
+if breakoutWatchNow
+    breakoutWatchArmed := false
+    breakoutWatchCount += 1
+    breakoutWatchEventBar := bar_index
+    if enablePineAlerts and not actionAlertsOnly and enableBreakoutWatch
+        alert("NG BREAKOUT / WATCH ONLY | " + syminfo.ticker +
+              " | Fresh 8-bar close breakout" +
+              " | Day " + str.tostring(stockDayPct, "#.##") + "%" +
+              " | IntraRS " + str.tostring(rsSpreadPct, "#.##") + "%" +
+              " | BarVol " + (na(completedBarVolRatio) ? "—" : str.tostring(completedBarVolRatio, "#.##") + "x") +
+              " | VolStrength " + (na(fastVolStrength) ? "—" : str.tostring(fastVolStrength, "#.##") + "x") +
+              " | ABOVE VWAP / EMA UP" +
+              " | REVIEW STRUCTURE — NOT A BUY SIGNAL",
+              alert.freq_all)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Automatic state machine
+//  0 = scanning
+//  1 = expansion found, waiting for first controlled pullback
+//  2 = setup ready, waiting for trigger
+//  3 = paper trade active
+//  4 = completed/full exit (first-take full, EOD, or other terminal exit)
+// -1 = stop hit / exited
+//  5 = trigger missed / no chase
+// ─────────────────────────────────────────────────────────────────────────────
+varip int   autoState        = 0
+// Lane B/C states are predeclared here so every lane can enforce the same
+// one-live-paper-position-per-symbol rule, regardless of code order.
+varip int   bState           = 0
+varip int   cState           = 0
+varip int   dState           = 0
+varip int   eState           = 0
+varip int   expansionBar     = na
+varip float expansionLow     = na
+varip float expansionRange   = na
+varip float expansionVolume  = na
+varip float peakHigh         = na
+varip int   pullbackStartBar = na
+varip int   pullbackBars     = 0
+varip int   readyBar         = na
+
+varip float autoEntry        = na
+varip float autoStop         = na
+varip float autoTarget       = na
+varip float autoRisk         = na
+varip float autoManagedStop  = na
+varip float autoInitialQty    = na
+varip float autoRemainingQty  = na
+varip bool  autoPartialTaken  = false
+varip int   autoPartialEventBar = na
+
+varip int entryEventBar      = na
+varip int stopEventBar       = na
+varip int targetEventBar     = na
+varip int missedEventBar     = na
+varip int terminalBar        = na
+varip string aLastExitReason = ""
+
+// Lane-A setup memory. These diagnostics survive normal setup resets so the
+// dashboard can explain earlier pullbacks after the lane has moved on.
+varip int    aLastExpansionTime = na
+varip int    aLastPbCheckTime   = na
+varip string aLastPbCheckReason = "—"
+varip string aLastSetupEvent    = "—"
+
+varip bool liveEngineStarted = false
+
+// Daily audit counters. They reconstruct from historical bars and then continue
+// in realtime. They do not change entry qualification; they only expose where
+// candidates are being filtered before an actionable BUY.
+varip int aReadyToday  = 0
+varip int aBuyToday    = 0
+varip int aRejectToday = 0
+varip int bReadyToday  = 0
+varip int bBuyToday    = 0
+varip int bRejectToday = 0
+varip int cReadyToday  = 0
+varip int cBuyToday    = 0
+varip int cRejectToday = 0
+varip int dReadyToday  = 0
+varip int dBuyToday    = 0
+varip int dRejectToday = 0
+varip int eReadyToday  = 0
+varip int eBuyToday    = 0
+varip int eRejectToday = 0
+
+if newDayReset
+    aReadyToday  := 0
+    aBuyToday    := 0
+    aRejectToday := 0
+    bReadyToday  := 0
+    bBuyToday    := 0
+    bRejectToday := 0
+    cReadyToday  := 0
+    cBuyToday    := 0
+    cRejectToday := 0
+    dReadyToday  := 0
+    dBuyToday    := 0
+    dRejectToday := 0
+    eReadyToday  := 0
+    eBuyToday    := 0
+    eRejectToday := 0
+
+// Operational de-duplication across ALL lanes on this symbol. A BUY from any
+// lane consumes one same-day symbol slot. This prevents A/B/C/D/E from churning
+// the same stock after a fast stop or from producing multiple BUY alerts a few
+// minutes apart. The default is intentionally one BUY per symbol per day.
+int symbolBuysToday = aBuyToday + bBuyToday + cBuyToday + dBuyToday + eBuyToday
+bool symbolBuySlotOpen = symbolBuysToday < maxBuysPerSymbolPerDay
+
+// v0.8.9 action-quality rule: a BUY can only fire on the confirmed close of a
+// bullish 5-minute bar that closes through the lane's trigger. Intrabar touches
+// may arm/observe a setup but can never produce an actionable BUY. Protective
+// SELL stops remain realtime so risk is not delayed to bar close.
+bool confirmedBullishActionBar = barstate.isconfirmed and close > open
+
+bool resetToScan = false
+
+if not symbolBuySlotOpen and autoState != 3 and (autoState == 1 or autoState == 2)
+    resetToScan := true
+
+if newDayReset or not isFiveMinute
+    autoState        := 0
+    expansionBar     := na
+    expansionLow     := na
+    expansionRange   := na
+    expansionVolume  := na
+    peakHigh         := na
+    pullbackStartBar := na
+    pullbackBars     := 0
+    readyBar         := na
+    autoEntry        := na
+    autoStop         := na
+    autoTarget       := na
+    autoRisk         := na
+    autoManagedStop  := na
+    autoInitialQty    := na
+    autoRemainingQty  := na
+    autoPartialTaken  := false
+    autoPartialEventBar := na
+    entryEventBar    := na
+    stopEventBar     := na
+    targetEventBar   := na
+    missedEventBar   := na
+    terminalBar      := na
+    aLastExitReason  := ""
+    aLastExpansionTime := na
+    aLastPbCheckTime   := na
+    aLastPbCheckReason := "—"
+    aLastSetupEvent    := "—"
+
+// Terminal state stays visible briefly, then scanning resumes.
+if (autoState == 4 or autoState == -1) and not na(terminalBar) and bar_index - terminalBar >= terminalCooldownBars
+    resetToScan := true
+if autoState == 5 and not na(terminalBar) and bar_index - terminalBar >= missedCooldownBars
+    resetToScan := true
+
+// At/after the entry cutoff, abandon any not-yet-entered Lane A candidate.
+// A live paper trade (state 3) continues to be managed by its frozen initial risk and runner rules.
+if not entryWindowOpen and (autoState == 1 or autoState == 2)
+    resetToScan := true
+
+// Start a candidate only from scanning state.
+if autoState == 0 and symbolBuySlotOpen and entryWindowOpen and bState != 3 and cState != 3 and dState != 3 and eState != 3 and expansionSignal
+    autoState        := 1
+    expansionBar     := bar_index
+    expansionLow     := low
+    expansionRange   := barRange
+    expansionVolume  := volume
+    peakHigh         := high
+    pullbackStartBar := na
+    pullbackBars     := 0
+    readyBar         := na
+    autoEntry        := na
+    autoStop         := na
+    autoTarget       := na
+    autoRisk         := na
+    autoManagedStop  := na
+    autoInitialQty    := na
+    autoRemainingQty  := na
+    autoPartialTaken  := false
+    autoPartialEventBar := na
+    entryEventBar    := na
+    stopEventBar     := na
+    targetEventBar   := na
+    missedEventBar   := na
+    aLastExitReason  := ""
+    aLastExpansionTime := time
+    aLastPbCheckTime   := na
+    aLastPbCheckReason := "Waiting for first controlled PB"
+    aLastSetupEvent    := "Expansion " + fmtTimeIST(time)
+
+// Wait for first controlled pullback.
+if autoState == 1 and barstate.isconfirmed and bar_index > expansionBar
+    peakHigh := math.max(peakHigh, high)
+
+    impulseHeight = peakHigh - expansionLow
+    retraceFrac   = impulseHeight > 0 ? (peakHigh - low) / impulseHeight : 1.0
+    pullbackRange = high - low
+
+    pullbackDirection = close < close[1] or close < open or high < high[1]
+    pullbackRangeOk   = pullbackRange <= expansionRange * MAX_PULLBACK_RANGE_VS_EXP
+    pullbackVolOk     = volume < expansionVolume
+    pullbackEmaOk     = close > ema20
+    pullbackVwapOk    = close > vwap
+    pullbackRsOk      = not na(rsSpreadPct) and rsSpreadPct > 0
+    pullbackContextOk = pullbackEmaOk and pullbackVwapOk and pullbackRsOk
+    pullbackRetraceOk = retraceFrac >= 0 and retraceFrac <= MAX_PULLBACK_RETRACE_FRACTION
+
+    controlledPullback = pullbackDirection and pullbackRangeOk and pullbackVolOk and pullbackContextOk and pullbackRetraceOk
+    hardInvalidation   = low <= expansionLow or close < vwap or (not na(rsSpreadPct) and rsSpreadPct <= 0)
+
+    // Preserve the latest PB evaluation. This does not change the v0.5 rules.
+    aLastPbCheckTime := time
+    aLastPbCheckReason := hardInvalidation ? (low <= expansionLow ? "Invalid: below expansion low" : close < vwap ? "Invalid: below VWAP" : "Invalid: RS lost") :
+         controlledPullback ? "QUALIFIED" :
+         not pullbackDirection ? "No pullback shape" :
+         not pullbackRangeOk ? "Range too large" :
+         not pullbackVolOk ? "Volume not lower" :
+         not pullbackEmaOk ? "Below EMA" :
+         not pullbackVwapOk ? "Below VWAP" :
+         not pullbackRsOk ? "RS not positive" :
+         not pullbackRetraceOk ? "Retrace >55%" : "Not qualified"
+
+    if hardInvalidation
+        aLastSetupEvent := "Invalidated " + fmtTimeIST(time)
+        resetToScan := true
+    else if controlledPullback
+        pullbackStartBar := bar_index
+        pullbackBars     := 1
+        readyBar         := bar_index
+        autoEntry        := high + syminfo.mintick
+        autoStop         := low - syminfo.mintick
+        autoRisk         := autoEntry - autoStop
+        autoTarget       := autoEntry + autoRisk * rrMultiple
+        autoState        := autoRisk > 0 ? 2 : 0
+        if autoRisk > 0
+            aReadyToday += 1
+            if barstate.isrealtime and enablePineAlerts and not actionAlertsOnly and enableSetupReadyAlerts
+                alert("NG SETUP READY | Lane A FIRST PULLBACK | " + syminfo.ticker +
+                      " | Trigger " + str.tostring(autoEntry, format.mintick) +
+                      " | SL " + str.tostring(autoStop, format.mintick) +
+                          " | WAIT FOR TRIGGER — NOT YET A BUY",
+                      alert.freq_all)
+        aLastSetupEvent  := autoRisk > 0 ? "PB qualified " + fmtTimeIST(time) : "PB risk invalid " + fmtTimeIST(time)
+    else if bar_index - expansionBar >= MAX_BARS_TO_FIRST_PULLBACK
+        aLastSetupEvent := "No qualifying PB in 4 bars"
+        resetToScan := true
+
+// First realtime execution after loading/switching: never emit a late BUY.
+// By default, an untouched historical setup may remain armed. A setup whose
+// trigger already traded is discarded immediately without poisoning the live
+// lane with a historical cooldown. freshScanOnLoad can force a brand-new setup.
+if barstate.isrealtime and not liveEngineStarted
+    liveEngineStarted := true
+    if freshScanOnLoad and (autoState == 1 or autoState == 2)
+        aLastSetupEvent := "Discarded on live load " + fmtTimeIST(time)
+        resetToScan := true
+    else if autoState == 2 and high >= autoEntry
+        aLastSetupEvent := "Trigger already passed " + fmtTimeIST(time)
+        resetToScan := true
+
+// Historical trigger consumption mirrors the confirmed bullish close-through policy.
+// A wick above entry alone does not consume READY or suppress the current live scan.
+if autoState == 2 and not barstate.isrealtime and confirmedBullishActionBar and close >= autoEntry
+    aLastSetupEvent := "Historical trigger passed " + fmtTimeIST(time)
+    resetToScan := true
+
+// Stop touched before entry invalidates the setup.
+if autoState == 2 and barstate.isrealtime and close <= autoStop
+    aLastSetupEvent := "Setup invalidated " + fmtTimeIST(time)
+    resetToScan := true
+
+// If another lane owns the paper position when this trigger trades, expire the
+// setup immediately. It may not become a delayed/chased entry after that trade exits.
+if autoState == 2 and barstate.isrealtime and (bState == 3 or cState == 3 or dState == 3 or eState == 3) and high >= autoEntry
+    aLastSetupEvent := "Trigger passed while other lane in trade"
+    resetToScan := true
+
+// Realtime trigger. Buy only near the predefined level and only if at least one
+// share fits both the risk budget and capital limit.
+if autoState == 2 and barstate.isrealtime and symbolBuySlotOpen and confirmedBullishActionBar and entryWindowOpen and bState != 3 and cState != 3 and dState != 3 and eState != 3 and not resetToScan and close >= autoEntry
+    entryContextOk = close > ema20 and close > vwap and not na(rsSpreadPct) and rsSpreadPct > 0
+    plannedRisk    = autoRisk
+    overshootR     = plannedRisk > 0 ? (close - autoEntry) / plannedRisk : 999.0
+    entryFill      = close
+    entryFillRisk  = entryFill - autoStop
+    entryQty       = calcQty(entryFill, autoStop)
+
+    if entryContextOk and overshootR <= MAX_ENTRY_OVERSHOOT_R and entryFillRisk > 0 and entryQty >= 1
+        autoEntry       := entryFill
+        autoRisk        := entryFillRisk
+        autoTarget      := autoEntry + autoRisk * rrMultiple
+        autoState       := 3
+        autoManagedStop := autoStop
+        autoInitialQty   := entryQty
+        autoRemainingQty := entryQty
+        autoPartialTaken := false
+        autoPartialEventBar := na
+        entryEventBar   := bar_index
+        aBuyToday      += 1
+        aLastSetupEvent := "LIVE BUY " + fmtTimeIST(time)
+        if enablePineAlerts
+            alert("NG PAPER BUY NOW | Lane A | " + syminfo.ticker +
+                  " | Last " + str.tostring(close, format.mintick) +
+                  " | Entry " + str.tostring(autoEntry, format.mintick) +
+                  " | SL " + str.tostring(autoStop, format.mintick) +
+                  " | Qty " + str.tostring(entryQty, "#") +
+                  " | Position ₹" + str.tostring(entryQty * autoEntry, "#.##") +
+                  " | MaxRisk ₹" + str.tostring(entryQty * autoRisk, "#.##") +
+                  " | PosCap ₹" + str.tostring(maxPositionValue, "#.##") +
+                  " | FirstTake " + str.tostring(rrMultiple, "#.##") + "R @ " + str.tostring(autoTarget, format.mintick) +
+                  " | Then RUNNER" + actionMeta("BUY", time),
+                  alert.freq_once_per_bar_close)
+    else
+        reasonA = entryQty < 1 ? "QTY 0 / RISK TOO LARGE" : not entryContextOk ? "CONTEXT LOST" : "NO CHASE"
+        autoState      := 5
+        missedEventBar := bar_index
+        terminalBar    := bar_index
+        aRejectToday  += 1
+        aLastSetupEvent := "REJECT " + reasonA + " " + fmtTimeIST(time)
+        if enablePineAlerts and not actionAlertsOnly and enableMissedAlerts
+            alert("NG PAPER MISSED | Lane A | " + syminfo.ticker +
+                  " | " + reasonA +
+                  " | Last " + str.tostring(close, format.mintick) +
+                  " | Trigger " + str.tostring(autoEntry, format.mintick),
+                  alert.freq_all)
+
+// A continuing controlled pullback can refine trigger/stop for up to 3 bars.
+if autoState == 2 and barstate.isconfirmed and bar_index > readyBar
+    impulseHeight2 = peakHigh - expansionLow
+    retraceFrac2   = impulseHeight2 > 0 ? (peakHigh - low) / impulseHeight2 : 1.0
+    pullbackRange2 = high - low
+
+    continuingPb = high < autoEntry and
+         (close < close[1] or close < open or high < high[1]) and
+         pullbackRange2 <= expansionRange * MAX_PULLBACK_RANGE_VS_EXP and
+         volume < expansionVolume and
+         retraceFrac2 >= 0 and retraceFrac2 <= MAX_PULLBACK_RETRACE_FRACTION and
+         close > ema20 and close > vwap and not na(rsSpreadPct) and rsSpreadPct > 0
+
+    armedInvalidation = low <= autoStop or close < vwap or close < ema20 or (not na(rsSpreadPct) and rsSpreadPct <= 0)
+
+    if armedInvalidation
+        aLastSetupEvent := "READY invalidated " + fmtTimeIST(time)
+        resetToScan := true
+    else if continuingPb and pullbackBars < MAX_PULLBACK_BARS
+        pullbackBars += 1
+        autoEntry  := high + syminfo.mintick
+        autoStop   := math.min(autoStop, low - syminfo.mintick)
+        autoRisk   := autoEntry - autoStop
+        autoTarget := autoEntry + autoRisk * rrMultiple
+        aLastPbCheckTime   := time
+        aLastPbCheckReason := "QUALIFIED / refined PB"
+        aLastSetupEvent    := "PB refined " + fmtTimeIST(time)
+    else if bar_index - readyBar >= MAX_READY_BARS
+        aLastSetupEvent := "READY expired / no trigger"
+        resetToScan := true
+
+// Live paper exits: first profit-take + structural runner.
+// No pre-target trailing: initial structural risk stays intact until the first take.
+// At the first take, bank a partial, move the runner stop to at least breakeven,
+// then trail using completed-bar structure. This keeps initial risk fixed while
+// allowing exceptional trends to earn more than a fixed 2R full exit.
+if autoState == 3 and barstate.isrealtime
+    if na(autoManagedStop)
+        autoManagedStop := autoStop
+
+    if autoPartialTaken and enableRunnerTrail and bar_index > autoPartialEventBar
+        autoManagedStop := calcRunnerStop(autoEntry, autoManagedStop, runnerRecentLow, atr)
+
+    qtyAExit    = not na(autoRemainingQty) ? autoRemainingQty : calcQty(autoEntry, autoStop)
+    rNowA       = autoRisk > 0 ? (close - autoEntry) / autoRisk : na
+    stopNow     = close <= autoManagedStop
+    firstTakeNow = not autoPartialTaken and close >= autoTarget
+
+    if stopNow
+        autoState    := -1
+        stopEventBar := bar_index
+        terminalBar  := bar_index
+        stopKindA = autoManagedStop > autoStop + syminfo.mintick ? "RUNNER / PROTECTIVE STOP" : "STOP"
+        aLastExitReason := stopKindA
+        if enablePineAlerts
+            alert("NG PAPER SELL NOW / " + stopKindA + " | Lane A | " + syminfo.ticker +
+                  " | Last " + str.tostring(close, format.mintick) +
+                  " | ManagedSL " + str.tostring(autoManagedStop, format.mintick) +
+                  " | SellQty " + str.tostring(qtyAExit, "#") +
+                  " | ApproxR " + str.tostring(rNowA, "#.##") + actionMeta("SELL_STOP", time),
+                  alert.freq_all)
+    else if forceExitNow
+        autoState      := 4
+        targetEventBar := bar_index
+        terminalBar    := bar_index
+        aLastExitReason := "EOD EXIT"
+        if enablePineAlerts
+            alert("NG PAPER SELL NOW / EOD SAFETY EXIT | Lane A | " + syminfo.ticker +
+                  " | Last " + str.tostring(close, format.mintick) +
+                  " | SellQty " + str.tostring(qtyAExit, "#") +
+                  " | ApproxR " + str.tostring(rNowA, "#.##") + actionMeta("SELL_EOD", time),
+                  alert.freq_all)
+    else if firstTakeNow
+        aTakeQty = calcPartialQty(autoInitialQty)
+        if aTakeQty >= autoRemainingQty
+            autoState      := 4
+            targetEventBar := bar_index
+            terminalBar    := bar_index
+            aLastExitReason := "FIRST TAKE / FULL"
+            if enablePineAlerts
+                alert("NG PAPER SELL NOW / FIRST TAKE FULL | Lane A | " + syminfo.ticker +
+                      " | Last " + str.tostring(close, format.mintick) +
+                      " | SellQty " + str.tostring(autoRemainingQty, "#") +
+                      " | ApproxR " + str.tostring(rNowA, "#.##") + actionMeta("SELL_FIRST_TAKE_FULL", time),
+                      alert.freq_all)
+        else
+            autoRemainingQty := autoRemainingQty - aTakeQty
+            autoPartialTaken := true
+            autoPartialEventBar := bar_index
+            autoManagedStop := math.max(autoManagedStop, autoEntry)
+            aLastExitReason := "PARTIAL / RUNNER"
+            if enablePineAlerts
+                alert("NG PAPER SELL NOW / TAKE " + str.tostring(partialExitPct, "#") + "% | Lane A | " + syminfo.ticker +
+                      " | Last " + str.tostring(close, format.mintick) +
+                      " | SellQty " + str.tostring(aTakeQty, "#") +
+                      " | RunnerQty " + str.tostring(autoRemainingQty, "#") +
+                      " | RunnerSL>= " + str.tostring(autoManagedStop, format.mintick) +
+                      " | ApproxR " + str.tostring(rNowA, "#.##") + actionMeta("SELL_PARTIAL", time),
+                      alert.freq_all)
+
+
+if resetToScan
+    autoState        := 0
+    expansionBar     := na
+    expansionLow     := na
+    expansionRange   := na
+    expansionVolume  := na
+    peakHigh         := na
+    pullbackStartBar := na
+    pullbackBars     := 0
+    readyBar         := na
+    autoEntry        := na
+    autoStop         := na
+    autoTarget       := na
+    autoRisk         := na
+    autoManagedStop  := na
+    autoInitialQty    := na
+    autoRemainingQty  := na
+    autoPartialTaken  := false
+    autoPartialEventBar := na
+    entryEventBar    := na
+    stopEventBar     := na
+    targetEventBar   := na
+    missedEventBar   := na
+    terminalBar      := na
+    aLastExitReason  := ""
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Lane B — Important-level breakout -> acceptance/retest -> continuation
+// Separate paper hypothesis. Lane A logic above is unchanged.
+// State meanings mirror Lane A:
+//  0 scan, 1 breakout found/wait acceptance, 2 ready, 3 in trade,
+//  4 target, -1 stop, 5 missed/no chase.
+// ─────────────────────────────────────────────────────────────────────────────
+varip float  bLevel            = na
+varip string bLevelName        = ""
+varip int    bBreakBar         = na
+varip float  bBreakVolume      = na
+varip int    bReadyBar         = na
+varip float  bEntry            = na
+varip float  bStop             = na
+varip float  bTarget           = na
+varip float  bRisk             = na
+varip float  bManagedStop      = na
+varip float  bInitialQty       = na
+varip float  bRemainingQty     = na
+varip bool   bPartialTaken     = false
+varip int    bPartialEventBar  = na
+varip int    bEntryEventBar    = na
+varip int    bStopEventBar     = na
+varip int    bTargetEventBar   = na
+varip int    bMissedEventBar   = na
+varip int    bTerminalBar      = na
+varip string bLastExitReason   = ""
+varip bool   bLiveEngineStarted = false
+bool bResetToScan = false
+
+if not symbolBuySlotOpen and bState != 3 and (bState == 1 or bState == 2)
+    bResetToScan := true
+
+if newDayReset or not isFiveMinute
+    bState           := 0
+    bLevel           := na
+    bLevelName       := ""
+    bBreakBar        := na
+    bBreakVolume     := na
+    bReadyBar        := na
+    bEntry           := na
+    bStop            := na
+    bTarget          := na
+    bRisk            := na
+    bManagedStop     := na
+    bInitialQty      := na
+    bRemainingQty    := na
+    bPartialTaken    := false
+    bPartialEventBar := na
+    bEntryEventBar   := na
+    bStopEventBar    := na
+    bTargetEventBar  := na
+    bMissedEventBar  := na
+    bTerminalBar     := na
+    bLastExitReason  := ""
+
+if (bState == 4 or bState == -1) and not na(bTerminalBar) and bar_index - bTerminalBar >= terminalCooldownBars
+    bResetToScan := true
+if bState == 5 and not na(bTerminalBar) and bar_index - bTerminalBar >= missedCooldownBars
+    bResetToScan := true
+
+// At/after the entry cutoff, abandon any not-yet-entered Lane B candidate.
+// A live paper trade (state 3) continues to be managed by its frozen initial risk and runner rules.
+if not entryWindowOpen and (bState == 1 or bState == 2)
+    bResetToScan := true
+
+// Detect a fresh close through PDH and/or PWH. If both are crossed on the same
+// bar, the higher level is used; if they coincide it is labelled PDH/PWH.
+bBreakBuffer = not na(atr) ? atr * B_BREAK_BUFFER_ATR : 0.0
+bool bCrossPDH = not na(pdh) and close[1] <= pdh and close > pdh + bBreakBuffer
+bool bCrossPWH = not na(pwh) and close[1] <= pwh and close > pwh + bBreakBuffer
+float bCandidateLevel = na
+string bCandidateName = ""
+if bCrossPDH and bCrossPWH
+    bCandidateLevel := math.max(pdh, pwh)
+    bCandidateName  := math.abs(pdh - pwh) <= syminfo.mintick ? "PDH/PWH" : (pwh > pdh ? "PWH" : "PDH")
+else if bCrossPWH
+    bCandidateLevel := pwh
+    bCandidateName  := "PWH"
+else if bCrossPDH
+    bCandidateLevel := pdh
+    bCandidateName  := "PDH"
+
+bBreakoutQuality = barstate.isconfirmed and contextGood and
+     not na(bCandidateLevel) and close > open and
+     bodyFraction >= B_MIN_BODY_FRACTION and
+     closePosition >= B_MIN_CLOSE_POSITION and
+     not na(completedBarVolRatio) and completedBarVolRatio >= B_MIN_VOLUME_RATIO
+
+if bState == 0 and symbolBuySlotOpen and entryWindowOpen and autoState != 3 and cState != 3 and dState != 3 and eState != 3 and bBreakoutQuality
+    bState           := 1
+    bLevel           := bCandidateLevel
+    bLevelName       := bCandidateName
+    bBreakBar        := bar_index
+    bBreakVolume     := volume
+    bReadyBar        := na
+    bEntry           := na
+    bStop            := na
+    bTarget          := na
+    bRisk            := na
+    bManagedStop     := na
+    bInitialQty      := na
+    bRemainingQty    := na
+    bPartialTaken    := false
+    bPartialEventBar := na
+    bEntryEventBar   := na
+    bStopEventBar    := na
+    bTargetEventBar  := na
+    bMissedEventBar  := na
+    bLastExitReason  := ""
+
+// Acceptance/retest must occur soon after the breakout. It may be either a
+// controlled touch of the broken level or a tight consolidation above it.
+if bState == 1 and barstate.isconfirmed and bar_index > bBreakBar
+    bTouchTol      = atr * B_LEVEL_TOUCH_TOL_ATR
+    bUndercut      = atr * B_MAX_UNDERCUT_ATR
+    bMaxExtension  = atr * B_MAX_ACCEPT_EXTENSION_ATR
+    bAcceptRange   = high - low
+
+    bCloseHolds    = close >= bLevel
+    bNoDeepBreak   = low >= bLevel - bUndercut
+    bTouchesLevel  = low <= bLevel + bTouchTol
+    bTightAbove    = low > bLevel and bAcceptRange <= atr * B_MAX_ACCEPT_RANGE_ATR
+    bQuieter       = not na(bBreakVolume) and volume <= bBreakVolume
+    bExtensionOk   = close >= bLevel and close - bLevel <= bMaxExtension
+    bContextOk     = close > ema20 and close > vwap and not na(rsSpreadPct) and rsSpreadPct > 0
+
+    bAcceptance = bCloseHolds and bNoDeepBreak and (bTouchesLevel or bTightAbove) and bQuieter and bExtensionOk and bContextOk
+    bHardInvalid = close < bLevel - bUndercut or close < vwap or close < ema20 or (not na(rsSpreadPct) and rsSpreadPct <= 0)
+
+    if bHardInvalid
+        bResetToScan := true
+    else if bAcceptance
+        bReadyBar := bar_index
+        bEntry    := high + syminfo.mintick
+        bStop     := math.min(low - syminfo.mintick, bLevel - atr * 0.05)
+        bRisk     := bEntry - bStop
+        bTarget   := bEntry + bRisk * rrMultiple
+        bState    := bRisk > 0 ? 2 : 0
+        if bRisk > 0
+            bReadyToday += 1
+            if barstate.isrealtime and enablePineAlerts and not actionAlertsOnly and enableSetupReadyAlerts
+                alert("NG SETUP READY | Lane B " + bLevelName + " ACCEPTANCE | " + syminfo.ticker +
+                      " | Trigger " + str.tostring(bEntry, format.mintick) +
+                      " | SL " + str.tostring(bStop, format.mintick) +
+                          " | WAIT FOR TRIGGER — NOT YET A BUY",
+                      alert.freq_all)
+    else if bar_index - bBreakBar >= B_MAX_BARS_TO_ACCEPT
+        bResetToScan := true
+
+// Same fresh-load protection as Lane A. Historical confirmed bullish close-through resets
+// immediately and never imposes a live cooldown.
+if barstate.isrealtime and not bLiveEngineStarted
+    bLiveEngineStarted := true
+    if freshScanOnLoad and (bState == 1 or bState == 2)
+        bResetToScan := true
+    else if bState == 2 and high >= bEntry
+        bResetToScan := true
+
+if bState == 2 and not barstate.isrealtime and confirmedBullishActionBar and close >= bEntry
+    bResetToScan := true
+
+if bState == 2 and barstate.isrealtime and close <= bStop
+    bResetToScan := true
+
+if bState == 2 and barstate.isrealtime and (autoState == 3 or cState == 3 or dState == 3 or eState == 3) and high >= bEntry
+    bResetToScan := true
+
+if bState == 2 and barstate.isrealtime and symbolBuySlotOpen and confirmedBullishActionBar and entryWindowOpen and autoState != 3 and cState != 3 and dState != 3 and eState != 3 and not bResetToScan and close >= bEntry
+    bEntryContextOk = close > ema20 and close > vwap and not na(rsSpreadPct) and rsSpreadPct > 0
+    bPlannedRisk    = bRisk
+    bOvershootR     = bPlannedRisk > 0 ? (close - bEntry) / bPlannedRisk : 999.0
+    bEntryFill      = close
+    bEntryFillRisk  = bEntryFill - bStop
+    bEntryQty       = calcQty(bEntryFill, bStop)
+
+    if bEntryContextOk and bOvershootR <= B_MAX_ENTRY_OVERSHOOT_R and bEntryFillRisk > 0 and bEntryQty >= 1
+        bEntry         := bEntryFill
+        bRisk          := bEntryFillRisk
+        bTarget        := bEntry + bRisk * rrMultiple
+        bState         := 3
+        bManagedStop   := bStop
+        bInitialQty     := bEntryQty
+        bRemainingQty   := bEntryQty
+        bPartialTaken   := false
+        bPartialEventBar := na
+        bEntryEventBar  := bar_index
+        bBuyToday     += 1
+        if enablePineAlerts
+            alert("NG PAPER BUY NOW | Lane B " + bLevelName + " continuation | " + syminfo.ticker +
+                  " | Last " + str.tostring(close, format.mintick) +
+                  " | Entry " + str.tostring(bEntry, format.mintick) +
+                  " | SL " + str.tostring(bStop, format.mintick) +
+                  " | Qty " + str.tostring(bEntryQty, "#") +
+                  " | Position ₹" + str.tostring(bEntryQty * bEntry, "#.##") +
+                  " | MaxRisk ₹" + str.tostring(bEntryQty * bRisk, "#.##") +
+                  " | PosCap ₹" + str.tostring(maxPositionValue, "#.##") +
+                  " | FirstTake " + str.tostring(rrMultiple, "#.##") + "R @ " + str.tostring(bTarget, format.mintick) +
+                  " | Then RUNNER" + actionMeta("BUY", time),
+                  alert.freq_once_per_bar_close)
+    else
+        reasonB = bEntryQty < 1 ? "QTY 0 / RISK TOO LARGE" : not bEntryContextOk ? "CONTEXT LOST" : "NO CHASE"
+        bState          := 5
+        bMissedEventBar := bar_index
+        bTerminalBar    := bar_index
+        bRejectToday   += 1
+        if enablePineAlerts and not actionAlertsOnly and enableMissedAlerts
+            alert("NG PAPER MISSED | Lane B " + bLevelName + " continuation | " + syminfo.ticker +
+                  " | " + reasonB +
+                  " | Last " + str.tostring(close, format.mintick) +
+                  " | Trigger " + str.tostring(bEntry, format.mintick),
+                  alert.freq_all)
+
+if bState == 2 and barstate.isconfirmed and bar_index > bReadyBar
+    bReadyInvalid = close < bLevel or close < vwap or close < ema20 or low <= bStop or (not na(rsSpreadPct) and rsSpreadPct <= 0)
+    if bReadyInvalid
+        bResetToScan := true
+    else if bar_index - bReadyBar >= B_MAX_READY_BARS
+        bResetToScan := true
+
+if bState == 3 and barstate.isrealtime
+    if na(bManagedStop)
+        bManagedStop := bStop
+
+    if bPartialTaken and enableRunnerTrail and bar_index > bPartialEventBar
+        bManagedStop := calcRunnerStop(bEntry, bManagedStop, runnerRecentLow, atr)
+
+    qtyBExit     = not na(bRemainingQty) ? bRemainingQty : calcQty(bEntry, bStop)
+    rNowB        = bRisk > 0 ? (close - bEntry) / bRisk : na
+    bStopNow     = close <= bManagedStop
+    bFirstTakeNow = not bPartialTaken and close >= bTarget
+
+    if bStopNow
+        bState        := -1
+        bStopEventBar := bar_index
+        bTerminalBar  := bar_index
+        stopKindB = bManagedStop > bStop + syminfo.mintick ? "RUNNER / PROTECTIVE STOP" : "STOP"
+        bLastExitReason := stopKindB
+        if enablePineAlerts
+            alert("NG PAPER SELL NOW / " + stopKindB + " | Lane B " + bLevelName + " continuation | " + syminfo.ticker +
+                  " | Last " + str.tostring(close, format.mintick) +
+                  " | ManagedSL " + str.tostring(bManagedStop, format.mintick) +
+                  " | SellQty " + str.tostring(qtyBExit, "#") +
+                  " | ApproxR " + str.tostring(rNowB, "#.##") + actionMeta("SELL_STOP", time),
+                  alert.freq_all)
+    else if forceExitNow
+        bState          := 4
+        bTargetEventBar := bar_index
+        bTerminalBar    := bar_index
+        bLastExitReason := "EOD EXIT"
+        if enablePineAlerts
+            alert("NG PAPER SELL NOW / EOD SAFETY EXIT | Lane B " + bLevelName + " continuation | " + syminfo.ticker +
+                  " | Last " + str.tostring(close, format.mintick) +
+                  " | SellQty " + str.tostring(qtyBExit, "#") +
+                  " | ApproxR " + str.tostring(rNowB, "#.##") + actionMeta("SELL_EOD", time),
+                  alert.freq_all)
+    else if bFirstTakeNow
+        bTakeQty = calcPartialQty(bInitialQty)
+        if bTakeQty >= bRemainingQty
+            bState          := 4
+            bTargetEventBar := bar_index
+            bTerminalBar    := bar_index
+            bLastExitReason := "FIRST TAKE / FULL"
+            if enablePineAlerts
+                alert("NG PAPER SELL NOW / FIRST TAKE FULL | Lane B " + bLevelName + " | " + syminfo.ticker +
+                      " | Last " + str.tostring(close, format.mintick) +
+                      " | SellQty " + str.tostring(bRemainingQty, "#") +
+                      " | ApproxR " + str.tostring(rNowB, "#.##") + actionMeta("SELL_FIRST_TAKE_FULL", time),
+                      alert.freq_all)
+        else
+            bRemainingQty := bRemainingQty - bTakeQty
+            bPartialTaken := true
+            bPartialEventBar := bar_index
+            bManagedStop := math.max(bManagedStop, bEntry)
+            bLastExitReason := "PARTIAL / RUNNER"
+            if enablePineAlerts
+                alert("NG PAPER SELL NOW / TAKE " + str.tostring(partialExitPct, "#") + "% | Lane B " + bLevelName + " | " + syminfo.ticker +
+                      " | Last " + str.tostring(close, format.mintick) +
+                      " | SellQty " + str.tostring(bTakeQty, "#") +
+                      " | RunnerQty " + str.tostring(bRemainingQty, "#") +
+                      " | RunnerSL>= " + str.tostring(bManagedStop, format.mintick) +
+                      " | ApproxR " + str.tostring(rNowB, "#.##") + actionMeta("SELL_PARTIAL", time),
+                      alert.freq_all)
+
+
+if bResetToScan
+    bState           := 0
+    bLevel           := na
+    bLevelName       := ""
+    bBreakBar        := na
+    bBreakVolume     := na
+    bReadyBar        := na
+    bEntry           := na
+    bStop            := na
+    bTarget          := na
+    bRisk            := na
+    bManagedStop     := na
+    bInitialQty      := na
+    bRemainingQty    := na
+    bPartialTaken    := false
+    bPartialEventBar := na
+    bEntryEventBar   := na
+    bStopEventBar    := na
+    bTargetEventBar  := na
+    bMissedEventBar  := na
+    bTerminalBar     := na
+    bLastExitReason  := ""
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Lane C — Immediate momentum continuation
+// Separate PAPER hypothesis. Lane A/B definitions above remain frozen.
+// State meanings:
+//  0 scan, 2 armed/ready for immediate continuation trigger, 3 in trade,
+//  4 target, -1 stop, 5 missed/no chase.
+// ─────────────────────────────────────────────────────────────────────────────
+varip string cLevelName        = ""
+varip float  cBreakLevel       = na
+varip int    cSetupBar         = na
+varip int    cReadyBar         = na
+varip float  cEntry            = na
+varip float  cStop             = na
+varip float  cTarget           = na
+varip float  cRisk             = na
+varip float  cManagedStop      = na
+varip float  cInitialQty       = na
+varip float  cRemainingQty     = na
+varip bool   cPartialTaken     = false
+varip int    cPartialEventBar  = na
+varip int    cEntryEventBar    = na
+varip int    cStopEventBar     = na
+varip int    cTargetEventBar   = na
+varip int    cMissedEventBar   = na
+varip int    cTerminalBar      = na
+varip string cLastExitReason   = ""
+varip string cLastRejectReason = "—"
+varip int    cLastRejectBar    = na
+varip bool   cLiveEngineStarted = false
+
+// Lane-C0 coverage study — FORWARD MEASUREMENT ONLY.
+// It is intentionally independent from cState after launch and can never set
+// cState, consume the symbol BUY slot, size a live trade, or emit an actionable
+// BUY/SELL. The study starts only from an EXISTING Lane-C fully-qualified arm.
+varip bool   c0StudyActive        = false
+varip bool   c0StudyDone          = false
+varip int    c0StudyEntryBar      = na
+varip int    c0StudyEntryTime     = na
+varip float  c0StudyEntry         = na
+varip float  c0StudyStop          = na
+varip float  c0StudyRisk          = na
+varip float  c0StudyQty           = na
+varip float  c0StudyT1            = na
+varip float  c0StudyT2            = na
+varip float  c0StudyT3            = na
+varip float  c0StudyHighest       = na
+varip float  c0StudyLowest        = na
+varip bool   c0StudyT1Hit         = false
+varip bool   c0StudyT2Hit         = false
+varip bool   c0StudyT3Hit         = false
+varip bool   c0StudyStopHit       = false
+varip int    c0StudyT1Time        = na
+varip int    c0StudyT2Time        = na
+varip int    c0StudyT3Time        = na
+varip int    c0StudyStopTime      = na
+varip string c0StudyEndReason     = "—"
+varip string c0StudyLastSummary   = "—"
+varip int    c0StudyResultEventBar = na
+varip int    cCoverageAlertBar    = na
+
+bool cResetToScan = false
+
+if not symbolBuySlotOpen and cState != 3 and (cState == 1 or cState == 2)
+    cResetToScan := true
+
+if newDayReset or not isFiveMinute
+    cState           := 0
+    cLevelName       := ""
+    cBreakLevel      := na
+    cSetupBar        := na
+    cReadyBar        := na
+    cEntry           := na
+    cStop            := na
+    cTarget          := na
+    cRisk            := na
+    cManagedStop     := na
+    cInitialQty      := na
+    cRemainingQty    := na
+    cPartialTaken    := false
+    cPartialEventBar := na
+    cEntryEventBar   := na
+    cStopEventBar    := na
+    cTargetEventBar  := na
+    cMissedEventBar  := na
+    cTerminalBar     := na
+    cLastExitReason  := ""
+    cLastRejectReason := "—"
+    cLastRejectBar    := na
+    c0StudyActive         := false
+    c0StudyDone           := false
+    c0StudyEntryBar       := na
+    c0StudyEntryTime      := na
+    c0StudyEntry          := na
+    c0StudyStop           := na
+    c0StudyRisk           := na
+    c0StudyQty            := na
+    c0StudyT1             := na
+    c0StudyT2             := na
+    c0StudyT3             := na
+    c0StudyHighest        := na
+    c0StudyLowest         := na
+    c0StudyT1Hit          := false
+    c0StudyT2Hit          := false
+    c0StudyT3Hit          := false
+    c0StudyStopHit        := false
+    c0StudyT1Time         := na
+    c0StudyT2Time         := na
+    c0StudyT3Time         := na
+    c0StudyStopTime       := na
+    c0StudyEndReason      := "—"
+    c0StudyLastSummary    := "—"
+    c0StudyResultEventBar := na
+    cCoverageAlertBar     := na
+
+if (cState == 4 or cState == -1) and not na(cTerminalBar) and bar_index - cTerminalBar >= terminalCooldownBars
+    cResetToScan := true
+if cState == 5 and not na(cTerminalBar) and bar_index - cTerminalBar >= missedCooldownBars
+    cResetToScan := true
+
+// At/after the entry cutoff, abandon an untriggered Lane C setup.
+// A live paper trade continues to be managed by its frozen initial risk and runner rules.
+if not entryWindowOpen and cState == 2
+    cResetToScan := true
+
+// Tag the strongest freshly broken reference available on the momentum bar.
+// Lane C does not REQUIRE PDH/PWH; a fresh 8-bar high can qualify.
+// If a higher-timeframe level is crossed on the same bar, it is named explicitly.
+bool cCrossPDH = not na(pdh) and close[1] <= pdh and close > pdh
+bool cCrossPWH = not na(pwh) and close[1] <= pwh and close > pwh
+
+float cCandidateLevel = priorHigh
+string cCandidateName = "8-bar high"
+
+if cCrossPDH and cCrossPWH
+    cCandidateLevel := math.max(priorHigh, math.max(pdh, pwh))
+    cCandidateName  := math.abs(pdh - pwh) <= syminfo.mintick ? "PDH/PWH" : (pwh > pdh ? "PWH" : "PDH")
+else if cCrossPWH
+    cCandidateLevel := math.max(priorHigh, pwh)
+    cCandidateName  := "PWH"
+else if cCrossPDH
+    cCandidateLevel := math.max(priorHigh, pdh)
+    cCandidateName  := "PDH"
+
+// Lane C uses a stricter momentum bar than Lane A because it is willing to
+// enter continuation without waiting for a controlled pullback.
+cEmaExtensionAtr = not na(atr) and atr > 0 ? (close - ema20) / atr : na
+cMomentumQuality = barstate.isconfirmed and entryWindowOpen and contextGood and
+     close > open and
+     not na(priorHigh) and close > priorHigh and
+     not na(atr) and atr > 0 and
+     barRange >= atr * C_MIN_RANGE_ATR and
+     bodyFraction >= C_MIN_BODY_FRACTION and
+     closePosition >= C_MIN_CLOSE_POSITION and
+     not na(completedBarVolRatio) and completedBarVolRatio >= C_MIN_VOLUME_RATIO and
+     not na(rsSpreadPct) and rsSpreadPct >= C_MIN_RS_PCT and
+     not na(cEmaExtensionAtr) and cEmaExtensionAtr <= C_MAX_CLOSE_ABOVE_EMA_ATR
+
+// Remember the reason on the actual momentum-attempt bar rather than later
+// reporting only the current candle's blocker.
+cAttemptBar = barstate.isconfirmed and entryWindowOpen and contextGood and close > open and not na(priorHigh) and close > priorHigh
+if cState == 0 and cAttemptBar
+    cLastRejectReason := na(atr) or atr <= 0 ? "ATR unavailable" :
+         barRange < atr * C_MIN_RANGE_ATR ? "Range < 1.0 ATR" :
+         bodyFraction < C_MIN_BODY_FRACTION ? "Body < 65%" :
+         closePosition < C_MIN_CLOSE_POSITION ? "Close < top 25%" :
+         na(completedBarVolRatio) or completedBarVolRatio < C_MIN_VOLUME_RATIO ? "Volume < 2.0x" :
+         na(rsSpreadPct) or rsSpreadPct < C_MIN_RS_PCT ? "Intraday RS < 1.0%" :
+         na(cEmaExtensionAtr) or cEmaExtensionAtr > C_MAX_CLOSE_ABOVE_EMA_ATR ? "Too extended from EMA" :
+         "Momentum bar passed"
+    cLastRejectBar := bar_index
+
+if cState == 0 and symbolBuySlotOpen and autoState != 3 and bState != 3 and dState != 3 and eState != 3 and cMomentumQuality
+    cEntryCandidate = high + syminfo.mintick
+    cMidpoint       = low + barRange * 0.50
+    cStopCandidate  = math.max(cMidpoint - syminfo.mintick, cCandidateLevel - atr * C_STOP_BUFFER_ATR)
+    cRiskCandidate  = cEntryCandidate - cStopCandidate
+
+    // If another known HTF resistance remains above the proposed entry,
+    // require at least 1R of room to it. If no known PDH/PWH is above, pass.
+    float cNextResistance = na
+    if not na(pdh) and pdh > cEntryCandidate
+        cNextResistance := pdh
+    if not na(pwh) and pwh > cEntryCandidate
+        cNextResistance := na(cNextResistance) ? pwh : math.min(cNextResistance, pwh)
+
+    cRiskOk = cRiskCandidate > 0 and cRiskCandidate <= atr * C_MAX_RISK_ATR
+    cRoomOk = na(cNextResistance) or (cNextResistance - cEntryCandidate) >= cRiskCandidate * C_MIN_ROOM_R
+
+    if cRiskOk and cRoomOk
+        cLastRejectReason := "QUALIFIED / ARMED"
+        cLastRejectBar    := bar_index
+
+        // C0 research launch: same EXISTING qualification, different timing only.
+        // Forward-only so the 1/2/3% vs stop event order is observed tick-by-tick,
+        // not inferred from historical OHLC ordering.
+        if enableC0ShadowStudy and barstate.isrealtime and not c0StudyActive
+            float c0EntryCandidate = close
+            float c0RiskCandidate  = c0EntryCandidate - cStopCandidate
+            float c0QtyCandidate   = calcQty(c0EntryCandidate, cStopCandidate)
+            if c0RiskCandidate > 0 and c0QtyCandidate >= 1
+                c0StudyActive         := true
+                c0StudyDone           := false
+                c0StudyEntryBar       := bar_index
+                c0StudyEntryTime      := time_close
+                c0StudyEntry          := c0EntryCandidate
+                c0StudyStop           := cStopCandidate
+                c0StudyRisk           := c0RiskCandidate
+                c0StudyQty            := c0QtyCandidate
+                c0StudyT1             := c0StudyEntry * (1.0 + C0_STUDY_T1_PCT / 100.0)
+                c0StudyT2             := c0StudyEntry * (1.0 + C0_STUDY_T2_PCT / 100.0)
+                c0StudyT3             := c0StudyEntry * (1.0 + C0_STUDY_T3_PCT / 100.0)
+                c0StudyHighest        := c0StudyEntry
+                c0StudyLowest         := c0StudyEntry
+                c0StudyT1Hit          := false
+                c0StudyT2Hit          := false
+                c0StudyT3Hit          := false
+                c0StudyStopHit        := false
+                c0StudyT1Time         := na
+                c0StudyT2Time         := na
+                c0StudyT3Time         := na
+                c0StudyStopTime       := na
+                c0StudyEndReason      := "RUNNING"
+                c0StudyLastSummary    := "RUNNING"
+                c0StudyResultEventBar := na
+
+        cState          := 2
+        cReadyToday    += 1
+        cLevelName      := cCandidateName
+        cBreakLevel     := cCandidateLevel
+        cSetupBar       := bar_index
+        cReadyBar       := bar_index
+        cEntry          := cEntryCandidate
+        cStop           := cStopCandidate
+        cRisk           := cRiskCandidate
+        cTarget         := cEntry + cRisk * rrMultiple
+        cEntryEventBar  := na
+        cStopEventBar   := na
+        cTargetEventBar := na
+        cMissedEventBar := na
+        cLastExitReason := ""
+        if barstate.isrealtime and enablePineAlerts and not actionAlertsOnly and enableSetupReadyAlerts
+            alert("NG SETUP READY | Lane C IMMEDIATE MOMENTUM | " + syminfo.ticker +
+                  " | Level " + cLevelName +
+                  " | Trigger " + str.tostring(cEntry, format.mintick) +
+                  " | SL " + str.tostring(cStop, format.mintick) +
+                  " | WAIT FOR TRIGGER — NOT YET A BUY",
+                  alert.freq_all)
+    else
+        cLastRejectReason := not cRiskOk ? "Risk > 0.90 ATR" : "Not enough room to resistance"
+        cLastRejectBar    := bar_index
+
+// Optional confirmed Fast-Mover coverage telemetry. Research only; OFF by
+// default. This deliberately probes bars that fail before cAttemptBar too, so
+// "no breakout", candle quality, context and extension misses are measurable.
+bool cCoverageProbeBar = barstate.isconfirmed and entryWindowOpen and fastMoverCore
+if enablePineAlerts and enableCCoverageResearchAlerts and barstate.isrealtime and cCoverageProbeBar and (na(cCoverageAlertBar) or cCoverageAlertBar != bar_index)
+    string cCoverageOutcome = cState == 2 and cReadyBar == bar_index ? "ARMED" :
+         not contextGood ? "CONTEXT BLOCK" :
+         close <= open ? "Need bullish close" :
+         na(priorHigh) or close <= priorHigh ? "No 8-bar breakout" :
+         na(atr) or atr <= 0 ? "ATR unavailable" :
+         barRange < atr * C_MIN_RANGE_ATR ? "Range < 1.0 ATR" :
+         bodyFraction < C_MIN_BODY_FRACTION ? "Body < 65%" :
+         closePosition < C_MIN_CLOSE_POSITION ? "Close < top 25%" :
+         na(completedBarVolRatio) or completedBarVolRatio < C_MIN_VOLUME_RATIO ? "Volume < 2.0x" :
+         na(rsSpreadPct) or rsSpreadPct < C_MIN_RS_PCT ? "Intraday RS < 1.0%" :
+         na(cEmaExtensionAtr) or cEmaExtensionAtr > C_MAX_CLOSE_ABOVE_EMA_ATR ? "Too extended from EMA" :
+         not na(cLastRejectBar) and cLastRejectBar == bar_index ? cLastRejectReason : "Momentum passed / arm blocked"
+    alert("NG RESEARCH C COVERAGE | " + syminfo.ticker +
+          " | Outcome " + cCoverageOutcome +
+          " | ExtEMA " + (na(cEmaExtensionAtr) ? "—" : str.tostring(cEmaExtensionAtr, "#.##") + "ATR") +
+          " | Range " + (na(atr) or atr <= 0 ? "—" : str.tostring(barRange / atr, "#.##") + "ATR") +
+          " | Body " + str.tostring(bodyFraction * 100.0, "#.#") + "%" +
+          " | ClosePos " + str.tostring(closePosition * 100.0, "#.#") + "%" +
+          " | Vol " + (na(completedBarVolRatio) ? "—" : str.tostring(completedBarVolRatio, "#.##") + "x") +
+          " | IntraRS " + (na(rsSpreadPct) ? "—" : str.tostring(rsSpreadPct, "#.##") + "%") +
+          " | AState " + str.tostring(autoState) +
+          " | DState " + str.tostring(dState) +
+          actionMeta("RESEARCH_C_COVERAGE", time),
+          alert.freq_all)
+    cCoverageAlertBar := bar_index
+
+// Same fresh-load protection as the other lanes.
+if barstate.isrealtime and not cLiveEngineStarted
+    cLiveEngineStarted := true
+    if freshScanOnLoad and cState == 2
+        cResetToScan := true
+    else if cState == 2 and high >= cEntry
+        cResetToScan := true
+
+// Historical confirmed bullish close-through consumes READY; no wick-only touch resets
+// the setup or leaks a historical cooldown into the current live scan.
+if cState == 2 and not barstate.isrealtime and bar_index > cSetupBar and confirmedBullishActionBar and close >= cEntry
+    cResetToScan := true
+
+// Before entry, a loss of the continuation structure invalidates the setup.
+if cState == 2 and barstate.isrealtime and close <= cStop
+    cResetToScan := true
+
+// If another lane owns the paper position when Lane C's trigger trades, the
+// continuation setup is no longer a valid first trigger.
+if cState == 2 and barstate.isrealtime and (autoState == 3 or bState == 3 or dState == 3 or eState == 3) and high >= cEntry
+    cResetToScan := true
+
+// Immediate continuation trigger. Require valid sizing as well as context.
+if cState == 2 and barstate.isrealtime and symbolBuySlotOpen and confirmedBullishActionBar and entryWindowOpen and autoState != 3 and bState != 3 and dState != 3 and eState != 3 and not cResetToScan and close >= cEntry
+    cEntryContextOk = close > ema20 and close > vwap and not na(rsSpreadPct) and rsSpreadPct > 0
+    cPlannedRisk    = cRisk
+    cOvershootR     = cPlannedRisk > 0 ? (close - cEntry) / cPlannedRisk : 999.0
+    cEntryFill      = close
+    cEntryFillRisk  = cEntryFill - cStop
+    cEntryQty       = calcQty(cEntryFill, cStop)
+
+    if cEntryContextOk and cOvershootR <= C_MAX_ENTRY_OVERSHOOT_R and cEntryFillRisk > 0 and cEntryQty >= 1
+        cEntry         := cEntryFill
+        cRisk          := cEntryFillRisk
+        cTarget        := cEntry + cRisk * rrMultiple
+        cState         := 3
+        cManagedStop   := cStop
+        cInitialQty     := cEntryQty
+        cRemainingQty   := cEntryQty
+        cPartialTaken   := false
+        cPartialEventBar := na
+        cEntryEventBar  := bar_index
+        cBuyToday     += 1
+        if enablePineAlerts
+            alert("NG PAPER BUY NOW | Lane C Immediate Momentum " + cLevelName + " | " + syminfo.ticker +
+                  " | Last " + str.tostring(close, format.mintick) +
+                  " | Entry " + str.tostring(cEntry, format.mintick) +
+                  " | SL " + str.tostring(cStop, format.mintick) +
+                  " | Qty " + str.tostring(cEntryQty, "#") +
+                  " | Position ₹" + str.tostring(cEntryQty * cEntry, "#.##") +
+                  " | MaxRisk ₹" + str.tostring(cEntryQty * cRisk, "#.##") +
+                  " | PosCap ₹" + str.tostring(maxPositionValue, "#.##") +
+                  " | FirstTake " + str.tostring(rrMultiple, "#.##") + "R @ " + str.tostring(cTarget, format.mintick) +
+                  " | Then RUNNER" + actionMeta("BUY", time),
+                  alert.freq_once_per_bar_close)
+    else
+        reasonC = cEntryQty < 1 ? "QTY 0 / RISK TOO LARGE" : not cEntryContextOk ? "CONTEXT LOST" : "NO CHASE"
+        cState          := 5
+        cMissedEventBar := bar_index
+        cTerminalBar    := bar_index
+        cRejectToday   += 1
+        cLastRejectReason := "TRIGGER " + reasonC
+        if enablePineAlerts and not actionAlertsOnly and enableMissedAlerts
+            alert("NG PAPER MISSED | Lane C Immediate Momentum " + cLevelName + " | " + syminfo.ticker +
+                  " | " + reasonC +
+                  " | Last " + str.tostring(close, format.mintick) +
+                  " | Trigger " + str.tostring(cEntry, format.mintick),
+                  alert.freq_all)
+
+// Lane C is intentionally short-lived: if momentum does not continue through
+// the expansion high within two bars, the immediate-momentum hypothesis expires.
+if cState == 2 and barstate.isconfirmed and bar_index > cSetupBar
+    cReadyInvalid = close < cBreakLevel or close < vwap or close < ema20 or low <= cStop or (not na(rsSpreadPct) and rsSpreadPct <= 0)
+    if cReadyInvalid
+        cResetToScan := true
+    else if bar_index - cSetupBar >= C_MAX_TRIGGER_BARS
+        cResetToScan := true
+
+if cState == 3 and barstate.isrealtime
+    if na(cManagedStop)
+        cManagedStop := cStop
+
+    if cPartialTaken and enableRunnerTrail and bar_index > cPartialEventBar
+        cManagedStop := calcRunnerStop(cEntry, cManagedStop, runnerRecentLow, atr)
+
+    qtyCExit     = not na(cRemainingQty) ? cRemainingQty : calcQty(cEntry, cStop)
+    rNowC        = cRisk > 0 ? (close - cEntry) / cRisk : na
+    cStopNow     = close <= cManagedStop
+    cFirstTakeNow = not cPartialTaken and close >= cTarget
+
+    if cStopNow
+        cState        := -1
+        cStopEventBar := bar_index
+        cTerminalBar  := bar_index
+        stopKindC = cManagedStop > cStop + syminfo.mintick ? "RUNNER / PROTECTIVE STOP" : "STOP"
+        cLastExitReason := stopKindC
+        if enablePineAlerts
+            alert("NG PAPER SELL NOW / " + stopKindC + " | Lane C Immediate Momentum " + cLevelName + " | " + syminfo.ticker +
+                  " | Last " + str.tostring(close, format.mintick) +
+                  " | ManagedSL " + str.tostring(cManagedStop, format.mintick) +
+                  " | SellQty " + str.tostring(qtyCExit, "#") +
+                  " | ApproxR " + str.tostring(rNowC, "#.##") + actionMeta("SELL_STOP", time),
+                  alert.freq_all)
+    else if forceExitNow
+        cState          := 4
+        cTargetEventBar := bar_index
+        cTerminalBar    := bar_index
+        cLastExitReason := "EOD EXIT"
+        if enablePineAlerts
+            alert("NG PAPER SELL NOW / EOD SAFETY EXIT | Lane C Immediate Momentum " + cLevelName + " | " + syminfo.ticker +
+                  " | Last " + str.tostring(close, format.mintick) +
+                  " | SellQty " + str.tostring(qtyCExit, "#") +
+                  " | ApproxR " + str.tostring(rNowC, "#.##") + actionMeta("SELL_EOD", time),
+                  alert.freq_all)
+    else if cFirstTakeNow
+        cTakeQty = calcPartialQty(cInitialQty)
+        if cTakeQty >= cRemainingQty
+            cState          := 4
+            cTargetEventBar := bar_index
+            cTerminalBar    := bar_index
+            cLastExitReason := "FIRST TAKE / FULL"
+            if enablePineAlerts
+                alert("NG PAPER SELL NOW / FIRST TAKE FULL | Lane C | " + syminfo.ticker +
+                      " | Last " + str.tostring(close, format.mintick) +
+                      " | SellQty " + str.tostring(cRemainingQty, "#") +
+                      " | ApproxR " + str.tostring(rNowC, "#.##") + actionMeta("SELL_FIRST_TAKE_FULL", time),
+                      alert.freq_all)
+        else
+            cRemainingQty := cRemainingQty - cTakeQty
+            cPartialTaken := true
+            cPartialEventBar := bar_index
+            cManagedStop := math.max(cManagedStop, cEntry)
+            cLastExitReason := "PARTIAL / RUNNER"
+            if enablePineAlerts
+                alert("NG PAPER SELL NOW / TAKE " + str.tostring(partialExitPct, "#") + "% | Lane C | " + syminfo.ticker +
+                      " | Last " + str.tostring(close, format.mintick) +
+                      " | SellQty " + str.tostring(cTakeQty, "#") +
+                      " | RunnerQty " + str.tostring(cRemainingQty, "#") +
+                      " | RunnerSL>= " + str.tostring(cManagedStop, format.mintick) +
+                      " | ApproxR " + str.tostring(rNowC, "#.##") + actionMeta("SELL_PARTIAL", time),
+                      alert.freq_all)
+
+
+if cResetToScan
+    cState           := 0
+    cLevelName       := ""
+    cBreakLevel      := na
+    cSetupBar        := na
+    cReadyBar        := na
+    cEntry           := na
+    cStop            := na
+    cTarget          := na
+    cRisk            := na
+    cManagedStop     := na
+    cInitialQty      := na
+    cRemainingQty    := na
+    cPartialTaken    := false
+    cPartialEventBar := na
+    cEntryEventBar   := na
+    cStopEventBar    := na
+    cTargetEventBar  := na
+    cMissedEventBar  := na
+    cTerminalBar     := na
+    cLastExitReason  := ""
+
+// Lane-C0 coverage tracker — MEASUREMENT ONLY.
+// The qualifying bar itself is excluded because the shadow entry is its close;
+// only subsequent realtime ticks can hit the research stop/targets.
+if enableC0ShadowStudy and c0StudyActive and barstate.isrealtime
+    bool c0PostEntry = not na(c0StudyEntryBar) and bar_index > c0StudyEntryBar
+
+    if c0PostEntry
+        c0StudyHighest := na(c0StudyHighest) ? close : math.max(c0StudyHighest, close)
+        c0StudyLowest  := na(c0StudyLowest)  ? close : math.min(c0StudyLowest, close)
+
+        if not c0StudyT1Hit and not na(c0StudyT1) and close >= c0StudyT1
+            c0StudyT1Hit  := true
+            c0StudyT1Time := timenow
+
+        if not c0StudyT2Hit and not na(c0StudyT2) and close >= c0StudyT2
+            c0StudyT2Hit  := true
+            c0StudyT2Time := timenow
+
+        if not c0StudyT3Hit and not na(c0StudyT3) and close >= c0StudyT3
+            c0StudyT3Hit  := true
+            c0StudyT3Time := timenow
+
+        if not c0StudyStopHit and not na(c0StudyStop) and close <= c0StudyStop
+            c0StudyStopHit  := true
+            c0StudyStopTime := timenow
+
+    bool c0FinishStop = c0PostEntry and c0StudyStopHit
+    bool c0FinishT3   = c0PostEntry and c0StudyT3Hit
+    bool c0FinishEod  = forceExitNow
+
+    if (c0FinishStop or c0FinishT3 or c0FinishEod) and (na(c0StudyResultEventBar) or c0StudyResultEventBar != bar_index)
+        float c0MfePct = not na(c0StudyHighest) and c0StudyEntry > 0 ? (c0StudyHighest / c0StudyEntry - 1.0) * 100.0 : na
+        float c0MaePct = not na(c0StudyLowest) and c0StudyEntry > 0 ? (c0StudyLowest / c0StudyEntry - 1.0) * 100.0 : na
+        float c0StopPct = c0StudyEntry > 0 and not na(c0StudyStop) ? (c0StudyStop / c0StudyEntry - 1.0) * 100.0 : na
+        float c0T1Min = not na(c0StudyT1Time) and not na(c0StudyEntryTime) ? (c0StudyT1Time - c0StudyEntryTime) / 60000.0 : na
+        float c0T2Min = not na(c0StudyT2Time) and not na(c0StudyEntryTime) ? (c0StudyT2Time - c0StudyEntryTime) / 60000.0 : na
+        float c0T3Min = not na(c0StudyT3Time) and not na(c0StudyEntryTime) ? (c0StudyT3Time - c0StudyEntryTime) / 60000.0 : na
+        bool c0T1BeforeStop = c0StudyT1Hit and (not c0StudyStopHit or c0StudyT1Time < c0StudyStopTime)
+        bool c0T2BeforeStop = c0StudyT2Hit and (not c0StudyStopHit or c0StudyT2Time < c0StudyStopTime)
+        bool c0T3BeforeStop = c0StudyT3Hit and (not c0StudyStopHit or c0StudyT3Time < c0StudyStopTime)
+
+        c0StudyEndReason := c0FinishStop ? "STOP" : c0FinishT3 ? "+3%" : "EOD"
+        c0StudyLastSummary := "End " + c0StudyEndReason +
+             " | +1 " + (c0T1BeforeStop ? "YES" : "NO") +
+             " | +2 " + (c0T2BeforeStop ? "YES" : "NO") +
+             " | +3 " + (c0T3BeforeStop ? "YES" : "NO")
+        c0StudyResultEventBar := bar_index
+        c0StudyDone   := true
+        c0StudyActive := false
+
+        if enablePineAlerts and enableCCoverageResearchAlerts
+            alert("NG RESEARCH C0 RESULT | " + syminfo.ticker +
+                  " | Entry " + str.tostring(c0StudyEntry, format.mintick) +
+                  " | Stop " + str.tostring(c0StudyStop, format.mintick) +
+                  " | StopPct " + (na(c0StopPct) ? "—" : str.tostring(c0StopPct, "#.##") + "%") +
+                  " | Qty " + (na(c0StudyQty) ? "—" : str.tostring(c0StudyQty, "#")) +
+                  " | End " + c0StudyEndReason +
+                  " | T1BeforeStop " + (c0T1BeforeStop ? "YES" : "NO") +
+                  " | T2BeforeStop " + (c0T2BeforeStop ? "YES" : "NO") +
+                  " | T3BeforeStop " + (c0T3BeforeStop ? "YES" : "NO") +
+                  " | T1Min " + (na(c0T1Min) ? "—" : str.tostring(c0T1Min, "#.#")) +
+                  " | T2Min " + (na(c0T2Min) ? "—" : str.tostring(c0T2Min, "#.#")) +
+                  " | T3Min " + (na(c0T3Min) ? "—" : str.tostring(c0T3Min, "#.#")) +
+                  " | MFE " + (na(c0MfePct) ? "—" : str.tostring(c0MfePct, "#.##") + "%") +
+                  " | MAE " + (na(c0MaePct) ? "—" : str.tostring(c0MaePct, "#.##") + "%") +
+                  actionMeta("RESEARCH_C0_RESULT", time),
+                  alert.freq_all)
+
+// Hidden research levels for Data Window inspection only.
+plot(enableC0ShadowStudy and (c0StudyActive or c0StudyDone) ? c0StudyEntry : na, title="C0 Study Entry", color=color.new(color.blue, 100), display=display.data_window)
+plot(enableC0ShadowStudy and (c0StudyActive or c0StudyDone) ? c0StudyStop  : na, title="C0 Study Stop",  color=color.new(color.red, 100), display=display.data_window)
+plot(enableC0ShadowStudy and (c0StudyActive or c0StudyDone) ? c0StudyT1    : na, title="C0 Study +1%",   color=color.new(color.green, 100), display=display.data_window)
+plot(enableC0ShadowStudy and (c0StudyActive or c0StudyDone) ? c0StudyT2    : na, title="C0 Study +2%",   color=color.new(color.green, 100), display=display.data_window)
+plot(enableC0ShadowStudy and (c0StudyActive or c0StudyDone) ? c0StudyT3    : na, title="C0 Study +3%",   color=color.new(color.green, 100), display=display.data_window)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Lane D — Opening Drive / Fast Mover continuation
+// State: 0 scan, 1 impulse found/wait micro-pause, 2 ready, 3 in trade,
+//        4 target/EOD exit, -1 stop, 5 missed/no chase.
+// ─────────────────────────────────────────────────────────────────────────────
+varip int    dImpulseBar       = na
+varip float  dImpulseLow       = na
+varip float  dImpulseHigh      = na
+varip float  dImpulseRange     = na
+varip float  dImpulseVolume    = na
+varip int    dReadyBar         = na
+varip float  dEntry            = na
+varip float  dStop             = na
+varip float  dTarget           = na
+varip float  dRisk             = na
+varip float  dManagedStop      = na
+varip float  dInitialQty       = na
+varip float  dRemainingQty     = na
+varip bool   dPartialTaken     = false
+varip int    dPartialEventBar  = na
+varip int    dEntryEventBar    = na
+varip int    dStopEventBar     = na
+varip int    dTargetEventBar   = na
+varip int    dMissedEventBar   = na
+varip int    dTerminalBar      = na
+varip string dLastExitReason   = ""
+varip string dLastRejectReason = "—"
+varip int    dLastRejectBar    = na
+varip bool   dLiveEngineStarted = false
+bool dResetToScan = false
+
+if not symbolBuySlotOpen and dState != 3 and (dState == 1 or dState == 2)
+    dResetToScan := true
+
+if newDayReset or not isFiveMinute
+    dState            := 0
+    dImpulseBar       := na
+    dImpulseLow       := na
+    dImpulseHigh      := na
+    dImpulseRange     := na
+    dImpulseVolume    := na
+    dReadyBar         := na
+    dEntry            := na
+    dStop             := na
+    dTarget           := na
+    dRisk             := na
+    dManagedStop      := na
+    dInitialQty       := na
+    dRemainingQty     := na
+    dPartialTaken     := false
+    dPartialEventBar  := na
+    dEntryEventBar    := na
+    dStopEventBar     := na
+    dTargetEventBar   := na
+    dMissedEventBar   := na
+    dTerminalBar      := na
+    dLastExitReason   := ""
+    dLastRejectReason := "—"
+    dLastRejectBar    := na
+
+// Parallel monitoring: Lane D may form while legacy A/B/C are WAITING or READY.
+// The one-position rule still guarantees only one live paper trade. A/B/C are
+// evaluated earlier in the script, so an exact same-update collision naturally
+// resolves to the legacy lane; if Lane D triggers earlier, Lane D may enter first.
+legacySetupActive = autoState == 1 or autoState == 2 or bState == 1 or bState == 2 or cState == 2
+
+if (dState == 4 or dState == -1) and not na(dTerminalBar) and bar_index - dTerminalBar >= terminalCooldownBars
+    dResetToScan := true
+if dState == 5 and not na(dTerminalBar) and bar_index - dTerminalBar >= missedCooldownBars
+    dResetToScan := true
+
+if (not dWindowOpen) and (dState == 1 or dState == 2)
+    dResetToScan := true
+
+dImpulseQuality = enableLaneD and barstate.isconfirmed and dWindowOpen and
+     fastMoverCore and close > open and
+     not na(priorHigh) and close > priorHigh and
+     not na(atr) and atr > 0 and
+     barRange >= atr * D_MIN_IMPULSE_RANGE_ATR and
+     bodyFraction >= D_MIN_IMPULSE_BODY_FRACTION and
+     closePosition >= D_MIN_IMPULSE_CLOSE_POSITION and
+     not na(completedBarVolRatio) and completedBarVolRatio >= D_MIN_COMPLETED_VOL_RATIO
+
+// Record why a fast-mover breakout was not eligible for Lane D.
+dAttemptBar = enableLaneD and barstate.isconfirmed and dWindowOpen and fastMoverCore and close > open and not na(priorHigh) and close > priorHigh
+if dState == 0 and dAttemptBar
+    dLastRejectReason := na(atr) or atr <= 0 ? "ATR unavailable" :
+         barRange < atr * D_MIN_IMPULSE_RANGE_ATR ? "Impulse range < 0.75 ATR" :
+         bodyFraction < D_MIN_IMPULSE_BODY_FRACTION ? "Impulse body < 50%" :
+         closePosition < D_MIN_IMPULSE_CLOSE_POSITION ? "Impulse close weak" :
+         na(completedBarVolRatio) or completedBarVolRatio < D_MIN_COMPLETED_VOL_RATIO ? "Completed vol < 1.5x" :
+         "Impulse passed"
+    dLastRejectBar := bar_index
+
+if dState == 0 and symbolBuySlotOpen and autoState != 3 and bState != 3 and cState != 3 and eState != 3 and dImpulseQuality
+    dState            := 1
+    dImpulseBar       := bar_index
+    dImpulseLow       := low
+    dImpulseHigh      := high
+    dImpulseRange     := barRange
+    dImpulseVolume    := volume
+    dReadyBar         := na
+    dEntry            := na
+    dStop             := na
+    dTarget           := na
+    dRisk             := na
+    dManagedStop      := na
+    dInitialQty       := na
+    dRemainingQty     := na
+    dPartialTaken     := false
+    dPartialEventBar  := na
+    dEntryEventBar    := na
+    dStopEventBar     := na
+    dTargetEventBar   := na
+    dMissedEventBar   := na
+    dLastExitReason   := ""
+    dLastRejectReason := "WAIT MICRO-PAUSE"
+
+// Wait for a brief, controlled pause rather than a full Lane-A pullback.
+// It can be a small red/green inside-type candle, but it must preserve trend.
+if dState == 1 and barstate.isconfirmed and bar_index > dImpulseBar
+    dImpulseHigh := math.max(dImpulseHigh, high)
+    dImpulseHeight = dImpulseHigh - dImpulseLow
+    dPauseRange     = high - low
+    dRetraceFrac    = dImpulseHeight > 0 ? (dImpulseHigh - low) / dImpulseHeight : 1.0
+    dPauseContext   = close > ema20 and fastVwapOk and liquidityOk and
+         not na(dayRsPct) and dayRsPct >= FAST_MIN_DAY_RS_PCT and
+         not na(rsSpreadPct) and rsSpreadPct > 0
+    dPauseQuieter   = not na(dImpulseVolume) and volume <= dImpulseVolume * 1.20
+    dPauseShape     = dPauseRange <= dImpulseRange * D_MAX_PAUSE_RANGE_VS_IMPULSE
+    dPauseRetraceOk = dRetraceFrac >= 0 and dRetraceFrac <= D_MAX_PAUSE_RETRACE
+    dMicroPause     = dPauseContext and dPauseQuieter and dPauseShape and dPauseRetraceOk and low > dImpulseLow
+
+    dHardInvalid = close < vwap - vwapTol or close < ema20 or low <= dImpulseLow or
+         not liquidityOk or (not na(rsSpreadPct) and rsSpreadPct <= 0)
+
+    if dHardInvalid
+        dLastRejectReason := "Opening drive structure lost"
+        dResetToScan := true
+    else if dMicroPause
+        dEntryCandidate = high + syminfo.mintick
+        dStopCandidate  = low - math.max(syminfo.mintick, atr * D_STOP_BUFFER_ATR)
+        dRiskCandidate  = dEntryCandidate - dStopCandidate
+        dQtyCandidate   = calcQty(dEntryCandidate, dStopCandidate)
+        dEntryExtensionAtr = not na(atr) and atr > 0 ? (dEntryCandidate - ema20) / atr : na
+        dRiskOk         = dRiskCandidate > 0 and dRiskCandidate <= atr * D_MAX_RISK_ATR
+        dExtensionOk    = not na(dEntryExtensionAtr) and dEntryExtensionAtr <= D_MAX_EXTENSION_ATR
+        if dRiskOk and dExtensionOk and dQtyCandidate >= 1
+            dReadyBar         := bar_index
+            dEntry            := dEntryCandidate
+            dStop             := dStopCandidate
+            dRisk             := dRiskCandidate
+            dTarget           := dEntry + dRisk * rrMultiple
+            dState            := 2
+            dReadyToday      += 1
+            dLastRejectReason := "READY / MICRO-PAUSE"
+            if barstate.isrealtime and enablePineAlerts and not actionAlertsOnly and enableSetupReadyAlerts
+                alert("NG SETUP READY | Lane D OPENING DRIVE | " + syminfo.ticker +
+                      " | Trigger " + str.tostring(dEntry, format.mintick) +
+                      " | SL " + str.tostring(dStop, format.mintick) +
+                          (D_REQUIRE_VWAP_RECLAIM and not aboveVWAP ? " | WAIT VWAP RECLAIM" : " | WAIT FOR TRIGGER") +
+                      " — NOT YET A BUY",
+                      alert.freq_all)
+        else
+            dLastRejectReason := dQtyCandidate < 1 ? "QTY 0 / risk too large" :
+                 not dRiskOk ? "Pause risk > 1.10 ATR" :
+                 "Entry too extended from EMA"
+            dResetToScan := true
+    else if bar_index - dImpulseBar >= D_MAX_BARS_TO_PAUSE
+        dLastRejectReason := "No safe micro-pause"
+        dResetToScan := true
+
+// Fresh-load protection and confirmed-close historical trigger handling.
+if barstate.isrealtime and not dLiveEngineStarted
+    dLiveEngineStarted := true
+    if freshScanOnLoad and (dState == 1 or dState == 2)
+        dResetToScan := true
+    else if dState == 2 and high >= dEntry
+        dResetToScan := true
+
+if dState == 2 and not barstate.isrealtime and confirmedBullishActionBar and close >= dEntry
+    dResetToScan := true
+
+if dState == 2 and barstate.isrealtime and close <= dStop
+    dResetToScan := true
+
+if dState == 2 and barstate.isrealtime and (autoState == 3 or bState == 3 or cState == 3 or eState == 3) and high >= dEntry
+    dLastRejectReason := "Trigger occurred while another lane owned trade"
+    dResetToScan := true
+
+if dState == 2 and barstate.isrealtime and symbolBuySlotOpen and confirmedBullishActionBar and dWindowOpen and autoState != 3 and bState != 3 and cState != 3 and eState != 3 and not dResetToScan and close >= dEntry
+    dVwapEntryOk = D_REQUIRE_VWAP_RECLAIM ? close > vwap : fastVwapOk
+    dBaseEntryContextOk = close > ema20 and liquidityOk and
+         not na(dayRsPct) and dayRsPct >= FAST_MIN_DAY_RS_PCT and
+         not na(rsSpreadPct) and rsSpreadPct > 0
+    dPlannedRisk = dRisk
+    dOvershootR = dPlannedRisk > 0 ? (close - dEntry) / dPlannedRisk : 999.0
+    dEntryFill = close
+    dEntryFillRisk = dEntryFill - dStop
+    dEntryQty   = calcQty(dEntryFill, dStop)
+
+    // If the micro-pause trigger trades while price is only marginally under
+    // VWAP, do not throw the setup away. Keep it READY and require the reclaim.
+    if dBaseEntryContextOk and not dVwapEntryOk and D_REQUIRE_VWAP_RECLAIM and dOvershootR <= D_MAX_ENTRY_OVERSHOOT_R
+        dLastRejectReason := "Trigger touched / waiting VWAP reclaim"
+    else if dBaseEntryContextOk and dVwapEntryOk and dOvershootR <= D_MAX_ENTRY_OVERSHOOT_R and dEntryFillRisk > 0 and dEntryQty >= 1
+        dEntry         := dEntryFill
+        dRisk          := dEntryFillRisk
+        dTarget        := dEntry + dRisk * rrMultiple
+        dState         := 3
+        dManagedStop   := dStop
+        dInitialQty     := dEntryQty
+        dRemainingQty   := dEntryQty
+        dPartialTaken   := false
+        dPartialEventBar := na
+        dEntryEventBar  := bar_index
+        dBuyToday     += 1
+        if enablePineAlerts
+            alert("NG PAPER BUY NOW | Lane D OPENING DRIVE | " + syminfo.ticker +
+                  " | Day " + str.tostring(stockDayPct, "#.##") + "%" +
+                  " | DayRS " + str.tostring(dayRsPct, "#.##") + "%" +
+                  " | Last " + str.tostring(close, format.mintick) +
+                  " | Entry " + str.tostring(dEntry, format.mintick) +
+                  " | SL " + str.tostring(dStop, format.mintick) +
+                  " | Qty " + str.tostring(dEntryQty, "#") +
+                  " | Position ₹" + str.tostring(dEntryQty * dEntry, "#.##") +
+                  " | MaxRisk ₹" + str.tostring(dEntryQty * dRisk, "#.##") +
+                  " | PosCap ₹" + str.tostring(maxPositionValue, "#.##") +
+                  " | FirstTake " + str.tostring(rrMultiple, "#.##") + "R @ " + str.tostring(dTarget, format.mintick) +
+                  " | Then RUNNER" + actionMeta("BUY", time),
+                  alert.freq_once_per_bar_close)
+    else
+        dState          := 5
+        dMissedEventBar := bar_index
+        dTerminalBar    := bar_index
+        dRejectToday   += 1
+        dLastRejectReason := dEntryQty < 1 ? "QTY 0 / RISK TOO LARGE" :
+             not dBaseEntryContextOk ? "CONTEXT LOST" :
+             dOvershootR > D_MAX_ENTRY_OVERSHOOT_R ? "NO CHASE" :
+             "VWAP RECLAIM FAILED"
+        if enablePineAlerts and not actionAlertsOnly and enableMissedAlerts
+            alert("NG PAPER MISSED | Lane D OPENING DRIVE | " + syminfo.ticker +
+                  " | " + dLastRejectReason +
+                  " | Last " + str.tostring(close, format.mintick) +
+                  " | Trigger " + str.tostring(dEntry, format.mintick),
+                  alert.freq_all)
+
+if dState == 2 and barstate.isconfirmed and bar_index > dReadyBar
+    dReadyInvalid = close < ema20 or close < vwap - vwapTol or low <= dStop or not liquidityOk or (not na(rsSpreadPct) and rsSpreadPct <= 0)
+    if dReadyInvalid
+        dLastRejectReason := "Ready setup invalidated"
+        dResetToScan := true
+    else if bar_index - dReadyBar >= D_MAX_READY_BARS
+        dLastRejectReason := "Ready setup expired"
+        dResetToScan := true
+
+if dState == 3 and barstate.isrealtime
+    if na(dManagedStop)
+        dManagedStop := dStop
+
+    if dPartialTaken and enableRunnerTrail and bar_index > dPartialEventBar
+        dManagedStop := calcRunnerStop(dEntry, dManagedStop, runnerRecentLow, atr)
+
+    qtyDExit     = not na(dRemainingQty) ? dRemainingQty : calcQty(dEntry, dStop)
+    rNowD        = dRisk > 0 ? (close - dEntry) / dRisk : na
+    dStopNow     = close <= dManagedStop
+    dFirstTakeNow = not dPartialTaken and close >= dTarget
+
+    if dStopNow
+        dState        := -1
+        dStopEventBar := bar_index
+        dTerminalBar  := bar_index
+        stopKindD = dManagedStop > dStop + syminfo.mintick ? "RUNNER / PROTECTIVE STOP" : "STOP"
+        dLastExitReason := stopKindD
+        if enablePineAlerts
+            alert("NG PAPER SELL NOW / " + stopKindD + " | Lane D OPENING DRIVE | " + syminfo.ticker +
+                  " | Last " + str.tostring(close, format.mintick) +
+                  " | ManagedSL " + str.tostring(dManagedStop, format.mintick) +
+                  " | SellQty " + str.tostring(qtyDExit, "#") +
+                  " | ApproxR " + str.tostring(rNowD, "#.##") + actionMeta("SELL_STOP", time),
+                  alert.freq_all)
+    else if forceExitNow
+        dState          := 4
+        dTargetEventBar := bar_index
+        dTerminalBar    := bar_index
+        dLastExitReason := "EOD EXIT"
+        if enablePineAlerts
+            alert("NG PAPER SELL NOW / EOD SAFETY EXIT | Lane D OPENING DRIVE | " + syminfo.ticker +
+                  " | Last " + str.tostring(close, format.mintick) +
+                  " | SellQty " + str.tostring(qtyDExit, "#") +
+                  " | ApproxR " + str.tostring(rNowD, "#.##") + actionMeta("SELL_EOD", time),
+                  alert.freq_all)
+    else if dFirstTakeNow
+        dTakeQty = calcPartialQty(dInitialQty)
+        if dTakeQty >= dRemainingQty
+            dState          := 4
+            dTargetEventBar := bar_index
+            dTerminalBar    := bar_index
+            dLastExitReason := "FIRST TAKE / FULL"
+            if enablePineAlerts
+                alert("NG PAPER SELL NOW / FIRST TAKE FULL | Lane D | " + syminfo.ticker +
+                      " | Last " + str.tostring(close, format.mintick) +
+                      " | SellQty " + str.tostring(dRemainingQty, "#") +
+                      " | ApproxR " + str.tostring(rNowD, "#.##") + actionMeta("SELL_FIRST_TAKE_FULL", time),
+                      alert.freq_all)
+        else
+            dRemainingQty := dRemainingQty - dTakeQty
+            dPartialTaken := true
+            dPartialEventBar := bar_index
+            dManagedStop := math.max(dManagedStop, dEntry)
+            dLastExitReason := "PARTIAL / RUNNER"
+            if enablePineAlerts
+                alert("NG PAPER SELL NOW / TAKE " + str.tostring(partialExitPct, "#") + "% | Lane D | " + syminfo.ticker +
+                      " | Last " + str.tostring(close, format.mintick) +
+                      " | SellQty " + str.tostring(dTakeQty, "#") +
+                      " | RunnerQty " + str.tostring(dRemainingQty, "#") +
+                      " | RunnerSL>= " + str.tostring(dManagedStop, format.mintick) +
+                      " | ApproxR " + str.tostring(rNowD, "#.##") + actionMeta("SELL_PARTIAL", time),
+                      alert.freq_all)
+
+
+if dResetToScan
+    dState           := 0
+    dImpulseBar      := na
+    dImpulseLow      := na
+    dImpulseHigh     := na
+    dImpulseRange    := na
+    dImpulseVolume   := na
+    dReadyBar        := na
+    dEntry           := na
+    dStop            := na
+    dTarget          := na
+    dRisk            := na
+    dManagedStop     := na
+    dInitialQty      := na
+    dRemainingQty    := na
+    dPartialTaken    := false
+    dPartialEventBar := na
+    dEntryEventBar   := na
+    dStopEventBar    := na
+    dTargetEventBar  := na
+    dMissedEventBar  := na
+    dTerminalBar     := na
+    dLastExitReason  := ""
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Lane E — Late-arrival / second-leg re-acceleration (PAPER hypothesis)
+//
+// This lane is deliberately realtime-only. It cannot replay a historical setup
+// that occurred before this TradingView script/alert instance became live. After
+// 10:30 it arms only in an established Fast-Mover context, waits for a NEW
+// controlled pullback/base formed at or after eLiveStartBar, then requires a
+// fresh break of that new bar's high. Existing D risk/extension/no-chase limits
+// are reused to minimize new degrees of freedom.
+// State: 0 scan, 1 strong mover / wait new PB-base, 2 ready, 3 in trade,
+//        4 target/EOD exit, -1 stop, 5 missed/no chase.
+// ─────────────────────────────────────────────────────────────────────────────
+varip bool   eLiveEngineStarted = false
+varip int    eLiveStartBar      = na
+varip bool   eStartBarFullyObserved = false
+varip int    eArmBar            = na
+varip int    eReadyBar          = na
+varip float  eEntry             = na
+varip float  eStop              = na
+varip float  eTarget            = na
+varip float  eRisk              = na
+varip float  eManagedStop       = na
+varip float  eImpulseVolPeak    = na
+varip float  ePauseVolRatio     = na
+varip float  eInitialQty        = na
+varip float  eRemainingQty      = na
+varip bool   ePartialTaken      = false
+varip int    ePartialEventBar   = na
+varip int    eEntryEventBar     = na
+varip int    eStopEventBar      = na
+varip int    eTargetEventBar    = na
+varip int    eMissedEventBar    = na
+varip int    eTerminalBar       = na
+varip string eLastExitReason    = ""
+varip string eLastRejectReason  = "—"
+
+// Lane-E shadow-stop research state. Independent from eState so measurement can
+// continue after the REAL Stop-A trade has exited. No variable below is used by
+// actionable entry/exit predicates.
+varip bool   eStudyActive          = false
+varip bool   eStudyDone            = false
+varip int    eStudyEntryBar        = na
+varip float  eStudyEntry           = na
+varip float  eStudyStopA           = na
+varip float  eStudyStopB           = na
+varip float  eStudyRiskA           = na
+varip float  eStudyRiskB           = na
+varip float  eStudyTargetA         = na
+varip float  eStudyTargetB         = na
+varip float  eStudyShadowQtyB      = na
+varip float  eStudyHighest         = na
+varip float  eStudyLowest          = na
+varip bool   eStudyAStopHit        = false
+varip bool   eStudyA2RHit          = false
+varip bool   eStudyBStopHit        = false
+varip bool   eStudyB2RHit          = false
+varip bool   eStudyAStopThen2R     = false
+varip string eStudyFirstA          = "NONE"
+varip string eStudyFirstB          = "NONE"
+varip float  eStudyR15A            = na
+varip float  eStudyR30A            = na
+varip float  eStudyEodRA           = na
+varip int    eStudyResultEventBar  = na
+varip string eStudyLastSummary     = "—"
+
+bool eResetToScan = false
+
+if not symbolBuySlotOpen and eState != 3 and (eState == 1 or eState == 2)
+    eResetToScan := true
+
+if newDayReset or not isFiveMinute
+    eState             := 0
+    eLiveEngineStarted := false
+    eLiveStartBar      := na
+    eStartBarFullyObserved := false
+    eArmBar            := na
+    eReadyBar          := na
+    eEntry             := na
+    eStop              := na
+    eTarget            := na
+    eRisk              := na
+    eManagedStop       := na
+    eImpulseVolPeak    := na
+    ePauseVolRatio     := na
+    eInitialQty        := na
+    eRemainingQty      := na
+    ePartialTaken      := false
+    ePartialEventBar   := na
+    eEntryEventBar     := na
+    eStopEventBar      := na
+    eTargetEventBar    := na
+    eMissedEventBar    := na
+    eTerminalBar       := na
+    eLastExitReason    := ""
+    eLastRejectReason  := "—"
+    eStudyActive         := false
+    eStudyDone           := false
+    eStudyEntryBar       := na
+    eStudyEntry          := na
+    eStudyStopA          := na
+    eStudyStopB          := na
+    eStudyRiskA          := na
+    eStudyRiskB          := na
+    eStudyTargetA        := na
+    eStudyTargetB        := na
+    eStudyShadowQtyB     := na
+    eStudyHighest        := na
+    eStudyLowest         := na
+    eStudyAStopHit       := false
+    eStudyA2RHit         := false
+    eStudyBStopHit       := false
+    eStudyB2RHit         := false
+    eStudyAStopThen2R    := false
+    eStudyFirstA         := "NONE"
+    eStudyFirstB         := "NONE"
+    eStudyR15A           := na
+    eStudyR30A           := na
+    eStudyEodRA          := na
+    eStudyResultEventBar := na
+    eStudyLastSummary    := "—"
+
+// First realtime update is the causal boundary for this lane. Historical bars
+// before this point may provide known context/levels, but may never become an
+// actionable Lane-E setup or BUY.
+if barstate.isrealtime and not eLiveEngineStarted
+    eLiveEngineStarted := true
+    eLiveStartBar := bar_index
+    eStartBarFullyObserved := barstate.isnew
+
+if (eState == 4 or eState == -1) and not na(eTerminalBar) and bar_index - eTerminalBar >= terminalCooldownBars
+    eResetToScan := true
+if eState == 5 and not na(eTerminalBar) and bar_index - eTerminalBar >= missedCooldownBars
+    eResetToScan := true
+if not eWindowOpen and (eState == 1 or eState == 2)
+    eResetToScan := true
+
+// Strong-mover context keeps the existing Fast-Mover price/RS/liquidity gates,
+// but VOLUME is session-memory based for Lane E. A late arrival should not be
+// rejected simply because the original 3x/5x participation burst happened 20-40
+// minutes earlier and the current healthy pullback is only ~1x volume.
+eContextStrong = enableLaneE and eWindowOpen and barstate.isrealtime and isFiveMinute and
+     emaTrendUp and aboveVWAP and liquidityOk and
+     not na(stockDayPct) and stockDayPct >= FAST_MIN_DAY_PCT and
+     not na(dayRsPct) and dayRsPct >= FAST_MIN_DAY_RS_PCT and
+     not na(rsSpreadPct) and rsSpreadPct >= FAST_MIN_INTRADAY_RS and
+     sessionVolImpulseOk
+
+if eState == 0 and symbolBuySlotOpen and eContextStrong and autoState != 3 and bState != 3 and cState != 3 and dState != 3
+    eState            := 1
+    eArmBar           := bar_index
+    eReadyBar         := na
+    eEntry            := na
+    eStop             := na
+    eTarget           := na
+    eRisk             := na
+    eManagedStop      := na
+    eImpulseVolPeak   := sessionVolStrength
+    ePauseVolRatio    := na
+    eInitialQty       := na
+    eRemainingQty     := na
+    ePartialTaken     := false
+    ePartialEventBar  := na
+    eEntryEventBar    := na
+    eStopEventBar     := na
+    eTargetEventBar   := na
+    eMissedEventBar   := na
+    eLastExitReason   := ""
+    eLastRejectReason := "WAIT NEW PB/BASE"
+
+// Preserve the strongest volume evidence seen while this late-arrival episode is
+// active. This is memory, not a requirement that every later bar remain abnormal.
+if (eState == 1 or eState == 2) and not na(sessionVolStrength)
+    eImpulseVolPeak := na(eImpulseVolPeak) ? sessionVolStrength : math.max(eImpulseVolPeak, sessionVolStrength)
+
+// Candidate must be a NEW completed pause/pullback bar after the live boundary.
+// We deliberately require it to sit below the previously-known 8-bar high, stay
+// above EMA/VWAP, carry quieter volume than the REMEMBERED session impulse, and
+// define a stop small enough for the existing D risk ceiling. No old trigger is
+// replayed. We intentionally do NOT require the pullback itself to be >=2x.
+ePriorHigh = priorHigh
+ePauseContext = close > ema20 and close > vwap and liquidityOk and
+     not na(stockDayPct) and stockDayPct >= FAST_MIN_DAY_PCT and
+     not na(dayRsPct) and dayRsPct >= FAST_MIN_DAY_RS_PCT and
+     not na(rsSpreadPct) and rsSpreadPct > 0
+ePauseBelowHigh = not na(ePriorHigh) and low < ePriorHigh and close <= ePriorHigh
+ePauseRangeOk = not na(atr) and atr > 0 and barRange <= atr * D_MAX_RISK_ATR
+ePauseVolumeOk = not na(eImpulseVolPeak) and eImpulseVolPeak >= FAST_MIN_VOL_PACE and
+     not na(completedBarVolRatio) and completedBarVolRatio < eImpulseVolPeak
+ePauseCandidate = eState == 1 and barstate.isrealtime and barstate.isconfirmed and
+     not na(eLiveStartBar) and (bar_index > eLiveStartBar or (bar_index == eLiveStartBar and eStartBarFullyObserved)) and
+     not na(eArmBar) and bar_index >= eArmBar and eWindowOpen and
+     ePauseContext and ePauseBelowHigh and ePauseRangeOk and ePauseVolumeOk
+
+if eState == 1 and barstate.isrealtime and barstate.isconfirmed
+    eHardInvalid = close < ema20 or close < vwap or not liquidityOk or
+         (not na(rsSpreadPct) and rsSpreadPct <= 0)
+    if eHardInvalid
+        eLastRejectReason := "LATE CONTEXT LOST"
+        eResetToScan := true
+    else if ePauseCandidate
+        eEntryCandidate = high + syminfo.mintick
+        eStopCandidate  = low - math.max(syminfo.mintick, atr * D_STOP_BUFFER_ATR)
+        eRiskCandidate  = eEntryCandidate - eStopCandidate
+        eQtyCandidate   = calcQty(eEntryCandidate, eStopCandidate)
+        eEntryExtensionAtr = not na(atr) and atr > 0 ? (eEntryCandidate - ema20) / atr : na
+        eRiskOk      = eRiskCandidate > 0 and eRiskCandidate <= atr * D_MAX_RISK_ATR
+        eExtensionOk = not na(eEntryExtensionAtr) and eEntryExtensionAtr <= D_MAX_EXTENSION_ATR
+        if eRiskOk and eExtensionOk and eQtyCandidate >= 1
+            eReadyBar         := bar_index
+            ePauseVolRatio    := completedBarVolRatio
+            eEntry            := eEntryCandidate
+            eStop             := eStopCandidate
+            eRisk             := eRiskCandidate
+            eTarget           := eEntry + eRisk * rrMultiple
+            eState            := 2
+            eReadyToday      += 1
+            eLastRejectReason := "READY / RE-ACCEL"
+            if enablePineAlerts and not actionAlertsOnly and enableSetupReadyAlerts
+                alert("NG SETUP READY | Lane E RE-ACCEL | " + syminfo.ticker +
+                      " | Trigger " + str.tostring(eEntry, format.mintick) +
+                      " | SL " + str.tostring(eStop, format.mintick) +
+                      " | SessionVolPeak " + (na(eImpulseVolPeak) ? "—" : str.tostring(eImpulseVolPeak, "#.##") + "x") +
+                      " | PBVol " + (na(ePauseVolRatio) ? "—" : str.tostring(ePauseVolRatio, "#.##") + "x") +
+                      " | WAIT FOR NEW CONTINUATION — NOT YET A BUY",
+                      alert.freq_all)
+        else
+            eLastRejectReason := eQtyCandidate < 1 ? "QTY 0 / risk too large" :
+                 not eRiskOk ? "PB/base risk > 1.10 ATR" :
+                 "Entry too extended from EMA"
+    else
+        eLastRejectReason := not ePauseContext ? "WAIT STRONG CONTEXT" :
+             not ePauseBelowHigh ? "WAIT NEW PB/BASE" :
+             not ePauseRangeOk ? "PB/base too wide" :
+             not ePauseVolumeOk ? "PB VOL NOT QUIETER THAN IMPULSE" :
+             "WAIT NEW PB/BASE"
+
+    // Do not stalk one stale late-arrival episode forever. Re-arm from current
+    // context after the same first-pullback waiting horizon already used by A.
+    if eState == 1 and not na(eArmBar) and bar_index - eArmBar >= MAX_BARS_TO_FIRST_PULLBACK
+        eLastRejectReason := "NO NEW PB/BASE IN WINDOW"
+        eResetToScan := true
+
+// If another lane owns the position before E's trigger, E cannot also enter.
+if eState == 2 and barstate.isrealtime and (autoState == 3 or bState == 3 or cState == 3 or dState == 3) and high >= eEntry
+    eLastRejectReason := "Trigger occurred while another lane owned trade"
+    eResetToScan := true
+
+if eState == 2 and barstate.isrealtime and symbolBuySlotOpen and confirmedBullishActionBar and eWindowOpen and autoState != 3 and bState != 3 and cState != 3 and dState != 3 and not eResetToScan and close >= eEntry
+    // Do NOT demand current/recent volume >=2x here. The stock already had to
+    // prove abnormal participation earlier in this same session. We still record
+    // whether volume pace is re-expanding versus the pullback, but it is a quality
+    // diagnostic rather than a universal veto.
+    eVolumeMemoryOk = not na(eImpulseVolPeak) and eImpulseVolPeak >= FAST_MIN_VOL_PACE
+    eReAccelVolNow = maxNa(liveVolPaceUsable, completedBarVolRatio)
+    eVolRenewed = not na(ePauseVolRatio) and not na(eReAccelVolNow) and eReAccelVolNow > ePauseVolRatio
+    eBaseEntryContextOk = close > ema20 and close > vwap and liquidityOk and
+         not na(stockDayPct) and stockDayPct >= FAST_MIN_DAY_PCT and
+         not na(dayRsPct) and dayRsPct >= FAST_MIN_DAY_RS_PCT and
+         not na(rsSpreadPct) and rsSpreadPct >= FAST_MIN_INTRADAY_RS and
+         eVolumeMemoryOk
+    ePlannedRisk  = eRisk
+    eOvershootR   = ePlannedRisk > 0 ? (close - eEntry) / ePlannedRisk : 999.0
+    eEntryFill    = close
+    eEntryFillRisk = eEntryFill - eStop
+    eEntryQty     = calcQty(eEntryFill, eStop)
+    if eBaseEntryContextOk and eOvershootR <= D_MAX_ENTRY_OVERSHOOT_R and eEntryFillRisk > 0 and eEntryQty >= 1
+        eEntry           := eEntryFill
+        eRisk            := eEntryFillRisk
+        eTarget          := eEntry + eRisk * rrMultiple
+        eState           := 3
+        eManagedStop     := eStop
+        eInitialQty      := eEntryQty
+        eRemainingQty    := eEntryQty
+        ePartialTaken    := false
+        ePartialEventBar := na
+        eEntryEventBar   := bar_index
+        eBuyToday       += 1
+        eLastExitReason  := ""
+
+        // Measurement-only A-vs-B stop study. It starts from this confirmed
+        // Lane-E entry and never feeds back into live trade management.
+        if enableEShadowStudy
+            eStudyStructLow = ta.lowest(low[1], E_STUDY_SHADOW_LOOKBACK)
+            eStudyShadowRaw = not na(eStudyStructLow) and not na(atr) and atr > 0 ?
+                 eStudyStructLow - math.max(syminfo.mintick, atr * E_STUDY_SHADOW_BUFFER_ATR) : eStop
+            eStudyActive         := true
+            eStudyDone           := false
+            eStudyEntryBar       := bar_index
+            eStudyEntry          := eEntry
+            eStudyStopA          := eStop
+            eStudyStopB          := math.min(eStop, eStudyShadowRaw)
+            eStudyRiskA          := eStudyEntry - eStudyStopA
+            eStudyRiskB          := eStudyEntry - eStudyStopB
+            eStudyTargetA        := eStudyEntry + eStudyRiskA * rrMultiple
+            eStudyTargetB        := eStudyEntry + eStudyRiskB * rrMultiple
+            eStudyShadowQtyB     := calcQty(eStudyEntry, eStudyStopB)
+            eStudyHighest        := eStudyEntry
+            eStudyLowest         := eStudyEntry
+            eStudyAStopHit       := false
+            eStudyA2RHit         := false
+            eStudyBStopHit       := false
+            eStudyB2RHit         := false
+            eStudyAStopThen2R    := false
+            eStudyFirstA         := "NONE"
+            eStudyFirstB         := "NONE"
+            eStudyR15A           := na
+            eStudyR30A           := na
+            eStudyEodRA          := na
+            eStudyResultEventBar := na
+            eStudyLastSummary    := "RUNNING"
+
+        if enablePineAlerts
+            alert("NG PAPER BUY NOW | Lane E RE-ACCEL | " + syminfo.ticker +
+                  " | Day " + str.tostring(stockDayPct, "#.##") + "%" +
+                  " | DayRS " + str.tostring(dayRsPct, "#.##") + "%" +
+                  " | Last " + str.tostring(close, format.mintick) +
+                  " | Entry " + str.tostring(eEntry, format.mintick) +
+                  " | SL " + str.tostring(eStop, format.mintick) +
+                  " | Qty " + str.tostring(eEntryQty, "#") +
+                  " | Position ₹" + str.tostring(eEntryQty * eEntry, "#.##") +
+                  " | MaxRisk ₹" + str.tostring(eEntryQty * eRisk, "#.##") +
+                  " | PosCap ₹" + str.tostring(maxPositionValue, "#.##") +
+                  " | SessionVolPeak " + (na(eImpulseVolPeak) ? "—" : str.tostring(eImpulseVolPeak, "#.##") + "x") +
+                  " | PBVol " + (na(ePauseVolRatio) ? "—" : str.tostring(ePauseVolRatio, "#.##") + "x") +
+                  " | ReAccelVol " + (na(eReAccelVolNow) ? "—" : str.tostring(eReAccelVolNow, "#.##") + "x") +
+                  " | VolRenewed " + (eVolRenewed ? "YES" : "NO") +
+                  " | FirstTake " + str.tostring(rrMultiple, "#.##") + "R @ " + str.tostring(eTarget, format.mintick) +
+                  " | Then RUNNER" + actionMeta("BUY", time),
+                  alert.freq_once_per_bar_close)
+    else
+        eState          := 5
+        eMissedEventBar := bar_index
+        eTerminalBar    := bar_index
+        eRejectToday   += 1
+        eLastRejectReason := eEntryQty < 1 ? "QTY 0 / RISK TOO LARGE" :
+             not eBaseEntryContextOk ? "CONTEXT LOST" :
+             eOvershootR > D_MAX_ENTRY_OVERSHOOT_R ? "NO CHASE" :
+             "RE-ACCEL REJECTED"
+        if enablePineAlerts and not actionAlertsOnly and enableMissedAlerts
+            alert("NG PAPER MISSED | Lane E RE-ACCEL | " + syminfo.ticker +
+                  " | " + eLastRejectReason +
+                  " | Last " + str.tostring(close, format.mintick) +
+                  " | Trigger " + str.tostring(eEntry, format.mintick),
+                  alert.freq_all)
+
+if eState == 2 and barstate.isrealtime and close <= eStop
+    eLastRejectReason := "READY setup invalidated"
+    eResetToScan := true
+
+if eState == 2 and barstate.isconfirmed and bar_index > eReadyBar
+    eReadyInvalid = close < ema20 or close < vwap or low <= eStop or not liquidityOk or
+         (not na(rsSpreadPct) and rsSpreadPct <= 0)
+    if eReadyInvalid
+        eLastRejectReason := "READY setup invalidated"
+        eResetToScan := true
+    else if bar_index - eReadyBar >= D_MAX_READY_BARS
+        eLastRejectReason := "READY setup expired"
+        eResetToScan := true
+
+if eState == 3 and barstate.isrealtime
+    if na(eManagedStop)
+        eManagedStop := eStop
+    if ePartialTaken and enableRunnerTrail and bar_index > ePartialEventBar
+        eManagedStop := calcRunnerStop(eEntry, eManagedStop, runnerRecentLow, atr)
+
+    qtyEExit      = not na(eRemainingQty) ? eRemainingQty : calcQty(eEntry, eStop)
+    rNowE         = eRisk > 0 ? (close - eEntry) / eRisk : na
+    eStopNow      = close <= eManagedStop
+    eFirstTakeNow = not ePartialTaken and close >= eTarget
+
+    if eStopNow
+        eState        := -1
+        eStopEventBar := bar_index
+        eTerminalBar  := bar_index
+        stopKindE = eManagedStop > eStop + syminfo.mintick ? "RUNNER / PROTECTIVE STOP" : "STOP"
+        eLastExitReason := stopKindE
+        if enablePineAlerts
+            alert("NG PAPER SELL NOW / " + stopKindE + " | Lane E RE-ACCEL | " + syminfo.ticker +
+                  " | Last " + str.tostring(close, format.mintick) +
+                  " | ManagedSL " + str.tostring(eManagedStop, format.mintick) +
+                  " | SellQty " + str.tostring(qtyEExit, "#") +
+                  " | ApproxR " + str.tostring(rNowE, "#.##") + actionMeta("SELL_STOP", time),
+                  alert.freq_all)
+    else if forceExitNow
+        eState          := 4
+        eTargetEventBar := bar_index
+        eTerminalBar    := bar_index
+        eLastExitReason := "EOD EXIT"
+        if enablePineAlerts
+            alert("NG PAPER SELL NOW / EOD SAFETY EXIT | Lane E RE-ACCEL | " + syminfo.ticker +
+                  " | Last " + str.tostring(close, format.mintick) +
+                  " | SellQty " + str.tostring(qtyEExit, "#") +
+                  " | ApproxR " + str.tostring(rNowE, "#.##") + actionMeta("SELL_EOD", time),
+                  alert.freq_all)
+    else if eFirstTakeNow
+        eTakeQty = calcPartialQty(eInitialQty)
+        if eTakeQty >= eRemainingQty
+            eState          := 4
+            eTargetEventBar := bar_index
+            eTerminalBar    := bar_index
+            eLastExitReason := "FIRST TAKE / FULL"
+            if enablePineAlerts
+                alert("NG PAPER SELL NOW / FIRST TAKE FULL | Lane E | " + syminfo.ticker +
+                      " | Last " + str.tostring(close, format.mintick) +
+                      " | SellQty " + str.tostring(eRemainingQty, "#") +
+                      " | ApproxR " + str.tostring(rNowE, "#.##") + actionMeta("SELL_FIRST_TAKE_FULL", time),
+                      alert.freq_all)
+        else
+            eRemainingQty := eRemainingQty - eTakeQty
+            ePartialTaken := true
+            ePartialEventBar := bar_index
+            eManagedStop := math.max(eManagedStop, eEntry)
+            eLastExitReason := "PARTIAL / RUNNER"
+            if enablePineAlerts
+                alert("NG PAPER SELL NOW / TAKE " + str.tostring(partialExitPct, "#") + "% | Lane E | " + syminfo.ticker +
+                      " | Last " + str.tostring(close, format.mintick) +
+                      " | SellQty " + str.tostring(eTakeQty, "#") +
+                      " | RunnerQty " + str.tostring(eRemainingQty, "#") +
+                      " | RunnerSL>= " + str.tostring(eManagedStop, format.mintick) +
+                      " | ApproxR " + str.tostring(rNowE, "#.##") + actionMeta("SELL_PARTIAL", time),
+                      alert.freq_all)
+
+if eResetToScan
+    eState            := 0
+    eArmBar           := na
+    eReadyBar         := na
+    eEntry            := na
+    eStop             := na
+    eTarget           := na
+    eRisk             := na
+    eManagedStop      := na
+    eImpulseVolPeak   := na
+    ePauseVolRatio    := na
+    eInitialQty       := na
+    eRemainingQty     := na
+    ePartialTaken     := false
+    ePartialEventBar  := na
+    eEntryEventBar    := na
+    eStopEventBar     := na
+    eTargetEventBar   := na
+    eMissedEventBar   := na
+    eTerminalBar      := na
+    eLastExitReason   := ""
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Lane-E shadow-stop study tracker — MEASUREMENT ONLY
+// ─────────────────────────────────────────────────────────────────────────────
+if enableEShadowStudy and eStudyActive and barstate.isrealtime and not eStudyDone
+    bool eStudyPostEntry = not na(eStudyEntryBar) and bar_index > eStudyEntryBar
+
+    if eStudyPostEntry
+        eStudyHighest := na(eStudyHighest) ? high : math.max(eStudyHighest, high)
+        eStudyLowest  := na(eStudyLowest)  ? low  : math.min(eStudyLowest, low)
+
+        if not eStudyAStopHit and not na(eStudyStopA) and close <= eStudyStopA
+            eStudyAStopHit := true
+            if eStudyFirstA == "NONE"
+                eStudyFirstA := "STOP"
+
+        if not eStudyA2RHit and not na(eStudyTargetA) and close >= eStudyTargetA
+            eStudyA2RHit := true
+            if eStudyAStopHit
+                eStudyAStopThen2R := true
+            if eStudyFirstA == "NONE"
+                eStudyFirstA := "2R"
+
+        if not eStudyBStopHit and not na(eStudyStopB) and close <= eStudyStopB
+            eStudyBStopHit := true
+            if eStudyFirstB == "NONE"
+                eStudyFirstB := "STOP"
+
+        if not eStudyB2RHit and not na(eStudyTargetB) and close >= eStudyTargetB
+            eStudyB2RHit := true
+            if eStudyFirstB == "NONE"
+                eStudyFirstB := "2R"
+
+    if barstate.isconfirmed and eStudyPostEntry
+        int eStudyBarsSinceEntry = bar_index - eStudyEntryBar
+        if na(eStudyR15A) and eStudyBarsSinceEntry >= 3 and eStudyRiskA > 0
+            eStudyR15A := (close - eStudyEntry) / eStudyRiskA
+        if na(eStudyR30A) and eStudyBarsSinceEntry >= 6 and eStudyRiskA > 0
+            eStudyR30A := (close - eStudyEntry) / eStudyRiskA
+
+    if forceExitNow and eStudyResultEventBar != bar_index
+        eStudyEodRA := eStudyRiskA > 0 ? (close - eStudyEntry) / eStudyRiskA : na
+        eStudyMfeA = eStudyRiskA > 0 and not na(eStudyHighest) ? (eStudyHighest - eStudyEntry) / eStudyRiskA : na
+        eStudyMaeA = eStudyRiskA > 0 and not na(eStudyLowest) ? (eStudyLowest - eStudyEntry) / eStudyRiskA : na
+        eStudyMfeB = eStudyRiskB > 0 and not na(eStudyHighest) ? (eStudyHighest - eStudyEntry) / eStudyRiskB : na
+        eStudyMaeB = eStudyRiskB > 0 and not na(eStudyLowest) ? (eStudyLowest - eStudyEntry) / eStudyRiskB : na
+        eStudyLastSummary := "A " + eStudyFirstA + " | B " + eStudyFirstB + (eStudyAStopThen2R ? " | A→2R" : "")
+        eStudyResultEventBar := bar_index
+        eStudyDone   := true
+        eStudyActive := false
+
+        if enablePineAlerts and enableResearchResultAlerts
+            alert("NG RESEARCH RESULT | Lane E SHADOW STOP | " + syminfo.ticker +
+                  " | Entry " + str.tostring(eStudyEntry, format.mintick) +
+                  " | StopA " + str.tostring(eStudyStopA, format.mintick) +
+                  " | StopB " + str.tostring(eStudyStopB, format.mintick) +
+                  " | QtyB " + (na(eStudyShadowQtyB) ? "—" : str.tostring(eStudyShadowQtyB, "#")) +
+                  " | FirstA " + eStudyFirstA +
+                  " | FirstB " + eStudyFirstB +
+                  " | AStop " + (eStudyAStopHit ? "YES" : "NO") +
+                  " | A2R " + (eStudyA2RHit ? "YES" : "NO") +
+                  " | AStopThen2R " + (eStudyAStopThen2R ? "YES" : "NO") +
+                  " | BStop " + (eStudyBStopHit ? "YES" : "NO") +
+                  " | B2R " + (eStudyB2RHit ? "YES" : "NO") +
+                  " | MFE_A " + (na(eStudyMfeA) ? "—" : str.tostring(eStudyMfeA, "#.##") + "R") +
+                  " | MAE_A " + (na(eStudyMaeA) ? "—" : str.tostring(eStudyMaeA, "#.##") + "R") +
+                  " | MFE_B " + (na(eStudyMfeB) ? "—" : str.tostring(eStudyMfeB, "#.##") + "R") +
+                  " | MAE_B " + (na(eStudyMaeB) ? "—" : str.tostring(eStudyMaeB, "#.##") + "R") +
+                  " | R15_A " + (na(eStudyR15A) ? "—" : str.tostring(eStudyR15A, "#.##")) +
+                  " | R30_A " + (na(eStudyR30A) ? "—" : str.tostring(eStudyR30A, "#.##")) +
+                  " | EOD_A " + (na(eStudyEodRA) ? "—" : str.tostring(eStudyEodRA, "#.##")),
+                  alert.freq_all)
+
+// Data-Window-only study levels. They do not occupy chart space.
+plot(enableEShadowStudy and (eStudyActive or eStudyDone) ? eStudyStopA : na, title="E Study Stop A", color=color.new(color.red, 100), display=display.data_window)
+plot(enableEShadowStudy and (eStudyActive or eStudyDone) ? eStudyStopB : na, title="E Study Stop B", color=color.new(color.red, 100), display=display.data_window)
+plot(enableEShadowStudy and (eStudyActive or eStudyDone) ? eStudyTargetA : na, title="E Study 2R A", color=color.new(color.green, 100), display=display.data_window)
+plot(enableEShadowStudy and (eStudyActive or eStudyDone) ? eStudyTargetB : na, title="E Study 2R B", color=color.new(color.green, 100), display=display.data_window)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Per-lane risk sizing
+// ─────────────────────────────────────────────────────────────────────────────
+aLevelsValid = not na(autoEntry) and not na(autoStop) and autoEntry > autoStop
+aRiskPerShare = aLevelsValid ? autoEntry - autoStop : na
+aRiskQty       = aLevelsValid and aRiskPerShare > 0 ? math.floor(riskBudget / aRiskPerShare) : na
+aCapitalQty    = aLevelsValid and autoEntry > 0 ? math.floor(maxPositionValue / autoEntry) : na
+aPaperQty      = not na(aRiskQty) and not na(aCapitalQty) ? math.min(aRiskQty, aCapitalQty) : na
+aEffectiveRisk = aLevelsValid and not na(aPaperQty) ? aPaperQty * aRiskPerShare : na
+
+bLevelsValid = not na(bEntry) and not na(bStop) and bEntry > bStop
+bRiskPerShare = bLevelsValid ? bEntry - bStop : na
+bRiskQty       = bLevelsValid and bRiskPerShare > 0 ? math.floor(riskBudget / bRiskPerShare) : na
+bCapitalQty    = bLevelsValid and bEntry > 0 ? math.floor(maxPositionValue / bEntry) : na
+bPaperQty      = not na(bRiskQty) and not na(bCapitalQty) ? math.min(bRiskQty, bCapitalQty) : na
+bEffectiveRisk = bLevelsValid and not na(bPaperQty) ? bPaperQty * bRiskPerShare : na
+
+cLevelsValid = not na(cEntry) and not na(cStop) and cEntry > cStop
+cRiskPerShare = cLevelsValid ? cEntry - cStop : na
+cRiskQty       = cLevelsValid and cRiskPerShare > 0 ? math.floor(riskBudget / cRiskPerShare) : na
+cCapitalQty    = cLevelsValid and cEntry > 0 ? math.floor(maxPositionValue / cEntry) : na
+cPaperQty      = not na(cRiskQty) and not na(cCapitalQty) ? math.min(cRiskQty, cCapitalQty) : na
+cEffectiveRisk = cLevelsValid and not na(cPaperQty) ? cPaperQty * cRiskPerShare : na
+
+dLevelsValid = not na(dEntry) and not na(dStop) and dEntry > dStop
+dRiskPerShare = dLevelsValid ? dEntry - dStop : na
+dRiskQty       = dLevelsValid and dRiskPerShare > 0 ? math.floor(riskBudget / dRiskPerShare) : na
+dCapitalQty    = dLevelsValid and dEntry > 0 ? math.floor(maxPositionValue / dEntry) : na
+dPaperQty      = not na(dRiskQty) and not na(dCapitalQty) ? math.min(dRiskQty, dCapitalQty) : na
+dEffectiveRisk = dLevelsValid and not na(dPaperQty) ? dPaperQty * dRiskPerShare : na
+eLevelsValid = not na(eEntry) and not na(eStop) and eEntry > eStop
+eRiskPerShare = eLevelsValid ? eEntry - eStop : na
+ePaperQty = eLevelsValid ? calcQty(eEntry, eStop) : 0.0
+eEffectiveRisk = eLevelsValid and ePaperQty >= 1 ? ePaperQty * eRiskPerShare : na
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Clean context plots
+// ─────────────────────────────────────────────────────────────────────────────
+sameHighLevel = not na(pdh) and not na(pwh) and math.abs(pdh - pwh) <= syminfo.mintick
+sameLowLevel  = not na(pdl) and not na(pwl) and math.abs(pdl - pwl) <= syminfo.mintick
+
+plot(showPD ? pdh : na, "PDH", color=color.new(color.red, 30), linewidth=1, style=plot.style_linebr, display=display.pane)
+plot(showPD ? pdl : na, "PDL", color=color.new(color.green, 30), linewidth=1, style=plot.style_linebr, display=display.pane)
+plot(showPW and not sameHighLevel ? pwh : na, "PWH", color=color.new(color.red, 60), linewidth=1, style=plot.style_linebr, display=display.pane)
+plot(showPW and not sameLowLevel ? pwl : na, "PWL", color=color.new(color.green, 60), linewidth=1, style=plot.style_linebr, display=display.pane)
+plot(showVWAP ? vwap : na, "Session VWAP", color=color.new(color.blue, 0), linewidth=2, display=display.pane)
+plot(showEMA ? ema20 : na, "EMA", color=color.new(color.orange, 0), linewidth=2, display=display.pane)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Combined event/focus logic. Lanes remain independently defined for research,
+// but only the most actionable current lane gets chart geometry to avoid clutter.
+// ─────────────────────────────────────────────────────────────────────────────
+aEntryNow  = not na(entryEventBar) and bar_index == entryEventBar
+aStopNow   = not na(stopEventBar) and bar_index == stopEventBar
+aTargetNow = not na(targetEventBar) and bar_index == targetEventBar
+aPartialNow = not na(autoPartialEventBar) and bar_index == autoPartialEventBar
+bEntryNow  = not na(bEntryEventBar) and bar_index == bEntryEventBar
+bStopNowEv = not na(bStopEventBar) and bar_index == bStopEventBar
+bTargetNowEv = not na(bTargetEventBar) and bar_index == bTargetEventBar
+bPartialNow = not na(bPartialEventBar) and bar_index == bPartialEventBar
+cEntryNow  = not na(cEntryEventBar) and bar_index == cEntryEventBar
+cStopNowEv = not na(cStopEventBar) and bar_index == cStopEventBar
+cTargetNowEv = not na(cTargetEventBar) and bar_index == cTargetEventBar
+cPartialNow = not na(cPartialEventBar) and bar_index == cPartialEventBar
+dEntryNow  = not na(dEntryEventBar) and bar_index == dEntryEventBar
+dStopNowEv = not na(dStopEventBar) and bar_index == dStopEventBar
+dTargetNowEv = not na(dTargetEventBar) and bar_index == dTargetEventBar
+dPartialNow = not na(dPartialEventBar) and bar_index == dPartialEventBar
+eEntryNow  = not na(eEntryEventBar) and bar_index == eEntryEventBar
+eStopNowEv = not na(eStopEventBar) and bar_index == eStopEventBar
+eTargetNowEv = not na(eTargetEventBar) and bar_index == eTargetEventBar
+ePartialNow = not na(ePartialEventBar) and bar_index == ePartialEventBar
+
+int focusLane = 0
+if aEntryNow or aStopNow or aTargetNow or aPartialNow
+    focusLane := 1
+else if bEntryNow or bStopNowEv or bTargetNowEv or bPartialNow
+    focusLane := 2
+else if cEntryNow or cStopNowEv or cTargetNowEv or cPartialNow
+    focusLane := 3
+else if dEntryNow or dStopNowEv or dTargetNowEv or dPartialNow
+    focusLane := 4
+else if eEntryNow or eStopNowEv or eTargetNowEv or ePartialNow
+    focusLane := 5
+else if autoState == 3
+    focusLane := 1
+else if bState == 3
+    focusLane := 2
+else if cState == 3
+    focusLane := 3
+else if dState == 3
+    focusLane := 4
+else if eState == 3
+    focusLane := 5
+else if autoState == 2
+    focusLane := 1
+else if bState == 2
+    focusLane := 2
+else if cState == 2
+    focusLane := 3
+else if dState == 2
+    focusLane := 4
+else if eState == 2
+    focusLane := 5
+
+focusEntry = focusLane == 1 ? autoEntry : focusLane == 2 ? bEntry : focusLane == 3 ? cEntry : focusLane == 4 ? dEntry : focusLane == 5 ? eEntry : na
+focusStop  = focusLane == 1 ? (autoState == 3 and not na(autoManagedStop) ? autoManagedStop : autoStop) :
+     focusLane == 2 ? (bState == 3 and not na(bManagedStop) ? bManagedStop : bStop) :
+     focusLane == 3 ? (cState == 3 and not na(cManagedStop) ? cManagedStop : cStop) :
+     focusLane == 4 ? (dState == 3 and not na(dManagedStop) ? dManagedStop : dStop) :
+     focusLane == 5 ? (eState == 3 and not na(eManagedStop) ? eManagedStop : eStop) : na
+focusTarget = focusLane == 1 ? autoTarget : focusLane == 2 ? bTarget : focusLane == 3 ? cTarget : focusLane == 4 ? dTarget : focusLane == 5 ? eTarget : na
+focusReadyBar = focusLane == 1 ? readyBar : focusLane == 2 ? bReadyBar : focusLane == 3 ? cReadyBar : focusLane == 4 ? dReadyBar : focusLane == 5 ? eReadyBar : na
+focusLevelsValid = not na(focusEntry) and not na(focusStop) and focusEntry > focusStop
+focusRiskPerShare = focusLane == 1 ? aRiskPerShare : focusLane == 2 ? bRiskPerShare : focusLane == 3 ? cRiskPerShare : focusLane == 4 ? dRiskPerShare : focusLane == 5 ? eRiskPerShare : na
+focusPaperQty = focusLane == 1 ? (autoState == 3 and not na(autoRemainingQty) ? autoRemainingQty : aPaperQty) :
+     focusLane == 2 ? (bState == 3 and not na(bRemainingQty) ? bRemainingQty : bPaperQty) :
+     focusLane == 3 ? (cState == 3 and not na(cRemainingQty) ? cRemainingQty : cPaperQty) :
+     focusLane == 4 ? (dState == 3 and not na(dRemainingQty) ? dRemainingQty : dPaperQty) :
+     focusLane == 5 ? (eState == 3 and not na(eRemainingQty) ? eRemainingQty : ePaperQty) : na
+focusEffectiveRisk = focusLane == 1 ? aEffectiveRisk : focusLane == 2 ? bEffectiveRisk : focusLane == 3 ? cEffectiveRisk : focusLane == 4 ? dEffectiveRisk : focusLane == 5 ? eEffectiveRisk : na
+
+var line entryLine  = na
+var line stopLine   = na
+var line targetLine = na
+geometryActive = showSetupGeometry and focusLevelsValid and focusLane != 0
+geometryStartBar = not na(focusReadyBar) ? focusReadyBar : bar_index
+
+if geometryActive
+    if na(entryLine)
+        entryLine := line.new(geometryStartBar, focusEntry, bar_index + 1, focusEntry, xloc=xloc.bar_index, extend=extend.right, color=color.lime, width=2)
+    else
+        line.set_xy1(entryLine, geometryStartBar, focusEntry)
+        line.set_xy2(entryLine, bar_index + 1, focusEntry)
+    if na(stopLine)
+        stopLine := line.new(geometryStartBar, focusStop, bar_index + 1, focusStop, xloc=xloc.bar_index, extend=extend.right, color=color.red, width=2)
+    else
+        line.set_xy1(stopLine, geometryStartBar, focusStop)
+        line.set_xy2(stopLine, bar_index + 1, focusStop)
+    if na(targetLine)
+        targetLine := line.new(geometryStartBar, focusTarget, bar_index + 1, focusTarget, xloc=xloc.bar_index, extend=extend.right, color=color.aqua, width=2)
+    else
+        line.set_xy1(targetLine, geometryStartBar, focusTarget)
+        line.set_xy2(targetLine, bar_index + 1, focusTarget)
+else
+    if not na(entryLine)
+        line.delete(entryLine)
+        entryLine := na
+    if not na(stopLine)
+        line.delete(stopLine)
+        stopLine := na
+    if not na(targetLine)
+        line.delete(targetLine)
+        targetLine := na
+
+// Optional research markers. Hidden by default.
+plotshape(showDebugMarkers and expansionSignal, title="Lane A expansion", style=shape.circle, location=location.belowbar,
+     size=size.tiny, color=color.new(color.blue, 0), text="A EXP", display=display.pane)
+plotshape(showDebugMarkers and autoState == 2 and bar_index == readyBar, title="Lane A ready", style=shape.triangleup, location=location.belowbar,
+     size=size.tiny, color=color.new(color.yellow, 0), text="A RDY", display=display.pane)
+plotshape(showDebugMarkers and bBreakoutQuality, title="Lane B level breakout", style=shape.circle, location=location.belowbar,
+     size=size.tiny, color=color.new(color.purple, 0), text="B BO", display=display.pane)
+plotshape(showDebugMarkers and bState == 2 and bar_index == bReadyBar, title="Lane B ready", style=shape.triangleup, location=location.belowbar,
+     size=size.tiny, color=color.new(color.fuchsia, 0), text="B RDY", display=display.pane)
+plotshape(showDebugMarkers and cMomentumQuality, title="Lane C momentum setup", style=shape.circle, location=location.belowbar,
+     size=size.tiny, color=color.new(color.teal, 0), text="C MOM", display=display.pane)
+plotshape(showDebugMarkers and cState == 2 and bar_index == cReadyBar, title="Lane C ready", style=shape.triangleup, location=location.belowbar,
+     size=size.tiny, color=color.new(color.aqua, 0), text="C RDY", display=display.pane)
+plotshape(showDebugMarkers and dImpulseQuality, title="Lane D opening drive impulse", style=shape.circle, location=location.belowbar,
+     size=size.tiny, color=color.new(color.orange, 0), text="D IMP", display=display.pane)
+plotshape(showDebugMarkers and dState == 2 and bar_index == dReadyBar, title="Lane D ready", style=shape.triangleup, location=location.belowbar,
+     size=size.tiny, color=color.new(color.orange, 0), text="D RDY", display=display.pane)
+plotshape(showDebugMarkers and ePauseCandidate, title="Lane E late pullback/base", style=shape.circle, location=location.belowbar,
+     size=size.tiny, color=color.new(color.yellow, 0), text="E PB", display=display.pane)
+plotshape(showDebugMarkers and eState == 2 and bar_index == eReadyBar, title="Lane E ready", style=shape.triangleup, location=location.belowbar,
+     size=size.tiny, color=color.new(color.yellow, 0), text="E RDY", display=display.pane)
+plotshape(showDebugMarkers and fastWatchNow, title="Fast mover watch", style=shape.diamond, location=location.belowbar,
+     size=size.tiny, color=color.new(color.yellow, 0), text="WATCH", display=display.pane)
+
+plotshape(showTradeMarkers and aEntryNow, title="Lane A Paper BUY", style=shape.triangleup, location=location.belowbar,
+     size=size.small, color=color.lime, text="BUY A", display=display.pane)
+plotshape(showTradeMarkers and (aStopNow or aTargetNow or aPartialNow), title="Lane A Paper SELL", style=shape.xcross, location=location.abovebar,
+     size=size.small, color=color.red, text="SELL A", display=display.pane)
+plotshape(showTradeMarkers and bEntryNow, title="Lane B Paper BUY", style=shape.triangleup, location=location.belowbar,
+     size=size.small, color=color.lime, text="BUY B", display=display.pane)
+plotshape(showTradeMarkers and (bStopNowEv or bTargetNowEv or bPartialNow), title="Lane B Paper SELL", style=shape.xcross, location=location.abovebar,
+     size=size.small, color=color.red, text="SELL B", display=display.pane)
+plotshape(showTradeMarkers and cEntryNow, title="Lane C Paper BUY", style=shape.triangleup, location=location.belowbar,
+     size=size.small, color=color.lime, text="BUY C", display=display.pane)
+plotshape(showTradeMarkers and (cStopNowEv or cTargetNowEv or cPartialNow), title="Lane C Paper SELL", style=shape.xcross, location=location.abovebar,
+     size=size.small, color=color.red, text="SELL C", display=display.pane)
+plotshape(showTradeMarkers and dEntryNow, title="Lane D Paper BUY", style=shape.triangleup, location=location.belowbar,
+     size=size.small, color=color.lime, text="BUY D", display=display.pane)
+plotshape(showTradeMarkers and (dStopNowEv or dTargetNowEv or dPartialNow), title="Lane D Paper SELL", style=shape.xcross, location=location.abovebar,
+     size=size.small, color=color.red, text="SELL D", display=display.pane)
+plotshape(showTradeMarkers and eEntryNow, title="Lane E Paper BUY", style=shape.triangleup, location=location.belowbar,
+     size=size.small, color=color.lime, text="BUY E", display=display.pane)
+plotshape(showTradeMarkers and (eStopNowEv or eTargetNowEv or ePartialNow), title="Lane E Paper SELL", style=shape.xcross, location=location.abovebar,
+     size=size.small, color=color.red, text="SELL E", display=display.pane)
+
+// Backup named alert conditions for diagnosis.
+// Primary production notifications should still use "Any alert() function call"
+// so they receive the detailed dynamic Entry/SL/Target/Qty messages above.
+alertcondition(aEntryNow or bEntryNow or cEntryNow or dEntryNow or eEntryNow,
+     title="NG BACKUP ANY PAPER BUY",
+     message="NG BACKUP PAPER BUY event on {{ticker}}")
+alertcondition(aStopNow or aTargetNow or aPartialNow or bStopNowEv or bTargetNowEv or bPartialNow or cStopNowEv or cTargetNowEv or cPartialNow or dStopNowEv or dTargetNowEv or dPartialNow or eStopNowEv or eTargetNowEv or ePartialNow,
+     title="NG BACKUP ANY PAPER SELL",
+     message="NG BACKUP PAPER SELL event on {{ticker}}")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Compact dashboard
+// ─────────────────────────────────────────────────────────────────────────────
+dashPosition = dashboardPosInput == "Top Left" ? position.top_left :
+     dashboardPosInput == "Middle Right" ? position.middle_right :
+     dashboardPosInput == "Middle Left" ? position.middle_left :
+     dashboardPosInput == "Bottom Right" ? position.bottom_right :
+     dashboardPosInput == "Bottom Left" ? position.bottom_left : position.top_right
+
+// 14 rows only. Volume row now shows current pace versus session memory; research diagnostics stay internal.
+var table dash = table.new(position.top_right, 2, 14,
+     bgcolor=color.new(color.black, 12), frame_color=color.new(color.gray, 55), frame_width=1)
+
+fmtPct(x) => na(x) ? "—" : str.tostring(x, "#.##") + "%"
+fmtPx(x)  => na(x) ? "—" : str.tostring(x, format.mintick)
+fmtNum(x) => na(x) ? "—" : str.tostring(x, "#.##")
+
+goodBg    = color.new(color.green, 65)
+badBg     = color.new(color.red, 70)
+warnBg    = color.new(color.orange, 65)
+neutralBg = color.new(color.gray, 80)
+blueBg    = color.new(color.blue, 65)
+
+string aStage = autoState == 0 ? "SCAN" : autoState == 1 ? "WAIT PB" : autoState == 2 ? "READY" : autoState == 3 ? "TRADE" : autoState == 5 ? "MISS" : "EXIT"
+string bStage = bState == 0 ? "SCAN" : bState == 1 ? "WAIT LEVEL" : bState == 2 ? "READY" : bState == 3 ? "TRADE" : bState == 5 ? "MISS" : "EXIT"
+string cStage = cState == 0 ? "SCAN" : cState == 2 ? "READY" : cState == 3 ? "TRADE" : cState == 5 ? "MISS" : "EXIT"
+string dStage = not enableLaneD ? "OFF" : dState == 0 and not dBeforeEnd ? "OPEN DONE" : dState == 0 ? "SCAN" : dState == 1 ? "WAIT μPB" : dState == 2 ? "READY" : dState == 3 ? "TRADE" : dState == 5 ? "MISS" : "EXIT"
+string eStartTxt = str.tostring(D_END_HOUR) + ":" + str.tostring(D_END_MINUTE, "00")
+string eStage = not enableLaneE ? "OFF" : not eWindowOpen and eState == 0 ? "AFTER " + eStartTxt : eState == 0 ? "SCAN" : eState == 1 ? "WAIT PB/BASE" : eState == 2 ? "READY" : eState == 3 ? "TRADE" : eState == 5 ? "MISS" : "EXIT"
+
+string focusTxt = focusLane == 1 ? "A" : focusLane == 2 ? "B" : focusLane == 3 ? "C" : focusLane == 4 ? "D" : focusLane == 5 ? "E" : "—"
+
+bool anySellNow = aStopNow or aTargetNow or aPartialNow or bStopNowEv or bTargetNowEv or bPartialNow or cStopNowEv or cTargetNowEv or cPartialNow or dStopNowEv or dTargetNowEv or dPartialNow or eStopNowEv or eTargetNowEv or ePartialNow
+bool anyBuyNow  = aEntryNow or bEntryNow or cEntryNow or dEntryNow or eEntryNow
+bool anyInTrade = autoState == 3 or bState == 3 or cState == 3 or dState == 3 or eState == 3
+bool anyReady   = autoState == 2 or bState == 2 or cState == 2 or dState == 2 or eState == 2
+bool anyWaiting = autoState == 1 or bState == 1 or dState == 1 or eState == 1
+
+string contextBlocker = not isFiveMinute ? "USE 5m" :
+     not inNseCashSession ? "OUTSIDE SESSION" :
+     not afterEntryStart ? "BEFORE START" :
+     not beforeEntryCutoff ? "ENTRY CLOSED" :
+     not emaTrendUp ? "EMA NOT UP" :
+     not aboveVWAP ? "BELOW VWAP" :
+     not rsLeader ? "RS <= 0" : "CONTEXT OK"
+
+string aBlocker = autoState != 0 ? aStage :
+     not contextGood ? contextBlocker :
+     close <= open ? "A: need bull bar" :
+     na(priorHigh) or close <= priorHigh ? "A: no 8-bar BO" :
+     na(atr) or atr <= 0 or barRange < atr * MIN_EXPANSION_RANGE_ATR ? "A: range <1 ATR" :
+     bodyFraction < MIN_EXPANSION_BODY_FRACTION ? "A: body <60%" :
+     closePosition < MIN_EXPANSION_CLOSE_POSITION ? "A: weak close" :
+     na(completedBarVolRatio) or completedBarVolRatio < MIN_EXPANSION_VOLUME_RATIO ? "A: vol <1.5x" : "A: qualifying"
+
+string cBlocker = cState != 0 ? cStage :
+     not contextGood ? contextBlocker :
+     na(priorHigh) or close <= priorHigh ? "C: no 8-bar BO" :
+     na(atr) or atr <= 0 or barRange < atr * C_MIN_RANGE_ATR ? "C: range <1 ATR" :
+     bodyFraction < C_MIN_BODY_FRACTION ? "C: body <65%" :
+     closePosition < C_MIN_CLOSE_POSITION ? "C: weak close" :
+     na(completedBarVolRatio) or completedBarVolRatio < C_MIN_VOLUME_RATIO ? "C: vol <2x" :
+     na(rsSpreadPct) or rsSpreadPct < C_MIN_RS_PCT ? "C: RS <1%" :
+     na(cEmaExtensionAtr) or cEmaExtensionAtr > C_MAX_CLOSE_ABOVE_EMA_ATR ? "C: too extended" : "C: qualifying"
+
+string eBlocker = not enableLaneE ? "E OFF" :
+     not eWindowOpen ? "E starts " + eStartTxt :
+     eState != 0 ? (eState == 1 ? eLastRejectReason : eStage) :
+     not sessionVolImpulseOk ? "E: wait session vol impulse" :
+     not eContextStrong ? "E: wait price/RS context" : "E: arm PB/base"
+
+// Coverage diagnostics are DISPLAY ONLY. Prefer the finalized remembered C/D
+// reason for a recent confirmed attempt so a forming next bar cannot hide why
+// the prior momentum bar failed. A uses its actual current state/blocker.
+string aCoverageDiag = autoState != 0 ? "A " + aStage : aBlocker
+string cCoverageDiag = cState != 0 ? "C " + cStage :
+     not na(cLastRejectBar) and bar_index - cLastRejectBar <= 2 ? "C: " + cLastRejectReason : cBlocker
+string dCoverageDiag = dState != 0 ? "D " + dStage :
+     not na(dLastRejectBar) and bar_index - dLastRejectBar <= 2 ? "D: " + dLastRejectReason : "D SCAN"
+string fastCoverageWhy = aCoverageDiag + " | " + cCoverageDiag + " | " + dCoverageDiag
+
+string actionTxt = not isFiveMinute ? "NO TRADE" :
+     anySellNow ? "SELL NOW" :
+     anyBuyNow ? "BUY NOW" :
+     anyInTrade ? "HOLD / MANAGE" :
+     not entryWindowOpen ? (not afterEntryStart ? "WAIT START" : "NO NEW TRADE") :
+     anyReady ? "WAIT TRIGGER" :
+     autoState == 1 ? "WAIT 1ST PB" :
+     bState == 1 ? "WAIT LEVEL" :
+     dState == 1 ? "WAIT MICRO-PB" :
+     eState == 1 ? "WAIT RE-ACCEL" :
+     fastMoverCore ? "FAST / SEEK SETUP" :
+     "NO BUY"
+
+string whyTxt = anyInTrade ? "Trade managed automatically" :
+     eState == 2 ? "E ready: new local break" :
+     autoState == 2 ? "A ready: break PB high" :
+     bState == 2 ? "B ready: level continuation" :
+     cState == 2 ? "C ready: momentum trigger" :
+     dState == 2 ? "D ready: micro-PB trigger" :
+     eState == 1 ? eBlocker :
+     fastMoverCore and eWindowOpen ? "E seeks PB/base | " + cCoverageDiag :
+     fastMoverCore ? fastCoverageWhy :
+     autoState == 1 ? "A: waiting controlled PB" :
+     bState == 1 ? "B: waiting accept/retest" :
+     dState == 1 ? "D: waiting micro-PB" :
+     cBlocker != "CONTEXT OK" ? cBlocker : aBlocker
+
+color actionBg = anySellNow ? badBg : anyBuyNow ? goodBg : anyInTrade ? goodBg : anyReady ? blueBg : anyWaiting or fastMoverCore ? warnBg : neutralBg
+
+if barstate.islast
+    table.set_position(dash, dashPosition)
+    table.clear(dash, 0, 0, 1, 13)
+    if showDashboard
+        bool dayFast = not na(stockDayPct) and stockDayPct >= FAST_MIN_DAY_PCT
+        bool rsFast = not na(dayRsPct) and dayRsPct >= FAST_MIN_DAY_RS_PCT
+        bool intraFast = not na(rsSpreadPct) and rsSpreadPct >= FAST_MIN_INTRADAY_RS
+        bool volFast = not na(fastVolStrength) and fastVolStrength >= FAST_MIN_VOL_PACE
+        bool volSession = sessionVolImpulseOk
+        string ctxTxt = (emaTrendUp ? "EMA↑" : "EMA×") + " | " + (aboveVWAP ? "VWAP+" : fastVwapOk ? "VWAP~" : "VWAP-") + " | " + (liquidityOk ? "LIQ✓" : "LIQ×")
+        color ctxBg = emaTrendUp and aboveVWAP and liquidityOk ? goodBg : neutralBg
+        string strengthTxt = "D " + fmtPct(stockDayPct) + " | RS " + fmtPct(dayRsPct) + " | I " + fmtPct(rsSpreadPct)
+        color strengthBg = dayFast and rsFast and intraFast ? goodBg : (not na(stockDayPct) and stockDayPct > 0 and not na(dayRsPct) and dayRsPct > 0 ? warnBg : neutralBg)
+        string volumeTxt = "Now " + (na(volPace) ? "—" : str.tostring(volPace, "#.##") + "x") + " | MoverPeak " + (na(sessionVolStrength) ? "—" : str.tostring(sessionVolStrength, "#.##") + "x") + (volSession ? " ✓" : "")
+        color volumeBg = volSession ? goodBg : (volFast ? warnBg : neutralBg)
+        string levelTxt = "PDH " + fmtPx(pdh) + " | PWH " + fmtPx(pwh)
+        string tradeTxt = focusLane == 0 ? "—" : focusTxt + "  E " + fmtPx(focusEntry) + "  S " + fmtPx(focusStop)
+        string takeTxt = focusLane == 0 ? "—" : str.tostring(rrMultiple, "#.##") + "R " + fmtPx(focusTarget) + " | Q " + (na(focusPaperQty) ? "—" : str.tostring(focusPaperQty, "#"))
+        string riskTxt = focusLane == 0 or na(focusEffectiveRisk) ? "₹" + str.tostring(riskBudget, "#") + " max | ₹" + str.tostring(maxPositionValue, "#") + " cap" : "Risk ₹" + str.tostring(focusEffectiveRisk, "#") + " | Cap ₹" + str.tostring(maxPositionValue, "#")
+
+        table.cell(dash, 0, 0, "NG v0.8.12", text_color=color.white, bgcolor=color.new(color.blue, 45), text_size=size.small)
+        table.cell(dash, 1, 0, "PAPER • ACTION", text_color=color.white, bgcolor=color.new(color.blue, 45), text_size=size.small)
+        table.cell(dash, 0, 1, "Context", text_color=color.white, text_size=size.small)
+        table.cell(dash, 1, 1, ctxTxt, text_color=color.white, bgcolor=ctxBg, text_size=size.small)
+        table.cell(dash, 0, 2, "Strength", text_color=color.white, text_size=size.small)
+        table.cell(dash, 1, 2, strengthTxt, text_color=color.white, bgcolor=strengthBg, text_size=size.small)
+        table.cell(dash, 0, 3, "Volume", text_color=color.white, text_size=size.small)
+        table.cell(dash, 1, 3, volumeTxt, text_color=color.white, bgcolor=volumeBg, text_size=size.small)
+        table.cell(dash, 0, 4, "Levels", text_color=color.white, text_size=size.small)
+        table.cell(dash, 1, 4, levelTxt, text_color=color.white, text_size=size.small)
+        table.cell(dash, 0, 5, "A • 1st PB", text_color=color.white, text_size=size.small)
+        table.cell(dash, 1, 5, aStage, text_color=color.white, text_size=size.small)
+        table.cell(dash, 0, 6, "B • Level", text_color=color.white, text_size=size.small)
+        table.cell(dash, 1, 6, bStage, text_color=color.white, text_size=size.small)
+        table.cell(dash, 0, 7, "C • Momentum", text_color=color.white, text_size=size.small)
+        table.cell(dash, 1, 7, cStage, text_color=color.white, text_size=size.small)
+        table.cell(dash, 0, 8, "D • Open", text_color=color.white, text_size=size.small)
+        table.cell(dash, 1, 8, dStage, text_color=color.white, text_size=size.small)
+        table.cell(dash, 0, 9, "E • Re-Accel", text_color=color.white, text_size=size.small)
+        table.cell(dash, 1, 9, eStage, text_color=color.white, bgcolor=eState == 2 ? blueBg : eState == 1 ? warnBg : neutralBg, text_size=size.small)
+        table.cell(dash, 0, 10, "ACTION", text_color=color.white, bgcolor=actionBg, text_size=size.small)
+        table.cell(dash, 1, 10, actionTxt, text_color=color.white, bgcolor=actionBg, text_size=size.small)
+        table.cell(dash, 0, 11, "Trade", text_color=color.white, text_size=size.small)
+        table.cell(dash, 1, 11, tradeTxt, text_color=color.white, text_size=size.small)
+        table.cell(dash, 0, 12, "Take / Risk", text_color=color.white, text_size=size.small)
+        table.cell(dash, 1, 12, focusLane == 0 ? riskTxt : takeTxt + " | " + riskTxt, text_color=color.white, text_size=size.small)
+        table.cell(dash, 0, 13, "Why", text_color=color.white, text_size=size.small)
+        table.cell(dash, 1, 13, whyTxt, text_color=color.white, text_size=size.small)
