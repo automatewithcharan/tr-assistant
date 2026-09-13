@@ -83,7 +83,7 @@ def _validate_events(rows: list[dict]) -> None:
         if event_type != "candidate_observed" and row.get("signal_time_fields") is not None:
             raise ValueError(f"signal-time fields on linked event at line {line_no}")
         try:
-            _timestamp(row.get("event_timestamp"), "event timestamp")
+            event_dt = _timestamp(row.get("event_timestamp"), "event timestamp")
         except ValueError as exc:
             raise ValueError(f"invalid lifecycle timestamp at line {line_no}") from exc
         if event_type != "candidate_observed":
@@ -95,6 +95,10 @@ def _validate_events(rows: list[dict]) -> None:
             observation_dt = _timestamp(row.get("observation_timestamp"), "observation timestamp")
         except ValueError as exc:
             raise ValueError(f"invalid observation timestamp at line {line_no}") from exc
+        if event_dt != observation_dt:
+            raise ValueError(
+                f"candidate event timestamp does not match observation timestamp at line {line_no}"
+            )
         expected = TopGainerLifecycleRecorder.lifecycle_id(
             observation_dt.date().isoformat(), str(row.get("symbol") or "").strip().upper(),
             observation_dt.isoformat(timespec="microseconds"), str(row.get("source_lane") or ""),
@@ -111,7 +115,14 @@ def _validate_events(rows: list[dict]) -> None:
             raise ValueError(f"unexpected signal-time fields at line {line_no}")
         observations[lifecycle_id] = row
     for line_no, row in enumerate(rows, 1):
-        if row.get("event_type") == "candidate_observed" or not row.get("lifecycle_id"):
+        event_type = str(row.get("event_type") or "")
+        if event_type == "candidate_observed":
+            continue
+        if not row.get("lifecycle_id"):
+            if event_type == "session_outcome_finalized":
+                raise ValueError(
+                    f"terminal outcome missing observation identity at line {line_no}"
+                )
             continue
         observation = observations.get(str(row.get("lifecycle_id")))
         if observation is None:
@@ -120,16 +131,25 @@ def _validate_events(rows: list[dict]) -> None:
         observation_dt = _timestamp(observation.get("observation_timestamp"), "observation timestamp")
         if event_dt < observation_dt:
             raise ValueError(f"lifecycle event precedes observation at line {line_no}")
-        if (row.get("observation_id") != observation.get("lifecycle_id")
+        if (row.get("lifecycle_id") != observation.get("lifecycle_id")
+                or row.get("observation_id") != observation.get("lifecycle_id")
+                or row.get("observation_timestamp") != observation.get("observation_timestamp")
                 or row.get("origin_source_lane") != observation.get("source_lane")
                 or row.get("experiment_version") != observation.get("experiment_version")):
             raise ValueError(f"linked lifecycle identity mismatch at line {line_no}")
-        if row.get("event_type") == "session_outcome_finalized":
+        if event_type == "session_outcome_finalized":
             lifecycle_id = str(row.get("lifecycle_id"))
             if lifecycle_id in finalized:
                 raise ValueError(f"duplicate finalized outcome at line {line_no}")
             if row.get("payload") != row.get("future_labels"):
                 raise ValueError(f"finalized outcome payload mismatch at line {line_no}")
+            if row["future_labels"].get("completeness_status") not in {
+                "complete",
+                "incomplete",
+            }:
+                raise ValueError(
+                    f"invalid terminal completeness status at line {line_no}"
+                )
             finalized.add(lifecycle_id)
 
 
@@ -169,7 +189,7 @@ def load_local_bars(bars_root: Path, trading_date: str, symbol: str) -> tuple[li
 
 
 def enrich(events: list[dict], bars_root: Path, start_date: str,
-           end_date: str) -> tuple[list[dict], dict]:
+           end_date: str, *, eligible_only: bool = False) -> tuple[list[dict], dict]:
     _validate_events(events)
     existing_ids = {str(row.get("event_id")) for row in events}
     finalized_ids = {str(row.get("lifecycle_id")) for row in events
@@ -178,7 +198,14 @@ def enrich(events: list[dict], bars_root: Path, start_date: str,
     counts = Counter()
     observations = [row for row in events
                     if row.get("event_type") == "candidate_observed"
-                    and start_date <= str(row.get("trading_date", "")) <= end_date]
+                    and start_date <= str(row.get("trading_date", "")) <= end_date
+                    and (
+                        not eligible_only
+                        or (
+                            row.get("causal_evaluation_eligible", True)
+                            and not row.get("historical_reconstruction", False)
+                        )
+                    )]
     for observation in observations:
         lifecycle_id = str(observation.get("lifecycle_id") or "")
         if lifecycle_id in finalized_ids:
