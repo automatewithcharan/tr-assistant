@@ -23,6 +23,9 @@ OUTPUT_ROOT="$REPO/results/Data/live_feature_recorder/eod/$DATE"
 LOG_DIR="$REPO/results/Data/live_feature_recorder/eod/logs"
 LOG="$LOG_DIR/live_evidence_eod_${DATE}.log"
 LOCK="$REPO/results/Data/live_feature_recorder/eod/.live_evidence_eod.lock"
+RC=0
+LIFECYCLE_RC=0
+LIFECYCLE_STATE="not_started"
 mkdir -p "$LOG_DIR" "$OUTPUT_ROOT"
 
 exec 9>"$LOCK"
@@ -148,6 +151,15 @@ run_event_shadow_rebuild() {
         --root "$rebuilt/intraday_event_shadow" \
         --output-dir "$rebuilt/candidate_selectors" \
         >>"$LOG" 2>&1 || true
+}
+
+run_top_gainer_lifecycle_finalization() {
+    "$PYTHON" "$REPO/scripts/finalize_top_gainer_lifecycle_eod.py" \
+        --events "$REPO/results/Data/top_gainer_lifecycle/events.jsonl" \
+        --bars-root "$REPO/results/Data/kite_history_backfill/minute" \
+        --date "$DATE" \
+        --output-dir "$REPO/results/Data/top_gainer_lifecycle/enriched" \
+        >>"$LOG" 2>&1
 }
 
 run_rank_migration_audit() {
@@ -484,6 +496,14 @@ run_eod_integrity() {
 
 send_eod_integrity_summary() {
     local integrity="$REPO/results/Data/intraday_evidence_pipeline/eod_latest.json"
+    if [ "$RC" -ne 0 ] && [ "$LIFECYCLE_RC" -eq 0 ]; then
+        send_discord "Intraday EOD evidence needs attention for $DATE | main_eod_backfill=failed rc=$RC lifecycle_finalization=$LIFECYCLE_STATE | see $LOG"
+        return
+    fi
+    if [ "${LIFECYCLE_RC:-0}" -ne 0 ]; then
+        send_discord "Intraday EOD evidence needs attention for $DATE | lifecycle_finalization=failed rc=$LIFECYCLE_RC | see $LOG"
+        return
+    fi
     if [ ! -s "$integrity" ]; then
         send_discord "Intraday EOD evidence needs attention for $DATE | integrity manifest missing | no orders enabled"
         return
@@ -509,6 +529,14 @@ print(
 if [ -f "$OUTPUT_ROOT/status.json" ]; then
     existing_status=$("$PYTHON" -c 'import json,sys; print(json.load(open(sys.argv[1])).get("status", ""))' "$OUTPUT_ROOT/status.json" 2>/dev/null || true)
     if [[ "$existing_status" == complete* ]]; then
+        if ! run_top_gainer_lifecycle_finalization; then
+            LIFECYCLE_RC=3
+            LIFECYCLE_STATE="failed"
+            echo "[$(date -u +'%Y-%m-%d %H:%M:%S UTC')] top-gainer lifecycle finalization failed" >>"$LOG"
+            send_eod_integrity_summary
+            exit 3
+        fi
+        LIFECYCLE_STATE="finalized"
         run_readiness
         run_ranked_replay
         run_live_microstructure_research
@@ -555,6 +583,19 @@ set +e
     >>"$LOG" 2>&1
 RC=$?
 set -e
+
+if [ "$RC" -eq 0 ]; then
+    if ! run_top_gainer_lifecycle_finalization; then
+        LIFECYCLE_RC=3
+        LIFECYCLE_STATE="failed"
+        echo "[$(date -u +'%Y-%m-%d %H:%M:%S UTC')] top-gainer lifecycle finalization failed" >>"$LOG"
+    else
+        LIFECYCLE_STATE="finalized"
+    fi
+else
+    LIFECYCLE_STATE="skipped_prerequisite_failed"
+    echo "[$(date -u +'%Y-%m-%d %H:%M:%S UTC')] top-gainer lifecycle finalization skipped because minute-bar EOD backfill failed rc=$RC" >>"$LOG"
+fi
 
 STATUS_FILE="$OUTPUT_ROOT/status.json"
 if [ -f "$STATUS_FILE" ]; then
@@ -610,6 +651,9 @@ run_pullback_reclaim_audit
 run_strategy_evidence_scoreboard
 run_eod_integrity
 run_pipeline_readiness
+if [ "$RC" -eq 0 ] && [ "$LIFECYCLE_RC" -ne 0 ]; then
+    RC="$LIFECYCLE_RC"
+fi
 send_eod_integrity_summary
 echo "[$(date -u +'%Y-%m-%d %H:%M:%S UTC')] live evidence EOD finished rc=$RC $SUMMARY" >>"$LOG"
 exit "$RC"

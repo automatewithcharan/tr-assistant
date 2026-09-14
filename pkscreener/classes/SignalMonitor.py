@@ -9,6 +9,7 @@ for active buy candidates so valid setups do not go silent.
 
 import html
 import json
+import math
 import os
 import subprocess
 import sys
@@ -17,6 +18,7 @@ import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
+from zoneinfo import ZoneInfo
 
 import pandas as pd
 import requests
@@ -27,20 +29,45 @@ from PKDevTools.classes.PKDateUtilities import PKDateUtilities
 from PKDevTools.classes.log import default_logger
 
 from pkscreener.classes.ActionableReport import ActionableReportRunner
+try:
+    from pkscreener.classes.AlertTimingObservability import (
+        AlertTimingObserver,
+        deliver_with_observability,
+    )
+except Exception:  # Observability must never prevent scanner startup.
+    AlertTimingObserver = None
+    deliver_with_observability = None
 from pkscreener.classes.AnomalyDetector import VolumeAnomalyDetector
 from pkscreener.classes.FullUniverseRankContractMatrixObserver import FullUniverseRankContractMatrixObserver
 from pkscreener.classes.FullUniverseRankEntryTimingObserver import FullUniverseRankEntryTimingObserver
 from pkscreener.classes.FullUniverseRankPaperObserver import FullUniverseRankPaperObserver
 from pkscreener.classes.LiveFeatureRecorder import LiveFeatureRecorder
+try:
+    from pkscreener.classes.ManualDiscordDeliveryGuard import NSEEQManualDiscordGuard
+except Exception:  # Human delivery fails closed when the guard is unavailable.
+    NSEEQManualDiscordGuard = None
 from pkscreener.classes.TopGainerLifecycleRecorder import TopGainerLifecycleRecorder
 from pkscreener.classes.IntradayEventShadowRecorder import IntradayEventShadowRecorder
 from pkscreener.classes.PaperTradeTracker import PaperTradeTracker
 from pkscreener.classes.RiskGuardrails import LiveTradingGuardrails
 from pkscreener.classes.SignalPerformanceTracker import SignalPerformanceTracker
+from pkscreener.classes.TickFreshnessDiagnostics import TickFreshnessDiagnostics
+try:
+    from pkscreener.classes.TradingViewCandidateDelivery import (
+        append_delivery_record,
+        deterministic_fallback_candidate_key,
+        reconstruct_delivery_states,
+    )
+except Exception:  # Direct delivery is optional; scanner work must continue.
+    append_delivery_record = None
+    deterministic_fallback_candidate_key = None
+    reconstruct_delivery_states = None
 
 
 class SignalMonitorRunner:
     """Continuously monitor a universe and alert on fresh Buy Now / Sell Now changes."""
+
+    CANDIDATE_ARTIFACT_SCHEMA_VERSION = "signalmonitor-candidates-v1"
 
     FULL_REFRESH_EVERY_CYCLES = int(os.environ.get("SIGNALMONITOR_FULL_REFRESH_EVERY_CYCLES", "200") or 200)
     MEANINGFUL_PRICE_MOVE_PCT = 0.5   # Tick-to-tick price move threshold (lowered for faster pick-up)
@@ -182,6 +209,7 @@ class SignalMonitorRunner:
         self.guardrail_max_daily_profit_amount = max(0.0, float(guardrail_max_daily_profit_amount or 0.0))
         self.guardrail_max_consecutive_losses = max(0, int(guardrail_max_consecutive_losses or 0))
         self.output_dir = Archiver.get_user_data_dir()
+        self._initialize_runtime_helpers()
         self.run_at = PKDateUtilities.currentDateTime()
         self.run_at_str = self.run_at.strftime("%Y-%m-%d %H:%M:%S")
         self.timestamp = self.run_at.strftime("%Y%m%d_%H%M%S")
@@ -248,7 +276,35 @@ class SignalMonitorRunner:
         self.radar_min_strength = max(0.0, float(os.environ.get("SIGNALMONITOR_RADAR_MIN_STRENGTH", "38") or "38"))
         self.radar_min_volume_ratio = max(0.0, float(os.environ.get("SIGNALMONITOR_RADAR_MIN_VOLUME_RATIO", "1.0") or "1.0"))
         self.radar_min_bs_ratio = max(0.0, float(os.environ.get("SIGNALMONITOR_RADAR_MIN_BS_RATIO", "1.2") or "1.2"))
+        self.tradingview_discord_max_attempts = max(
+            1,
+            int(float(os.environ.get("SIGNALMONITOR_TRADINGVIEW_DISCORD_MAX_ATTEMPTS", "3") or "3")),
+        )
+        self.tradingview_discord_retry_backoff_seconds = max(
+            0.0,
+            float(os.environ.get("SIGNALMONITOR_TRADINGVIEW_DISCORD_RETRY_BACKOFF_SECONDS", "1") or "1"),
+        )
+        self.tradingview_candidate_retry_ttl_seconds = max(
+            0.0,
+            float(os.environ.get("TRADINGVIEW_CANDIDATE_RETRY_TTL_SECONDS", "600") or "600"),
+        )
+        self.tradingview_candidate_max_total_attempts = max(
+            1,
+            int(float(os.environ.get("TRADINGVIEW_CANDIDATE_MAX_TOTAL_ATTEMPTS", "6") or "6")),
+        )
         self.monitor_heartbeat_minutes = max(0.0, float(os.environ.get("SIGNALMONITOR_HEARTBEAT_MINUTES", "10") or "10"))
+        self.buy_board_digest_seconds = max(
+            0.0,
+            float(os.environ.get("SIGNALMONITOR_BUY_BOARD_DIGEST_SECONDS", "60") or "60"),
+        )
+        self.buy_board_queue_display_limit = max(
+            1,
+            int(float(os.environ.get("SIGNALMONITOR_BUY_BOARD_QUEUE_DISPLAY_LIMIT", "15") or "15")),
+        )
+        self.buy_board_queue_refresh_seconds = max(
+            0.0,
+            float(os.environ.get("SIGNALMONITOR_BUY_BOARD_QUEUE_REFRESH_SECONDS", "600") or "600"),
+        )
         self.autotrade_enabled = self._env_truthy("SIGNALMONITOR_AUTOTRADE_ENABLED", "0")
         self.autotrade_observation_enabled = self._env_truthy(
             "SIGNALMONITOR_AUTOTRADE_OBSERVATION_ENABLED", "0"
@@ -297,6 +353,11 @@ class SignalMonitorRunner:
             else None
         )
         self._heartbeat_state_path = os.path.join(self.output_dir, f"signalmonitor_{self.universe}_heartbeat_state.json")
+        self._buy_now_board_state_path = os.path.join(
+            self.output_dir,
+            f"signalmonitor_{self.universe}_buy_now_board_state.json",
+        )
+        self._active_buy_now_board: Set[str] = self._load_buy_now_board_state()
         self._leader_ignition_state_path = os.path.join(self.output_dir, "signalmonitor_leader_ignition_state.json")
         self._leader_candidates: Dict[str, Dict[str, Any]] = self._load_leader_ignition_state()
         self._leader_last_ticks_by_symbol: Dict[str, Dict[str, Any]] = {}
@@ -436,6 +497,10 @@ class SignalMonitorRunner:
         # move together — when 2 light up, scan all 30 PHARMA stocks immediately).
         self._hot_sectors: Set[str] = set()
         self._hot_sectors_refreshed_at: Optional[datetime] = None
+        self._tick_freshness_diagnostics = TickFreshnessDiagnostics(self.output_dir)
+        self._diagnostic_live_tick_applied_symbols: Set[str] = set()
+        self._tick_diagnostic_context_cycle = ""
+        self._tick_diagnostic_context: Dict[str, Any] = {}
 
     def run(
         self,
@@ -445,6 +510,8 @@ class SignalMonitorRunner:
         self.run_at = PKDateUtilities.currentDateTime()
         self.run_at_str = self.run_at.strftime("%Y-%m-%d %H:%M:%S")
         self.timestamp = self.run_at.strftime("%Y%m%d_%H%M%S")
+        self._retry_pending_tradingview_candidates()
+
         symbols = self.actionable_runner.get_universe_symbols()
         if self.limit and self.limit > 0:
             symbols = symbols[: self.limit]
@@ -470,7 +537,16 @@ class SignalMonitorRunner:
 
         previous_state_df = self._load_previous_state()
         previous_simple_df = self._load_previous_simple()
-        cycle_symbols = self._select_symbols_for_cycle(symbols, previous_simple_df)
+        # Keep the monitor process alive for post-market bookkeeping, but do
+        # not select or build intraday candidates outside the half-open NSE
+        # candidate window.  Routing through the existing no-changed-cycle
+        # path preserves state/output/EOD maintenance and its downstream
+        # defense-in-depth gates.
+        cycle_symbols = (
+            self._select_symbols_for_cycle(symbols, previous_simple_df)
+            if self._is_intraday_candidate_window()
+            else []
+        )
         self._record_intraday_event_shadow()
         cycle_total = len(cycle_symbols)
         if cycle_total == 0:
@@ -494,6 +570,8 @@ class SignalMonitorRunner:
                 summary_df,
             )
             self._print_summary(summary_df, previous_simple_df, pd.DataFrame(columns=self.ALERT_COLUMNS), scorecard_df)
+            if previous_simple_df is not None and not previous_simple_df.empty:
+                self._send_buy_now_board_delta(previous_simple_df)
             self._close_paper_trades_if_eod()
             self._evaluate_event_shadow_outcomes_if_eod()
             self._cycle_number += 1
@@ -546,7 +624,9 @@ class SignalMonitorRunner:
         )
         self._last_simple_df = merged_simple_df
         alerts_df = self._build_alerts(previous_state_df, merged_state_df)
+        self._record_tick_freshness_diagnostics(alerts_df, "signal_monitor")
         early_breakout_alerts_df = self._build_early_breakout_alerts(merged_simple_df)
+        self._record_tick_freshness_diagnostics(early_breakout_alerts_df, "early_breakout")
         if not early_breakout_alerts_df.empty:
             already_alerted = set(alerts_df["Symbol"].astype(str).str.upper()) if not alerts_df.empty else set()
             if already_alerted:
@@ -556,6 +636,7 @@ class SignalMonitorRunner:
             if not early_breakout_alerts_df.empty:
                 alerts_df = pd.concat([alerts_df, early_breakout_alerts_df], ignore_index=True)
         top_gainer_radar_df = self._build_top_gainer_radar_alerts(merged_simple_df)
+        self._record_tick_freshness_diagnostics(top_gainer_radar_df, "top_gainer_radar")
         if not top_gainer_radar_df.empty:
             already_alerted = set(alerts_df["Symbol"].astype(str).str.upper()) if not alerts_df.empty else set()
             if already_alerted:
@@ -636,6 +717,7 @@ class SignalMonitorRunner:
 
         self._save_outputs(report_df, actionable_df, merged_simple_df, merged_state_df, alerts_df, summary_df)
         self._print_summary(summary_df, merged_simple_df, alerts_df, scorecard_df)
+        self._send_buy_now_board_delta(merged_simple_df)
         self._send_alerts(alerts_df, summary_df)
         self._send_monitor_heartbeat(
             summary_df,
@@ -644,6 +726,71 @@ class SignalMonitorRunner:
         )
         self._cycle_number += 1
         return report_df, merged_simple_df, alerts_df, summary_df
+
+    def _record_tick_freshness_diagnostics(
+        self,
+        candidates_df: Optional[pd.DataFrame],
+        lane: str,
+    ) -> None:
+        """Observe constructed candidates without mutating or filtering them."""
+        diagnostics = getattr(self, "_tick_freshness_diagnostics", None)
+        if (
+            diagnostics is None
+            or not diagnostics.enabled
+            or candidates_df is None
+            or candidates_df.empty
+        ):
+            return
+        try:
+            cycle_key = str(getattr(self, "run_at", ""))
+            if getattr(self, "_tick_diagnostic_context_cycle", "") != cycle_key:
+                self._tick_diagnostic_context = diagnostics.snapshot_context(self.output_dir, self.universe)
+                self._tick_diagnostic_context_cycle = cycle_key
+            snapshot_context = getattr(self, "_tick_diagnostic_context", {})
+            live_ticks = getattr(getattr(self, "actionable_runner", None), "live_ticks", None) or {}
+            applied_symbols = getattr(self, "_diagnostic_live_tick_applied_symbols", set())
+            for row in candidates_df.to_dict(orient="records"):
+                symbol = str(row.get("Symbol", "") or "").strip().upper()
+                tick = live_ticks.get(symbol, {}) if isinstance(live_ticks, dict) else {}
+                live_tick_applied = symbol in applied_symbols
+                evaluation_timestamp = row.get("LifecycleTimestamp")
+                try:
+                    has_lifecycle_timestamp = (
+                        evaluation_timestamp is not None
+                        and not pd.isna(evaluation_timestamp)
+                        and bool(str(evaluation_timestamp).strip())
+                    )
+                except (TypeError, ValueError):
+                    has_lifecycle_timestamp = False
+                if not has_lifecycle_timestamp:
+                    evaluation_timestamp = row.get("When")
+                try:
+                    has_evaluation_timestamp = (
+                        evaluation_timestamp is not None
+                        and not pd.isna(evaluation_timestamp)
+                        and bool(str(evaluation_timestamp).strip())
+                    )
+                except (TypeError, ValueError):
+                    has_evaluation_timestamp = False
+                if not has_evaluation_timestamp:
+                    evaluation_timestamp = self.run_at
+                diagnostics.record(
+                    evaluation_timestamp=evaluation_timestamp,
+                    cycle_timestamp=self.run_at,
+                    lane=lane,
+                    symbol=symbol,
+                    tick=tick,
+                    snapshot_context=snapshot_context,
+                    live_price_used=row.get("PriceNow"),
+                    live_tick_applied=live_tick_applied,
+                    report_cache_fallback=not live_tick_applied,
+                    candidate_result=row.get("NowAction"),
+                    lifecycle_observation_id=row.get("LifecycleObservationId"),
+                )
+        except Exception:
+            # The recorder is best-effort; even malformed diagnostic state must
+            # never escape into candidate generation or lifecycle processing.
+            return
 
     def _record_intraday_event_shadow(self) -> None:
         """Record shared-engine events without creating alerts or broker orders."""
@@ -1169,6 +1316,10 @@ class SignalMonitorRunner:
         state_df: pd.DataFrame,
     ) -> Tuple[pd.DataFrame, pd.DataFrame]:
         """Refresh visible prices from the latest live ticks without forcing a full recompute."""
+        diagnostics = getattr(self, "_tick_freshness_diagnostics", None)
+        track_diagnostics = diagnostics is not None and diagnostics.enabled
+        if track_diagnostics:
+            self._diagnostic_live_tick_applied_symbols = set()
         live_ticks = self.actionable_runner.live_ticks or {}
         if not live_ticks:
             return simple_df, state_df
@@ -1185,6 +1336,8 @@ class SignalMonitorRunner:
                 live_price = self._to_float(tick.get("last_price"))
                 if live_price <= 0:
                     continue
+                if track_diagnostics:
+                    self._diagnostic_live_tick_applied_symbols.add(symbol)
                 refreshed_simple_df.loc[index, "Price Now"] = round(live_price, 2)
                 buy_above = self._to_float(refreshed_simple_df.loc[index].get("Buy Above"))
                 if buy_above > 0 and "Entry Gap %" in refreshed_simple_df.columns:
@@ -1208,6 +1361,8 @@ class SignalMonitorRunner:
                 live_price = self._to_float(tick.get("last_price"))
                 if live_price <= 0:
                     continue
+                if track_diagnostics:
+                    self._diagnostic_live_tick_applied_symbols.add(symbol)
                 refreshed_state_df.loc[index, "PriceNow"] = round(live_price, 2)
                 # Always use tick's 'close' as PrevClose — it is Kite's official
                 # previous-session close, which is more reliable than OHLCV iloc[-2]
@@ -1733,6 +1888,17 @@ class SignalMonitorRunner:
             )
 
         alerts_df = pd.DataFrame(alert_rows, columns=self.ALERT_COLUMNS)
+        buy_now_timing_events = []
+        for alert_row in alert_rows:
+            if str(alert_row.get("NowAction", "") or "") in allowed_buy_actions:
+                timing_event = self._alert_timing_event_for_row(
+                    alert_row,
+                    "SOURCE_QUALIFIED",
+                    source="buy_now_board",
+                )
+                if timing_event is not None:
+                    buy_now_timing_events.append(timing_event)
+        self._emit_alert_timing_events(buy_now_timing_events)
         if not alerts_df.empty:
             alerts_df.sort_values(
                 by=["NowAction", "SignalStrengthPct", "Symbol"],
@@ -2033,6 +2199,15 @@ class SignalMonitorRunner:
             })
 
         if alert_rows:
+            anomaly_timing_events = []
+            for alert_row in alert_rows:
+                timing_event = self._alert_timing_event_for_row(
+                    alert_row,
+                    "SOURCE_QUALIFIED",
+                )
+                if timing_event is not None:
+                    anomaly_timing_events.append(timing_event)
+            self._emit_alert_timing_events(anomaly_timing_events)
             summary = ", ".join(
                 f"{c.symbol}[{c.confidence_tier}] +{c.price_from_open_pct:.1f}% Q:{c.quality_score:.0f}"
                 for c in candidates[:5]
@@ -3091,6 +3266,8 @@ class SignalMonitorRunner:
             self._early_breakout_alerted_today = self._load_daily_symbol_set("early_breakout", today=today)
 
         rows = []
+        audit_rows = []
+        timing_events = []
         live_ticks = self.actionable_runner.live_ticks or {}
         for rec in current_simple_df.to_dict(orient="records"):
             sym = str(rec.get("Stock", "") or "").strip().upper()
@@ -3098,18 +3275,9 @@ class SignalMonitorRunner:
                 continue
 
             change_pct = self._to_float(rec.get("Change %"))
-            if not (self.EARLY_BREAKOUT_MIN_PCT <= change_pct <= self.EARLY_BREAKOUT_MAX_PCT):
-                continue
-
             action = str(rec.get("What To Do", "") or "").strip()
             setup = str(rec.get("Momentum Setup", "") or "").strip()
-            if action not in {"Strong Buy Now", "Buy Now"} and setup != "Momentum Buy":
-                continue
-
             price_now = self._to_float(rec.get("Price Now"))
-            if price_now <= 0:
-                continue
-
             strength = self._to_float(rec.get("Signal Strength %"))
             rsi_val = self._to_float(rec.get("RSI"))
             volume_ratio = self._to_float(rec.get("Volume vs Avg"))
@@ -3124,6 +3292,106 @@ class SignalMonitorRunner:
                 best_bid = depth["buy"][0].get("price")
             if best_ask is None and depth.get("sell"):
                 best_ask = depth["sell"][0].get("price")
+            bid_value = self._to_float(best_bid)
+            ask_value = self._to_float(best_ask)
+            spread_bps = (
+                (ask_value - bid_value) / ((ask_value + bid_value) / 2.0) * 10000.0
+                if ask_value > bid_value > 0 else None
+            )
+            day_high = self._to_float(tick.get("high", 0))
+            pullback = (
+                (day_high - price_now) / price_now * 100.0
+                if day_high > 0 and price_now > 0 else 0.0
+            )
+
+            def audit(
+                decision: str,
+                reason: str,
+                observation_id: Optional[str] = None,
+            ) -> None:
+                buy_depth = depth.get("buy") or []
+                sell_depth = depth.get("sell") or []
+                audit_rows.append(
+                    {
+                        "When": self.run_at_str,
+                        "Stage": "qualification",
+                        "Symbol": sym,
+                        "Decision": decision,
+                        "Reason": reason,
+                        "Action": action or setup,
+                        "PriceNow": rec.get("Price Now"),
+                        "TickLastPrice": tick.get("last_price"),
+                        "ChangePct": rec.get("Change %"),
+                        "OpenMovePct": rec.get("Open Change %"),
+                        "PullbackPct": pullback,
+                        "SignalStrengthPct": rec.get("Signal Strength %"),
+                        "VolumeVsAvg": rec.get("Volume vs Avg"),
+                        "BuyerSellerRatio": bs_ratio,
+                        "RSI": rec.get("RSI"),
+                        "DayHigh": tick.get("high"),
+                        "Volume": tick.get("volume_traded", tick.get("volume", rec.get("Volume"))),
+                        "VolumeDeltaPct": rec.get("Volume Delta %", rec.get("Volume Acceleration")),
+                        "TradedValue": rec.get("Traded Value"),
+                        "TotalBuyQty": tick.get("total_buy_quantity"),
+                        "TotalSellQty": tick.get("total_sell_quantity"),
+                        "BestBid": best_bid,
+                        "BestAsk": best_ask,
+                        "BestBidQty": (buy_depth[0] or {}).get("quantity") if buy_depth else None,
+                        "BestAskQty": (sell_depth[0] or {}).get("quantity") if sell_depth else None,
+                        "SpreadBps": spread_bps,
+                        "Checks": rec.get("Checks"),
+                        "Why": rec.get("Why"),
+                    }
+                )
+                timing_row = {
+                    "Symbol": sym,
+                    "When": self.run_at_str,
+                    "PriceNow": rec.get("Price Now"),
+                    "ChangePct": rec.get("Change %"),
+                    "SignalStrengthPct": rec.get("Signal Strength %"),
+                    "VolumeRatio": rec.get("Volume vs Avg"),
+                    "RSI": rec.get("RSI"),
+                    "EntryGapPct": rec.get("Entry Gap %"),
+                    "BuyAbove": rec.get("Buy Above"),
+                    "TradedValue": rec.get("Traded Value"),
+                    "BuyerSellerRatio": bs_ratio,
+                    "PullbackPct": pullback,
+                    "LifecycleObservationId": observation_id,
+                }
+                evaluated = self._alert_timing_event_for_row(
+                    timing_row,
+                    "SOURCE_EVALUATED",
+                    source="early_breakout",
+                )
+                outcome = self._alert_timing_event_for_row(
+                    timing_row,
+                    "SOURCE_QUALIFIED" if decision == "pass" else "SOURCE_REJECTED",
+                    source="early_breakout",
+                    rejection_reason=None if decision == "pass" else reason,
+                )
+                timing_events.extend(event for event in (evaluated, outcome) if event is not None)
+
+            in_change_band = (
+                self.EARLY_BREAKOUT_MIN_PCT
+                <= change_pct
+                <= self.EARLY_BREAKOUT_MAX_PCT
+            )
+            if not in_change_band:
+                if not math.isfinite(change_pct):
+                    reason = "change unavailable or non-finite"
+                elif change_pct < self.EARLY_BREAKOUT_MIN_PCT:
+                    reason = "change below early-breakout band"
+                else:
+                    reason = "change above early-breakout band"
+                audit("reject", reason)
+                continue
+            if action not in {"Strong Buy Now", "Buy Now"} and setup != "Momentum Buy":
+                audit("reject", "source action not buy or momentum")
+                continue
+
+            if price_now <= 0:
+                audit("reject", "price unavailable or non-positive")
+                continue
 
             try:
                 now_ist = PKDateUtilities.currentDateTime()
@@ -3133,27 +3401,34 @@ class SignalMonitorRunner:
             opening_window = (9 * 60 + 15) <= minute_of_day <= (10 * 60 + 15)
             strength_floor = 32.0 if opening_window else 38.0
             if strength < strength_floor:
+                audit(
+                    "reject",
+                    "strength below opening-window floor"
+                    if opening_window else "strength below normal-session floor",
+                )
                 continue
             if rsi_val and rsi_val >= 70.0:
+                audit("reject", "RSI overbought")
                 continue
             if volume_ratio < self.EARLY_BREAKOUT_MIN_VOLUME_RATIO and bs_ratio < 1.5:
+                audit("reject", "volume and buyer/seller confirmation below floor")
                 continue
 
             week52 = self._to_float(rec.get("Week52High"))
             if week52 and week52 > 0 and price_now < week52:
                 room_to_high = (week52 - price_now) / price_now * 100.0
                 if room_to_high < 2.0:
+                    audit("reject", "too close to 52-week high")
                     continue
 
-            day_high = self._to_float(tick.get("high", 0))
-            pullback = 0.0
             if day_high > 0 and price_now > 0:
-                pullback = (day_high - price_now) / price_now * 100.0
                 if pullback > 1.2:
+                    audit("reject", "pulled back too far from day high")
                     continue
 
             suggested_qty = self._to_float(rec.get("Suggested Qty"))
             if suggested_qty < 1:
+                audit("reject", "quantity below one")
                 continue
 
             entry = price_now
@@ -3229,10 +3504,19 @@ class SignalMonitorRunner:
                     + " | Early breakout lane: +1% to +3.5% move before top-gainer stretch",
                 }
             )
+            audit(
+                "pass",
+                "early breakout qualification passed",
+                observation_id=lifecycle_id,
+            )
 
         if not rows:
+            self._emit_alert_timing_events(timing_events)
+            self._record_lane_decisions("early_breakout", audit_rows)
             return pd.DataFrame(columns=self.ALERT_COLUMNS)
 
+        self._emit_alert_timing_events(timing_events)
+        self._send_tradingview_candidate_alerts(pd.DataFrame(rows))
         out = pd.DataFrame(rows, columns=self.ALERT_COLUMNS)
         out["Lane"] = [row.get("Lane", "early_breakout") for row in rows]
         out["LifecycleObservationId"] = [row.get("LifecycleObservationId", "") for row in rows]
@@ -3244,6 +3528,9 @@ class SignalMonitorRunner:
         )
         max_per_cycle = max(1, int(getattr(self, "EARLY_BREAKOUT_MAX_PER_CYCLE", 4) or 4))
         out = out.head(max_per_cycle)
+        # The cycle cap controls the returned display list only. Qualification
+        # audit rows remain pass because the strategy qualification already ran.
+        self._record_lane_decisions("early_breakout", audit_rows)
         for sym in out["Symbol"].astype(str).str.upper().tolist():
             self._early_breakout_alerted_today.add(sym)
             self._append_daily_symbol("early_breakout", sym, today=today)
@@ -3720,6 +4007,9 @@ class SignalMonitorRunner:
             return
         if alerts_df is None or alerts_df.empty:
             return
+        alerts_df = self._filter_manual_discord_frame(alerts_df, "leader_ignition")
+        if alerts_df.empty:
+            return
         try:
             sent_at = PKDateUtilities.currentDateTime().strftime("%Y-%m-%d %H:%M:%S")
         except Exception:
@@ -3754,6 +4044,7 @@ class SignalMonitorRunner:
         live_ticks = self.actionable_runner.live_ticks or {}
         rows = []
         audit_rows = []
+        timing_events = []
         for rec in current_simple_df.to_dict(orient="records"):
             sym = str(rec.get("Stock", "") or "").strip().upper()
             if not sym or sym in getattr(self, "_top_gainer_radar_today", set()):
@@ -3788,7 +4079,11 @@ class SignalMonitorRunner:
             if best_ask is None and depth.get("sell"):
                 best_ask = depth["sell"][0].get("price")
 
-            def audit(decision: str, reason: str) -> None:
+            def audit(
+                decision: str,
+                reason: str,
+                observation_id: Optional[str] = None,
+            ) -> None:
                 audit_rows.append(
                     {
                         "When": self.run_at_str,
@@ -3807,6 +4102,33 @@ class SignalMonitorRunner:
                         "Why": str(rec.get("Why", "") or ""),
                     }
                 )
+                timing_row = {
+                    "Symbol": sym,
+                    "When": self.run_at_str,
+                    "PriceNow": price_now,
+                    "ChangePct": change_pct,
+                    "SignalStrengthPct": strength,
+                    "VolumeRatio": volume_ratio,
+                    "RSI": rsi_val,
+                    "EntryGapPct": rec.get("Entry Gap %"),
+                    "BuyAbove": price_now,
+                    "TradedValue": rec.get("Traded Value"),
+                    "BuyerSellerRatio": bs_ratio,
+                    "PullbackPct": pullback,
+                    "LifecycleObservationId": observation_id,
+                }
+                evaluated = self._alert_timing_event_for_row(
+                    timing_row,
+                    "SOURCE_EVALUATED",
+                    source="top_gainer_radar",
+                )
+                outcome = self._alert_timing_event_for_row(
+                    timing_row,
+                    "SOURCE_QUALIFIED" if decision == "pass" else "SOURCE_REJECTED",
+                    source="top_gainer_radar",
+                    rejection_reason=None if decision == "pass" else reason,
+                )
+                timing_events.extend(event for event in (evaluated, outcome) if event is not None)
 
             bearish_markers = (
                 "sell / exit",
@@ -3932,12 +4254,19 @@ class SignalMonitorRunner:
                     + " | Live top-gainer radar: controlled +1.5% to +3.5% move not surfaced by core scanner",
                 }
             )
-            audit("pass", "radar candidate passed")
+            audit(
+                "pass",
+                "radar candidate passed",
+                observation_id=lifecycle_id,
+            )
 
         if not rows:
+            self._emit_alert_timing_events(timing_events)
             self._append_top_gainer_radar_audit(audit_rows, today=today)
             return pd.DataFrame(columns=self.ALERT_COLUMNS)
 
+        self._emit_alert_timing_events(timing_events)
+        self._send_tradingview_candidate_alerts(pd.DataFrame(rows))
         out = pd.DataFrame(rows, columns=self.ALERT_COLUMNS)
         out["Lane"] = [row.get("Lane", "top_gainer_radar") for row in rows]
         out["LifecycleObservationId"] = [row.get("LifecycleObservationId", "") for row in rows]
@@ -3952,11 +4281,8 @@ class SignalMonitorRunner:
             "  [+] Top-gainer radar alert(s): "
             + ", ".join(f"{r['Symbol']} (+{float(r['ChangePct']):.1f}%)" for _, r in out.iterrows())
         )
-        selected_symbols = set(out["Symbol"].astype(str).str.upper().tolist())
-        for audit_row in audit_rows:
-            if audit_row.get("Decision") == "pass" and audit_row.get("Symbol") not in selected_symbols:
-                audit_row["Decision"] = "reject"
-                audit_row["Reason"] = "cycle radar slot not selected"
+        # The cycle cap controls the returned display list only. Qualification
+        # audit rows remain pass because the strategy qualification already ran.
         self._append_top_gainer_radar_audit(audit_rows, today=today)
         return out.copy()
 
@@ -4122,6 +4448,13 @@ class SignalMonitorRunner:
         actionable_to_save = actionable_df.copy()
         report_to_save.drop(columns=["ActionRank", "NowActionRank"], inplace=True, errors="ignore")
         actionable_to_save.drop(columns=["ActionRank", "NowActionRank"], inplace=True, errors="ignore")
+        # This is the completed candidate-cohort serialization boundary. Capture
+        # one aware timestamp here and repeat it verbatim on every candidate row.
+        # Partial/in-progress outputs deliberately remain legacy-ineligible.
+        report_to_save = self._prepare_candidate_artifact(
+            report_to_save,
+            generated_at=PKDateUtilities.currentDateTime(),
+        )
         momentum_df = (
             self._build_momentum_board(simple_df)
             if not self.fast_mode
@@ -4161,6 +4494,69 @@ class SignalMonitorRunner:
             report_to_save, actionable_to_save, simple_df,
             momentum_df, state_df, alerts_df, summary_df,
         )
+
+    def _prepare_candidate_artifact(
+        self,
+        report_df: pd.DataFrame,
+        generated_at: datetime,
+    ) -> pd.DataFrame:
+        """Add immutable cohort-level provenance to a newly completed export.
+
+        Existing files are never read or upgraded here. A naive clock is rejected
+        rather than emitting an artifact that could be mistaken for prospective
+        evidence.
+        """
+        if generated_at.tzinfo is None or generated_at.utcoffset() is None:
+            raise ValueError("candidate_generated_at must be timezone-aware")
+
+        source_commit, source_dirty = self._candidate_source_revision()
+        artifact = report_df.copy()
+        artifact["candidate_generated_at"] = generated_at.isoformat(timespec="microseconds")
+        artifact["candidate_artifact_row_count"] = int(len(artifact.index))
+        artifact["candidate_artifact_schema_version"] = self.CANDIDATE_ARTIFACT_SCHEMA_VERSION
+        artifact["candidate_source_runtime_commit"] = source_commit
+        artifact["candidate_source_runtime_dirty"] = bool(source_dirty)
+        return artifact
+
+    def _candidate_source_revision(self) -> Tuple[str, bool]:
+        """Return the checked-out source revision and whether tracked files differ."""
+        cached = getattr(self, "_candidate_source_revision_cache", None)
+        if cached is not None:
+            return cached
+
+        repo_root = Path(__file__).resolve().parents[2]
+        source_commit = "UNKNOWN"
+        source_dirty = True
+        try:
+            revision = subprocess.run(
+                ["git", "rev-parse", "HEAD"],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            candidate = revision.stdout.strip()
+            if revision.returncode == 0 and len(candidate) == 40 and all(
+                character in "0123456789abcdefABCDEF" for character in candidate
+            ):
+                source_commit = candidate.lower()
+
+            status = subprocess.run(
+                ["git", "status", "--porcelain", "--untracked-files=no"],
+                cwd=str(repo_root),
+                capture_output=True,
+                text=True,
+                timeout=5,
+                check=False,
+            )
+            if status.returncode == 0:
+                source_dirty = bool(status.stdout.strip())
+        except (OSError, subprocess.SubprocessError):
+            pass
+
+        self._candidate_source_revision_cache = (source_commit, source_dirty)
+        return self._candidate_source_revision_cache
 
     def _maybe_write_daily_snapshot(
         self,
@@ -5462,7 +5858,11 @@ class SignalMonitorRunner:
         if current_simple_df is None or current_simple_df.empty or "Stock" not in current_simple_df.columns:
             return []
 
-        board = current_simple_df.copy()
+        board = self._filter_manual_discord_frame(
+            current_simple_df,
+            "buy_now_board",
+            symbol_column="Stock",
+        )
         board["Stock"] = board["Stock"].astype(str).str.strip().str.upper()
         board = board[board["Stock"].ne("")].copy()
         if board.empty:
@@ -5516,6 +5916,567 @@ class SignalMonitorRunner:
             path = os.path.join(output_dir, f"signalmonitor_{universe}_heartbeat_state.json")
         return Path(path)
 
+    def _buy_now_board_state_file(self) -> Path:
+        """Return the persisted active-membership file for the Buy Now board."""
+        path = str(getattr(self, "_buy_now_board_state_path", "") or "").strip()
+        if not path:
+            output_dir = getattr(self, "output_dir", "") or Archiver.get_user_data_dir()
+            universe = str(getattr(self, "universe", "all") or "all").strip() or "all"
+            path = os.path.join(
+                output_dir,
+                f"signalmonitor_{universe}_buy_now_board_state.json",
+            )
+        return Path(path)
+
+    def _load_buy_now_board_state(self) -> Set[str]:
+        """Load current-day membership; mark missing or cross-day state invalid."""
+        self._buy_now_board_state_valid = False
+        self._buy_now_board_state_date = ""
+        self._buy_now_board_pending_entries: List[Dict[str, Any]] = []
+        self._buy_now_board_pending_exits: List[Dict[str, Any]] = []
+        self._buy_now_board_digest_started_at: Optional[float] = None
+        self._buy_now_board_digest_baseline: Optional[Set[str]] = None
+        self._buy_now_board_queue_signature = ""
+        self._buy_now_board_queue_delivered_at = 0.0
+        try:
+            path = self._buy_now_board_state_file()
+            if not path.exists():
+                return set()
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if not isinstance(payload, dict):
+                return set()
+            state_date = str(payload.get("trading_date", "") or "").strip()
+            self._buy_now_board_state_date = state_date
+            if state_date != self._today_key():
+                return set()
+            symbols = payload.get("active_symbols", [])
+            if not isinstance(symbols, list):
+                return set()
+            pending_entries = payload.get("pending_entries", [])
+            pending_exits = payload.get("pending_exits", [])
+            if isinstance(pending_entries, list):
+                self._buy_now_board_pending_entries = [
+                    row for row in pending_entries if isinstance(row, dict)
+                ]
+            if isinstance(pending_exits, list):
+                self._buy_now_board_pending_exits = [
+                    row for row in pending_exits if isinstance(row, dict)
+                ]
+            try:
+                started_at = payload.get("digest_started_at")
+                self._buy_now_board_digest_started_at = (
+                    float(started_at) if started_at not in (None, "") else None
+                )
+            except (TypeError, ValueError):
+                self._buy_now_board_digest_started_at = None
+            baseline = payload.get("digest_baseline_symbols")
+            if isinstance(baseline, list):
+                self._buy_now_board_digest_baseline = {
+                    str(symbol or "").strip().upper()
+                    for symbol in baseline
+                    if str(symbol or "").strip()
+                }
+            self._buy_now_board_queue_signature = str(
+                payload.get("delivered_queue_signature", "") or ""
+            )
+            try:
+                self._buy_now_board_queue_delivered_at = float(
+                    payload.get("queue_delivered_at", 0.0) or 0.0
+                )
+            except (TypeError, ValueError):
+                self._buy_now_board_queue_delivered_at = 0.0
+            self._buy_now_board_state_valid = True
+            return {
+                str(symbol or "").strip().upper()
+                for symbol in symbols
+                if str(symbol or "").strip()
+            }
+        except Exception as exc:
+            default_logger().debug(
+                f"Could not load Buy Now board state: {exc}",
+                exc_info=True,
+            )
+            return set()
+
+    def _save_buy_now_board_state(self, active_symbols: Set[str]) -> None:
+        """Persist current membership, including exits, for later re-entry detection."""
+        try:
+            path = self._buy_now_board_state_file()
+            path.parent.mkdir(parents=True, exist_ok=True)
+            trading_date = self._today_key()
+            try:
+                updated_at = PKDateUtilities.currentDateTime().isoformat(timespec="seconds")
+            except Exception:
+                updated_at = datetime.now().isoformat(timespec="seconds")
+            payload = {
+                "trading_date": trading_date,
+                "active_symbols": sorted(active_symbols),
+                "pending_entries": list(
+                    getattr(self, "_buy_now_board_pending_entries", []) or []
+                ),
+                "pending_exits": list(
+                    getattr(self, "_buy_now_board_pending_exits", []) or []
+                ),
+                "digest_started_at": getattr(
+                    self, "_buy_now_board_digest_started_at", None
+                ),
+                "digest_baseline_symbols": sorted(
+                    getattr(self, "_buy_now_board_digest_baseline", None) or []
+                ),
+                "delivered_queue_signature": str(
+                    getattr(self, "_buy_now_board_queue_signature", "") or ""
+                ),
+                "queue_delivered_at": float(
+                    getattr(self, "_buy_now_board_queue_delivered_at", 0.0) or 0.0
+                ),
+                "updated_at": updated_at,
+            }
+            serialized = json.dumps(payload, indent=2, sort_keys=True)
+            temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+            temporary.write_text(serialized, encoding="utf-8")
+            temporary.replace(path)
+            self._buy_now_board_state_date = trading_date
+            self._buy_now_board_state_valid = True
+        except Exception as exc:
+            default_logger().debug(
+                f"Could not persist Buy Now board state: {exc}",
+                exc_info=True,
+            )
+
+    @staticmethod
+    def _buy_now_board_symbols(current_simple_df: Optional[pd.DataFrame]) -> Set[str]:
+        """Extract exact Buy Now members without applying any trade qualification gate."""
+        if (
+            current_simple_df is None
+            or current_simple_df.empty
+            or "Stock" not in current_simple_df.columns
+            or "What To Do" not in current_simple_df.columns
+        ):
+            return set()
+        buy_rows = current_simple_df[
+            current_simple_df["What To Do"].astype(str).eq("Buy Now")
+        ]
+        return {
+            str(symbol or "").strip().upper()
+            for symbol in buy_rows["Stock"].tolist()
+            if str(symbol or "").strip()
+        }
+
+    @staticmethod
+    def _buy_now_board_optional_float(value: Any) -> Optional[float]:
+        """Return a finite board metric or None without inventing missing data."""
+        try:
+            if value is None or str(value).strip() in {"", "nan", "None"}:
+                return None
+            number = float(value)
+            return number if math.isfinite(number) else None
+        except (TypeError, ValueError):
+            return None
+
+    def _buy_now_board_entry_snapshot(
+        self,
+        current_simple_df: pd.DataFrame,
+        symbol: str,
+    ) -> Dict[str, Any]:
+        """Capture only current-board fields available when an entry is observed."""
+        normalized = str(symbol or "").strip().upper()
+        matches = current_simple_df[
+            current_simple_df["Stock"].astype(str).str.strip().str.upper().eq(normalized)
+        ]
+        row = matches.iloc[0] if not matches.empty else pd.Series(dtype=object)
+        field_map = {
+            "strength": "Signal Strength %",
+            "change_pct": "Change %",
+            "volume_ratio": "Volume vs Avg",
+            "rsi": "RSI",
+            "entry_gap_pct": "Entry Gap %",
+            "price_now": "Price Now",
+            "buy_above": "Buy Above",
+        }
+        snapshot: Dict[str, Any] = {
+            "symbol": normalized,
+            "observed_at": str(getattr(self, "run_at_str", "") or ""),
+        }
+        for key, column in field_map.items():
+            snapshot[key] = self._buy_now_board_optional_float(row.get(column))
+        return snapshot
+
+    def _rank_buy_now_board(self, current_simple_df: Optional[pd.DataFrame]) -> List[Dict[str, Any]]:
+        """Rank the complete active board for human attention using existing fields."""
+        if (
+            current_simple_df is None
+            or current_simple_df.empty
+            or "Stock" not in current_simple_df.columns
+            or "What To Do" not in current_simple_df.columns
+        ):
+            return []
+        board = current_simple_df[
+            current_simple_df["What To Do"].astype(str).eq("Buy Now")
+        ].copy()
+        if board.empty:
+            return []
+        board["Stock"] = board["Stock"].astype(str).str.strip().str.upper()
+        board = board[board["Stock"].ne("")].drop_duplicates("Stock", keep="first")
+        sort_fields = [
+            ("_queue_strength", "Signal Strength %"),
+            ("_queue_volume", "Volume vs Avg"),
+            ("_queue_gap", "Entry Gap %"),
+        ]
+        for target, source in sort_fields:
+            board[target] = pd.to_numeric(
+                board[source] if source in board.columns else pd.Series(index=board.index, dtype=float),
+                errors="coerce",
+            ).round(1)
+        board.sort_values(
+            by=["_queue_strength", "_queue_volume", "_queue_gap", "Stock"],
+            ascending=[False, False, True, True],
+            na_position="last",
+            inplace=True,
+        )
+        return [
+            self._buy_now_board_entry_snapshot(board, symbol)
+            for symbol in board["Stock"].tolist()
+        ]
+
+    def _buy_now_board_displayed_queue(
+        self, ranked_queue: List[Dict[str, Any]]
+    ) -> List[Dict[str, Any]]:
+        """Return only the useful Discord preview; the full queue remains authoritative."""
+        display_limit = max(
+            1,
+            int(getattr(self, "buy_board_queue_display_limit", 15) or 15),
+        )
+        return ranked_queue[: min(15, display_limit)]
+
+    def _buy_now_board_queue_signature_for(
+        self, ranked_queue: List[Dict[str, Any]]
+    ) -> str:
+        """Canonical signature based on displayed membership/order, not noisy metrics."""
+        symbols = [
+            str(row.get("symbol", "") or "").strip().upper()
+            for row in self._buy_now_board_displayed_queue(ranked_queue)
+        ]
+        return json.dumps(symbols, separators=(",", ":"), ensure_ascii=True)
+
+    @staticmethod
+    def _format_buy_now_board_metric(
+        value: Optional[float],
+        suffix: str = "",
+        signed: bool = False,
+    ) -> str:
+        if value is None:
+            return "—"
+        rendered = f"{value:+.1f}" if signed else f"{value:.1f}"
+        return rendered + suffix
+
+    def _build_buy_now_board_digest_messages(
+        self,
+        entries: List[Dict[str, Any]],
+        exits: List[Dict[str, Any]],
+        ranked_queue: List[Dict[str, Any]],
+        window_started_at: float,
+        window_ended_at: float,
+        include_queue: bool = True,
+    ) -> List[str]:
+        """Build a safely split transition delta, optionally with a queue update."""
+        if not entries and not exits and not include_queue:
+            return []
+        selector_status = (
+            "VALIDATED (unchanged; does not approve this board notification)"
+            if bool(getattr(self, "goal_selector_validated", False))
+            else "NOT VALIDATED"
+        )
+        window_start = datetime.fromtimestamp(window_started_at).strftime("%H:%M:%S")
+        window_end = datetime.fromtimestamp(window_ended_at).strftime("%H:%M:%S")
+        active_count = len(ranked_queue)
+        shown_queue = self._buy_now_board_displayed_queue(ranked_queue)
+        hidden_count = max(0, active_count - len(shown_queue))
+        blocks: List[str] = []
+        for index, entry in enumerate(entries):
+            blocks.append(
+                ("**NEW & STILL ACTIVE:**\n" if index == 0 else "")
+                + f"`{entry.get('symbol', '')}`"
+            )
+        for index, exit_row in enumerate(exits):
+            blocks.append(
+                ("**EXITED:**\n" if index == 0 else "")
+                + f"`{exit_row.get('symbol', '')}`"
+            )
+        if include_queue:
+            review_first = shown_queue[:10]
+            next_up = shown_queue[10:15]
+            if review_first:
+                queue_lines = ["**PINE PRIORITY UPDATE**", "**REVIEW FIRST**"]
+                for rank, row in enumerate(review_first, start=1):
+                    queue_lines.append(
+                        f"{rank}. `{row.get('symbol', '')}` — Strength "
+                        + self._format_buy_now_board_metric(row.get("strength"))
+                        + " | Vol "
+                        + self._format_buy_now_board_metric(row.get("volume_ratio"), "x")
+                        + " | Day "
+                        + self._format_buy_now_board_metric(row.get("change_pct"), "%", signed=True)
+                        + " | Gap "
+                        + self._format_buy_now_board_metric(row.get("entry_gap_pct"), "%")
+                    )
+                if next_up:
+                    queue_lines.extend(["", "**NEXT UP**"])
+                    queue_lines.extend(
+                        f"{rank}. `{row.get('symbol', '')}`"
+                        for rank, row in enumerate(next_up, start=11)
+                    )
+                blocks.append("\n".join(queue_lines))
+            blocks.append(
+                f"Active board: `{active_count}`\n"
+                f"Additional retained candidates: `{hidden_count}`"
+            )
+        else:
+            blocks.append(f"Active board: `{active_count}`")
+
+        header = "\n".join(
+            [
+                "**BUY NOW BOARD — MANUAL REVIEW**",
+                f"Source `{self._alert_source_label()}` | Window `{window_start}–{window_end}`",
+                f"Transitions: new `{len(entries)}` | exited `{len(exits)}` | active `{active_count}`",
+            ]
+        )
+        footer_lines = []
+        if include_queue:
+            footer_lines.extend(
+                [
+                    "Attention ranking only — NOT a validated profitability score.",
+                    "Use the highest-ranked unmonitored candidate when a Pine alert slot is free; recycle to the next candidate after completion/invalidation.",
+                ]
+            )
+        if exits:
+            footer_lines.append(
+                "Exited names are possible Pine-slot release candidates only if no other source/setup still justifies monitoring them."
+            )
+        footer_lines.extend(
+            [
+                "Existing general/swing Buy Now board. Manual TradingView/Pine review only.",
+                f"Not an approved trade. Goal selector: `{selector_status}` | Auto-buy: `DISABLED`",
+            ]
+        )
+        footer = "\n".join(footer_lines)
+
+        chunks: List[List[str]] = []
+        current_blocks: List[str] = []
+        for block in blocks:
+            candidate = [*current_blocks, block]
+            draft = (
+                header
+                + " | Part `999/999`\n\n"
+                + "\n\n".join(candidate)
+                + "\n\n"
+                + footer
+            )
+            if current_blocks and len(draft) > 1900:
+                chunks.append(current_blocks)
+                current_blocks = [block]
+            else:
+                current_blocks = candidate
+        if current_blocks:
+            chunks.append(current_blocks)
+        total_parts = len(chunks)
+        return [
+            header
+            + (f" | Part `{part}/{total_parts}`" if total_parts > 1 else "")
+            + "\n\n"
+            + "\n\n".join(chunk)
+            + "\n\n"
+            + footer
+            for part, chunk in enumerate(chunks, start=1)
+        ]
+
+    def _send_buy_now_board_delta(
+        self,
+        current_simple_df: Optional[pd.DataFrame],
+    ) -> List[str]:
+        """Accumulate board transitions and emit a rolling manual-review digest."""
+        current = self._buy_now_board_symbols(current_simple_df)
+        previous = getattr(self, "_active_buy_now_board", None)
+        if previous is None:
+            previous = self._load_buy_now_board_state()
+        today = self._today_key()
+        state_is_current = (
+            bool(getattr(self, "_buy_now_board_state_valid", False))
+            and str(getattr(self, "_buy_now_board_state_date", "") or "") == today
+        )
+        if not state_is_current:
+            # A first deployment, invalid/legacy state, or a new trading day has
+            # no trustworthy transition predecessor. Establish the authoritative
+            # full merged board as today's baseline and emit nothing.
+            self._active_buy_now_board = current
+            self._buy_now_board_pending_entries = []
+            self._buy_now_board_pending_exits = []
+            self._buy_now_board_digest_started_at = None
+            self._buy_now_board_digest_baseline = None
+            ranked_queue = self._rank_buy_now_board(current_simple_df)
+            self._buy_now_board_queue_signature = self._buy_now_board_queue_signature_for(
+                ranked_queue
+            )
+            self._buy_now_board_queue_delivered_at = time.time()
+            self._save_buy_now_board_state(current)
+            return []
+        entrants = sorted(current.difference(previous))
+        exits = sorted(previous.difference(current))
+        board_qualification_events = []
+        for symbol in entrants:
+            snapshot = self._buy_now_board_entry_snapshot(current_simple_df, symbol)
+            timing_event = self._alert_timing_event_for_row(
+                snapshot,
+                "SOURCE_QUALIFIED",
+                source="buy_now_board",
+            )
+            if timing_event is not None:
+                board_qualification_events.append(timing_event)
+        self._emit_alert_timing_events(board_qualification_events)
+
+        now_ts = time.time()
+        pending_entries = list(getattr(self, "_buy_now_board_pending_entries", []) or [])
+        pending_exits = list(getattr(self, "_buy_now_board_pending_exits", []) or [])
+        if entrants or exits:
+            if getattr(self, "_buy_now_board_digest_started_at", None) is None:
+                self._buy_now_board_digest_started_at = now_ts
+                self._buy_now_board_digest_baseline = set(previous)
+        baseline = getattr(self, "_buy_now_board_digest_baseline", None)
+        if baseline is not None:
+            entry_by_symbol = {
+                str(row.get("symbol", "") or "").upper(): row
+                for row in pending_entries
+            }
+            exit_by_symbol = {
+                str(row.get("symbol", "") or "").upper(): row
+                for row in pending_exits
+            }
+            pending_entries = [
+                entry_by_symbol.get(symbol)
+                or self._buy_now_board_entry_snapshot(current_simple_df, symbol)
+                for symbol in sorted(current.difference(baseline))
+            ]
+            pending_exits = [
+                exit_by_symbol.get(symbol)
+                or {
+                    "symbol": symbol,
+                    "observed_at": str(getattr(self, "run_at_str", "") or ""),
+                }
+                for symbol in sorted(baseline.difference(current))
+            ]
+            if not pending_entries and not pending_exits:
+                self._buy_now_board_digest_started_at = None
+                self._buy_now_board_digest_baseline = None
+        self._buy_now_board_pending_entries = pending_entries
+        self._buy_now_board_pending_exits = pending_exits
+
+        # Always replace membership rather than accumulating a shown-today set:
+        # removing exited names is what makes a later genuine re-entry alertable.
+        self._active_buy_now_board = current
+        self._save_buy_now_board_state(current)
+
+        ranked_queue = self._rank_buy_now_board(current_simple_df)
+        queue_signature = self._buy_now_board_queue_signature_for(ranked_queue)
+        delivered_signature = str(
+            getattr(self, "_buy_now_board_queue_signature", "") or ""
+        )
+        if not delivered_signature:
+            # Migrate a same-day legacy state silently. Its membership remains a
+            # trustworthy restart baseline, but it predates queue signatures.
+            self._buy_now_board_queue_signature = queue_signature
+            self._buy_now_board_queue_delivered_at = now_ts
+            delivered_signature = queue_signature
+            self._save_buy_now_board_state(current)
+        queue_changed = queue_signature != delivered_signature
+        refresh_seconds = max(
+            0.0,
+            float(getattr(self, "buy_board_queue_refresh_seconds", 600.0) or 0.0),
+        )
+        delivered_at = float(
+            getattr(self, "_buy_now_board_queue_delivered_at", 0.0) or 0.0
+        )
+        queue_refresh_due = bool(
+            refresh_seconds > 0.0
+            and delivered_at > 0.0
+            and now_ts - delivered_at >= refresh_seconds
+        )
+        if not pending_entries and not pending_exits and not queue_changed and not queue_refresh_due:
+            return entrants
+        digest_seconds = max(
+            0.0,
+            float(getattr(self, "buy_board_digest_seconds", 60.0) or 0.0),
+        )
+        started_at = float(self._buy_now_board_digest_started_at or now_ts)
+        if (pending_entries or pending_exits) and now_ts - started_at < digest_seconds:
+            return entrants
+        if (
+            "discord" not in getattr(self, "alert_channels", set())
+            or not self._is_regular_market_hours()
+        ):
+            return entrants
+
+        include_queue = queue_changed or queue_refresh_due
+        delivery_pending_entries = self._filter_manual_discord_records(
+            pending_entries,
+            "buy_now_board",
+        )
+        delivery_pending_exits = self._filter_manual_discord_records(
+            pending_exits,
+            "buy_now_board",
+        )
+        delivery_ranked_queue = self._filter_manual_discord_records(
+            ranked_queue,
+            "buy_now_board",
+        )
+        messages = self._build_buy_now_board_digest_messages(
+            delivery_pending_entries,
+            delivery_pending_exits,
+            delivery_ranked_queue,
+            started_at,
+            now_ts,
+            include_queue=include_queue,
+        )
+        delivered = True
+        board_delivery_rows = {
+            str(row.get("symbol", "") or "").strip().upper(): row
+            for row in [*delivery_pending_entries, *delivery_ranked_queue]
+            if str(row.get("symbol", "") or "").strip()
+        }
+        for message in messages:
+            try:
+                # Historical test doubles and callers return None; only an explicit
+                # False or an exception denotes failed delivery.
+                delivery_events = []
+                for symbol, board_row in board_delivery_rows.items():
+                    if f"`{symbol}`" not in message:
+                        continue
+                    timing_event = self._alert_timing_event_for_row(
+                        board_row,
+                        "DISCORD_ATTEMPTED",
+                        source="buy_now_board",
+                    )
+                    if timing_event is not None:
+                        delivery_events.append(timing_event)
+                result = self._deliver_with_optional_timing(message, delivery_events)
+                delivered = result is not False
+            except Exception as exc:
+                default_logger().debug(
+                    f"Buy Now board Discord delivery failed: {exc}", exc_info=True
+                )
+                delivered = False
+            if not delivered:
+                break
+        if not delivered:
+            self._save_buy_now_board_state(current)
+            return entrants
+        self._buy_now_board_pending_entries = []
+        self._buy_now_board_pending_exits = []
+        self._buy_now_board_digest_started_at = None
+        self._buy_now_board_digest_baseline = None
+        if include_queue:
+            self._buy_now_board_queue_signature = queue_signature
+            self._buy_now_board_queue_delivered_at = now_ts
+        self._save_buy_now_board_state(current)
+        return entrants
+
     def _load_last_heartbeat_ts(self) -> float:
         try:
             path = self._heartbeat_state_file()
@@ -5555,12 +6516,710 @@ class SignalMonitorRunner:
         minute_of_day = int(now_ist.hour) * 60 + int(now_ist.minute)
         return self.MARKET_OPEN_MINUTES_IST <= minute_of_day <= self.MARKET_CLOSE_MINUTES_IST
 
+    def _is_intraday_candidate_window(self) -> bool:
+        """Return whether intraday candidates may be evaluated right now.
+
+        Candidate generation deliberately uses a half-open close boundary:
+        15:30:00 IST is outside the intraday window even though the existing
+        downstream market-hours helper retains its inclusive semantics.
+        """
+        now_ist = getattr(self, "run_at", None)
+        if now_ist is None:
+            try:
+                now_ist = PKDateUtilities.currentDateTime()
+            except Exception:
+                now_ist = datetime.now()
+        if now_ist.weekday() >= 5:
+            return False
+        minute_of_day = int(now_ist.hour) * 60 + int(now_ist.minute)
+        return self.MARKET_OPEN_MINUTES_IST <= minute_of_day < self.MARKET_CLOSE_MINUTES_IST
+
+    @staticmethod
+    def _alert_timing_source_for_row(row: Dict[str, Any]) -> Optional[str]:
+        lane = str(row.get("Lane", "") or "").strip().lower()
+        if lane in {"early_breakout", "top_gainer_radar"}:
+            return lane
+        action = str(row.get("NowAction", row.get("Action", "")) or "").strip()
+        action_lower = action.lower()
+        if "pre-move" in action_lower or action.startswith("👀"):
+            return "pre_move"
+        if (
+            "anomaly" in action_lower
+            or "grade-a" in action_lower
+            or "runner" in action_lower
+            or action.startswith("🔥")
+            or action.startswith("⚡")
+        ):
+            return "anomaly"
+        if action in {"Strong Buy Now", "Buy Now"}:
+            return "buy_now_board"
+        return None
+
+    @staticmethod
+    def _alert_timing_context_for_row(row: Dict[str, Any]) -> Dict[str, Any]:
+        field_map = {
+            "PriceNow": "price",
+            "price_now": "price",
+            "ChangePct": "day_change_pct",
+            "change_pct": "day_change_pct",
+            "VolumeRatio": "volume_ratio",
+            "volume_ratio": "volume_ratio",
+            "SignalStrengthPct": "signal_strength",
+            "strength": "signal_strength",
+            "RSI": "rsi",
+            "rsi": "rsi",
+            "EntryGapPct": "entry_gap_pct",
+            "entry_gap_pct": "entry_gap_pct",
+            "BuyAbove": "buy_above",
+            "buy_above": "buy_above",
+            "TradedValue": "traded_value",
+            "BuyerSellerRatio": "buy_sell_ratio",
+            "PullbackPct": "pullback_pct",
+        }
+        context: Dict[str, Any] = {}
+        for source_key, target_key in field_map.items():
+            if target_key in context or source_key not in row:
+                continue
+            value = row.get(source_key)
+            try:
+                if value is None or pd.isna(value) or str(value).strip() == "":
+                    continue
+            except (TypeError, ValueError):
+                continue
+            context[target_key] = value
+        return context
+
+    def _alert_timing_event_for_row(
+        self,
+        row: Dict[str, Any],
+        event_type: str,
+        *,
+        source: Optional[str] = None,
+        rejection_reason: Optional[str] = None,
+    ) -> Optional[Dict[str, Any]]:
+        resolved_source = source or self._alert_timing_source_for_row(row)
+        symbol = str(row.get("Symbol", row.get("symbol", "")) or "").strip().upper()
+        if not resolved_source or not symbol:
+            return None
+        context = self._alert_timing_context_for_row(row)
+        if rejection_reason is not None:
+            context["rejection_reason"] = str(rejection_reason)
+        qualified_at = row.get("LifecycleTimestamp") or row.get("When") or row.get("observed_at")
+        if event_type.startswith("DISCORD_") and qualified_at:
+            try:
+                parsed_qualified_at = datetime.fromisoformat(
+                    str(qualified_at).replace("Z", "+00:00")
+                )
+                if parsed_qualified_at.tzinfo is None:
+                    parsed_qualified_at = parsed_qualified_at.replace(
+                        tzinfo=ZoneInfo("Asia/Kolkata")
+                    )
+                context["qualified_at"] = parsed_qualified_at.isoformat(
+                    timespec="microseconds"
+                )
+            except (TypeError, ValueError):
+                context["qualified_at"] = qualified_at
+        observation_id = str(row.get("LifecycleObservationId", "") or "").strip() or None
+        return {
+            "event_type": event_type,
+            "symbol": symbol,
+            "source": resolved_source,
+            "event_timestamp": getattr(self, "run_at", None),
+            "trading_date": self._today_key(),
+            "observation_id": observation_id,
+            "candidate_id": observation_id,
+            "context": context,
+        }
+
+    def _emit_alert_timing_events(self, events: List[Dict[str, Any]]) -> None:
+        observer = getattr(self, "_alert_timing_observer", None)
+        if observer is not None and events:
+            observer.emit_many(events)
+
+    def _initialize_runtime_helpers(self) -> None:
+        """Apply explicit fail-open/fail-closed policies for optional helpers."""
+        self._manual_discord_guard_required = True
+        self._manual_discord_guard = None
+        if NSEEQManualDiscordGuard is not None:
+            try:
+                self._manual_discord_guard = NSEEQManualDiscordGuard(self.output_dir)
+            except Exception as exc:
+                default_logger().warning(
+                    "Manual Discord NSE-EQ guard initialization failed; "
+                    f"human candidate delivery is disabled: {type(exc).__name__}"
+                )
+        else:
+            default_logger().warning(
+                "Manual Discord NSE-EQ guard is unavailable; "
+                "human candidate delivery is disabled"
+            )
+
+        self._alert_timing_observer = None
+        if AlertTimingObserver is not None:
+            try:
+                self._alert_timing_observer = AlertTimingObserver(self.output_dir)
+            except Exception as exc:
+                default_logger().warning(
+                    f"Alert timing telemetry initialization failed: {type(exc).__name__}"
+                )
+
+        self._tradingview_delivery_available = bool(
+            callable(append_delivery_record)
+            and callable(reconstruct_delivery_states)
+            and callable(deterministic_fallback_candidate_key)
+        )
+        self._tradingview_delivery_failure_logged = False
+        if not self._tradingview_delivery_available:
+            default_logger().warning(
+                "TradingView candidate delivery is unavailable; scanner operation continues"
+            )
+
+    def _disable_tradingview_delivery(self, exc: BaseException) -> None:
+        """Open a process-local circuit after durable state becomes unavailable."""
+        self._tradingview_delivery_available = False
+        if not getattr(self, "_tradingview_delivery_failure_logged", False):
+            default_logger().warning(
+                "TradingView candidate delivery disabled for this process; "
+                f"scanner operation continues: {type(exc).__name__}"
+            )
+            self._tradingview_delivery_failure_logged = True
+
+    def _deliver_with_optional_timing(
+        self,
+        message: str,
+        events: List[Dict[str, Any]],
+    ) -> Any:
+        """Keep existing Discord delivery alive when timing support is absent."""
+        if deliver_with_observability is None:
+            return self._send_discord_alert(message)
+        return deliver_with_observability(
+            self._send_discord_alert,
+            getattr(self, "_alert_timing_observer", None),
+            message,
+            events,
+        )
+
     def _alert_source_label(self) -> str:
         return str(
             os.environ.get("SIGNALMONITOR_ALERT_SOURCE", "")
             or os.environ.get("SIGNALMONITOR_ALERT_SOURCE_LABEL", "")
             or "unknown launcher"
         ).strip()
+
+    def _manual_discord_guard_for_runtime(self) -> Optional[Any]:
+        """Return the production guard; legacy test shells may omit initialization."""
+        return getattr(self, "_manual_discord_guard", None)
+
+    def _manual_discord_row_is_eligible(
+        self,
+        row: Dict[str, Any],
+        source: str,
+        symbol_key: str = "Symbol",
+    ) -> bool:
+        guard = self._manual_discord_guard_for_runtime()
+        if guard is None:
+            # Legacy unit shells created with __new__ predate runtime helper
+            # initialization.  A normally initialized runtime explicitly marks
+            # the guard as required and fails closed if it is unavailable.
+            return not getattr(self, "_manual_discord_guard_required", False)
+        symbol = str(row.get(symbol_key, "") or "").strip().upper()
+        runtime_metadata = dict(row)
+        live_ticks = getattr(getattr(self, "actionable_runner", None), "live_ticks", None)
+        if isinstance(live_ticks, dict) and symbol in live_ticks:
+            runtime_metadata = {**live_ticks[symbol], **runtime_metadata}
+        decision = guard.check(symbol, runtime_metadata)
+        if decision.eligible:
+            return True
+        guard.record_suppression(
+            decision,
+            source=source,
+            now=getattr(self, "run_at", None),
+        )
+        return False
+
+    def _filter_manual_discord_frame(
+        self,
+        frame: Optional[pd.DataFrame],
+        source: str,
+        symbol_column: str = "Symbol",
+    ) -> pd.DataFrame:
+        """Filter a delivery copy only; never mutate upstream candidate frames."""
+        if frame is None:
+            return pd.DataFrame()
+        if frame.empty or symbol_column not in frame.columns:
+            return frame.copy()
+        mask = [
+            self._manual_discord_row_is_eligible(
+                row,
+                source=(
+                    self._alert_timing_source_for_row(row)
+                    if source == "candidate"
+                    else source
+                ) or source,
+                symbol_key=symbol_column,
+            )
+            for row in frame.to_dict(orient="records")
+        ]
+        return frame.loc[mask].copy()
+
+    def _filter_manual_discord_records(
+        self,
+        rows: List[Dict[str, Any]],
+        source: str,
+        symbol_key: str = "symbol",
+    ) -> List[Dict[str, Any]]:
+        return [
+            row
+            for row in list(rows or [])
+            if self._manual_discord_row_is_eligible(row, source, symbol_key)
+        ]
+
+    def _resolve_discord_webhook_url(self) -> str:
+        """Resolve the webhook without ever writing it to delivery evidence."""
+        webhook_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
+        if webhook_url:
+            return webhook_url
+        try:
+            from PKDevTools.classes.Environment import PKEnvironment
+
+            return str(PKEnvironment().allSecrets.get("DISCORD_WEBHOOK_URL", "")).strip()
+        except Exception:
+            return ""
+
+    def _build_tradingview_candidate_message(self, row: Dict[str, Any]) -> str:
+        """Build an informational direct-lane message, never a trade instruction."""
+        symbol = str(row.get("Symbol", "") or "").strip().upper()
+        lane = str(row.get("Lane", "") or "").strip()
+        detected_at = str(
+            row.get("LifecycleTimestamp") or row.get("When") or self.run_at_str
+        ).strip()
+        observation_id = str(row.get("LifecycleObservationId", "") or "").strip()
+        lines = [
+            "**TRADINGVIEW CANDIDATE — MANUAL REVIEW**",
+            f"`{symbol}` | source `{lane}` | detected `{detected_at}`",
+        ]
+        price = self._to_float(row.get("PriceNow"))
+        change_pct = self._to_float(row.get("ChangePct"))
+        metrics = []
+        if price > 0:
+            metrics.append(f"price `₹{price:.2f}`")
+        if row.get("ChangePct") not in (None, ""):
+            metrics.append(f"day change `{change_pct:+.2f}%`")
+        strength = self._to_float(row.get("SignalStrengthPct"))
+        if row.get("SignalStrengthPct") not in (None, ""):
+            metrics.append(f"strength `{strength:.1f}`")
+        rsi = self._to_float(row.get("RSI"))
+        if row.get("RSI") not in (None, "") and rsi > 0:
+            metrics.append(f"RSI `{rsi:.1f}`")
+        if metrics:
+            lines.append(" | ".join(metrics))
+        checks = str(row.get("Checks", "") or "").strip()
+        reason = str(row.get("Why", "") or "").strip()
+        if checks:
+            lines.append(f"Checks: {checks}")
+        if reason:
+            lines.append(f"Reason: {reason}")
+        if observation_id:
+            lines.append(f"Lifecycle observation `{observation_id}`")
+        lines.append("Manual TradingView review required. Not an approved trade.")
+        return "\n".join(lines)[:1900]
+
+    def _tradingview_delivery_is_available(self) -> bool:
+        return bool(
+            getattr(
+                self,
+                "_tradingview_delivery_available",
+                callable(append_delivery_record)
+                and callable(reconstruct_delivery_states)
+                and callable(deterministic_fallback_candidate_key),
+            )
+        )
+
+    def _tradingview_delivery_states(
+        self,
+        trading_date: str,
+    ) -> Optional[Dict[str, Dict[str, Any]]]:
+        if not self._tradingview_delivery_is_available():
+            return None
+        try:
+            return reconstruct_delivery_states(self.output_dir, trading_date)
+        except Exception as exc:
+            self._disable_tradingview_delivery(exc)
+            return None
+
+    def _append_tradingview_delivery_record(self, record: Dict[str, Any]) -> bool:
+        if not self._tradingview_delivery_is_available():
+            return False
+        try:
+            append_delivery_record(self.output_dir, record)
+            return True
+        except Exception as exc:
+            self._disable_tradingview_delivery(exc)
+            return False
+
+    def _send_tradingview_candidate_alerts(self, candidates_df: pd.DataFrame) -> None:
+        """Deliver direct detector observations before unrelated goal selection."""
+        if "discord" not in getattr(self, "alert_channels", set()):
+            return
+        if candidates_df is None or candidates_df.empty:
+            return
+        if not self._tradingview_delivery_is_available():
+            return
+
+        for row in candidates_df.to_dict(orient="records"):
+            lane = str(row.get("Lane", "") or "").strip()
+            if lane not in {"early_breakout", "top_gainer_radar"}:
+                continue
+            if not self._manual_discord_row_is_eligible(row, lane):
+                continue
+            symbol = str(row.get("Symbol", "") or "").strip().upper()
+            detected_at = str(
+                row.get("LifecycleTimestamp") or row.get("When") or self.run_at_str
+            ).strip()
+            trading_date = detected_at[:10] or self._today_key()
+            observation_id = str(row.get("LifecycleObservationId", "") or "").strip()
+            identity_kind = "lifecycle"
+            if not observation_id:
+                observation_id = deterministic_fallback_candidate_key(
+                    trading_date,
+                    lane,
+                    symbol,
+                )
+                identity_kind = "causal_fallback"
+
+            message = self._build_tradingview_candidate_message(row)
+            common = {
+                "lifecycle_observation_id": observation_id,
+                "trading_date": trading_date,
+                "symbol": symbol,
+                "source_lane": lane,
+                "detected_at": detected_at,
+                "identity_kind": identity_kind,
+            }
+            self._deliver_tradingview_candidate(
+                common,
+                message,
+                telemetry_context=self._alert_timing_context_for_row(row),
+            )
+
+    @staticmethod
+    def _tradingview_delivery_now() -> datetime:
+        return datetime.now().astimezone()
+
+    @staticmethod
+    def _tradingview_timestamp(value: Any, reference: datetime) -> Optional[datetime]:
+        try:
+            parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+        except (TypeError, ValueError):
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
+        return parsed
+
+    def _retry_pending_tradingview_candidates(self) -> None:
+        """Resume retryable deliveries from the journal on later monitor cycles."""
+        if "discord" not in getattr(self, "alert_channels", set()):
+            return
+        output_dir = getattr(self, "output_dir", "")
+        if not output_dir:
+            return
+        trading_date = str(getattr(self, "run_at_str", "") or "")[:10]
+        if not trading_date:
+            return
+        states = self._tradingview_delivery_states(trading_date)
+        if states is None:
+            return
+        for state in states.values():
+            if state.get("delivery_status") != "retryable_failed":
+                continue
+            eligibility_row = {
+                "Symbol": state.get("symbol"),
+                "Lane": state.get("source_lane"),
+            }
+            if not self._manual_discord_row_is_eligible(
+                eligibility_row,
+                str(state.get("source_lane") or "tradingview_candidate_retry"),
+            ):
+                continue
+            message = str(state.get("discord_message") or "").strip()
+            if not message:
+                message = (
+                    "**TRADINGVIEW CANDIDATE — MANUAL REVIEW**\n"
+                    f"`{state.get('symbol', '')}` | source `{state.get('source_lane', '')}` | "
+                    f"detected `{state.get('detected_at', '')}`\n"
+                    f"Lifecycle observation `{state.get('lifecycle_observation_id', '')}`\n"
+                    "Manual TradingView review required. Not an approved trade."
+                )
+            self._deliver_tradingview_candidate(
+                {
+                    key: state.get(key)
+                    for key in (
+                        "lifecycle_observation_id",
+                        "trading_date",
+                        "symbol",
+                        "source_lane",
+                        "detected_at",
+                        "identity_kind",
+                    )
+                },
+                message,
+            )
+
+    def _deliver_tradingview_candidate(
+        self,
+        common: Dict[str, Any],
+        message: str,
+        telemetry_context: Optional[Dict[str, Any]] = None,
+    ) -> None:
+        """Run one immediate retry cycle using durable cross-cycle attempt state."""
+        if not self._tradingview_delivery_is_available():
+            return
+        output_dir = self.output_dir
+        trading_date = str(common.get("trading_date") or "")
+        observation_id = str(common.get("lifecycle_observation_id") or "")
+        states = self._tradingview_delivery_states(trading_date)
+        if states is None:
+            return
+        prior = states.get(observation_id, {})
+        if prior.get("delivery_status") in {
+            "delivered",
+            "terminal_failed",
+            "delivery_uncertain",
+        }:
+            return
+
+        now = self._tradingview_delivery_now()
+        total_attempts = int(prior.get("total_attempts", 0) or 0)
+        max_total_attempts = max(
+            1,
+            int(getattr(self, "tradingview_candidate_max_total_attempts", 6) or 6),
+        )
+        retry_ttl = max(
+            0.0,
+            float(getattr(self, "tradingview_candidate_retry_ttl_seconds", 600.0) or 0.0),
+        )
+        detected_at = self._tradingview_timestamp(common.get("detected_at"), now)
+        next_eligible_at = self._tradingview_timestamp(prior.get("next_retry_eligible_at"), now)
+        if next_eligible_at is not None and now < next_eligible_at:
+            return
+
+        terminal_reason = ""
+        if total_attempts >= max_total_attempts:
+            terminal_reason = "max_total_attempts_exhausted"
+        elif detected_at is not None and (now - detected_at).total_seconds() > retry_ttl:
+            terminal_reason = "retry_ttl_expired"
+        if terminal_reason:
+            observer = getattr(self, "_alert_timing_observer", None)
+            if observer is not None:
+                observer.emit(
+                    "DISCORD_FAILED",
+                    str(common.get("symbol") or ""),
+                    str(common.get("source_lane") or ""),
+                    trading_date=trading_date,
+                    observation_id=observation_id or None,
+                    candidate_id=observation_id or None,
+                    context={
+                        **dict(telemetry_context or {}),
+                        "qualified_at": common.get("detected_at"),
+                        "failure_category": terminal_reason,
+                        "attempt_number": total_attempts,
+                    },
+                )
+            self._append_tradingview_delivery_record(
+                {
+                    **common,
+                    "discord_message": message,
+                    "send_attempt_at": now.isoformat(timespec="microseconds"),
+                    "delivery_status": "terminal_failed",
+                    "failure_class": terminal_reason,
+                    "terminal": True,
+                    "retryable": False,
+                    "http_status": prior.get("http_status"),
+                    "error": terminal_reason,
+                    "delivered_at": None,
+                    "attempt_count": total_attempts,
+                    "next_retry_eligible_at": None,
+                },
+            )
+            return
+
+        webhook_url = self._resolve_discord_webhook_url()
+        if not webhook_url:
+            observer = getattr(self, "_alert_timing_observer", None)
+            if observer is not None:
+                observer.emit(
+                    "DISCORD_FAILED",
+                    str(common.get("symbol") or ""),
+                    str(common.get("source_lane") or ""),
+                    trading_date=trading_date,
+                    observation_id=observation_id or None,
+                    candidate_id=observation_id or None,
+                    context={
+                        **dict(telemetry_context or {}),
+                        "qualified_at": common.get("detected_at"),
+                        "failure_category": "configuration",
+                        "attempt_number": total_attempts,
+                    },
+                )
+            self._append_tradingview_delivery_record(
+                {
+                    **common,
+                    "discord_message": message,
+                    "send_attempt_at": now.isoformat(timespec="microseconds"),
+                    "delivery_status": "terminal_failed",
+                    "failure_class": "configuration",
+                    "terminal": True,
+                    "retryable": False,
+                    "http_status": None,
+                    "error": "DISCORD_WEBHOOK_URL is not configured",
+                    "delivered_at": None,
+                    "attempt_count": total_attempts,
+                    "next_retry_eligible_at": None,
+                },
+            )
+            return
+
+        immediate_attempts = min(
+            max(1, int(getattr(self, "tradingview_discord_max_attempts", 3) or 3)),
+            max_total_attempts - total_attempts,
+        )
+        backoff_seconds = max(
+            0.0,
+            float(getattr(self, "tradingview_discord_retry_backoff_seconds", 1.0) or 0.0),
+        )
+        for local_attempt in range(1, immediate_attempts + 1):
+            attempt_count = total_attempts + local_attempt
+            attempted_at = self._tradingview_delivery_now()
+            # Write-ahead reservation: no HTTP is attempted unless its attempt
+            # number is durable. If no later outcome is persisted, restart
+            # reconstructs this as delivery_uncertain and will not resend.
+            if not self._append_tradingview_delivery_record(
+                {
+                    **common,
+                    "discord_message": message,
+                    "send_attempt_at": attempted_at.isoformat(timespec="microseconds"),
+                    "delivery_status": "attempt_reserved",
+                    "failure_class": "delivery_outcome_unknown",
+                    "terminal": True,
+                    "retryable": False,
+                    "http_status": None,
+                    "error": None,
+                    "delivered_at": None,
+                    "attempt_count": attempt_count,
+                    "next_retry_eligible_at": None,
+                }
+            ):
+                return
+            delivery_started = time.monotonic()
+            response = None
+            error = ""
+            retry_after = 0.0
+            observer = getattr(self, "_alert_timing_observer", None)
+            if observer is not None:
+                observer.emit(
+                    "DISCORD_ATTEMPTED",
+                    str(common.get("symbol") or ""),
+                    str(common.get("source_lane") or ""),
+                    event_timestamp=attempted_at,
+                    trading_date=trading_date,
+                    observation_id=observation_id or None,
+                    candidate_id=observation_id or None,
+                    context={
+                        **dict(telemetry_context or {}),
+                        "qualified_at": common.get("detected_at"),
+                        "attempt_number": attempt_count,
+                    },
+                )
+            try:
+                response = requests.post(webhook_url, json={"content": message}, timeout=10)
+                http_status = int(response.status_code)
+                success = 200 <= http_status < 300
+                retryable = http_status == 429 or 500 <= http_status < 600
+                if not success:
+                    response_text = str(getattr(response, "text", "") or "")[:300]
+                    error = f"HTTP {http_status}" + (f": {response_text}" if response_text else "")
+                if http_status == 429:
+                    try:
+                        retry_after = max(0.0, float(response.headers.get("Retry-After", 0) or 0))
+                    except (AttributeError, TypeError, ValueError):
+                        retry_after = 0.0
+            except Exception as exc:
+                http_status = None
+                success = False
+                retryable = True
+                error = f"{type(exc).__name__}: {exc}"
+
+            global_exhausted = not success and retryable and attempt_count >= max_total_attempts
+            immediate_exhausted = not success and retryable and local_attempt >= immediate_attempts
+            if success:
+                status, failure_class = "delivered", None
+            elif not retryable:
+                status, failure_class = "terminal_failed", "permanent_http"
+            elif global_exhausted:
+                status, failure_class = "terminal_failed", "max_total_attempts_exhausted"
+                error = f"max_total_attempts_exhausted: {error}"
+            elif immediate_exhausted:
+                status, failure_class = "retryable_failed", "transient"
+            else:
+                status, failure_class = "retrying", "transient"
+            delay = max(backoff_seconds * (2 ** (local_attempt - 1)), retry_after)
+            if status == "retrying" and delay > 60.0:
+                # Do not block a monitor cycle for a long rate-limit window or
+                # retry before Discord permits. The next cycle consults the
+                # persisted eligibility timestamp.
+                status, failure_class = "retryable_failed", "transient_rate_limit"
+            next_retry = (
+                attempted_at + timedelta(seconds=delay)
+                if not success and retryable and delay > 0 else None
+            )
+            delivered_at = (
+                self._tradingview_delivery_now().isoformat(timespec="microseconds")
+                if success else None
+            )
+            if observer is not None:
+                observer.emit(
+                    "DISCORD_SUCCESS" if success else "DISCORD_FAILED",
+                    str(common.get("symbol") or ""),
+                    str(common.get("source_lane") or ""),
+                    trading_date=trading_date,
+                    observation_id=observation_id or None,
+                    candidate_id=observation_id or None,
+                    context={
+                        **dict(telemetry_context or {}),
+                        "qualified_at": common.get("detected_at"),
+                        "http_status": http_status,
+                        "delivery_duration_ms": round(
+                            (time.monotonic() - delivery_started) * 1000.0,
+                            3,
+                        ),
+                        "failure_category": failure_class,
+                        "attempt_number": attempt_count,
+                    },
+                )
+            if not self._append_tradingview_delivery_record(
+                {
+                    **common,
+                    "discord_message": message,
+                    "send_attempt_at": attempted_at.isoformat(timespec="microseconds"),
+                    "delivery_status": status,
+                    "failure_class": failure_class,
+                    "terminal": status in {"delivered", "terminal_failed"},
+                    "retryable": status in {"retrying", "retryable_failed"},
+                    "http_status": http_status,
+                    "error": error or None,
+                    "delivered_at": delivered_at,
+                    "attempt_count": attempt_count,
+                    "next_retry_eligible_at": (
+                        next_retry.isoformat(timespec="microseconds") if next_retry else None
+                    ),
+                }
+            ):
+                return
+            if success or status in {"terminal_failed", "retryable_failed"}:
+                return
+            if delay > 0:
+                time.sleep(min(delay, 60.0))
+
 
     def _send_discord_monitor_alerts(
         self,
@@ -5569,9 +7228,14 @@ class SignalMonitorRunner:
         current_simple_df: Optional[pd.DataFrame] = None,
     ) -> None:
         """Send all ranked Discord alerts without silently dropping symbols on length limits."""
-        remaining_df = alerts_df.copy() if alerts_df is not None else pd.DataFrame()
+        remaining_df = self._filter_manual_discord_frame(alerts_df, "candidate")
         if remaining_df.empty:
             return
+        delivery_simple_df = self._filter_manual_discord_frame(
+            current_simple_df,
+            "buy_now_board",
+            symbol_column="Stock",
+        )
 
         sent_any = False
         for _ in range(12):
@@ -5580,7 +7244,7 @@ class SignalMonitorRunner:
             discord_message = self._build_discord_monitor_message(
                 remaining_df,
                 summary,
-                current_simple_df=current_simple_df,
+                current_simple_df=delivery_simple_df,
             )
             sent_symbols = self._symbols_present_in_discord_message(remaining_df, discord_message)
             if not sent_symbols:
@@ -5599,7 +7263,15 @@ class SignalMonitorRunner:
                 remaining_df["Symbol"].astype(str).str.upper().isin(sent_symbols)
             ].copy()
             self._journal_discord_alerts(sent_df, summary, discord_message)
-            self._send_discord_alert(discord_message)
+            delivery_events = []
+            for row in sent_df.to_dict(orient="records"):
+                timing_event = self._alert_timing_event_for_row(
+                    row,
+                    "DISCORD_ATTEMPTED",
+                )
+                if timing_event is not None:
+                    delivery_events.append(timing_event)
+            self._deliver_with_optional_timing(discord_message, delivery_events)
             sent_any = True
             remaining_df = remaining_df[
                 ~remaining_df["Symbol"].astype(str).str.upper().isin(sent_symbols)
@@ -6251,23 +7923,15 @@ class SignalMonitorRunner:
         except Exception as exc:
             default_logger().debug(f"Telegram alert failed: {exc}", exc_info=True)
 
-    def _send_discord_alert(self, message: str) -> None:
+    def _send_discord_alert(self, message: str) -> bool:
         """Send a Discord webhook alert when configured."""
-        webhook_url = os.environ.get("DISCORD_WEBHOOK_URL", "").strip()
-        if not webhook_url:
-            try:
-                from PKDevTools.classes.Environment import PKEnvironment
-
-                env = PKEnvironment()
-                webhook_url = str(env.allSecrets.get("DISCORD_WEBHOOK_URL", webhook_url)).strip()
-            except Exception:
-                pass
+        webhook_url = self._resolve_discord_webhook_url()
 
         if not webhook_url:
             OutputControls().printOutput(
                 "  [+] Discord alerts skipped because DISCORD_WEBHOOK_URL is not configured."
             )
-            return
+            return False
 
         try:
             response = requests.post(
@@ -6282,8 +7946,11 @@ class SignalMonitorRunner:
                 default_logger().debug(
                     f"Discord alert failed with HTTP {response.status_code}: {response.text[:300]}"
                 )
+                return False
+            return True
         except Exception as exc:
             default_logger().debug(f"Discord alert failed: {exc}", exc_info=True)
+            return False
 
     def _normalize_alert_channels(self, value: str) -> Set[str]:
         """Normalize requested alert channels into a set."""

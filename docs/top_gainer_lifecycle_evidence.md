@@ -80,6 +80,33 @@ called during live ranking. Only bars strictly after the observation timestamp
 contribute to future labels. Missing post-observation data emits
 `data_incomplete`, and repeated enrichment is idempotent.
 
+For a session range already present in a local one-minute backfill, build a
+separate enriched copy with:
+
+```bash
+python -m scripts.enrich_top_gainer_lifecycle \
+  --events results/Data/top_gainer_lifecycle/events.jsonl \
+  --bars-root results/Data/kite_history_backfill/minute \
+  --start-date YYYY-MM-DD \
+  --end-date YYYY-MM-DD \
+  --output-events /a/separate/path/events.enriched.jsonl
+```
+
+The command has no data-download or broker client. It requires explicit local
+paths, never modifies its source, refuses to overwrite its output, and labels
+missing files, invalid CSVs, gaps, partial sessions, or missing post-observation
+bars as incomplete without assigning returns or threshold outcomes. It rejects
+malformed or identity-ambiguous evidence instead of guessing. Use `--dry-run`
+without `--output-events` to report coverage before creating a copy. An enriched
+copy supports precision and excursion analysis; recall remains unavailable
+until an independently defined eligible universe and actual-runner labels are
+recorded.
+
+For observations before the regular 09:15 IST open, expected one-minute
+coverage begins at 09:15. Later observations require the first whole-minute bar
+strictly after the observation, continuous coverage thereafter, and the 15:29
+terminal candle.
+
 ## Limitations
 
 Historical live snapshots are incomplete unless the recorder was running. The

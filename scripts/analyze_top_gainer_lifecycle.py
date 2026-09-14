@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import argparse
 import json
-from collections import Counter
+from collections import Counter, defaultdict
 from datetime import datetime
 from pathlib import Path
 from statistics import median
+
+from pkscreener.classes.TopGainerLifecycleRecorder import _timestamp
 
 
 def load_events(path: Path) -> list[dict]:
@@ -24,8 +26,132 @@ def load_events(path: Path) -> list[dict]:
     return rows
 
 
+def terminal_outcome_error(events: list[dict], outcome: dict) -> str | None:
+    """Return why a terminal outcome violates the lifecycle contract."""
+    lifecycle_id = str(outcome.get("lifecycle_id") or "")
+    if not lifecycle_id:
+        return "terminal outcome lacks lifecycle identity"
+    observations = [
+        row
+        for row in events
+        if row.get("event_type") == "candidate_observed"
+        and str(row.get("lifecycle_id") or "") == lifecycle_id
+    ]
+    if len(observations) != 1:
+        return f"expected one original lifecycle observation, found {len(observations)}"
+    observation = observations[0]
+    observation_id = str(observation.get("lifecycle_id") or "")
+    if (
+        not observation_id
+        or outcome.get("lifecycle_id") != observation.get("lifecycle_id")
+        or outcome.get("observation_id") != observation_id
+        or outcome.get("observation_timestamp")
+        != observation.get("observation_timestamp")
+    ):
+        return "terminal outcome observation identity does not match original observation"
+    if (
+        outcome.get("origin_source_lane") != observation.get("source_lane")
+        or outcome.get("experiment_version") != observation.get("experiment_version")
+    ):
+        return "terminal outcome lifecycle identity does not match original observation"
+    labels = outcome.get("future_labels")
+    if not isinstance(labels, dict):
+        return "terminal outcome lacks finalized future labels"
+    if outcome.get("payload") != labels:
+        return "terminal outcome payload does not match finalized future labels"
+    if (
+        "completeness_status" in labels
+        and labels["completeness_status"] not in {"complete", "incomplete"}
+    ):
+        return "terminal outcome has invalid completeness status"
+    return None
+
+
+def incomplete_diagnostic_error(events: list[dict], outcome: dict) -> str | None:
+    """Return why an incomplete terminal outcome lacks its one EOD diagnostic."""
+    if error := terminal_outcome_error(events, outcome):
+        return error
+    lifecycle_id = str(outcome.get("lifecycle_id") or "")
+    observation = next(
+        row
+        for row in events
+        if row.get("event_type") == "candidate_observed"
+        and str(row.get("lifecycle_id") or "") == lifecycle_id
+    )
+    observation_id = lifecycle_id
+    labels = outcome["future_labels"]
+    diagnostics = [
+        row
+        for row in events
+        if row.get("event_type") == "data_incomplete"
+        and str(row.get("lifecycle_id") or "") == lifecycle_id
+        and row.get("source_lane") == "eod_enrichment"
+    ]
+    if len(diagnostics) != 1:
+        return f"expected one linked EOD data_incomplete diagnostic, found {len(diagnostics)}"
+    diagnostic = diagnostics[0]
+    diagnostic_payload = diagnostic.get("payload")
+    if not isinstance(diagnostic_payload, dict):
+        return "linked EOD data_incomplete diagnostic lacks a payload"
+    missing_reason = diagnostic_payload.get("missing_reason")
+    if not isinstance(missing_reason, str) or not missing_reason:
+        return "incomplete evidence lacks an explicit missing reason"
+    expected_payload = {
+        "completeness_status": "incomplete",
+        "missing_reason": missing_reason,
+    }
+    if "coverage_issues" in labels:
+        expected_payload["coverage_issues"] = labels["coverage_issues"]
+    if (
+        "missing_reason" in labels
+        and labels["missing_reason"] != missing_reason
+    ):
+        return "terminal and diagnostic missing reasons do not match"
+    try:
+        diagnostic_dt = _timestamp(
+            diagnostic.get("event_timestamp"), "diagnostic event timestamp"
+        )
+        observation_dt = _timestamp(
+            observation.get("observation_timestamp"), "observation timestamp"
+        )
+    except ValueError:
+        return "linked EOD data_incomplete diagnostic has an invalid timestamp"
+    if diagnostic_dt < observation_dt:
+        return "linked EOD data_incomplete diagnostic precedes original observation"
+    if (
+        diagnostic.get("lifecycle_id") != observation.get("lifecycle_id")
+        or diagnostic.get("observation_id") != observation_id
+        or diagnostic.get("observation_timestamp")
+        != observation.get("observation_timestamp")
+        or diagnostic.get("origin_source_lane") != observation.get("source_lane")
+        or diagnostic.get("experiment_version")
+        != observation.get("experiment_version")
+        or diagnostic.get("payload") != expected_payload
+        or diagnostic.get("paper_only") is not True
+    ):
+        return "linked EOD data_incomplete diagnostic does not match terminal outcome"
+    return None
+
+
+def validate_terminal_outcomes(events: list[dict]) -> None:
+    """Validate the shared, backward-compatible terminal-event contract."""
+    errors = []
+    for index, outcome in enumerate(
+        row
+        for row in events
+        if row.get("event_type") == "session_outcome_finalized"
+    ):
+        error = terminal_outcome_error(events, outcome)
+        if error is not None:
+            identifier = str(outcome.get("event_id") or f"terminal-index-{index}")
+            errors.append(f"{identifier}: {error}")
+    if errors:
+        raise ValueError(f"invalid terminal lifecycle outcome: {errors[:5]}")
+
+
 def summarize(path: Path) -> dict:
     events = load_events(path)
+    validate_terminal_outcomes(events)
     all_observations = [e for e in events if e.get("event_type") == "candidate_observed"]
     observations = [e for e in all_observations
                     if e.get("causal_evaluation_eligible", True)
@@ -39,6 +165,47 @@ def summarize(path: Path) -> dict:
                       and e.get("lifecycle_id") in observations_by_id]
     complete_outcome_events = [e for e in outcome_events
                                if (e.get("future_labels") or {}).get("completeness_status", "complete") == "complete"]
+    outcomes_by_id = Counter(str(e.get("lifecycle_id")) for e in outcome_events)
+    eligible_by_date = defaultdict(set)
+    for observation in observations:
+        if observation.get("trading_date") and observation.get("lifecycle_id"):
+            eligible_by_date[str(observation["trading_date"])].add(
+                str(observation["lifecycle_id"])
+            )
+    session_finalization = {}
+    for trading_date, lifecycle_ids in sorted(eligible_by_date.items()):
+        date_outcomes = [
+            row for row in outcome_events
+            if str(row.get("lifecycle_id")) in lifecycle_ids
+        ]
+        complete_count = sum(
+            (row.get("future_labels") or {}).get(
+                "completeness_status", "complete"
+            )
+            == "complete"
+            for row in date_outcomes
+        )
+        incomplete_count = sum(
+            (row.get("future_labels") or {}).get("completeness_status") == "incomplete"
+            for row in date_outcomes
+        )
+        exactly_once = all(outcomes_by_id[identifier] == 1 for identifier in lifecycle_ids)
+        valid_terminal_statuses = (
+            complete_count + incomplete_count == len(lifecycle_ids)
+        )
+        session_finalization[trading_date] = {
+            "eligible_observations": len(lifecycle_ids),
+            "terminal_outcomes": len(date_outcomes),
+            "complete_outcomes": complete_count,
+            "incomplete_outcomes": incomplete_count,
+            "exactly_one_terminal_outcome_per_eligible_observation": exactly_once,
+            "valid_terminal_statuses": valid_terminal_statuses,
+            "finalized": (
+                bool(lifecycle_ids)
+                and exactly_once
+                and valid_terminal_statuses
+            ),
+        }
     labels = [e.get("future_labels") or {} for e in complete_outcome_events]
     def pct(name: str) -> float | None:
         vals = [float(row[name]) for row in labels if row.get(name) is not None]
@@ -190,7 +357,18 @@ def summarize(path: Path) -> dict:
         "duplicate_lane_overlap_count": len(overlap_cases),
         "lane_overlap_cases": overlap_cases,
         "unique_date_symbol_candidates": len({(e.get("trading_date"), e.get("symbol")) for e in observations}),
-        "incomplete_outcome_count": sum(1 for e in outcome_events if (e.get("future_labels") or {}).get("completeness_status") != "complete"),
+        "incomplete_outcome_count": sum(
+            1
+            for e in outcome_events
+            if (e.get("future_labels") or {}).get(
+                "completeness_status", "complete"
+            )
+            != "complete"
+        ),
+        "finalized_sessions": sum(
+            bool(row["finalized"]) for row in session_finalization.values()
+        ),
+        "session_finalization": session_finalization,
         "missing_data_rates_by_field_and_lane": {lane: dict(counts) for lane, counts in missing_by_lane.items()},
         "lane_comparison": lane_comparison,
         "signal_time_fields_only": True,

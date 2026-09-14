@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import json
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import pytest
 import pandas as pd
@@ -108,8 +108,17 @@ def test_eod_enrichment_uses_only_post_observation_bars_and_is_idempotent(tmp_pa
     observation_id = rec.record_observation(_snapshot(), "live_feature_recorder", "2026-08-03T09:30:00+05:30")
     bars = [
         {"timestamp": "2026-08-03T09:29:00+05:30", "high": 500, "low": 50, "close": 500},
-        {"timestamp": "2026-08-03T09:45:00+05:30", "high": 106, "low": 98, "close": 105},
     ]
+    start = datetime.fromisoformat("2026-08-03T09:31:00+05:30")
+    end = datetime.fromisoformat("2026-08-03T15:29:00+05:30")
+    bars.extend({
+        "timestamp": current.isoformat(), "high": 106 if current.minute == 45 and current.hour == 9 else 104,
+        "low": 98 if current.minute == 45 and current.hour == 9 else 99,
+        "close": 105 if current.minute == 45 and current.hour == 9 else 103,
+    } for current in (
+        start + timedelta(minutes=offset)
+        for offset in range(int((end - start).total_seconds() // 60) + 1)
+    ))
     rec.enrich_from_bars(observation_id, bars)
     rec.enrich_from_bars(observation_id, bars)
     outcomes = [row for row in rec.replay() if row["event_type"] == "session_outcome_finalized"]

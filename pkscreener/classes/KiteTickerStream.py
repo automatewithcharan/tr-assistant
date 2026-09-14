@@ -13,7 +13,7 @@ import os
 import tempfile
 import threading
 import time
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
@@ -341,7 +341,7 @@ class KiteTickerStreamRunner:
         )
 
     def _on_ticks(self, ws, ticks) -> None:
-        received_at = datetime.now().isoformat(timespec="seconds")
+        received_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
         with self._lock:
             for tick in ticks or []:
                 try:
