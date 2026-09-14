@@ -13,6 +13,7 @@ from scripts.analyze_prospective_timing_funnel import (
     events_from_lifecycle,
     events_from_timing,
     load_timing_compact,
+    main,
     opportunity_id,
     runtime_coverage,
     stage_outcome,
@@ -74,6 +75,35 @@ def test_stage_order_is_causal_and_later_precursor_is_not_back_joined():
     assert row["stage_order_status"] == "causal"
     assert row["first_precursor_qualified_at"] is None
     assert row["stage_order_violations"] == []
+    assert result["stage_counts"]["PRECURSOR_QUALIFIED"]["opportunities_reached"] == 0
+    assert result["stage_counts"]["PRECURSOR_QUALIFIED"]["raw_opportunities_present"] == 1
+    assert result["stage_counts"]["PRECURSOR_QUALIFIED"]["raw_events"] == 1
+    assert result["stage_counts"]["PRECURSOR_QUALIFIED"]["repeated_events"] == 0
+
+
+def test_later_only_source_evaluation_is_raw_but_not_causal_reach():
+    result = analyze([
+        event("BUY_NOW_BOARD_QUALIFIED", minute=0),
+        event("SOURCE_EVALUATED", minute=5),
+    ])
+    row = result["diagnostic_rows"][0]
+    assert row["first_source_evaluated_at"] is None
+    assert result["stage_counts"]["SOURCE_EVALUATED"]["opportunities_reached"] == 0
+    assert result["stage_counts"]["SOURCE_EVALUATED"]["raw_opportunities_present"] == 1
+    assert result["stage_counts"]["SOURCE_EVALUATED"]["raw_events"] == 1
+
+
+def test_valid_ordered_stages_are_counted_as_causal_reach():
+    result = analyze([
+        event("SOURCE_EVALUATED", minute=0),
+        event("PRECURSOR_QUALIFIED", minute=1),
+        event("BUY_NOW_BOARD_QUALIFIED", minute=2),
+    ])
+    for stage in (
+        "SOURCE_EVALUATED", "PRECURSOR_QUALIFIED", "BUY_NOW_BOARD_QUALIFIED"
+    ):
+        assert result["stage_counts"][stage]["opportunities_reached"] == 1
+        assert result["stage_counts"][stage]["raw_events"] == 1
 
 
 def test_delayed_delivery_is_valid():
@@ -240,3 +270,40 @@ def test_streaming_timing_loader_keeps_first_event_and_exact_raw_counts(tmp_path
     assert stage_counts["BUY_NOW_BOARD_QUALIFIED"] == 3
     oid = opportunity_id("2026-09-14", "AAA")
     assert opportunity_counts[(oid, "BUY_NOW_BOARD_QUALIFIED", "buy_now_board")] == 3
+
+
+@pytest.mark.parametrize(
+    "input_option",
+    [
+        "--timing-glob",
+        "--lifecycle-events",
+        "--goal-journal-glob",
+        "--candidate-delivery-glob",
+        "--tradingview-alert-glob",
+        "--live-feature-glob",
+    ],
+)
+def test_cli_rejects_output_overwriting_any_input_evidence(
+    tmp_path, input_option
+):
+    evidence = tmp_path / "immutable-evidence.dat"
+    original = b"immutable evidence bytes\n"
+    evidence.write_bytes(original)
+
+    with pytest.raises(SystemExit):
+        main([input_option, str(evidence), "--output", str(evidence)])
+
+    assert evidence.read_bytes() == original
+
+
+def test_cli_rejects_output_inside_minute_bar_evidence_root(tmp_path):
+    bars_root = tmp_path / "minute-bars"
+    bars_root.mkdir()
+    evidence = bars_root / "existing-evidence.json"
+    original = b"do not replace\n"
+    evidence.write_bytes(original)
+
+    with pytest.raises(SystemExit):
+        main(["--bars-root", str(bars_root), "--output", str(evidence)])
+
+    assert evidence.read_bytes() == original

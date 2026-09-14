@@ -603,12 +603,14 @@ def analyze(
     diagnostics = []
     adjacent_delays: dict[str, list[float]] = defaultdict(list)
     stage_reached = Counter()
-    repeated_by_stage = Counter()
+    raw_stage_opportunities = Counter()
     bars_by_opportunity = bars_by_opportunity or {}
     for oid, rows in sorted(grouped.items(), key=lambda item: (item[1][0]["trading_date"], item[1][0]["symbol"])):
         by_stage: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for row in rows:
             by_stage[row["stage"]].append(row)
+        for stage in by_stage:
+            raw_stage_opportunities[stage] += 1
         first = {
             stage: min(values, key=lambda row: row["event_timestamp"])
             for stage, values in by_stage.items()
@@ -672,9 +674,10 @@ def analyze(
                     first[stage] = min(
                         eligible, key=lambda row: row["event_timestamp"]
                     )
-        for stage, values in by_stage.items():
+        # Aggregate reach follows the causally selected path. Raw stage counts
+        # below continue to include events removed by causal ordering.
+        for stage in first:
             stage_reached[stage] += 1
-            repeated_by_stage[stage] += max(0, len(values) - 1)
 
         order_violations = []
         previous_stage = None
@@ -784,6 +787,7 @@ def analyze(
         "stage_counts": {
             stage: {
                 "opportunities_reached": stage_reached[stage],
+                "raw_opportunities_present": raw_stage_opportunities[stage],
                 "opportunity_pct": round(stage_reached[stage] * 100.0 / opportunities, 2) if opportunities else None,
                 "raw_events": int((raw_stage_counts or {}).get(
                     stage, sum(event["stage"] == stage for event in raw)
@@ -792,7 +796,7 @@ def analyze(
                     0,
                     int((raw_stage_counts or {}).get(
                         stage, sum(event["stage"] == stage for event in raw)
-                    )) - stage_reached[stage],
+                    )) - raw_stage_opportunities[stage],
                 ),
             }
             for stage in STAGES
@@ -836,6 +840,40 @@ def _atomic_json(path: Path, payload: Mapping[str, Any]) -> None:
             os.unlink(name)
 
 
+def _validate_output_path(
+    output: str | Path,
+    input_paths: Iterable[str | Path],
+    bars_root: str | Path | None = None,
+) -> Path:
+    """Reject any output that could replace or enter immutable evidence."""
+    output_path = Path(output).expanduser()
+    resolved_output = output_path.resolve()
+    resolved_inputs = {
+        Path(path).expanduser().resolve()
+        for path in input_paths
+        if Path(path).expanduser().is_file()
+    }
+    same_existing_file = resolved_output.exists() and any(
+        os.path.samefile(resolved_output, input_path)
+        for input_path in resolved_inputs
+    )
+    if resolved_output in resolved_inputs or same_existing_file:
+        raise ValueError("--output must not overwrite an input evidence file")
+    if bars_root:
+        bars_path = Path(bars_root).expanduser()
+        resolved_bars_root = bars_path.resolve()
+        lexical_output = Path(os.path.abspath(output_path))
+        lexical_bars_root = Path(os.path.abspath(bars_path))
+        if (
+            resolved_output == resolved_bars_root
+            or resolved_bars_root in resolved_output.parents
+            or lexical_output == lexical_bars_root
+            or lexical_bars_root in lexical_output.parents
+        ):
+            raise ValueError("--output must not reside inside --bars-root")
+    return resolved_output
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--timing-glob", action="append", default=[])
@@ -850,17 +888,40 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--output")
     args = parser.parse_args(argv)
 
+    timing_paths = _expand(args.timing_glob)
+    goal_paths = _expand(args.goal_journal_glob)
+    candidate_delivery_paths = _expand(args.candidate_delivery_glob)
+    tradingview_alert_paths = _expand(args.tradingview_alert_glob)
+    live_feature_paths = _expand(args.live_feature_glob)
+    input_paths: list[str | Path] = [
+        *timing_paths,
+        *goal_paths,
+        *candidate_delivery_paths,
+        *tradingview_alert_paths,
+        *live_feature_paths,
+    ]
+    if args.lifecycle_events:
+        input_paths.append(args.lifecycle_events)
+    resolved_output = None
+    if args.output:
+        try:
+            resolved_output = _validate_output_path(
+                args.output, input_paths, args.bars_root
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+
     events, coverage, raw_stage_counts, raw_counts_by_opportunity = load_timing_compact(
-        _expand(args.timing_glob), args.start_date, args.end_date
+        timing_paths, args.start_date, args.end_date
     )
     lifecycle_counts: Counter = Counter()
     extra_events: list[dict[str, Any]] = []
     if args.lifecycle_events:
         lifecycle_events, lifecycle_counts = events_from_lifecycle(load_jsonl([args.lifecycle_events]))
         extra_events.extend(lifecycle_events)
-    extra_events.extend(events_from_goal_journal(_expand(args.goal_journal_glob)))
+    extra_events.extend(events_from_goal_journal(goal_paths))
     candidate_events = events_from_candidate_delivery(
-        load_jsonl(_expand(args.candidate_delivery_glob))
+        load_jsonl(candidate_delivery_paths)
     )
     # Direct-candidate delivery is durably journaled with attempt state. Avoid
     # counting its mirrored timing rows as additional HTTP sends. Board timing
@@ -890,7 +951,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         ]
     extra_events.extend(candidate_events)
-    extra_events.extend(events_from_tradingview_alerts(load_jsonl(_expand(args.tradingview_alert_glob))))
+    extra_events.extend(events_from_tradingview_alerts(load_jsonl(tradingview_alert_paths)))
     if args.start_date:
         extra_events = [event for event in extra_events if event["trading_date"] >= args.start_date]
     if args.end_date:
@@ -906,7 +967,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.end_date:
         events = [event for event in events if event["trading_date"] <= args.end_date]
 
-    feature_coverage = _live_feature_coverage(_expand(args.live_feature_glob))
+    feature_coverage = _live_feature_coverage(live_feature_paths)
     dates = sorted({event["trading_date"] for event in events})
     for day in dates:
         coverage.setdefault(day, runtime_coverage(day, []))
@@ -928,9 +989,9 @@ def main(argv: list[str] | None = None) -> int:
         raw_stage_counts,
         raw_counts_by_opportunity,
     )
-    if args.output:
-        _atomic_json(Path(args.output), result)
-        print(json.dumps({"output": str(Path(args.output)), "opportunities": result["opportunities"]}, sort_keys=True))
+    if resolved_output is not None:
+        _atomic_json(resolved_output, result)
+        print(json.dumps({"output": str(resolved_output), "opportunities": result["opportunities"]}, sort_keys=True))
     else:
         print(json.dumps(result, indent=2, sort_keys=True))
     return 0

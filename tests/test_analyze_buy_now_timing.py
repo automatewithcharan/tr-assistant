@@ -294,3 +294,22 @@ def test_cli_writes_separate_output_without_modifying_input(synthetic_events, tm
 def test_cli_refuses_to_overwrite_evidence(synthetic_events):
     with pytest.raises(SystemExit):
         main(["--events", str(synthetic_events), "--output", str(synthetic_events)])
+
+
+def test_repetition_analysis_is_scoped_to_trading_date_and_symbol(tmp_path):
+    recorder = TopGainerLifecycleRecorder(str(tmp_path / "evidence"))
+    for timestamp in (
+        "2026-09-10T09:30:00+05:30",
+        "2026-09-10T10:00:00+05:30",
+        "2026-09-11T09:31:00+05:30",
+        "2026-09-11T09:40:00+05:30",
+    ):
+        _event(recorder, "AAA", timestamp, "Buy Now", move=1.0)
+
+    repetitions = analyze(recorder.events_path)["buy_now_repetition_analysis"]
+
+    assert [(row["trading_date"], row["symbol"]) for row in repetitions] == [
+        ("2026-09-10", "AAA"),
+        ("2026-09-11", "AAA"),
+    ]
+    assert [row["elapsed_minutes"] for row in repetitions] == [30.0, 9.0]

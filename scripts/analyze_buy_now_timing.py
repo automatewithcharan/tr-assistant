@@ -478,15 +478,16 @@ def analyze(events_path: Path) -> dict[str, Any]:
     )
 
     repeated = []
-    buys_by_symbol: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    buys_by_date_symbol: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for row in raw_buys:
-        buys_by_symbol[row["symbol"]].append(row)
-    for symbol, items in buys_by_symbol.items():
+        buys_by_date_symbol[(row["trading_date"], row["symbol"])].append(row)
+    for (trading_date, symbol), items in buys_by_date_symbol.items():
         items.sort(key=lambda row: row["alert_datetime"])
         if len(items) <= 1:
             continue
         repeated.append(
             {
+                "trading_date": trading_date,
                 "symbol": symbol,
                 "count": len(items),
                 "first_timestamp": items[0]["alert_timestamp"],
@@ -500,7 +501,9 @@ def analyze(events_path: Path) -> dict[str, Any]:
                 "last_buy_now_move_pct": items[-1]["move_pct"],
             }
         )
-    repeated.sort(key=lambda row: (-row["count"], row["symbol"]))
+    repeated.sort(
+        key=lambda row: (-row["count"], row["trading_date"], row["symbol"])
+    )
 
     precursors = [row for row in alerts if row["alert_type"] in PRECURSOR_TYPES]
     precursor_groups: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
