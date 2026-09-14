@@ -1,3 +1,4 @@
+import json
 import pandas as pd
 import tempfile
 from datetime import datetime, timedelta
@@ -1142,6 +1143,751 @@ def test_monitor_heartbeat_previews_board_names_and_overlap(monkeypatch):
     assert "Buy Now: `ALPHA`, `GAMMA`, `BETA`" in captured[0]
     assert "Momentum-only: `DELTA`" in captured[0]
     assert "Buy/Momentum overlap `3`" in captured[0]
+
+
+def test_buy_now_board_delta_cold_bootstrap_baselines_31_then_alerts_one_new(tmp_path):
+    runner = _make_runner()
+    runner.output_dir = str(tmp_path)
+    runner._buy_now_board_state_path = str(tmp_path / "buy_now_board_state.json")
+    runner._active_buy_now_board = set()
+    runner._buy_now_board_state_valid = False
+    runner._buy_now_board_state_date = ""
+    runner.buy_board_digest_seconds = 0
+    runner.goal_selector_validated = False
+    runner._is_regular_market_hours = lambda: True
+    sent_messages = []
+    runner._send_discord_alert = sent_messages.append
+    symbols = [f"BASE{i:02d}" for i in range(31)]
+    baseline = pd.DataFrame(
+        [{"Stock": symbol, "What To Do": "Buy Now"} for symbol in symbols]
+    )
+
+    assert runner._send_buy_now_board_delta(baseline) == []
+    assert sent_messages == []
+    assert runner._active_buy_now_board == set(symbols)
+    payload = json.loads((tmp_path / "buy_now_board_state.json").read_text())
+    assert payload["trading_date"] == "2026-05-08"
+    assert set(payload["active_symbols"]) == set(symbols)
+
+    with_new = pd.concat(
+        [baseline, pd.DataFrame([{"Stock": "FRESH", "What To Do": "Buy Now"}])],
+        ignore_index=True,
+    )
+    assert runner._send_buy_now_board_delta(with_new) == ["FRESH"]
+    combined = "\n".join(sent_messages)
+    assert "BUY NOW BOARD — MANUAL REVIEW" in combined
+    assert "`FRESH`" in combined
+    assert "Not an approved trade." in combined
+    assert "Goal selector: `NOT VALIDATED`" in combined
+    assert "Auto-buy: `DISABLED`" in combined
+
+
+def test_buy_now_board_digest_batches_transitions_across_cycles(monkeypatch, tmp_path):
+    runner = _make_runner()
+    runner.output_dir = str(tmp_path)
+    runner._buy_now_board_state_path = str(tmp_path / "buy_now_board_state.json")
+    runner._active_buy_now_board = set()
+    runner._buy_now_board_state_valid = False
+    runner._buy_now_board_state_date = ""
+    runner.buy_board_digest_seconds = 60
+    runner._is_regular_market_hours = lambda: True
+    sent_messages = []
+    runner._send_discord_alert = sent_messages.append
+    clock = {"now": 100.0}
+    monkeypatch.setattr(signal_monitor_module.time, "time", lambda: clock["now"])
+    empty = pd.DataFrame(columns=["Stock", "What To Do"])
+    first = pd.DataFrame(
+        [
+            {
+                "Stock": "AAA", "What To Do": "Buy Now",
+                "Signal Strength %": 60, "Volume vs Avg": 2.0,
+                "Entry Gap %": 0.4, "Change %": 1.5, "RSI": 61,
+                "Price Now": 101,
+            }
+        ]
+    )
+    second = pd.concat(
+        [
+            first,
+            pd.DataFrame(
+                [
+                    {
+                        "Stock": "BBB", "What To Do": "Buy Now",
+                        "Signal Strength %": 55, "Volume vs Avg": 3.0,
+                        "Entry Gap %": 0.2, "Change %": 2.0, "RSI": 64,
+                        "Price Now": 202,
+                    }
+                ]
+            ),
+        ],
+        ignore_index=True,
+    )
+
+    assert runner._send_buy_now_board_delta(empty) == []
+    clock["now"] = 110.0
+    assert runner._send_buy_now_board_delta(first) == ["AAA"]
+    clock["now"] = 135.0
+    assert runner._send_buy_now_board_delta(second) == ["BBB"]
+    assert sent_messages == []
+    clock["now"] = 171.0
+    assert runner._send_buy_now_board_delta(second) == []
+
+    assert len(sent_messages) == 1
+    message = sent_messages[0]
+    assert "Transitions: new `2` | exited `0` | active `2`" in message
+    assert message.count("`AAA`") == 2  # transition plus changed queue
+    assert message.count("`BBB`") == 2
+    assert "PINE PRIORITY UPDATE" in message
+
+
+def test_buy_now_board_pending_digest_survives_same_day_restart(monkeypatch, tmp_path):
+    runner = _make_runner()
+    runner.output_dir = str(tmp_path)
+    runner._buy_now_board_state_path = str(tmp_path / "buy_now_board_state.json")
+    runner._active_buy_now_board = set()
+    runner._buy_now_board_state_valid = False
+    runner._buy_now_board_state_date = ""
+    runner.buy_board_digest_seconds = 60
+    runner._is_regular_market_hours = lambda: True
+    clock = {"now": 100.0}
+    monkeypatch.setattr(signal_monitor_module.time, "time", lambda: clock["now"])
+    empty = pd.DataFrame(columns=["Stock", "What To Do"])
+    board = pd.DataFrame([{"Stock": "AAA", "What To Do": "Buy Now"}])
+
+    runner._send_buy_now_board_delta(empty)
+    clock["now"] = 110.0
+    runner._send_buy_now_board_delta(board)
+
+    restarted = _make_runner()
+    restarted.output_dir = str(tmp_path)
+    restarted._buy_now_board_state_path = runner._buy_now_board_state_path
+    restarted._active_buy_now_board = restarted._load_buy_now_board_state()
+    restarted.buy_board_digest_seconds = 60
+    restarted._is_regular_market_hours = lambda: True
+    sent_messages = []
+    restarted._send_discord_alert = sent_messages.append
+    clock["now"] = 171.0
+
+    assert restarted._send_buy_now_board_delta(board) == []
+    assert len(sent_messages) == 1
+    assert "Transitions: new `1`" in sent_messages[0]
+    assert sent_messages[0].count("`AAA`") == 2  # NEW section plus changed queue.
+
+
+def test_buy_now_board_delta_same_day_restart_does_not_fake_alert(tmp_path):
+    runner = _make_runner()
+    runner.output_dir = str(tmp_path)
+    runner._buy_now_board_state_path = str(tmp_path / "buy_now_board_state.json")
+    runner._active_buy_now_board = {"AAA", "BBB"}
+    runner._save_buy_now_board_state(runner._active_buy_now_board)
+
+    restarted = _make_runner()
+    restarted.output_dir = str(tmp_path)
+    restarted._buy_now_board_state_path = runner._buy_now_board_state_path
+    restarted._active_buy_now_board = restarted._load_buy_now_board_state()
+    restarted._is_regular_market_hours = lambda: True
+    restarted_messages = []
+    restarted._send_discord_alert = restarted_messages.append
+    same_board = pd.DataFrame(
+        [
+            {"Stock": "AAA", "What To Do": "Buy Now"},
+            {"Stock": "BBB", "What To Do": "Buy Now"},
+        ]
+    )
+
+    assert restarted._buy_now_board_state_valid is True
+    assert restarted._send_buy_now_board_delta(same_board) == []
+    assert restarted_messages == []
+
+
+def test_buy_now_board_delta_same_day_exit_then_reentry_alerts(tmp_path):
+    runner = _make_runner()
+    runner.output_dir = str(tmp_path)
+    runner._buy_now_board_state_path = str(tmp_path / "buy_now_board_state.json")
+    runner._active_buy_now_board = set()
+    runner._buy_now_board_state_valid = False
+    runner._buy_now_board_state_date = ""
+    runner.buy_board_digest_seconds = 0
+    runner._is_regular_market_hours = lambda: True
+    sent_messages = []
+    runner._send_discord_alert = sent_messages.append
+    buy_now = pd.DataFrame([{"Stock": "AAA", "What To Do": "Buy Now"}])
+
+    assert runner._send_buy_now_board_delta(buy_now) == []
+    assert runner._send_buy_now_board_delta(
+        pd.DataFrame([{"Stock": "AAA", "What To Do": "Hold / Do Nothing"}])
+    ) == []
+    assert runner._active_buy_now_board == set()
+    assert runner._send_buy_now_board_delta(buy_now) == ["AAA"]
+    assert len(sent_messages) == 2
+    assert "**EXITED:**" in sent_messages[0]
+    assert "possible Pine-slot release candidates" in sent_messages[0]
+    assert "**NEW & STILL ACTIVE:**" in sent_messages[1]
+
+
+def test_buy_now_board_delta_previous_day_state_is_ignored_and_rebaselined(tmp_path):
+    yesterday = _make_runner()
+    yesterday.output_dir = str(tmp_path)
+    yesterday._buy_now_board_state_path = str(tmp_path / "buy_now_board_state.json")
+    yesterday._active_buy_now_board = {"AAA", "BBB"}
+    yesterday._save_buy_now_board_state(yesterday._active_buy_now_board)
+
+    today = _make_runner()
+    today.run_at = datetime(2026, 5, 9, 9, 20, 0)
+    today.run_at_str = "2026-05-09 09:20:00"
+    today.output_dir = str(tmp_path)
+    today._buy_now_board_state_path = yesterday._buy_now_board_state_path
+    today._active_buy_now_board = today._load_buy_now_board_state()
+    today.buy_board_digest_seconds = 0
+    today._is_regular_market_hours = lambda: True
+    sent_messages = []
+    today._send_discord_alert = sent_messages.append
+    first_today = pd.DataFrame(
+        [
+            {"Stock": "AAA", "What To Do": "Buy Now"},
+            {"Stock": "CCC", "What To Do": "Buy Now"},
+        ]
+    )
+
+    assert today._buy_now_board_state_valid is False
+    assert today._active_buy_now_board == set()
+    assert today._send_buy_now_board_delta(first_today) == []
+    assert sent_messages == []
+    payload = json.loads((tmp_path / "buy_now_board_state.json").read_text())
+    assert payload["trading_date"] == "2026-05-09"
+    assert set(payload["active_symbols"]) == {"AAA", "CCC"}
+
+    second_today = pd.concat(
+        [first_today, pd.DataFrame([{"Stock": "DDD", "What To Do": "Buy Now"}])],
+        ignore_index=True,
+    )
+    assert today._send_buy_now_board_delta(second_today) == ["DDD"]
+    assert len(sent_messages) == 1
+
+
+def test_buy_now_board_delta_uses_full_merged_board_for_incremental_cycle(tmp_path):
+    runner = _make_runner()
+    runner.output_dir = str(tmp_path)
+    runner._buy_now_board_state_path = str(tmp_path / "buy_now_board_state.json")
+    runner._active_buy_now_board = {"AAA"}
+    runner._save_buy_now_board_state(runner._active_buy_now_board)
+    runner.buy_board_digest_seconds = 0
+    runner._is_regular_market_hours = lambda: True
+    sent_messages = []
+    runner._send_discord_alert = sent_messages.append
+    previous_full_board = pd.DataFrame(
+        [{"Stock": "AAA", "What To Do": "Buy Now"}]
+    )
+    incremental_rows = pd.DataFrame(
+        [{"Stock": "BBB", "What To Do": "Buy Now"}]
+    )
+    merged_board, _ = runner._merge_with_previous(
+        previous_full_board,
+        pd.DataFrame(),
+        incremental_rows,
+        pd.DataFrame(),
+    )
+
+    assert set(merged_board["Stock"]) == {"AAA", "BBB"}
+    assert runner._send_buy_now_board_delta(merged_board) == ["BBB"]
+    assert runner._active_buy_now_board == {"AAA", "BBB"}
+    assert len(sent_messages) == 1
+    assert "`BBB`" in sent_messages[0]
+    assert "**NEW & STILL ACTIVE:**\n`BBB`" in sent_messages[0]
+    assert "**NEW & STILL ACTIVE:**\n`AAA`" not in sent_messages[0]
+
+
+def test_buy_now_board_delta_batches_all_fresh_entrants_without_eight_name_cap():
+    runner = _make_runner()
+    runner._active_buy_now_board = set()
+    runner._buy_now_board_state_valid = True
+    runner._buy_now_board_state_date = runner._today_key()
+    runner._buy_now_board_queue_signature = "[]"
+    runner.buy_board_digest_seconds = 0
+    runner.goal_selector_validated = False
+    runner._is_regular_market_hours = lambda: True
+    sent_messages = []
+    runner._send_discord_alert = sent_messages.append
+    symbols = [f"BOARD{i:02d}" for i in range(12)]
+    board = pd.DataFrame(
+        [{"Stock": symbol, "What To Do": "Buy Now"} for symbol in symbols]
+    )
+
+    runner._send_buy_now_board_delta(board)
+
+    combined = "\n".join(sent_messages)
+    assert all("Transitions: new `12` | exited `0` | active `12`" in message for message in sent_messages)
+    assert all(f"`{symbol}`" in combined for symbol in symbols)
+
+
+def test_buy_now_board_delta_splits_safely_without_dropping_symbols():
+    runner = _make_runner()
+    symbols = [f"LONG_BOARD_SYMBOL_{index:03d}" for index in range(150)]
+    entries = [{"symbol": symbol} for symbol in symbols]
+    exit_symbols = [f"EXITED_BOARD_SYMBOL_{index:03d}" for index in range(80)]
+    exits = [{"symbol": symbol} for symbol in exit_symbols]
+
+    messages = runner._build_buy_now_board_digest_messages(
+        entries,
+        exits,
+        [],
+        100.0,
+        160.0,
+    )
+
+    assert len(messages) > 1
+    assert all(len(message) <= 1900 for message in messages)
+    combined = "\n".join(messages)
+    assert all(combined.count(f"`{symbol}`") == 1 for symbol in symbols)
+    assert all(combined.count(f"`{symbol}`") == 1 for symbol in exit_symbols)
+
+
+def test_buy_now_board_attention_ranking_is_lexicographic_and_missing_last():
+    runner = _make_runner()
+    board = pd.DataFrame(
+        [
+            {"Stock": "GAP_LOW", "What To Do": "Buy Now", "Signal Strength %": 50, "Volume vs Avg": 2, "Entry Gap %": 0.1},
+            {"Stock": "VOLUME_HIGH", "What To Do": "Buy Now", "Signal Strength %": 50, "Volume vs Avg": 3, "Entry Gap %": 0.9},
+            {"Stock": "STRENGTH_HIGH", "What To Do": "Buy Now", "Signal Strength %": 60, "Volume vs Avg": 1, "Entry Gap %": 1.0},
+            {"Stock": "GAP_HIGH", "What To Do": "Buy Now", "Signal Strength %": 50, "Volume vs Avg": 2, "Entry Gap %": 0.4},
+            {"Stock": "TIE_B", "What To Do": "Buy Now", "Signal Strength %": 50, "Volume vs Avg": 2, "Entry Gap %": 0.4},
+            {"Stock": "TIE_A", "What To Do": "Buy Now", "Signal Strength %": 50, "Volume vs Avg": 2, "Entry Gap %": 0.4},
+            {"Stock": "MISSING_GAP", "What To Do": "Buy Now", "Signal Strength %": 50, "Volume vs Avg": 2, "Entry Gap %": None},
+            {"Stock": "MISSING_VOLUME", "What To Do": "Buy Now", "Signal Strength %": 50, "Volume vs Avg": None, "Entry Gap %": 0.0},
+            {"Stock": "MISSING", "What To Do": "Buy Now", "Signal Strength %": None, "Volume vs Avg": 99, "Entry Gap %": 0.0},
+            {"Stock": "NOT_ACTIVE", "What To Do": "Watch for Buy", "Signal Strength %": 100, "Volume vs Avg": 100, "Entry Gap %": 0.0},
+        ]
+    )
+
+    ranked = runner._rank_buy_now_board(board)
+
+    assert [row["symbol"] for row in ranked] == [
+        "STRENGTH_HIGH",
+        "VOLUME_HIGH",
+        "GAP_LOW",
+        "GAP_HIGH",
+        "TIE_A",
+        "TIE_B",
+        "MISSING_GAP",
+        "MISSING_VOLUME",
+        "MISSING",
+    ]
+    assert ranked[-1]["strength"] is None
+
+
+def test_buy_now_board_queue_retains_rank_beyond_20_and_display_limit(tmp_path):
+    runner = _make_runner()
+    runner.output_dir = str(tmp_path)
+    runner._buy_now_board_state_path = str(tmp_path / "buy_now_board_state.json")
+    runner._active_buy_now_board = set()
+    runner._buy_now_board_state_valid = True
+    runner._buy_now_board_state_date = runner._today_key()
+    runner._buy_now_board_queue_signature = "[]"
+    runner.buy_board_digest_seconds = 0
+    runner.buy_board_queue_display_limit = 5
+    runner._is_regular_market_hours = lambda: True
+    sent_messages = []
+    runner._send_discord_alert = sent_messages.append
+    board = pd.DataFrame(
+        [
+            {
+                "Stock": f"QUEUE{index:02d}",
+                "What To Do": "Buy Now",
+                "Signal Strength %": 100 - index,
+                "Volume vs Avg": 2,
+                "Entry Gap %": 0.2,
+            }
+            for index in range(25)
+        ]
+    )
+
+    runner._send_buy_now_board_delta(board)
+
+    assert len(runner._active_buy_now_board) == 25
+    assert "QUEUE24" in runner._active_buy_now_board
+    assert len(sent_messages) >= 1
+    combined = "\n".join(sent_messages)
+    assert "Active board: `25`" in combined
+    assert "Additional retained candidates: `20`" in combined
+    # Every entrant remains in the NEW section even though only five queue rows display.
+    assert all(f"`QUEUE{index:02d}`" in combined for index in range(25))
+
+    promoted_board = board.copy()
+    promoted_board.loc[promoted_board["Stock"].eq("QUEUE24"), "Signal Strength %"] = 200
+    ranked = runner._rank_buy_now_board(promoted_board)
+    assert ranked[0]["symbol"] == "QUEUE24"
+    assert len(ranked) == 25
+
+
+def test_buy_now_board_delta_is_independent_of_other_alert_family_state():
+    runner = _make_runner()
+    runner._active_buy_now_board = set()
+    runner._buy_now_board_state_valid = True
+    runner._buy_now_board_state_date = runner._today_key()
+    runner.buy_board_digest_seconds = 0
+    runner._daily_alerted = {"CROSS": runner._today_key()}
+    runner._early_breakout_alerted_today = {"CROSS"}
+    runner._top_gainer_radar_today = {"CROSS"}
+    runner._ob_alerted_today = {"CROSS"}
+    runner._is_regular_market_hours = lambda: True
+    sent_messages = []
+    runner._send_discord_alert = sent_messages.append
+    family_state_before = (
+        dict(runner._daily_alerted),
+        set(runner._early_breakout_alerted_today),
+        set(runner._top_gainer_radar_today),
+        set(runner._ob_alerted_today),
+    )
+
+    runner._send_buy_now_board_delta(
+        pd.DataFrame([{"Stock": "CROSS", "What To Do": "Buy Now"}])
+    )
+
+    assert len(sent_messages) == 1
+    assert "`CROSS`" in sent_messages[0]
+    assert family_state_before == (
+        runner._daily_alerted,
+        runner._early_breakout_alerted_today,
+        runner._top_gainer_radar_today,
+        runner._ob_alerted_today,
+    )
+
+
+def test_buy_now_board_delta_does_not_promote_goal_or_create_order(monkeypatch):
+    runner = _make_runner()
+    runner._active_buy_now_board = set()
+    runner._buy_now_board_state_valid = True
+    runner._buy_now_board_state_date = runner._today_key()
+    runner.buy_board_digest_seconds = 0
+    runner.goal_selector_validated = False
+    runner._is_regular_market_hours = lambda: True
+    runner._send_discord_alert = lambda _message: None
+    runner._autotrade_candidates = {}
+    appended = []
+    monkeypatch.setattr(
+        runner,
+        "_append_daily_symbol",
+        lambda kind, symbol, **_kwargs: appended.append((kind, symbol)),
+    )
+
+    runner._send_buy_now_board_delta(
+        pd.DataFrame([{"Stock": "SAFE", "What To Do": "Buy Now"}])
+    )
+    alert = _alert("SAFE", "Buy Now", 80.0)
+    alert["Checks"] = "confidence ok | volume ok | Vol 3.0x"
+    promoted = runner._apply_intraday_goal_mode(
+        pd.DataFrame([alert], columns=runner.ALERT_COLUMNS)
+    )
+
+    assert promoted.empty
+    assert runner.goal_selector_validated is False
+    assert runner._autotrade_candidates == {}
+    assert appended == []
+
+
+def test_buy_now_board_unchanged_membership_and_queue_is_silent(tmp_path):
+    runner = _make_runner()
+    runner._buy_now_board_state_path = str(tmp_path / "buy_now_board_state.json")
+    runner._active_buy_now_board = set()
+    runner._buy_now_board_state_valid = False
+    runner._buy_now_board_state_date = ""
+    runner.buy_board_digest_seconds = 0
+    runner.buy_board_queue_refresh_seconds = 0
+    runner._is_regular_market_hours = lambda: True
+    sent = []
+    runner._send_discord_alert = sent.append
+    board = pd.DataFrame(
+        [{"Stock": "AAA", "What To Do": "Buy Now", "Signal Strength %": 50}]
+    )
+
+    runner._send_buy_now_board_delta(board)
+    runner._send_buy_now_board_delta(board.copy())
+
+    assert sent == []
+
+
+def test_buy_now_board_transition_is_acknowledged_once_after_success(tmp_path):
+    runner = _make_runner()
+    runner._buy_now_board_state_path = str(tmp_path / "buy_now_board_state.json")
+    runner._active_buy_now_board = set()
+    runner._buy_now_board_state_valid = False
+    runner._buy_now_board_state_date = ""
+    runner.buy_board_digest_seconds = 0
+    runner.buy_board_queue_refresh_seconds = 0
+    runner._is_regular_market_hours = lambda: True
+    sent = []
+    runner._send_discord_alert = sent.append
+    empty = pd.DataFrame(columns=["Stock", "What To Do"])
+    board = pd.DataFrame([{"Stock": "AAA", "What To Do": "Buy Now"}])
+
+    runner._send_buy_now_board_delta(empty)
+    assert runner._send_buy_now_board_delta(board) == ["AAA"]
+    assert runner._send_buy_now_board_delta(board) == []
+    assert len(sent) == 1
+    assert sent[0].count("**NEW & STILL ACTIVE:**") == 1
+    payload = json.loads((tmp_path / "buy_now_board_state.json").read_text())
+    assert payload["pending_entries"] == []
+    assert payload["pending_exits"] == []
+
+
+def test_buy_now_board_exit_is_acknowledged_once(tmp_path):
+    runner = _make_runner()
+    runner._buy_now_board_state_path = str(tmp_path / "buy_now_board_state.json")
+    runner._active_buy_now_board = set()
+    runner._buy_now_board_state_valid = False
+    runner._buy_now_board_state_date = ""
+    runner.buy_board_digest_seconds = 0
+    runner.buy_board_queue_refresh_seconds = 0
+    runner._is_regular_market_hours = lambda: True
+    sent = []
+    runner._send_discord_alert = sent.append
+    board = pd.DataFrame([{"Stock": "AAA", "What To Do": "Buy Now"}])
+    empty = pd.DataFrame(columns=["Stock", "What To Do"])
+
+    runner._send_buy_now_board_delta(board)
+    runner._send_buy_now_board_delta(empty)
+    runner._send_buy_now_board_delta(empty)
+
+    assert len(sent) == 1
+    assert sent[0].count("**EXITED:**") == 1
+    assert sent[0].count("`AAA`") == 1
+
+
+def test_buy_now_board_enter_exit_in_window_collapses_to_final_state(monkeypatch, tmp_path):
+    runner = _make_runner()
+    runner._buy_now_board_state_path = str(tmp_path / "buy_now_board_state.json")
+    runner._active_buy_now_board = set()
+    runner._buy_now_board_state_valid = False
+    runner._buy_now_board_state_date = ""
+    runner.buy_board_digest_seconds = 60
+    runner.buy_board_queue_refresh_seconds = 0
+    runner._is_regular_market_hours = lambda: True
+    sent = []
+    runner._send_discord_alert = sent.append
+    clock = {"now": 100.0}
+    monkeypatch.setattr(signal_monitor_module.time, "time", lambda: clock["now"])
+    empty = pd.DataFrame(columns=["Stock", "What To Do"])
+    board = pd.DataFrame([{"Stock": "FLAP", "What To Do": "Buy Now"}])
+
+    runner._send_buy_now_board_delta(empty)
+    clock["now"] = 110.0
+    runner._send_buy_now_board_delta(board)
+    clock["now"] = 130.0
+    runner._send_buy_now_board_delta(empty)
+    clock["now"] = 180.0
+    runner._send_buy_now_board_delta(empty)
+
+    assert sent == []
+    assert runner._buy_now_board_pending_entries == []
+    assert runner._buy_now_board_pending_exits == []
+
+
+def test_buy_now_board_minor_numeric_change_does_not_change_queue(tmp_path):
+    runner = _make_runner()
+    runner._buy_now_board_state_path = str(tmp_path / "buy_now_board_state.json")
+    runner._active_buy_now_board = set()
+    runner._buy_now_board_state_valid = False
+    runner._buy_now_board_state_date = ""
+    runner.buy_board_digest_seconds = 0
+    runner.buy_board_queue_refresh_seconds = 0
+    runner._is_regular_market_hours = lambda: True
+    sent = []
+    runner._send_discord_alert = sent.append
+    board = pd.DataFrame(
+        [
+            {"Stock": "AAA", "What To Do": "Buy Now", "Signal Strength %": 60.0},
+            {"Stock": "BBB", "What To Do": "Buy Now", "Signal Strength %": 50.0},
+        ]
+    )
+
+    runner._send_buy_now_board_delta(board)
+    changed = board.copy()
+    changed.loc[changed["Stock"].eq("AAA"), "Signal Strength %"] = 60.001
+    runner._send_buy_now_board_delta(changed)
+
+    assert sent == []
+
+
+def test_buy_now_board_sub_display_precision_rank_noise_is_silent(tmp_path):
+    runner = _make_runner()
+    runner._buy_now_board_state_path = str(tmp_path / "buy_now_board_state.json")
+    runner._active_buy_now_board = set()
+    runner._buy_now_board_state_valid = False
+    runner._buy_now_board_state_date = ""
+    runner.buy_board_digest_seconds = 0
+    runner.buy_board_queue_refresh_seconds = 0
+    runner._is_regular_market_hours = lambda: True
+    sent = []
+    runner._send_discord_alert = sent.append
+    board = pd.DataFrame(
+        [
+            {"Stock": "AAA", "What To Do": "Buy Now", "Signal Strength %": 50.001},
+            {"Stock": "BBB", "What To Do": "Buy Now", "Signal Strength %": 50.002},
+        ]
+    )
+    runner._send_buy_now_board_delta(board)
+
+    noisy = board.copy()
+    noisy.loc[noisy["Stock"].eq("AAA"), "Signal Strength %"] = 50.003
+    noisy.loc[noisy["Stock"].eq("BBB"), "Signal Strength %"] = 50.001
+    runner._send_buy_now_board_delta(noisy)
+
+    assert sent == []
+
+
+def test_buy_now_board_displayed_composition_change_sends_compact_queue(tmp_path):
+    runner = _make_runner()
+    runner._buy_now_board_state_path = str(tmp_path / "buy_now_board_state.json")
+    runner._active_buy_now_board = set()
+    runner._buy_now_board_state_valid = False
+    runner._buy_now_board_state_date = ""
+    runner.buy_board_digest_seconds = 0
+    runner.buy_board_queue_refresh_seconds = 0
+    runner.buy_board_queue_display_limit = 15
+    runner._is_regular_market_hours = lambda: True
+    sent = []
+    runner._send_discord_alert = sent.append
+    board = pd.DataFrame(
+        [
+            {"Stock": f"Q{index:02d}", "What To Do": "Buy Now", "Signal Strength %": 100 - index}
+            for index in range(16)
+        ]
+    )
+    runner._send_buy_now_board_delta(board)
+
+    promoted = board.copy()
+    promoted.loc[promoted["Stock"].eq("Q15"), "Signal Strength %"] = 200
+    runner._send_buy_now_board_delta(promoted)
+
+    assert len(sent) == 1
+    assert "PINE PRIORITY UPDATE" in sent[0]
+    assert "**REVIEW FIRST**" in sent[0]
+    assert "**NEXT UP**" in sent[0]
+    assert "Additional retained candidates: `1`" in sent[0]
+    assert "NEW & STILL ACTIVE" not in sent[0]
+
+
+def test_buy_now_board_new_below_display_limit_sends_delta_without_queue(tmp_path):
+    runner = _make_runner()
+    runner._buy_now_board_state_path = str(tmp_path / "buy_now_board_state.json")
+    runner._active_buy_now_board = set()
+    runner._buy_now_board_state_valid = False
+    runner._buy_now_board_state_date = ""
+    runner.buy_board_digest_seconds = 0
+    runner.buy_board_queue_refresh_seconds = 0
+    runner.buy_board_queue_display_limit = 15
+    runner._is_regular_market_hours = lambda: True
+    sent = []
+    runner._send_discord_alert = sent.append
+    board = pd.DataFrame(
+        [
+            {"Stock": f"Q{index:02d}", "What To Do": "Buy Now", "Signal Strength %": 100 - index}
+            for index in range(15)
+        ]
+    )
+    runner._send_buy_now_board_delta(board)
+    expanded = pd.concat(
+        [
+            board,
+            pd.DataFrame(
+                [{"Stock": "LOW_RANK", "What To Do": "Buy Now", "Signal Strength %": 1}]
+            ),
+        ],
+        ignore_index=True,
+    )
+
+    runner._send_buy_now_board_delta(expanded)
+    runner._send_buy_now_board_delta(expanded)
+
+    assert len(sent) == 1
+    assert sent[0].count("`LOW_RANK`") == 1
+    assert "**NEW & STILL ACTIVE:**" in sent[0]
+    assert "PINE PRIORITY UPDATE" not in sent[0]
+    assert "Active board: `16`" in sent[0]
+
+
+def test_buy_now_board_failed_send_keeps_pending_until_success(tmp_path):
+    runner = _make_runner()
+    runner._buy_now_board_state_path = str(tmp_path / "buy_now_board_state.json")
+    runner._active_buy_now_board = set()
+    runner._buy_now_board_state_valid = False
+    runner._buy_now_board_state_date = ""
+    runner.buy_board_digest_seconds = 0
+    runner.buy_board_queue_refresh_seconds = 0
+    runner._is_regular_market_hours = lambda: True
+    empty = pd.DataFrame(columns=["Stock", "What To Do"])
+    board = pd.DataFrame([{"Stock": "RETRY", "What To Do": "Buy Now"}])
+    runner._send_buy_now_board_delta(empty)
+    runner._send_discord_alert = lambda _message: False
+
+    runner._send_buy_now_board_delta(board)
+    failed_payload = json.loads((tmp_path / "buy_now_board_state.json").read_text())
+    assert [row["symbol"] for row in failed_payload["pending_entries"]] == ["RETRY"]
+
+    sent = []
+    runner._send_discord_alert = sent.append
+    runner._send_buy_now_board_delta(board)
+    runner._send_buy_now_board_delta(board)
+    assert len(sent) == 1
+    successful_payload = json.loads((tmp_path / "buy_now_board_state.json").read_text())
+    assert successful_payload["pending_entries"] == []
+
+
+@pytest.mark.parametrize(
+    "direct_action",
+    ["⚡ Grade-B Anomaly", "🌱 Early Breakout"],
+)
+@pytest.mark.parametrize("board_first", [False, True])
+def test_buy_now_board_and_direct_lane_notifications_work_in_both_orders(
+    direct_action, board_first, tmp_path
+):
+    runner = _make_runner()
+    runner._buy_now_board_state_path = str(tmp_path / "buy_now_board_state.json")
+    runner._active_buy_now_board = set()
+    runner._buy_now_board_state_valid = True
+    runner._buy_now_board_state_date = runner._today_key()
+    runner._buy_now_board_queue_signature = "[]"
+    runner.buy_board_digest_seconds = 0
+    runner.buy_board_queue_refresh_seconds = 0
+    runner._is_regular_market_hours = lambda: True
+    runner._filter_alerts_for_portfolio = lambda frame: frame
+    notifications = []
+    runner._send_discord_alert = lambda message: notifications.append(("board", message))
+    runner._send_discord_monitor_alerts = (
+        lambda frame, _summary, current_simple_df=None: notifications.append(
+            ("direct", frame.iloc[0]["NowAction"])
+        )
+    )
+    direct = pd.DataFrame(
+        [_alert("CROSS", direct_action, 70.0)], columns=runner.ALERT_COLUMNS
+    )
+    summary = pd.DataFrame([{"FreshAlertsThisRun": 1}])
+    board = pd.DataFrame([{"Stock": "CROSS", "What To Do": "Buy Now"}])
+
+    actions = (
+        [lambda: runner._send_buy_now_board_delta(board), lambda: runner._send_alerts(direct, summary)]
+        if board_first
+        else [lambda: runner._send_alerts(direct, summary), lambda: runner._send_buy_now_board_delta(board)]
+    )
+    for action in actions:
+        action()
+
+    assert [kind for kind, _message in notifications] == (
+        ["board", "direct"] if board_first else ["direct", "board"]
+    )
+
+
+@pytest.mark.parametrize("status_code, expected", [(204, True), (500, False)])
+def test_discord_sender_reports_delivery_outcome(monkeypatch, status_code, expected):
+    runner = _make_runner()
+    runner._resolve_discord_webhook_url = lambda: "https://discord.invalid/webhook"
+    monkeypatch.setattr(
+        signal_monitor_module.requests,
+        "post",
+        lambda *_args, **_kwargs: SimpleNamespace(status_code=status_code, text="result"),
+    )
+
+    assert runner._send_discord_alert("test") is expected
 
 
 def test_monitor_heartbeat_throttle_survives_runner_restart(monkeypatch, tmp_path):
