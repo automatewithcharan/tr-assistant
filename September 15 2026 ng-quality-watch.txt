@@ -1,0 +1,4622 @@
+==============================================================
+Guild: Screener Alerts
+Channel: Text Channels / ng-quality-watch
+==============================================================
+
+[10-09-2026 20:36] ng
+🧪 NG QUALITY WATCH — TEST
+
+Webhook delivery test only.
+No trading signal.
+Automation starts tomorrow at 09:05 IST.
+
+
+[11-09-2026 10:02] ng
+🧪 NG QUALITY WATCH — TRANSPORT TEST ONLY
+
+TEST ONLY / NOT A SIGNAL.
+Validating the corrected standalone publisher transport.
+
+
+[11-09-2026 10:03] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`INA`**
+Qualified: 2026-09-11T10:03:30+05:30 IST
+
+LTP: ₹93.50
+Day: 0.538%
+From open: 0.646%
+Turnover: ₹1.12 Cr
+Volume / volume delta: 119929 / 17159 (16.697%)
+B/S: 0.917
+Pullback: 0.267%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AINA)
+Event ID: `6fab5629034490a98b88d55cc4dc89644fb0c850409f42648a0666d4292a83b0`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AINA
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 10:03] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`PVRINOX`**
+Qualified: 2026-09-11T10:03:38+05:30 IST
+
+LTP: ₹1235.20
+Day: 1.138%
+From open: 0.586%
+Turnover: ₹36.02 Cr
+Volume / volume delta: 291633 / 2232 (0.771%)
+B/S: 0.685
+Pullback: 0.040%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3APVRINOX)
+Event ID: `8f119c3ed3ddd0670744bc1cb74d7ea1fb267913722eef7674f1fa179fa1ed4d`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3APVRINOX
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 10:03] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`BLUESTARCO`**
+Qualified: 2026-09-11T10:03:47+05:30 IST
+
+LTP: ₹1521.70
+Day: 0.509%
+From open: 1.447%
+Turnover: ₹14.21 Cr
+Volume / volume delta: 93375 / 1231 (1.336%)
+B/S: 1.750
+Pullback: 0.000%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ABLUESTARCO)
+Event ID: `e6313364968286ccc634ad3bf9449c945c306e056885e5df31f30e13648fdc38`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ABLUESTARCO
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 10:04] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`BAJAJHCARE`**
+Qualified: 2026-09-11T10:03:56+05:30 IST
+
+LTP: ₹335.00
+Day: 0.510%
+From open: 0.904%
+Turnover: ₹1.47 Cr
+Volume / volume delta: 43747 / 1000 (2.339%)
+B/S: 1.048
+Pullback: 0.000%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ABAJAJHCARE)
+Event ID: `077262863ad3e9219c0c3e0aa3d06da944f0d276d2c14de54b5c6cb797f013ae`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ABAJAJHCARE
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 10:05] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`WABAG`** — 2026-09-11T10:05:28+05:30 IST
+LTP: ₹2241.20 | Day: 1.329% | From open: 2.105%
+Rank: 194 (previous 283, improvement 89)
+Move delta: 0.506 pt | Turnover: ₹117.16 Cr | Volume: 522738
+B/S: 0.669 | Spread: 4.91 bps | Pullback from known HOD: 0.161%
+Time bucket: 09:30–10:30
+
+Context: Market breadth 20.92% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:WABAG in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AWABAG)
+Event: `d89e5596fae243ab`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AWABAG
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+
+
+[11-09-2026 10:14] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`PROTEAN`** — 2026-09-11T10:14:24+05:30 IST
+LTP: ₹501.60 | Day: 1.796% | From open: 1.951%
+Rank: 166 (previous 225, improvement 59)
+Move delta: 0.558 pt | Turnover: ₹3.01 Cr | Volume: 59918
+B/S: 1.331 | Spread: 12.97 bps | Pullback from known HOD: 0.000%
+Time bucket: 09:30–10:30
+
+Context: Market breadth 23.11% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:PROTEAN in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3APROTEAN)
+Event: `7f29feb102e66799`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3APROTEAN
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 10:15] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`FILATEX`** — 2026-09-11T10:15:15+05:30 IST
+LTP: ₹77.64 | Day: 1.823% | From open: 2.158%
+Rank: 173 (previous 292, improvement 119)
+Move delta: 0.905 pt | Turnover: ₹3.92 Cr | Volume: 504973
+B/S: 1.285 | Spread: 10.33 bps | Pullback from known HOD: 0.000%
+Time bucket: 09:30–10:30
+
+Context: Market breadth 23.44% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:FILATEX in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AFILATEX)
+Event: `c9f0e9239ecca940`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AFILATEX
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 10:17] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`TBZ`** — 2026-09-11T10:17:13+05:30 IST
+LTP: ₹512.80 | Day: 2.304% | From open: 5.688%
+Rank: 138 (previous 184, improvement 46)
+Move delta: 0.559 pt | Turnover: ₹97.25 Cr | Volume: 1896428
+B/S: 0.576 | Spread: 8.78 bps | Pullback from known HOD: 0.000%
+Time bucket: 09:30–10:30
+
+Context: Market breadth 23.53% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:TBZ in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ATBZ)
+Event: `f3baca3a071b8f85`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ATBZ
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[11-09-2026 10:17] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`RESPONIND`** — 2026-09-11T10:17:30+05:30 IST
+LTP: ₹172.78 | Day: 1.911% | From open: 1.130%
+Rank: 166 (previous 910, improvement 744)
+Move delta: 1.988 pt | Turnover: ₹4.94 Cr | Volume: 285744
+B/S: 1.220 | Spread: 12.14 bps | Pullback from known HOD: 0.289%
+Time bucket: 09:30–10:30
+
+Context: Market breadth 23.83% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:RESPONIND in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ARESPONIND)
+Event: `75337cdffc90bf18`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ARESPONIND
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[11-09-2026 10:20] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`AEROENTER`** — 2026-09-11T10:20:02+05:30 IST
+LTP: ₹137.66 | Day: 1.963% | From open: 3.039%
+Rank: 163 (previous 340, improvement 177)
+Move delta: 1.178 pt | Turnover: ₹6.40 Cr | Volume: 465051
+B/S: 2.275 | Spread: 13.80 bps | Pullback from known HOD: 0.240%
+Time bucket: 09:30–10:30
+
+Context: Market breadth 24.04% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:AEROENTER in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AAEROENTER)
+Event: `8d0677211e7a1c74`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AAEROENTER
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 10:22] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`WALCHANNAG`** — 2026-09-11T10:22:17+05:30 IST
+LTP: ₹213.70 | Day: 2.288% | From open: 3.237%
+Rank: 143 (previous 188, improvement 45)
+Move delta: 0.574 pt | Turnover: ₹5.43 Cr | Volume: 254139
+B/S: 0.410 | Spread: 4.21 bps | Pullback from known HOD: 0.140%
+Time bucket: 09:30–10:30
+
+Context: Market breadth 24.62% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:WALCHANNAG in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AWALCHANNAG)
+Event: `7141092fa06bffa0`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AWALCHANNAG
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 10:23] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`RGL`** — 2026-09-11T10:23:42+05:30 IST
+LTP: ₹159.25 | Day: 1.770% | From open: 2.083%
+Rank: 193 (previous 316, improvement 123)
+Move delta: 0.818 pt | Turnover: ₹6.20 Cr | Volume: 389050
+B/S: 1.127 | Spread: 7.54 bps | Pullback from known HOD: 0.000%
+Time bucket: 09:30–10:30
+
+Context: Market breadth 25.37% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:RGL in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ARGL)
+Event: `567bf66c20682bb4`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ARGL
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 10:24] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`QUADFUTURE`** — 2026-09-11T10:24:50+05:30 IST
+LTP: ₹443.50 | Day: 1.767% | From open: 2.900%
+Rank: 194 (previous 262, improvement 68)
+Move delta: 0.516 pt | Turnover: ₹8.77 Cr | Volume: 197799
+B/S: 0.733 | Spread: 6.80 bps | Pullback from known HOD: 0.023%
+Time bucket: 09:30–10:30
+
+Context: Market breadth 25.45% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:QUADFUTURE in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AQUADFUTURE)
+Event: `30309f9fa5c28989`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AQUADFUTURE
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[11-09-2026 10:28] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`NIACL`** — 2026-09-11T10:27:58+05:30 IST
+LTP: ₹201.50 | Day: 2.103% | From open: 2.284%
+Rank: 159 (previous 233, improvement 74)
+Move delta: 0.755 pt | Turnover: ₹69.46 Cr | Volume: 3447000
+B/S: 0.550 | Spread: 5.46 bps | Pullback from known HOD: 0.199%
+Time bucket: 09:30–10:30
+
+Context: Market breadth 24.53% | Sector FINANCE | sector avg -0.78% | sector breadth 20.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:NIACL in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ANIACL)
+Event: `ad8c2103aa9b51f7`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ANIACL
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 10:31] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`HERITGFOOD`** — 2026-09-11T10:31:39+05:30 IST
+LTP: ₹407.25 | Day: 2.311% | From open: 2.841%
+Rank: 154 (previous 197, improvement 43)
+Move delta: 0.515 pt | Turnover: ₹22.19 Cr | Volume: 544938
+B/S: 0.819 | Spread: 2.45 bps | Pullback from known HOD: 0.110%
+Time bucket: 10:30–12:00
+
+Context: Market breadth 24.68% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:HERITGFOOD in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AHERITGFOOD)
+Event: `b8fdb086191442a1`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AHERITGFOOD
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 10:33] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`INDORAMA`** — 2026-09-11T10:33:38+05:30 IST
+LTP: ₹85.49 | Day: 3.087% | From open: 2.975%
+Rank: 101 (previous 280, improvement 179)
+Move delta: 1.917 pt | Turnover: ₹3.90 Cr | Volume: 456541
+B/S: 0.730 | Spread: 10.53 bps | Pullback from known HOD: 0.000%
+Time bucket: 10:30–12:00
+
+Context: Market breadth 24.80% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:INDORAMA in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AINDORAMA)
+Event: `1ca636b2c36c5e98`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AINDORAMA
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[11-09-2026 10:37] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`BBOX`** — 2026-09-11T10:37:37+05:30 IST
+LTP: ₹765.55 | Day: 2.779% | From open: 3.313%
+Rank: 131 (previous 171, improvement 40)
+Move delta: 0.564 pt | Turnover: ₹12.98 Cr | Volume: 169530
+B/S: 0.776 | Spread: 5.88 bps | Pullback from known HOD: 0.255%
+Time bucket: 10:30–12:00
+
+Context: Market breadth 26.38% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:BBOX in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ABBOX)
+Event: `a21f57d3b425f358`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ABBOX
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 10:39] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`MANAKCOAT`** — 2026-09-11T10:39:19+05:30 IST
+LTP: ₹127.43 | Day: 2.460% | From open: 2.849%
+Rank: 151 (previous 209, improvement 58)
+Move delta: 0.683 pt | Turnover: ₹3.78 Cr | Volume: 296585
+B/S: 1.101 | Spread: 16.52 bps | Pullback from known HOD: 0.000%
+Time bucket: 10:30–12:00
+
+Context: Market breadth 26.64% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:MANAKCOAT in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AMANAKCOAT)
+Event: `d021918984a1f73d`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AMANAKCOAT
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[11-09-2026 10:46] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`CRIZAC`** — 2026-09-11T10:46:09+05:30 IST
+LTP: ₹184.69 | Day: 2.777% | From open: 3.173%
+Rank: 131 (previous 188, improvement 57)
+Move delta: 0.718 pt | Turnover: ₹3.37 Cr | Volume: 182333
+B/S: 0.688 | Spread: 10.28 bps | Pullback from known HOD: 0.060%
+Time bucket: 10:30–12:00
+
+Context: Market breadth 28.49% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:CRIZAC in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ACRIZAC)
+Event: `7c4b7a5d833f4567`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ACRIZAC
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[11-09-2026 11:19] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`DYNAMATECH`** — 2026-09-11T11:19:37+05:30 IST
+LTP: ₹11905.00 | Day: 3.136% | From open: 3.856%
+Rank: 130 (previous 195, improvement 65)
+Move delta: 0.875 pt | Turnover: ₹15.86 Cr | Volume: 13319
+B/S: 0.405 | Spread: 1.68 bps | Pullback from known HOD: 0.084%
+Time bucket: 10:30–12:00
+
+Context: Market breadth 30.87% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:DYNAMATECH in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ADYNAMATECH)
+Event: `12a5d7c9a0875f4a`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ADYNAMATECH
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 11:28] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`NOVARTIND`** — 2026-09-11T11:28:07+05:30 IST
+LTP: ₹2483.80 | Day: 2.290% | From open: 4.361%
+Rank: 194 (previous 310, improvement 116)
+Move delta: 0.774 pt | Turnover: ₹40.40 Cr | Volume: 162656
+B/S: 0.688 | Spread: 29.82 bps | Pullback from known HOD: 0.000%
+Time bucket: 10:30–12:00
+
+Context: Market breadth 30.43% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:NOVARTIND in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ANOVARTIND)
+Event: `116c240bdad16d1c`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ANOVARTIND
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[11-09-2026 11:32] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`RACLGEAR`** — 2026-09-11T11:32:40+05:30 IST
+LTP: ₹1632.00 | Day: 2.758% | From open: 2.900%
+Rank: 161 (previous 207, improvement 46)
+Move delta: 0.642 pt | Turnover: ₹3.03 Cr | Volume: 18546
+B/S: 1.014 | Spread: 25.15 bps | Pullback from known HOD: 0.184%
+Time bucket: 10:30–12:00
+
+Context: Market breadth 30.31% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:RACLGEAR in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ARACLGEAR)
+Event: `222ed93fa82e8906`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ARACLGEAR
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 11:35] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`AWFIS`** — 2026-09-11T11:35:14+05:30 IST
+LTP: ₹257.00 | Day: 2.965% | From open: 3.421%
+Rank: 150 (previous 207, improvement 57)
+Move delta: 0.801 pt | Turnover: ₹3.71 Cr | Volume: 144287
+B/S: 1.100 | Spread: 9.72 bps | Pullback from known HOD: 0.019%
+Time bucket: 10:30–12:00
+
+Context: Market breadth 30.87% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:AWFIS in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AAWFIS)
+Event: `9feafe36ff8ccc75`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AAWFIS
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 11:50] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`DECNGOLD`** — 2026-09-11T11:50:04+05:30 IST
+LTP: ₹232.91 | Day: 3.112% | From open: 3.327%
+Rank: 151 (previous 208, improvement 57)
+Move delta: 0.815 pt | Turnover: ₹31.95 Cr | Volume: 1371741
+B/S: 0.656 | Spread: 3.43 bps | Pullback from known HOD: 0.017%
+Time bucket: 10:30–12:00
+
+Context: Market breadth 31.59% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:DECNGOLD in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ADECNGOLD)
+Event: `3e941b4542c436d2`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ADECNGOLD
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 11:51] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`IONEXCHANG`** — 2026-09-11T11:51:47+05:30 IST
+LTP: ₹447.45 | Day: 2.756% | From open: 4.058%
+Rank: 175 (previous 229, improvement 54)
+Move delta: 0.700 pt | Turnover: ₹13.41 Cr | Volume: 299595
+B/S: 0.462 | Spread: 8.94 bps | Pullback from known HOD: 0.123%
+Time bucket: 10:30–12:00
+
+Context: Market breadth 31.88% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:IONEXCHANG in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AIONEXCHANG)
+Event: `53c8aca5a74ab499`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AIONEXCHANG
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 11:54] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`CEINSYS`** — 2026-09-11T11:54:21+05:30 IST
+LTP: ₹704.05 | Day: 2.781% | From open: 2.781%
+Rank: 170 (previous 223, improvement 53)
+Move delta: 0.628 pt | Turnover: ₹4.05 Cr | Volume: 57557
+B/S: 1.492 | Spread: 10.69 bps | Pullback from known HOD: 2.123%
+Time bucket: 10:30–12:00
+
+Context: Market breadth 31.81% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:CEINSYS in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ACEINSYS)
+Event: `946a9f98881efc1d`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ACEINSYS
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 12:03] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`FINCABLES`** — 2026-09-11T12:03:50+05:30 IST
+LTP: ₹1465.20 | Day: 3.299% | From open: 4.181%
+Rank: 151 (previous 196, improvement 45)
+Move delta: 0.571 pt | Turnover: ₹223.50 Cr | Volume: 1525366
+B/S: 1.325 | Spread: 2.05 bps | Pullback from known HOD: 0.041%
+Time bucket: 12:00–13:30
+
+Context: Market breadth 33.37% | Sector CAPGOODS | sector avg -0.94% | sector breadth 21.88%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:FINCABLES in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AFINCABLES)
+Event: `8cad54df79b65335`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AFINCABLES
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 12:16] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`LUMAXTECH`** — 2026-09-11T12:16:45+05:30 IST
+LTP: ₹2005.60 | Day: 3.243% | From open: 3.275%
+Rank: 157 (previous 228, improvement 71)
+Move delta: 1.004 pt | Turnover: ₹20.89 Cr | Volume: 104141
+B/S: 0.540 | Spread: 7.49 bps | Pullback from known HOD: 0.045%
+Time bucket: 12:00–13:30
+
+Context: Market breadth 32.86% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:LUMAXTECH in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ALUMAXTECH)
+Event: `1265ab0689a19a9f`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ALUMAXTECH
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[11-09-2026 12:41] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`RICOAUTO`** — 2026-09-11T12:41:09+05:30 IST
+LTP: ₹134.62 | Day: 3.307% | From open: 4.155%
+Rank: 165 (previous 206, improvement 41)
+Move delta: 0.629 pt | Turnover: ₹9.78 Cr | Volume: 726571
+B/S: 0.523 | Spread: 7.43 bps | Pullback from known HOD: 1.025%
+Time bucket: 12:00–13:30
+
+Context: Market breadth 33.42% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:RICOAUTO in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ARICOAUTO)
+Event: `5bd1713f75cf2b33`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ARICOAUTO
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 12:47] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`TIIL`** — 2026-09-11T12:47:26+05:30 IST
+LTP: ₹3249.90 | Day: 2.939% | From open: 3.665%
+Rank: 188 (previous 238, improvement 50)
+Move delta: 0.592 pt | Turnover: ₹6.51 Cr | Volume: 20036
+B/S: 1.610 | Spread: 17.55 bps | Pullback from known HOD: 0.157%
+Time bucket: 12:00–13:30
+
+Context: Market breadth 33.27% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:TIIL in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ATIIL)
+Event: `a467b74f9fc37ed3`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ATIIL
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 12:49] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`TVSSCS`** — 2026-09-11T12:49:09+05:30 IST
+LTP: ₹132.83 | Day: 3.185% | From open: 2.169%
+Rank: 174 (previous 277, improvement 103)
+Move delta: 1.189 pt | Turnover: ₹14.48 Cr | Volume: 1089794
+B/S: 0.557 | Spread: 1.51 bps | Pullback from known HOD: 0.105%
+Time bucket: 12:00–13:30
+
+Context: Market breadth 33.73% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:TVSSCS in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ATVSSCS)
+Event: `1b641119faf13176`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ATVSSCS
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 12:50] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`VSSL`** — 2026-09-11T12:50:18+05:30 IST
+LTP: ₹404.15 | Day: 3.099% | From open: 3.868%
+Rank: 183 (previous 230, improvement 47)
+Move delta: 0.625 pt | Turnover: ₹16.79 Cr | Volume: 415393
+B/S: 0.934 | Spread: 8.66 bps | Pullback from known HOD: 0.148%
+Time bucket: 12:00–13:30
+
+Context: Market breadth 33.90% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:VSSL in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AVSSL)
+Event: `b7da1ce2f2b6a4ff`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AVSSL
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[11-09-2026 12:51] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`VENKEYS`** — 2026-09-11T12:51:26+05:30 IST
+LTP: ₹1759.80 | Day: 3.111% | From open: 4.130%
+Rank: 179 (previous 221, improvement 42)
+Move delta: 0.562 pt | Turnover: ₹19.59 Cr | Volume: 111297
+B/S: 0.547 | Spread: 4.55 bps | Pullback from known HOD: 1.074%
+Time bucket: 12:00–13:30
+
+Context: Market breadth 33.72% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:VENKEYS in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AVENKEYS)
+Event: `cbc29b165d60cd73`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AVENKEYS
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 12:55] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`ELECTHERM`** — 2026-09-11T12:55:26+05:30 IST
+LTP: ₹972.00 | Day: 3.075% | From open: 3.075%
+Rank: 187 (previous 258, improvement 71)
+Move delta: 0.859 pt | Turnover: ₹11.79 Cr | Volume: 121297
+B/S: 1.259 | Spread: 24.27 bps | Pullback from known HOD: 0.000%
+Time bucket: 12:00–13:30
+
+Context: Market breadth 34.46% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:ELECTHERM in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AELECTHERM)
+Event: `e486d5ea6a22b7ff`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AELECTHERM
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 13:20] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`HLEGLAS`** — 2026-09-11T13:20:55+05:30 IST
+LTP: ₹379.60 | Day: 3.264% | From open: 3.194%
+Rank: 170 (previous 210, improvement 40)
+Move delta: 0.571 pt | Turnover: ₹10.08 Cr | Volume: 265636
+B/S: 1.647 | Spread: 9.23 bps | Pullback from known HOD: 0.000%
+Time bucket: 12:00–13:30
+
+Context: Market breadth 33.67% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:HLEGLAS in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AHLEGLAS)
+Event: `8de7e2a2c10e4032`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AHLEGLAS
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 13:21] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`CONCORDBIO`** — 2026-09-11T13:21:29+05:30 IST
+LTP: ₹1500.30 | Day: 3.270% | From open: 4.216%
+Rank: 172 (previous 255, improvement 83)
+Move delta: 1.053 pt | Turnover: ₹40.87 Cr | Volume: 272434
+B/S: 0.970 | Spread: 5.33 bps | Pullback from known HOD: 1.913%
+Time bucket: 12:00–13:30
+
+Context: Market breadth 33.81% | Sector PHARMA | sector avg -0.11% | sector breadth 39.22%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:CONCORDBIO in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ACONCORDBIO)
+Event: `af0f8c82668e33ce`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ACONCORDBIO
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 13:24] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`63MOONS`** — 2026-09-11T13:24:56+05:30 IST
+LTP: ₹913.65 | Day: 3.080% | From open: 3.824%
+Rank: 186 (previous 233, improvement 47)
+Move delta: 0.513 pt | Turnover: ₹90.69 Cr | Volume: 992663
+B/S: 0.566 | Spread: 6.02 bps | Pullback from known HOD: 3.431%
+Time bucket: 12:00–13:30
+
+Context: Market breadth 33.71% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:63MOONS in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3A63MOONS)
+Event: `0e79a36c419cd492`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3A63MOONS
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[11-09-2026 13:44] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`YASHO`** — 2026-09-11T13:44:12+05:30 IST
+LTP: ₹4083.60 | Day: 3.121% | From open: 3.382%
+Rank: 185 (previous 227, improvement 42)
+Move delta: 0.583 pt | Turnover: ₹26.01 Cr | Volume: 63695
+B/S: 1.727 | Spread: 22.80 bps | Pullback from known HOD: 0.108%
+Time bucket: 13:30–15:00
+
+Context: Market breadth 33.05% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:YASHO in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AYASHO)
+Event: `e5eb722d5b60767e`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AYASHO
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[11-09-2026 13:54] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`ALLTIME`** — 2026-09-11T13:54:50+05:30 IST
+LTP: ₹217.31 | Day: 3.402% | From open: 3.530%
+Rank: 174 (previous 220, improvement 46)
+Move delta: 0.671 pt | Turnover: ₹5.11 Cr | Volume: 235142
+B/S: 1.287 | Spread: 36.86 bps | Pullback from known HOD: 2.002%
+Time bucket: 13:30–15:00
+
+Context: Market breadth 34.55% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:ALLTIME in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AALLTIME)
+Event: `3e54603234113d81`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AALLTIME
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 14:37] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`EXICOM`** — 2026-09-11T14:37:26+05:30 IST
+LTP: ₹182.85 | Day: 3.463% | From open: 4.099%
+Rank: 175 (previous 231, improvement 56)
+Move delta: 0.707 pt | Turnover: ₹20.20 Cr | Volume: 1104850
+B/S: 0.544 | Spread: 6.02 bps | Pullback from known HOD: 0.000%
+Time bucket: 13:30–15:00
+
+Context: Market breadth 37.83% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:EXICOM in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AEXICOM)
+Event: `b47627a5f340f0f0`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AEXICOM
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 14:47] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`JBMA`** — 2026-09-11T14:47:15+05:30 IST
+LTP: ₹624.65 | Day: 3.376% | From open: 3.419%
+Rank: 184 (previous 242, improvement 58)
+Move delta: 0.588 pt | Turnover: ₹15.76 Cr | Volume: 252227
+B/S: 1.087 | Spread: 4.00 bps | Pullback from known HOD: 0.216%
+Time bucket: 13:30–15:00
+
+Context: Market breadth 38.06% | Sector AUTO | sector avg -0.47% | sector breadth 27.78%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:JBMA in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AJBMA)
+Event: `3189ef33d684d809`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AJBMA
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[11-09-2026 14:51] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`HATSUN`** — 2026-09-11T14:51:52+05:30 IST
+LTP: ₹1232.30 | Day: 3.165% | From open: 3.165%
+Rank: 198 (previous 371, improvement 173)
+Move delta: 1.406 pt | Turnover: ₹11.15 Cr | Volume: 90509
+B/S: 1.855 | Spread: 10.54 bps | Pullback from known HOD: 0.641%
+Time bucket: 13:30–15:00
+
+Context: Market breadth 37.88% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:HATSUN in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AHATSUN)
+Event: `dc44778d7e661c25`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AHATSUN
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:15] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`ZENSARTECH`**
+Qualified: 2026-09-15T09:15:28+05:30 IST
+
+LTP: ₹441.25
+Day: 3.762%
+From open: 2.616%
+Turnover: ₹4.66 Cr
+Volume / volume delta: 105547 / 83985 (389.505%)
+B/S: 0.839
+Pullback: 0.136%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AZENSARTECH)
+Event ID: `17319f72b8c397454b8517c04818e9748c5273c31cd3b08dbd96c85c7a155d6b`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AZENSARTECH
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:15] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`ASKAUTOLTD`**
+Qualified: 2026-09-15T09:15:28+05:30 IST
+
+LTP: ₹646.55
+Day: 3.523%
+From open: 1.979%
+Turnover: ₹1.07 Cr
+Volume / volume delta: 16615 / 13608 (452.544%)
+B/S: 3.401
+Pullback: 0.286%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AASKAUTOLTD)
+Event ID: `4c5ee7d13d40aa9124f8a225373e73e425594529dea5dce8f0736db5c229b63e`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AASKAUTOLTD
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:15] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`HLEGLAS`**
+Qualified: 2026-09-15T09:15:28+05:30 IST
+
+LTP: ₹422.00
+Day: 4.365%
+From open: 1.687%
+Turnover: ₹1.28 Cr
+Volume / volume delta: 30260 / 19791 (189.044%)
+B/S: 1.175
+Pullback: 0.213%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AHLEGLAS)
+Event ID: `91578da41b1e238e3f284e6e58d564fe3dec9c613b6304cafbb2a9117543f064`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AHLEGLAS
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:15] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`FILATEX`**
+Qualified: 2026-09-15T09:15:28+05:30 IST
+
+LTP: ₹90.96
+Day: 4.061%
+From open: 1.631%
+Turnover: ₹3.60 Cr
+Volume / volume delta: 395886 / 293937 (288.318%)
+B/S: 0.940
+Pullback: 0.044%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AFILATEX)
+Event ID: `f4f0a9da7586e1be0f78216293908828210320c09f3d46ad3587245960caf974`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AFILATEX
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:15] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`LTM`**
+Qualified: 2026-09-15T09:15:28+05:30 IST
+
+LTP: ₹4454.20
+Day: 4.192%
+From open: 1.133%
+Turnover: ₹4.18 Cr
+Volume / volume delta: 9378 / 7194 (329.396%)
+B/S: 1.804
+Pullback: 0.382%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ALTM)
+Event ID: `a86f7b66ad76870669a3e1ce9711f7078b641980aecdb02b8f54db78a8831d55`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ALTM
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:15] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`INDHOTEL`**
+Qualified: 2026-09-15T09:15:28+05:30 IST
+
+LTP: ₹736.20
+Day: 2.463%
+From open: 1.685%
+Turnover: ₹13.56 Cr
+Volume / volume delta: 184218 / 170777 (1270.568%)
+B/S: 1.291
+Pullback: 0.211%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AINDHOTEL)
+Event ID: `143a1b7bdd0510e3360be2773ea30280dd875c8b651596992a9a8f374369d64b`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AINDHOTEL
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:15] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`WELCORP`**
+Qualified: 2026-09-15T09:15:28+05:30 IST
+
+LTP: ₹2718.40
+Day: 1.562%
+From open: 2.149%
+Turnover: ₹6.83 Cr
+Volume / volume delta: 25111 / 16249 (183.356%)
+B/S: 1.128
+Pullback: 0.000%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AWELCORP)
+Event ID: `0409a4b38ddda14d7b26d808019feb96493b694bc175a3621bf86be8d5b64d5b`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AWELCORP
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:15] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`MASTEK`**
+Qualified: 2026-09-15T09:15:28+05:30 IST
+
+LTP: ₹1682.90
+Day: 3.480%
+From open: 1.318%
+Turnover: ₹1.50 Cr
+Volume / volume delta: 8886 / 7310 (463.832%)
+B/S: 1.465
+Pullback: 0.208%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AMASTEK)
+Event ID: `6768d93ccca94c502bbc109f64d3fa1c039a85933ac9db1ba802a32603f7b866`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AMASTEK
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:15] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`KISSHT`**
+Qualified: 2026-09-15T09:15:43+05:30 IST
+
+LTP: ₹339.50
+Day: 3.286%
+From open: 2.259%
+Turnover: ₹1.35 Cr
+Volume / volume delta: 39769 / 19193 (93.279%)
+B/S: 1.576
+Pullback: 0.147%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AKISSHT)
+Event ID: `ed4657b2be9d48c6fde43cb3ce4e63fe7966aba6a0f7891c1e2d1cb2755afb70`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AKISSHT
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:15] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`TECHM`**
+Qualified: 2026-09-15T09:15:43+05:30 IST
+
+LTP: ₹1608.70
+Day: 4.393%
+From open: 1.304%
+Turnover: ₹26.75 Cr
+Volume / volume delta: 166300 / 30917 (22.837%)
+B/S: 0.221
+Pullback: 0.118%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ATECHM)
+Event ID: `2c3c1ebcd01ca812fc5b9ea80676f22fbc4e5b52ee0a5414796d4108ec909511`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ATECHM
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:15] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`SKYGOLD`**
+Qualified: 2026-09-15T09:15:43+05:30 IST
+
+LTP: ₹850.85
+Day: 2.834%
+From open: 1.898%
+Turnover: ₹2.55 Cr
+Volume / volume delta: 29931 / 9007 (43.046%)
+B/S: 1.369
+Pullback: 0.129%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ASKYGOLD)
+Event ID: `7b7445004a4aba035b7e1a14bade4a34a984c7323353f8af33f9119dd6123c50`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ASKYGOLD
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:15] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`HCLTECH`**
+Qualified: 2026-09-15T09:15:43+05:30 IST
+
+LTP: ₹1259.70
+Day: 4.444%
+From open: 0.615%
+Turnover: ₹15.91 Cr
+Volume / volume delta: 126333 / 11371 (9.891%)
+B/S: 0.931
+Pullback: 0.413%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AHCLTECH)
+Event ID: `775a0e284e3af0e8f8a30fed5d92b296264888b3e73b649fb08845d10f4746df`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AHCLTECH
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:15] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`NEWGEN`**
+Qualified: 2026-09-15T09:15:43+05:30 IST
+
+LTP: ₹519.45
+Day: 3.600%
+From open: 1.455%
+Turnover: ₹2.29 Cr
+Volume / volume delta: 44126 / 15265 (52.891%)
+B/S: 0.561
+Pullback: 0.212%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ANEWGEN)
+Event ID: `838d58a2315e5051a1ba1e2b7364d7558e289ae867354b72a84e295f9eb846a5`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ANEWGEN
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:15] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`HDFCBANK`**
+Qualified: 2026-09-15T09:15:43+05:30 IST
+
+LTP: ₹728.50
+Day: 2.859%
+From open: 0.844%
+Turnover: ₹329.48 Cr
+Volume / volume delta: 4522671 / 1342215 (42.202%)
+B/S: 2.500
+Pullback: 0.247%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AHDFCBANK)
+Event ID: `a2d1a778519a57c8e92930012733c3e1464e566801903718b8e7c34c251b3573`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AHDFCBANK
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:15] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`RAYMONDREL`**
+Qualified: 2026-09-15T09:15:43+05:30 IST
+
+LTP: ₹606.10
+Day: 3.864%
+From open: 1.008%
+Turnover: ₹9.00 Cr
+Volume / volume delta: 148467 / 17580 (13.431%)
+B/S: 1.073
+Pullback: 0.792%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ARAYMONDREL)
+Event ID: `836be910ff19733697180facdcbc4f572ce133ca93b7db63b7064e408d200c51`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ARAYMONDREL
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:15] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`PERSISTENT`**
+Qualified: 2026-09-15T09:15:43+05:30 IST
+
+LTP: ₹5702.50
+Day: 3.381%
+From open: 0.858%
+Turnover: ₹11.28 Cr
+Volume / volume delta: 19784 / 4872 (32.672%)
+B/S: 0.879
+Pullback: 0.272%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3APERSISTENT)
+Event ID: `25323d1f71daabdcdf795d704cbfd084184af33da5bf26a6748060a5f80fff52`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3APERSISTENT
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:16] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`TCS`**
+Qualified: 2026-09-15T09:16:19+05:30 IST
+
+LTP: ₹2295.90
+Day: 4.321%
+From open: 0.897%
+Turnover: ₹60.26 Cr
+Volume / volume delta: 262457 / 82720 (46.023%)
+B/S: 1.115
+Pullback: 0.061%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ATCS)
+Event ID: `83519923bbbecdffafe64cdae8583e154f6174eb0ca599b601ebcb6be72482c4`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ATCS
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:16] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`SHAREINDIA`**
+Qualified: 2026-09-15T09:16:19+05:30 IST
+
+LTP: ₹206.95
+Day: 4.032%
+From open: 1.307%
+Turnover: ₹6.70 Cr
+Volume / volume delta: 323799 / 179050 (123.697%)
+B/S: 1.063
+Pullback: 0.198%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ASHAREINDIA)
+Event ID: `3c1951d711fc3a5109edab83d53d4534abb348e64595eb202dcb39b70f76f556`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ASHAREINDIA
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:16] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`BODALCHEM`**
+Qualified: 2026-09-15T09:16:19+05:30 IST
+
+LTP: ₹176.89
+Day: 2.604%
+From open: 2.178%
+Turnover: ₹1.75 Cr
+Volume / volume delta: 99212 / 48434 (95.384%)
+B/S: 0.996
+Pullback: 0.000%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ABODALCHEM)
+Event ID: `15c5b884421bf33cf366d6b0d527515960825e88cd5a4f1ede09f5311cfb3506`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ABODALCHEM
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:16] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`BBOX`**
+Qualified: 2026-09-15T09:16:19+05:30 IST
+
+LTP: ₹828.15
+Day: 3.415%
+From open: 1.613%
+Turnover: ₹7.17 Cr
+Volume / volume delta: 86556 / 29609 (51.994%)
+B/S: 1.157
+Pullback: 0.749%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ABBOX)
+Event ID: `6d557b6e02605f1542ba4d972662d96bd54c454442b086d0d3ccf53ebff685ba`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ABBOX
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:16] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`KPITTECH`**
+Qualified: 2026-09-15T09:16:19+05:30 IST
+
+LTP: ₹568.00
+Day: 2.573%
+From open: 1.429%
+Turnover: ₹6.21 Cr
+Volume / volume delta: 109406 / 31633 (40.673%)
+B/S: 1.391
+Pullback: 0.009%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AKPITTECH)
+Event ID: `89e51bd9b2b106c341b384bc1a9d25b385187ca5e63d4a0402016a7cf53bed45`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AKPITTECH
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:16] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`HAPPSTMNDS`**
+Qualified: 2026-09-15T09:16:19+05:30 IST
+
+LTP: ₹341.95
+Day: 2.889%
+From open: 1.756%
+Turnover: ₹1.68 Cr
+Volume / volume delta: 49082 / 16119 (48.900%)
+B/S: 0.758
+Pullback: 0.205%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AHAPPSTMNDS)
+Event ID: `5afc9162a7bc26439378fbf450def1c3072934fc265186487d0aaf41de5c7ef7`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AHAPPSTMNDS
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:16] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`BSOFT`**
+Qualified: 2026-09-15T09:16:19+05:30 IST
+
+LTP: ₹292.95
+Day: 4.012%
+From open: 0.670%
+Turnover: ₹7.59 Cr
+Volume / volume delta: 258979 / 124642 (92.783%)
+B/S: 0.906
+Pullback: 0.205%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ABSOFT)
+Event ID: `ed882f132287982220b48ba5b977a105f767948b4519e26a48e2f07645cfbef8`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ABSOFT
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:16] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`TENNIND`**
+Qualified: 2026-09-15T09:16:19+05:30 IST
+
+LTP: ₹525.95
+Day: 3.871%
+From open: 0.950%
+Turnover: ₹4.00 Cr
+Volume / volume delta: 75983 / 27371 (56.305%)
+B/S: 0.741
+Pullback: 0.162%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ATENNIND)
+Event ID: `6a31b9a98553bb6adb2241c469ac27b4ef70e69f6547b907c59008b6a5dafee9`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ATENNIND
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:16] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`NAUKRI`**
+Qualified: 2026-09-15T09:16:41+05:30 IST
+
+LTP: ₹1297.90
+Day: 3.766%
+From open: 2.350%
+Turnover: ₹14.19 Cr
+Volume / volume delta: 109367 / 14223 (14.949%)
+B/S: 1.188
+Pullback: 0.724%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ANAUKRI)
+Event ID: `ffb5ff14a8b3fcf4dc0d3d31895cb1f039e1577ff7f9bf2a550276bf6ec80afa`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ANAUKRI
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:16] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`RGL`**
+Qualified: 2026-09-15T09:16:41+05:30 IST
+
+LTP: ₹161.04
+Day: 3.569%
+From open: 2.378%
+Turnover: ₹1.34 Cr
+Volume / volume delta: 82984 / 19332 (30.371%)
+B/S: 0.944
+Pullback: 0.503%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ARGL)
+Event ID: `c301c6ff7b14e128fbf5e99ee2398ce16b100f68940b2c4647ecab03d60a7259`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ARGL
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:16] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`FSL`**
+Qualified: 2026-09-15T09:16:41+05:30 IST
+
+LTP: ₹256.00
+Day: 3.393%
+From open: 2.339%
+Turnover: ₹1.64 Cr
+Volume / volume delta: 64221 / 9437 (17.226%)
+B/S: 0.923
+Pullback: 0.645%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AFSL)
+Event ID: `af2ef6d06ef2dbf782ce53ad768473527f7cf79c001487cd7221488d28634dec`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AFSL
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:16] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`WSTCSTPAPR`**
+Qualified: 2026-09-15T09:16:41+05:30 IST
+
+LTP: ₹730.95
+Day: 2.403%
+From open: 2.518%
+Turnover: ₹1.93 Cr
+Volume / volume delta: 26384 / 13963 (112.414%)
+B/S: 0.720
+Pullback: 0.376%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AWSTCSTPAPR)
+Event ID: `7e23b2fb344bb8b7d2509e5e5f9485ea48b735b56d591453f98e6e59bf95b9fc`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AWSTCSTPAPR
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:16] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`ARVIND`**
+Qualified: 2026-09-15T09:16:41+05:30 IST
+
+LTP: ₹590.85
+Day: 2.739%
+From open: 2.082%
+Turnover: ₹1.85 Cr
+Volume / volume delta: 31234 / 6769 (27.668%)
+B/S: 1.091
+Pullback: 0.178%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AARVIND)
+Event ID: `11f7462789a399349567ba64cdec528dae0f0e3a6ed64eced29a3cbc58be2e31`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AARVIND
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:16] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`TATATECH`**
+Qualified: 2026-09-15T09:16:41+05:30 IST
+
+LTP: ₹785.00
+Day: 2.998%
+From open: 1.592%
+Turnover: ₹6.57 Cr
+Volume / volume delta: 83659 / 16779 (25.088%)
+B/S: 0.505
+Pullback: 0.223%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ATATATECH)
+Event ID: `421c826642839ed5629ac935e32aedd7467257b3442b91634067e896e47e65da`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ATATATECH
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:16] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`JINDWORLD`**
+Qualified: 2026-09-15T09:16:41+05:30 IST
+
+LTP: ₹54.00
+Day: 2.118%
+From open: 0.935%
+Turnover: ₹2.30 Cr
+Volume / volume delta: 426426 / 115970 (37.355%)
+B/S: 6.465
+Pullback: 0.167%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AJINDWORLD)
+Event ID: `b87545e6cd05073dac46a8a40aeb3d555a4014c51f46f7812d41545a9b4edeec`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AJINDWORLD
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:16] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`ORIENTTECH`**
+Qualified: 2026-09-15T09:16:41+05:30 IST
+
+LTP: ₹254.95
+Day: 2.127%
+From open: 2.127%
+Turnover: ₹1.13 Cr
+Volume / volume delta: 44298 / 8395 (23.382%)
+B/S: 0.575
+Pullback: 0.412%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AORIENTTECH)
+Event ID: `3cae38333d480e2bbed2ac0a49ff15c738aadbcce4cf1186a4fbc634a4b6de19`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AORIENTTECH
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`AYE`**
+Qualified: 2026-09-15T09:16:58+05:30 IST
+
+LTP: ₹187.50
+Day: 4.480%
+From open: 1.351%
+Turnover: ₹1.38 Cr
+Volume / volume delta: 73664 / 9957 (15.629%)
+B/S: 0.495
+Pullback: 0.000%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AAYE)
+Event ID: `640d59f670ec823a555f3d4ff77ce95e0f57075e01ea5f04348a018f2da345c2`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AAYE
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`OSWALPUMPS`**
+Qualified: 2026-09-15T09:16:58+05:30 IST
+
+LTP: ₹288.20
+Day: 2.036%
+From open: 2.036%
+Turnover: ₹1.41 Cr
+Volume / volume delta: 48934 / 29800 (155.744%)
+B/S: 0.742
+Pullback: 0.347%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AOSWALPUMPS)
+Event ID: `2d1cbe67c7a9ac7600b94bc6493a2b75f76e27a207dede40ada7c77e5c3aed04`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AOSWALPUMPS
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`TATAELXSI`**
+Qualified: 2026-09-15T09:16:58+05:30 IST
+
+LTP: ₹3477.00
+Day: 2.779%
+From open: 0.783%
+Turnover: ₹7.70 Cr
+Volume / volume delta: 22140 / 3474 (18.611%)
+B/S: 1.163
+Pullback: 0.161%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ATATAELXSI)
+Event ID: `6b3fff896c68decff38aceabb721089856cbb2375d0c0da9e738b2ae0c937ba0`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ATATAELXSI
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`IDBI`**
+Qualified: 2026-09-15T09:16:58+05:30 IST
+
+LTP: ₹85.14
+Day: 2.050%
+From open: 1.357%
+Turnover: ₹6.11 Cr
+Volume / volume delta: 717356 / 63275 (9.674%)
+B/S: 0.665
+Pullback: 0.200%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AIDBI)
+Event ID: `a5bbcab4ccb230338c11497becf859bf5b7d2d48878fa797de399c4f4c2f81ff`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AIDBI
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`GMMPFAUDLR`**
+Qualified: 2026-09-15T09:16:58+05:30 IST
+
+LTP: ₹1343.00
+Day: 2.684%
+From open: 1.358%
+Turnover: ₹3.14 Cr
+Volume / volume delta: 23361 / 4421 (23.342%)
+B/S: 0.585
+Pullback: 0.499%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AGMMPFAUDLR)
+Event ID: `de2b71d98ac7dde5e1b4a3c1d4e1d9734276bbe25a3849732b08f90031ca63f0`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AGMMPFAUDLR
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`ELGIEQUIP`**
+Qualified: 2026-09-15T09:16:58+05:30 IST
+
+LTP: ₹634.50
+Day: 2.720%
+From open: 1.107%
+Turnover: ₹2.66 Cr
+Volume / volume delta: 41956 / 4049 (10.681%)
+B/S: 0.798
+Pullback: 0.236%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AELGIEQUIP)
+Event ID: `4f6ec0d6fa8c61e20e58d045b87b7cba37564df5b273bcceb849d7e01a131eff`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AELGIEQUIP
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`LTTS`**
+Qualified: 2026-09-15T09:16:58+05:30 IST
+
+LTP: ₹3431.90
+Day: 2.832%
+From open: 0.879%
+Turnover: ₹1.95 Cr
+Volume / volume delta: 5668 / 912 (19.176%)
+B/S: 0.853
+Pullback: 0.000%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ALTTS)
+Event ID: `81d51e30582edfdfa68b62d5e9c2d1e53269608642fed3c079ed1a38d7bff6e4`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ALTTS
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`GOLDIAM`**
+Qualified: 2026-09-15T09:16:58+05:30 IST
+
+LTP: ₹333.00
+Day: 2.462%
+From open: 1.216%
+Turnover: ₹1.82 Cr
+Volume / volume delta: 54730 / 6136 (12.627%)
+B/S: 0.787
+Pullback: 0.195%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AGOLDIAM)
+Event ID: `32d89e5038231898d420e785afbb5c6b514d89e7c18313a3cc3962453d94408d`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AGOLDIAM
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`LATENTVIEW`**
+Qualified: 2026-09-15T09:17:20+05:30 IST
+
+LTP: ₹260.00
+Day: 2.991%
+From open: 2.342%
+Turnover: ₹1.03 Cr
+Volume / volume delta: 39517 / 7584 (23.750%)
+B/S: 0.666
+Pullback: 0.038%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ALATENTVIEW)
+Event ID: `5fd7728f3a4890786d24aac6339d69e9ee66296f018dfe195e47a162492204a0`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ALATENTVIEW
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`CEMPRO`**
+Qualified: 2026-09-15T09:17:20+05:30 IST
+
+LTP: ₹1277.90
+Day: 2.700%
+From open: 2.560%
+Turnover: ₹1.16 Cr
+Volume / volume delta: 9070 / 1646 (22.171%)
+B/S: 1.163
+Pullback: 0.446%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ACEMPRO)
+Event ID: `c3645b9fa0c78ab3b1642cd90d79ccca3aa71818ce5e5d0b3fdbd9da4b66e63a`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ACEMPRO
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`ANTELOPUS`**
+Qualified: 2026-09-15T09:17:20+05:30 IST
+
+LTP: ₹1165.15
+Day: 2.264%
+From open: 1.662%
+Turnover: ₹7.65 Cr
+Volume / volume delta: 65643 / 4397 (7.179%)
+B/S: 0.875
+Pullback: 0.687%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AANTELOPUS)
+Event ID: `dd6bc0fa7180b36ba081b6874bce70d713bd724bf6140295705df2dcdde12f6e`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AANTELOPUS
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`HYUNDAI`**
+Qualified: 2026-09-15T09:17:20+05:30 IST
+
+LTP: ₹2211.80
+Day: 1.739%
+From open: 1.092%
+Turnover: ₹3.40 Cr
+Volume / volume delta: 15363 / 2443 (18.909%)
+B/S: 2.397
+Pullback: 0.000%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AHYUNDAI)
+Event ID: `103e0c6c4b9a489544c086b63bb71be21cee1f90de98a159f8b8023eaa0f1318`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AHYUNDAI
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`EMAMILTD`**
+Qualified: 2026-09-15T09:17:20+05:30 IST
+
+LTP: ₹375.90
+Day: 3.326%
+From open: 0.508%
+Turnover: ₹5.24 Cr
+Volume / volume delta: 139481 / 10430 (8.082%)
+B/S: 0.619
+Pullback: 0.093%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AEMAMILTD)
+Event ID: `177a08cd717d7f14e5c735dc0498b38d552d2330e0490a48a5417bf165f4ed84`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AEMAMILTD
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`ABDL`**
+Qualified: 2026-09-15T09:17:20+05:30 IST
+
+LTP: ₹642.80
+Day: 1.628%
+From open: 1.228%
+Turnover: ₹2.24 Cr
+Volume / volume delta: 34802 / 2968 (9.323%)
+B/S: 0.798
+Pullback: 0.000%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AABDL)
+Event ID: `3b49fc6359a0cda24616195a8dea1d5c0b341c9f73ffce1e9e4eb8d91b2aea73`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AABDL
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`ITC`**
+Qualified: 2026-09-15T09:17:20+05:30 IST
+
+LTP: ₹263.15
+Day: 1.270%
+From open: 0.824%
+Turnover: ₹12.78 Cr
+Volume / volume delta: 485561 / 47704 (10.895%)
+B/S: 1.376
+Pullback: 0.000%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AITC)
+Event ID: `d52cc016519a836439ee46d4ab19c09364bd5a3b631555aae2fb1cafee2aef32`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AITC
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`TANLA`**
+Qualified: 2026-09-15T09:17:20+05:30 IST
+
+LTP: ₹513.85
+Day: 2.198%
+From open: 1.142%
+Turnover: ₹1.09 Cr
+Volume / volume delta: 21243 / 2236 (11.764%)
+B/S: 0.600
+Pullback: 0.418%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ATANLA)
+Event ID: `98d50418114371e3995bc8e4876bdeec57297b25695b99fa042da8c050de0c03`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ATANLA
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`GABRIEL`**
+Qualified: 2026-09-15T09:17:28+05:30 IST
+
+LTP: ₹1378.40
+Day: 2.377%
+From open: 2.324%
+Turnover: ₹1.18 Cr
+Volume / volume delta: 8567 / 1717 (25.066%)
+B/S: 0.694
+Pullback: 0.160%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AGABRIEL)
+Event ID: `22bcefce96c0ea1ba9c24e82b8d144a4e623deee6ede95d3d0c571687acde324`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AGABRIEL
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`ACMESOLAR`**
+Qualified: 2026-09-15T09:17:28+05:30 IST
+
+LTP: ₹408.10
+Day: 1.442%
+From open: 1.480%
+Turnover: ₹2.91 Cr
+Volume / volume delta: 71268 / 7018 (10.923%)
+B/S: 0.734
+Pullback: 0.000%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AACMESOLAR)
+Event ID: `1379904db7586c0aa341b3a45c2c501b0c34faccdd1dbb2bc929afa40f5f9625`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AACMESOLAR
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`KROSS`**
+Qualified: 2026-09-15T09:17:28+05:30 IST
+
+LTP: ₹242.45
+Day: 1.414%
+From open: 1.021%
+Turnover: ₹2.38 Cr
+Volume / volume delta: 98251 / 7149 (7.847%)
+B/S: 0.542
+Pullback: 0.346%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AKROSS)
+Event ID: `12795f4afe78e95e8d601f97311d6107123de582b993d8016c49b6569c032523`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AKROSS
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`CAMS`**
+Qualified: 2026-09-15T09:17:28+05:30 IST
+
+LTP: ₹716.55
+Day: 0.781%
+From open: 0.738%
+Turnover: ₹3.71 Cr
+Volume / volume delta: 51763 / 4641 (9.849%)
+B/S: 1.494
+Pullback: 0.028%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ACAMS)
+Event ID: `4db24ad2c176ff776447ad1eea7b9a568e665025cea51bdb872b7faf2c04ed4c`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ACAMS
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`BANDHANBNK`**
+Qualified: 2026-09-15T09:17:28+05:30 IST
+
+LTP: ₹178.26
+Day: 0.986%
+From open: 0.712%
+Turnover: ₹9.04 Cr
+Volume / volume delta: 507036 / 38922 (8.315%)
+B/S: 0.639
+Pullback: 0.477%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ABANDHANBNK)
+Event ID: `48f319151bd3a3fcb6fa3c4ee1f2d1ce680481e7ff190f656e24872591ea4507`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ABANDHANBNK
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`SWIGGY`**
+Qualified: 2026-09-15T09:17:28+05:30 IST
+
+LTP: ₹279.95
+Day: 0.629%
+From open: 0.629%
+Turnover: ₹9.47 Cr
+Volume / volume delta: 338105 / 35435 (11.707%)
+B/S: 0.856
+Pullback: 0.304%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ASWIGGY)
+Event ID: `49b152555946eae0b43a8095615c30acba29cc5b90c07444054b4b22eb5216eb`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ASWIGGY
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`GODFRYPHLP`**
+Qualified: 2026-09-15T09:17:28+05:30 IST
+
+LTP: ₹1943.30
+Day: 0.846%
+From open: 0.637%
+Turnover: ₹1.36 Cr
+Volume / volume delta: 6973 / 1056 (17.847%)
+B/S: 1.781
+Pullback: 0.165%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AGODFRYPHLP)
+Event ID: `0f6bd01eb5c46ef4ef366d76bf7b25653a70bccc93d50c4d000605f000f038b3`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AGODFRYPHLP
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`ASMTEC`**
+Qualified: 2026-09-15T09:17:28+05:30 IST
+
+LTP: ₹7030.30
+Day: 1.961%
+From open: 1.447%
+Turnover: ₹1.25 Cr
+Volume / volume delta: 1772 / 49 (2.844%)
+B/S: 0.431
+Pullback: 0.777%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AASMTEC)
+Event ID: `326f2b3f6d6d43826afbb1c7e2b26f3a783c3146bffe7706ec392bf057797118`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AASMTEC
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`IXIGO`**
+Qualified: 2026-09-15T09:17:52+05:30 IST
+
+LTP: ₹163.38
+Day: 2.994%
+From open: 2.626%
+Turnover: ₹1.02 Cr
+Volume / volume delta: 62580 / 4667 (8.059%)
+B/S: 0.823
+Pullback: 0.257%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AIXIGO)
+Event ID: `15cc049c1c8ce6e394c32e31851758bb38cb202d9d71d42a97ae38ce970eff10`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AIXIGO
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`MAFANG`**
+Qualified: 2026-09-15T09:17:52+05:30 IST
+
+LTP: ₹243.68
+Day: 3.447%
+From open: 0.928%
+Turnover: ₹1.74 Cr
+Volume / volume delta: 71579 / 3507 (5.152%)
+B/S: 1.584
+Pullback: 0.000%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AMAFANG)
+Event ID: `ee7d49a6225b638f636bb7707354eecc5c194e15b2e3bc994d3c0527736794e8`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AMAFANG
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`SONATSOFTW`**
+Qualified: 2026-09-15T09:17:52+05:30 IST
+
+LTP: ₹276.55
+Day: 4.025%
+From open: 0.655%
+Turnover: ₹4.32 Cr
+Volume / volume delta: 156217 / 28061 (21.896%)
+B/S: 0.746
+Pullback: 0.036%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ASONATSOFTW)
+Event ID: `e2adb98367a185c1c906dcdb65acef42c00e03b8a18405e08f646eef3efc3403`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ASONATSOFTW
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`INTELLECT`**
+Qualified: 2026-09-15T09:17:52+05:30 IST
+
+LTP: ₹694.25
+Day: 1.707%
+From open: 1.476%
+Turnover: ₹1.75 Cr
+Volume / volume delta: 25207 / 3170 (14.385%)
+B/S: 0.716
+Pullback: 0.007%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AINTELLECT)
+Event ID: `4d0ae326fca057c4a6ca425873e6b6f51515dd15a48ff9fa34c564576ddce8cc`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AINTELLECT
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`ACUTAAS`**
+Qualified: 2026-09-15T09:17:52+05:30 IST
+
+LTP: ₹3425.20
+Day: 1.226%
+From open: 1.217%
+Turnover: ₹6.40 Cr
+Volume / volume delta: 18692 / 1582 (9.246%)
+B/S: 0.867
+Pullback: 0.070%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AACUTAAS)
+Event ID: `7534cb80b01b254e6b111ed49a4256f1f1bc253d014ffa10c79a4f9c3d833cfb`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AACUTAAS
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`GPPL`**
+Qualified: 2026-09-15T09:17:52+05:30 IST
+
+LTP: ₹163.99
+Day: 1.655%
+From open: 0.917%
+Turnover: ₹2.52 Cr
+Volume / volume delta: 153445 / 21368 (16.178%)
+B/S: 0.463
+Pullback: 0.098%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AGPPL)
+Event ID: `1bd4fb60bd0d085bab4a077c59e4022b41d0c7a9f12ed11f9035f6cbd1815194`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AGPPL
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`FRACTAL`**
+Qualified: 2026-09-15T09:17:52+05:30 IST
+
+LTP: ₹774.00
+Day: 1.249%
+From open: 1.051%
+Turnover: ₹1.00 Cr
+Volume / volume delta: 12967 / 3278 (33.832%)
+B/S: 0.565
+Pullback: 0.155%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AFRACTAL)
+Event ID: `c2ba651e479d3db87daac68066e84ac6dd7c67664e4a9582f7acec10b58bb6e9`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AFRACTAL
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:17] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`DMART`**
+Qualified: 2026-09-15T09:17:52+05:30 IST
+
+LTP: ₹3718.40
+Day: 0.824%
+From open: 0.691%
+Turnover: ₹4.82 Cr
+Volume / volume delta: 12952 / 1130 (9.558%)
+B/S: 0.755
+Pullback: 0.027%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ADMART)
+Event ID: `f0720835923811c911f150f578fbf8d6d03520064bbaa01493e4a0b70263308c`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ADMART
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:18] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`SWSOLAR`**
+Qualified: 2026-09-15T09:18:11+05:30 IST
+
+LTP: ₹186.43
+Day: 3.446%
+From open: 0.937%
+Turnover: ₹3.90 Cr
+Volume / volume delta: 209439 / 29154 (16.171%)
+B/S: 0.547
+Pullback: 0.166%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ASWSOLAR)
+Event ID: `3440f71db69d096eeddd915b140d360238a6ae783ef609bf9c5b15411d1bb09a`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ASWSOLAR
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:18] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`HEROMOTOCO`**
+Qualified: 2026-09-15T09:18:11+05:30 IST
+
+LTP: ₹5318.00
+Day: 1.848%
+From open: 0.577%
+Turnover: ₹22.77 Cr
+Volume / volume delta: 42818 / 1605 (3.894%)
+B/S: 1.793
+Pullback: 0.000%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AHEROMOTOCO)
+Event ID: `01bacc14cc63fb3326966eddc5734039250880e568ffbcdcb9c74cf3beeca51c`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AHEROMOTOCO
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:18] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`LUMAXTECH`**
+Qualified: 2026-09-15T09:18:11+05:30 IST
+
+LTP: ₹2033.20
+Day: 1.981%
+From open: 0.658%
+Turnover: ₹1.85 Cr
+Volume / volume delta: 9082 / 516 (6.024%)
+B/S: 0.397
+Pullback: 0.054%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ALUMAXTECH)
+Event ID: `cc6f60b19514ca9124d80de6e653f439db6c6de5a8687c2d72142ea06ce2ab2d`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ALUMAXTECH
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:18] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`KARURVYSYA`**
+Qualified: 2026-09-15T09:18:11+05:30 IST
+
+LTP: ₹337.20
+Day: 1.019%
+From open: 1.019%
+Turnover: ₹1.17 Cr
+Volume / volume delta: 34725 / 1651 (4.992%)
+B/S: 0.761
+Pullback: 0.104%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AKARURVYSYA)
+Event ID: `2593e03df5dcc33fe1ee83c8572e40a2aa38a6252eef0cdf426636e56a494235`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AKARURVYSYA
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:18] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`ROLEXRINGS`**
+Qualified: 2026-09-15T09:18:11+05:30 IST
+
+LTP: ₹174.92
+Day: 2.072%
+From open: 0.737%
+Turnover: ₹1.45 Cr
+Volume / volume delta: 82750 / 10332 (14.267%)
+B/S: 0.442
+Pullback: 0.617%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AROLEXRINGS)
+Event ID: `bacd214560c3ac17d11d35d0afc5bfe3072f4ca63e294c38859343472731d5dc`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AROLEXRINGS
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:18] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`ATGL`**
+Qualified: 2026-09-15T09:18:11+05:30 IST
+
+LTP: ₹601.60
+Day: 1.143%
+From open: 1.109%
+Turnover: ₹2.01 Cr
+Volume / volume delta: 33340 / 1408 (4.409%)
+B/S: 0.561
+Pullback: 0.216%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AATGL)
+Event ID: `09e3c61ce43e15eff785821d0e22b10dc41a72181c5ab1474faa6ca6b499d929`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AATGL
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:18] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`SUPREMEIND`**
+Qualified: 2026-09-15T09:18:11+05:30 IST
+
+LTP: ₹3391.30
+Day: 0.800%
+From open: 0.662%
+Turnover: ₹3.47 Cr
+Volume / volume delta: 10246 / 562 (5.803%)
+B/S: 1.620
+Pullback: 0.215%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ASUPREMEIND)
+Event ID: `b8e7bca5bf370ee547c1321327fccafefe1d9ad12f80458da00bd334dbde5df1`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ASUPREMEIND
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:18] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`NATCOPHARM`**
+Qualified: 2026-09-15T09:18:11+05:30 IST
+
+LTP: ₹822.45
+Day: 0.871%
+From open: 0.673%
+Turnover: ₹1.42 Cr
+Volume / volume delta: 17212 / 898 (5.504%)
+B/S: 0.760
+Pullback: 0.036%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ANATCOPHARM)
+Event ID: `58287ec78d026f22e1373e3ce8bf3ed7b5f44334a58ba73ddcda26d0c67a7e0c`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ANATCOPHARM
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:18] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`SWANCORP`**
+Qualified: 2026-09-15T09:18:28+05:30 IST
+
+LTP: ₹299.65
+Day: 1.079%
+From open: 1.233%
+Turnover: ₹6.07 Cr
+Volume / volume delta: 202599 / 33017 (19.470%)
+B/S: 3.594
+Pullback: 0.017%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ASWANCORP)
+Event ID: `f4b73e27e977ec0e4aab88b39563fcf9a89df18218d05646ea13785c25b3f5bd`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ASWANCORP
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:18] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`BELRISE`**
+Qualified: 2026-09-15T09:18:28+05:30 IST
+
+LTP: ₹230.34
+Day: 1.026%
+From open: 0.766%
+Turnover: ₹1.80 Cr
+Volume / volume delta: 78135 / 3092 (4.120%)
+B/S: 1.787
+Pullback: 0.282%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ABELRISE)
+Event ID: `bf6da4a10ff493689e80e04a26a159f228aa706a84cbed0e1fe73bdd24f90145`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ABELRISE
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:18] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`SHAILY`**
+Qualified: 2026-09-15T09:18:28+05:30 IST
+
+LTP: ₹3317.40
+Day: 1.156%
+From open: 0.506%
+Turnover: ₹1.43 Cr
+Volume / volume delta: 4320 / 401 (10.232%)
+B/S: 0.745
+Pullback: 0.274%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ASHAILY)
+Event ID: `6723172fe14fce3da98fc719e16c7ad00ddecf7008096d195e2102963fd6dea0`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ASHAILY
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:18] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`CPPLUS`**
+Qualified: 2026-09-15T09:18:28+05:30 IST
+
+LTP: ₹3846.20
+Day: 0.541%
+From open: 0.544%
+Turnover: ₹2.24 Cr
+Volume / volume delta: 5813 / 322 (5.864%)
+B/S: 0.766
+Pullback: 0.372%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ACPPLUS)
+Event ID: `fdc8ad2522bdc1cd117d0903f7cea67d413e7bc018b8fcb3cf39af58c44e4cc9`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ACPPLUS
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:18] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`KTKBANK`**
+Qualified: 2026-09-15T09:18:28+05:30 IST
+
+LTP: ₹327.60
+Day: 0.692%
+From open: 0.893%
+Turnover: ₹1.41 Cr
+Volume / volume delta: 42979 / 1448 (3.487%)
+B/S: 0.471
+Pullback: 0.229%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AKTKBANK)
+Event ID: `1e3355b31f5ecd5dd93703199654c9533676967894b31193ea328444b301dfc6`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AKTKBANK
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:18] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`UJJIVANSFB`**
+Qualified: 2026-09-15T09:18:28+05:30 IST
+
+LTP: ₹66.24
+Day: 1.068%
+From open: 0.807%
+Turnover: ₹2.22 Cr
+Volume / volume delta: 334466 / 5294 (1.608%)
+B/S: 0.383
+Pullback: 0.483%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AUJJIVANSFB)
+Event ID: `01caeb9f6f56bc46e3cbad96d618c070474ed4952d19df66cc4a6b0ae9810964`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AUJJIVANSFB
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:18] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`ARROWGREEN`**
+Qualified: 2026-09-15T09:18:47+05:30 IST
+
+LTP: ₹848.00
+Day: 4.305%
+From open: 1.448%
+Turnover: ₹1.06 Cr
+Volume / volume delta: 12508 / 739 (6.279%)
+B/S: 2.320
+Pullback: 0.236%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AARROWGREEN)
+Event ID: `c3717d15b54840f7b1d9e01ecd8dc5807ce1ba62c511ab93c817bf8dd98de55d`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AARROWGREEN
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:18] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`OPTIEMUS`**
+Qualified: 2026-09-15T09:18:47+05:30 IST
+
+LTP: ₹579.95
+Day: 2.419%
+From open: 1.817%
+Turnover: ₹1.19 Cr
+Volume / volume delta: 20435 / 5173 (33.895%)
+B/S: 0.928
+Pullback: 0.000%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AOPTIEMUS)
+Event ID: `df205b49b09e0952a6d0a9b3fbdcdbed31c91d1f6563733d8994d248563ebd56`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AOPTIEMUS
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:18] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`PFOCUS`**
+Qualified: 2026-09-15T09:18:47+05:30 IST
+
+LTP: ₹314.45
+Day: 1.158%
+From open: 1.126%
+Turnover: ₹1.40 Cr
+Volume / volume delta: 44604 / 20680 (86.440%)
+B/S: 0.638
+Pullback: 0.318%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3APFOCUS)
+Event ID: `d3aa7ea8b2c5fa3b47b6307d04686742f32178649357143ab147dfca4ee1c7a5`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3APFOCUS
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:19] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`CUPID`**
+Qualified: 2026-09-15T09:19:07+05:30 IST
+
+LTP: ₹282.00
+Day: 0.714%
+From open: 0.517%
+Turnover: ₹11.30 Cr
+Volume / volume delta: 400534 / 46956 (13.280%)
+B/S: 8.593
+Pullback: 0.160%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ACUPID)
+Event ID: `f1eaef73fda30afeef20ad4733f4585b718ce3884872d932d0633f6f05373c4d`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ACUPID
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:19] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`ECLERX`**
+Qualified: 2026-09-15T09:19:07+05:30 IST
+
+LTP: ₹1931.60
+Day: 1.685%
+From open: 2.158%
+Turnover: ₹1.04 Cr
+Volume / volume delta: 5360 / 388 (7.804%)
+B/S: 0.733
+Pullback: 0.326%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AECLERX)
+Event ID: `2cebe12769c2db066d602fbc0625c48968147706ea6d9c7e4acfacd0f694f9d4`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AECLERX
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:19] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`HATSUN`**
+Qualified: 2026-09-15T09:19:07+05:30 IST
+
+LTP: ₹1234.40
+Day: 0.817%
+From open: 2.253%
+Turnover: ₹1.45 Cr
+Volume / volume delta: 11726 / 1431 (13.900%)
+B/S: 0.952
+Pullback: 0.081%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AHATSUN)
+Event ID: `61087ff28c05653c48e9416d60cf6c1f28c818d8160f2e6bdbdcd0d2cc6160f0`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AHATSUN
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:19] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`SHREEJISPG`**
+Qualified: 2026-09-15T09:19:07+05:30 IST
+
+LTP: ₹696.80
+Day: 0.730%
+From open: 0.730%
+Turnover: ₹3.99 Cr
+Volume / volume delta: 57311 / 1284 (2.292%)
+B/S: 4.788
+Pullback: 0.022%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ASHREEJISPG)
+Event ID: `d23eb27d961844d8b5846d18f4dfd8b056773e8d2fcaffd1364739ae2d2cbbd3`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ASHREEJISPG
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:19] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`DEEPAKFERT`**
+Qualified: 2026-09-15T09:19:07+05:30 IST
+
+LTP: ₹1332.30
+Day: 0.901%
+From open: 0.794%
+Turnover: ₹1.09 Cr
+Volume / volume delta: 8200 / 814 (11.021%)
+B/S: 0.874
+Pullback: 0.255%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ADEEPAKFERT)
+Event ID: `fe50261f2787b0fe8cb24b2b9af20c0055fe84266cc55198979c6133a24cc3fb`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ADEEPAKFERT
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:19] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`PIIND`**
+Qualified: 2026-09-15T09:19:07+05:30 IST
+
+LTP: ₹2274.10
+Day: 0.668%
+From open: 0.624%
+Turnover: ₹3.56 Cr
+Volume / volume delta: 15642 / 141 (0.910%)
+B/S: 1.436
+Pullback: 0.000%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3APIIND)
+Event ID: `9c25a8fa4901ddf6e463b178af1fc295f7a405fbc4dce6911d64e494a58972a2`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3APIIND
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:19] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`TATACONSUM`**
+Qualified: 2026-09-15T09:19:25+05:30 IST
+
+LTP: ₹1000.50
+Day: 0.959%
+From open: 1.050%
+Turnover: ₹11.34 Cr
+Volume / volume delta: 113378 / 33198 (41.404%)
+B/S: 1.731
+Pullback: 0.100%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ATATACONSUM)
+Event ID: `d318bc2b303099927047aa31b3b155a4b7861a33108c176dd69b99934ec57952`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ATATACONSUM
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:19] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`DABUR`**
+Qualified: 2026-09-15T09:19:25+05:30 IST
+
+LTP: ₹380.90
+Day: 1.303%
+From open: 0.501%
+Turnover: ₹2.01 Cr
+Volume / volume delta: 52779 / 3145 (6.336%)
+B/S: 1.632
+Pullback: 0.013%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ADABUR)
+Event ID: `6f266faf5e5d537aaede9a297cf6e85204b17ea215bf3db747f60fb6eb076419`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ADABUR
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:19] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`COLPAL`**
+Qualified: 2026-09-15T09:19:25+05:30 IST
+
+LTP: ₹1809.60
+Day: 0.679%
+From open: 0.679%
+Turnover: ₹1.53 Cr
+Volume / volume delta: 8428 / 966 (12.946%)
+B/S: 2.020
+Pullback: 0.144%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ACOLPAL)
+Event ID: `86016f730f0671cecf74004c0e4b5832b458d9cb50e9e21aca612eebdd570839`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ACOLPAL
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:19] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`NESTLEIND`**
+Qualified: 2026-09-15T09:19:25+05:30 IST
+
+LTP: ₹1391.10
+Day: 0.564%
+From open: 0.564%
+Turnover: ₹9.99 Cr
+Volume / volume delta: 71831 / 2855 (4.139%)
+B/S: 1.715
+Pullback: 0.137%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ANESTLEIND)
+Event ID: `a01c47003fc03ad1764fc42a7e4d51c6dd165760c90701e97420cfd0e6d5f90c`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ANESTLEIND
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:19] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`RATEGAIN`**
+Qualified: 2026-09-15T09:19:25+05:30 IST
+
+LTP: ₹884.95
+Day: 0.763%
+From open: 0.677%
+Turnover: ₹1.03 Cr
+Volume / volume delta: 11651 / 1001 (9.399%)
+B/S: 0.867
+Pullback: 0.175%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ARATEGAIN)
+Event ID: `14e59f568fdb35a9247701a134166bc7691c7e169fa588212c0ac51c2dda1d81`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ARATEGAIN
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:19] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`DCBBANK`**
+Qualified: 2026-09-15T09:19:25+05:30 IST
+
+LTP: ₹227.89
+Day: 0.671%
+From open: 0.734%
+Turnover: ₹1.07 Cr
+Volume / volume delta: 46946 / 12741 (37.249%)
+B/S: 0.514
+Pullback: 0.461%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ADCBBANK)
+Event ID: `c744714b326019979a40ace50672b5a17edd6f2e68030870ae1beb5eb060e0a1`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ADCBBANK
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:19] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`OFSS`**
+Qualified: 2026-09-15T09:19:50+05:30 IST
+
+LTP: ₹11974.00
+Day: 1.794%
+From open: 0.537%
+Turnover: ₹20.13 Cr
+Volume / volume delta: 16811 / 1295 (8.346%)
+B/S: 1.120
+Pullback: 0.042%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AOFSS)
+Event ID: `9860230eca476db722249537a57544d8822a69b8344af906f3e0f1b3c13cacd0`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AOFSS
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:19] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`CARTRADE`**
+Qualified: 2026-09-15T09:19:50+05:30 IST
+
+LTP: ₹3111.00
+Day: 0.748%
+From open: 0.680%
+Turnover: ₹5.41 Cr
+Volume / volume delta: 17397 / 1042 (6.371%)
+B/S: 0.816
+Pullback: 0.215%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ACARTRADE)
+Event ID: `e5ef53b84c4c293a30d7b4c4032818c89897a33e5e1e54eaf3e8067b023f5db3`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ACARTRADE
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:19] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`CLEAN`**
+Qualified: 2026-09-15T09:19:50+05:30 IST
+
+LTP: ₹849.60
+Day: 0.897%
+From open: 0.729%
+Turnover: ₹2.40 Cr
+Volume / volume delta: 28301 / 4115 (17.014%)
+B/S: 0.511
+Pullback: 0.141%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ACLEAN)
+Event ID: `f0dded30fda7dad61cb2d66ded2a30dab4042640722b845d0efe7ef217a70460`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ACLEAN
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:19] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`AVALON`**
+Qualified: 2026-09-15T09:19:50+05:30 IST
+
+LTP: ₹2287.80
+Day: 1.029%
+From open: 0.664%
+Turnover: ₹2.76 Cr
+Volume / volume delta: 12043 / 817 (7.278%)
+B/S: 0.562
+Pullback: 0.533%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AAVALON)
+Event ID: `a00ebd78bc2c34cb4ddb19ce7b32fd88e65d75a29fd36b4b31b557770f96b6be`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AAVALON
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:20] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`AEQUS`**
+Qualified: 2026-09-15T09:20:02+05:30 IST
+
+LTP: ₹230.87
+Day: 2.168%
+From open: 0.817%
+Turnover: ₹2.47 Cr
+Volume / volume delta: 107039 / 23671 (28.393%)
+B/S: 0.574
+Pullback: 0.000%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AAEQUS)
+Event ID: `76de276986f658bda87632ea3dbc871668085de3403f0b70ce2660936b2c4af9`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AAEQUS
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:20] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`GODREJCP`**
+Qualified: 2026-09-15T09:20:02+05:30 IST
+
+LTP: ₹872.45
+Day: 0.861%
+From open: 0.629%
+Turnover: ₹6.14 Cr
+Volume / volume delta: 70326 / 15169 (27.501%)
+B/S: 1.287
+Pullback: 0.126%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AGODREJCP)
+Event ID: `ec770b0d69b6e515b726d7acfbf88505fe2c4d28d708366d8a641df68c44d5ea`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AGODREJCP
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:20] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`GENESYS`**
+Qualified: 2026-09-15T09:20:02+05:30 IST
+
+LTP: ₹310.00
+Day: 0.711%
+From open: 0.977%
+Turnover: ₹1.95 Cr
+Volume / volume delta: 62991 / 12638 (25.099%)
+B/S: 0.608
+Pullback: 0.248%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AGENESYS)
+Event ID: `980b313f18477b3dcc8445a01be5fde27078fa8834a5353d6cded95ebdbf669e`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AGENESYS
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:20] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`HOMEFIRST`**
+Qualified: 2026-09-15T09:20:02+05:30 IST
+
+LTP: ₹1193.60
+Day: 0.768%
+From open: 0.777%
+Turnover: ₹1.36 Cr
+Volume / volume delta: 11369 / 8247 (264.158%)
+B/S: 0.724
+Pullback: 0.109%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AHOMEFIRST)
+Event ID: `87e8b022285590446c7d416169eb3e9f34383893ecd3d06dc34f7c8e644f4258`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AHOMEFIRST
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:20] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`AVANTEL`**
+Qualified: 2026-09-15T09:20:02+05:30 IST
+
+LTP: ₹157.84
+Day: 0.882%
+From open: 0.882%
+Turnover: ₹2.18 Cr
+Volume / volume delta: 138238 / 11868 (9.391%)
+B/S: 0.345
+Pullback: 0.735%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AAVANTEL)
+Event ID: `a9367f0046bea1ce5efdbe6b4fa5a8d6fb271597410037025cfb67dd72d78c69`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AAVANTEL
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:20] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`MAPMYINDIA`**
+Qualified: 2026-09-15T09:20:02+05:30 IST
+
+LTP: ₹937.40
+Day: 1.253%
+From open: 1.122%
+Turnover: ₹1.03 Cr
+Volume / volume delta: 11008 / 225 (2.087%)
+B/S: 0.835
+Pullback: 0.768%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AMAPMYINDIA)
+Event ID: `b441caeab641e9289dfd988d5b68944a9686ca2bf1f93ba828eaacd3c4958870`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AMAPMYINDIA
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:20] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`DEVYANI`**
+Qualified: 2026-09-15T09:20:02+05:30 IST
+
+LTP: ₹139.34
+Day: 0.993%
+From open: 0.606%
+Turnover: ₹1.29 Cr
+Volume / volume delta: 92603 / 1848 (2.036%)
+B/S: 0.682
+Pullback: 0.438%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ADEVYANI)
+Event ID: `6917b5fe6eb47392c02e78e0c3c0312589fbe0462fb8c7347a834668de9942d5`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ADEVYANI
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:20] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`UNITDSPR`**
+Qualified: 2026-09-15T09:20:02+05:30 IST
+
+LTP: ₹1402.00
+Day: 0.502%
+From open: 0.711%
+Turnover: ₹1.12 Cr
+Volume / volume delta: 7983 / 102 (1.294%)
+B/S: 1.281
+Pullback: 0.036%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AUNITDSPR)
+Event ID: `b772c2eeaee5480d90bf9876bb9cb591676e37039b7b53b10306181fa6030805`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AUNITDSPR
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:20] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`KSL`**
+Qualified: 2026-09-15T09:20:21+05:30 IST
+
+LTP: ₹983.50
+Day: 1.523%
+From open: 1.392%
+Turnover: ₹1.07 Cr
+Volume / volume delta: 10890 / 1622 (17.501%)
+B/S: 0.689
+Pullback: 0.000%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AKSL)
+Event ID: `9999431a7ec51b300bbb326558eb21390e9468372b13a2f4488a78a881687078`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AKSL
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:20] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`FIRSTCRY`**
+Qualified: 2026-09-15T09:20:21+05:30 IST
+
+LTP: ₹171.78
+Day: 1.747%
+From open: 1.047%
+Turnover: ₹1.02 Cr
+Volume / volume delta: 59327 / 4596 (8.397%)
+B/S: 0.945
+Pullback: 0.099%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AFIRSTCRY)
+Event ID: `f515f31511f309de4dc63de22b30e69f3b65921c931075cc3f1251c3e143e7bb`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AFIRSTCRY
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:20] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`CYIENT`**
+Qualified: 2026-09-15T09:20:21+05:30 IST
+
+LTP: ₹1083.60
+Day: 2.284%
+From open: 0.650%
+Turnover: ₹2.30 Cr
+Volume / volume delta: 21206 / 1354 (6.820%)
+B/S: 0.832
+Pullback: 0.591%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ACYIENT)
+Event ID: `508d725d50499223c84a07fba4baa4fa2f575d03ef917f6c8605dd4825283256`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ACYIENT
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:20] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`EMBDL`**
+Qualified: 2026-09-15T09:20:21+05:30 IST
+
+LTP: ₹56.21
+Day: 1.682%
+From open: 1.609%
+Turnover: ₹1.01 Cr
+Volume / volume delta: 180300 / 2758 (1.553%)
+B/S: 1.614
+Pullback: 0.142%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AEMBDL)
+Event ID: `19662cb6cbc6e89f20f082af88d46367afd99fe011f094c2bfcefcea2185b9ce`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AEMBDL
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:20] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`IRFC`**
+Qualified: 2026-09-15T09:20:21+05:30 IST
+
+LTP: ₹81.70
+Day: 0.752%
+From open: 0.752%
+Turnover: ₹6.08 Cr
+Volume / volume delta: 744515 / 151214 (25.487%)
+B/S: 0.805
+Pullback: 0.049%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AIRFC)
+Event ID: `34777526d9639493263e25a87c16357819fb0b0697e094e3418857be70cc2da1`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AIRFC
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:20] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`KMEW`**
+Qualified: 2026-09-15T09:20:21+05:30 IST
+
+LTP: ₹2898.10
+Day: 1.007%
+From open: 1.007%
+Turnover: ₹1.00 Cr
+Volume / volume delta: 3463 / 267 (8.354%)
+B/S: 0.924
+Pullback: 0.504%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AKMEW)
+Event ID: `1289f9e3e9f3cf8bcefed8e2ceee5cc30cc5d7f92a9a4e4aa8a137f9ed071ca8`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AKMEW
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:20] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`TATACOMM`**
+Qualified: 2026-09-15T09:20:21+05:30 IST
+
+LTP: ₹1777.80
+Day: 0.920%
+From open: 0.560%
+Turnover: ₹1.13 Cr
+Volume / volume delta: 6347 / 326 (5.414%)
+B/S: 0.852
+Pullback: 0.017%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ATATACOMM)
+Event ID: `6e6802e447cb2851aabe8b0077b2802aa7ba686e1b8d9f10ce56f35fd4777ed3`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ATATACOMM
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:20] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`PIDILITIND`**
+Qualified: 2026-09-15T09:20:21+05:30 IST
+
+LTP: ₹1574.90
+Day: 0.511%
+From open: 0.511%
+Turnover: ₹2.52 Cr
+Volume / volume delta: 15992 / 2937 (22.497%)
+B/S: 1.538
+Pullback: 0.000%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3APIDILITIND)
+Event ID: `cdac56f7f6507ed0c54d117827aeebc8bbbe445aa79cb5f35feb745339d12b28`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3APIDILITIND
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:20] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`HINDUNILVR`**
+Qualified: 2026-09-15T09:20:37+05:30 IST
+
+LTP: ₹1954.40
+Day: 1.422%
+From open: 0.535%
+Turnover: ₹21.49 Cr
+Volume / volume delta: 109942 / 7877 (7.718%)
+B/S: 1.524
+Pullback: 0.123%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AHINDUNILVR)
+Event ID: `dab23ec866fd5ee9a359266b0c4c7c837e2291b999d087ea839dc1fc9aadf468`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AHINDUNILVR
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:20] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`RVNL`**
+Qualified: 2026-09-15T09:20:37+05:30 IST
+
+LTP: ₹206.20
+Day: 0.634%
+From open: 0.585%
+Turnover: ₹10.10 Cr
+Volume / volume delta: 489718 / 10957 (2.289%)
+B/S: 1.075
+Pullback: 0.388%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ARVNL)
+Event ID: `7431261f741868518cd4bcf26122d8b5c50ed9f4d06d0cde04e997f5a9c94c47`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ARVNL
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:20] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`ZYDUSWELL`**
+Qualified: 2026-09-15T09:20:37+05:30 IST
+
+LTP: ₹555.05
+Day: 0.553%
+From open: 1.038%
+Turnover: ₹1.00 Cr
+Volume / volume delta: 18077 / 140 (0.781%)
+B/S: 0.805
+Pullback: 0.324%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AZYDUSWELL)
+Event ID: `6a30f7472bab33b1f1a3151834109b877bb072d0bbf880c974587807420267f9`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AZYDUSWELL
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 09:20] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`BLS`**
+Qualified: 2026-09-15T09:20:50+05:30 IST
+
+LTP: ₹233.96
+Day: 1.028%
+From open: 1.023%
+Turnover: ₹1.13 Cr
+Volume / volume delta: 48213 / 5823 (13.737%)
+B/S: 0.625
+Pullback: 0.188%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ABLS)
+Event ID: `ce7f71fa091e1f95e85a0a68f4f00dff32413dc586236ed99b159c6e19f883b8`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ABLS
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:21] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`J&KBANK`**
+Qualified: 2026-09-15T09:21:06+05:30 IST
+
+LTP: ₹147.22
+Day: 1.342%
+From open: 1.342%
+Turnover: ₹1.05 Cr
+Volume / volume delta: 71138 / 4150 (6.195%)
+B/S: 0.564
+Pullback: 0.190%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AJ%26KBANK)
+Event ID: `18c594f46dbf879a888e0e59a914c6cb0bc851ccb4e853d8bb12b327f3a9de25`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AJ%26KBANK
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:21] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`TEJASNET`**
+Qualified: 2026-09-15T09:21:06+05:30 IST
+
+LTP: ₹557.00
+Day: 0.787%
+From open: 0.542%
+Turnover: ₹11.10 Cr
+Volume / volume delta: 199259 / 10957 (5.819%)
+B/S: 0.402
+Pullback: 0.233%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ATEJASNET)
+Event ID: `1c893997a5c8869fa1eec50ca8db257e056832fb5d7402f83cbe7eba6e9819ed`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ATEJASNET
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:21] ng
+🟡 **NG QUALITY WATCH**
+**NOT A BUY SIGNAL**
+
+Source: **OPENING LEADER**
+Symbol: **`KAYNES`**
+Qualified: 2026-09-15T09:21:06+05:30 IST
+
+LTP: ₹3523.00
+Day: 0.514%
+From open: 0.514%
+Turnover: ₹16.53 Cr
+Volume / volume delta: 46920 / 3163 (7.229%)
+B/S: 0.649
+Pullback: 0.136%
+Rank: UNKNOWN
+
+Reason: **Leader Ignition PASS**
+[Open TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AKAYNES)
+Event ID: `2966048ced18e16f5b929c29ff7aa961227180f16eb75efd8df66a49754d0f4a`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AKAYNES
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 09:33] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`MAYURUNIQ`** — 2026-09-15T09:33:35+05:30 IST
+LTP: ₹764.10 | Day: 3.250% | From open: 2.798%
+Rank: 191 (previous 1767, improvement 1576)
+Move delta: 3.702 pt | Turnover: ₹3.11 Cr | Volume: 40704
+B/S: 1.677 | Spread: 13.12 bps | Pullback from known HOD: 0.007%
+Time bucket: 09:30–10:30
+
+Context: Market breadth 40.90% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:MAYURUNIQ in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AMAYURUNIQ)
+Event: `772b356b61c61b47`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AMAYURUNIQ
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 10:30] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`BETA`** — 2026-09-15T10:30:09+05:30 IST
+LTP: ₹2189.50 | Day: 3.351% | From open: 4.212%
+Rank: 171 (previous 219, improvement 48)
+Move delta: 0.647 pt | Turnover: ₹3.52 Cr | Volume: 16085
+B/S: 0.659 | Spread: 31.13 bps | Pullback from known HOD: 1.160%
+Time bucket: 10:30–12:00
+
+Context: Market breadth 31.55% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:BETA in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ABETA)
+Event: `9c0a92fac280f24d`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ABETA
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 10:30] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`UGARSUGAR`** — 2026-09-15T10:30:57+05:30 IST
+LTP: ₹56.09 | Day: 3.297% | From open: 2.729%
+Rank: 177 (previous 219, improvement 42)
+Move delta: 0.516 pt | Turnover: ₹3.78 Cr | Volume: 674179
+B/S: 0.498 | Spread: 19.63 bps | Pullback from known HOD: 2.514%
+Time bucket: 10:30–12:00
+
+Context: Market breadth 31.66% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:UGARSUGAR in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AUGARSUGAR)
+Event: `69bd076fdb069482`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AUGARSUGAR
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 10:44] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`SHUKRAPHAR`** — 2026-09-15T10:44:09+05:30 IST
+LTP: ₹55.78 | Day: 3.411% | From open: 3.182%
+Rank: 167 (previous 231, improvement 64)
+Move delta: 0.760 pt | Turnover: ₹4.37 Cr | Volume: 783497
+B/S: 5.046 | Spread: 16.12 bps | Pullback from known HOD: 0.179%
+Time bucket: 10:30–12:00
+
+Context: Market breadth 31.44% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:SHUKRAPHAR in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ASHUKRAPHAR)
+Event: `ab58569200d92ea7`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ASHUKRAPHAR
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 11:01] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`JARO`** — 2026-09-15T11:01:05+05:30 IST
+LTP: ₹469.00 | Day: 3.293% | From open: 2.626%
+Rank: 169 (previous 261, improvement 92)
+Move delta: 0.925 pt | Turnover: ₹3.65 Cr | Volume: 77929
+B/S: 0.971 | Spread: 12.80 bps | Pullback from known HOD: 0.000%
+Time bucket: 10:30–12:00
+
+Context: Market breadth 29.48% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:JARO in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AJARO)
+Event: `9149815ac276d10b`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AJARO
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 11:07] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`BUTTERFLY`** — 2026-09-15T11:07:32+05:30 IST
+LTP: ₹605.00 | Day: 3.198% | From open: 3.925%
+Rank: 183 (previous 221, improvement 38)
+Move delta: 0.512 pt | Turnover: ₹3.25 Cr | Volume: 53726
+B/S: 1.480 | Spread: 40.60 bps | Pullback from known HOD: 4.926%
+Time bucket: 10:30–12:00
+
+Context: Market breadth 29.76% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:BUTTERFLY in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ABUTTERFLY)
+Event: `81204f7a16a15a28`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ABUTTERFLY
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 11:31] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`BODALCHEM`** — 2026-09-15T11:31:45+05:30 IST
+LTP: ₹177.50 | Day: 2.958% | From open: 2.530%
+Rank: 187 (previous 244, improvement 57)
+Move delta: 0.522 pt | Turnover: ₹24.65 Cr | Volume: 1388639
+B/S: 0.758 | Spread: 7.89 bps | Pullback from known HOD: 0.056%
+Time bucket: 10:30–12:00
+
+Context: Market breadth 27.66% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:BODALCHEM in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3ABODALCHEM)
+Event: `8f2d010fa6988118`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3ABODALCHEM
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+[15-09-2026 11:49] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`WENDT`** — 2026-09-15T11:49:49+05:30 IST
+LTP: ₹9098.00 | Day: 3.240% | From open: 2.225%
+Rank: 173 (previous 227, improvement 54)
+Move delta: 0.641 pt | Turnover: ₹18.04 Cr | Volume: 19826
+B/S: 0.762 | Spread: 18.16 bps | Pullback from known HOD: 0.022%
+Time bucket: 10:30–12:00
+
+Context: Market breadth 27.75% | sector avg 0.00% | sector breadth 0.00%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:WENDT in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AWENDT)
+Event: `5547b124c919cc59`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AWENDT
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/Iv203VADxw6KRPFj9w6y8ZDxPcqKZ64feAHcslgvCQ0/https/static.tradingview.com/static/images/logo-preview.png
+
+
+[15-09-2026 12:24] ng
+🟡 **NG EARLY WATCH**
+**NOT A BUY SIGNAL**
+
+**`ECLERX`** — 2026-09-15T12:24:00+05:30 IST
+LTP: ₹1955.60 | Day: 2.948% | From open: 3.427%
+Rank: 195 (previous 252, improvement 57)
+Move delta: 0.516 pt | Turnover: ₹17.59 Cr | Volume: 89929
+B/S: 0.820 | Spread: 3.58 bps | Pullback from known HOD: 0.000%
+Time bucket: 12:00–13:30
+
+Context: Market breadth 26.98% | Sector SERVICES | sector avg -0.14% | sector breadth 21.43%
+**Why alerted:** Fresh post-open acceleration / P5 qualification
+**Review:** Open TradingView → inspect structure → **PAPER or SKIP**
+[Open NSE:ECLERX in TradingView](https://www.tradingview.com/chart/?symbol=NSE%3AECLERX)
+Event: `8108f71afe5d02ce`
+
+{Embed}
+https://www.tradingview.com/chart/?symbol=NSE%3AECLERX
+Live stock, index, futures, Forex and Bitcoin charts on TradingView
+Interactive financial charts for analysis and generating trading ideas on TradingView!
+https://images-ext-1.discordapp.net/external/qsVgiQnItn9D1GyTbDwT4ovfiYsUrD3AkONIgvbas4k/https/s.tradingview.com/static/images/illustrations/chart.jpg
+
+
+==============================================================
+Exported 173 message(s)
+==============================================================
