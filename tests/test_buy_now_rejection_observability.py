@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -148,9 +150,9 @@ def test_observer_cannot_mutate_candidate_state_or_selector_inputs():
     assert mutated["ConfidencePct"] == 30.0
 
 
-def test_observer_receives_a_deeply_detached_snapshot():
-    capture = _CaptureObserver()
-    runner = _runner(capture)
+def test_observer_receives_a_deeply_detached_snapshot(tmp_path):
+    observer = BuyNowRejectionObserver(tmp_path)
+    runner = _runner(observer)
     snapshot = {
         "symbol": "AAA",
         "source": "actionable_report",
@@ -160,16 +162,18 @@ def test_observer_receives_a_deeply_detached_snapshot():
         "final_action": "Watch for Buy",
     }
 
-    class _NestedMutator:
-        def record(self, **event):
-            event["selector_inputs"]["nested"]["value"] = 999
-            event["thresholds"]["nested"]["value"] = 999
-
-    runner._buy_now_rejection_observer = _NestedMutator()
     runner._record_buy_now_shadow(**snapshot)
+    snapshot["selector_inputs"]["nested"]["value"] = 999
+    snapshot["thresholds"]["nested"]["value"] = 999
+    assert observer.close(timeout=1.0)
+    path = tmp_path / "buy_now_rejection_observability" / "2026-09-14.jsonl"
+    event = json.loads(path.read_text())
+    assert event["inputs"]["nested"]["value"] == 1
+    assert event["thresholds"]["nested"]["value"] == 2
 
-    assert snapshot["selector_inputs"]["nested"]["value"] == 1
-    assert snapshot["thresholds"]["nested"]["value"] == 2
+    # Later caller mutation cannot change the retained event.
+    assert snapshot["selector_inputs"]["nested"]["value"] == 999
+    assert snapshot["thresholds"]["nested"]["value"] == 999
 
 
 def test_observability_does_not_affect_report_ranking():
@@ -260,6 +264,7 @@ def test_repeated_evaluations_are_distinct_and_group_by_date_symbol(tmp_path):
         **common,
         event_timestamp=datetime(2026, 9, 13, 10, 0, tzinfo=IST),
     )
+    assert observer.close(timeout=1.0)
 
     paths = sorted((tmp_path / "buy_now_rejection_observability").glob("*.jsonl"))
     events = load_events(paths)
@@ -309,6 +314,7 @@ def test_journal_schema_contains_decision_inputs_gates_and_stable_identity(tmp_p
         thresholds={},
         final_action="Buy Now",
     )
+    assert observer.close(timeout=1.0)
     path = tmp_path / "buy_now_rejection_observability" / "2026-09-14.jsonl"
     row = json.loads(path.read_text(encoding="utf-8").strip())
     assert row["final_decision"] == "QUALIFIED"
@@ -317,6 +323,122 @@ def test_journal_schema_contains_decision_inputs_gates_and_stable_identity(tmp_p
     assert isinstance(row["inputs"], dict)
     assert isinstance(row["gates"], dict)
     assert len(row["candidate_id"]) == 64
+
+
+def _observer_snapshot(symbol="AAA"):
+    return {
+        "symbol": symbol,
+        "source": "actionable_report",
+        "event_timestamp": datetime(2026, 9, 14, 10, 0, tzinfo=IST),
+        "selector_inputs": {"adjusted_action": "BUY", "nested": {"value": 1}},
+        "thresholds": {"nested": {"value": 2}},
+        "final_action": "Buy Now",
+    }
+
+
+def test_disk_stall_never_stalls_selector_submission(tmp_path, monkeypatch):
+    observer = BuyNowRejectionObserver(tmp_path, buffer_size=8)
+    started = threading.Event()
+    release = threading.Event()
+
+    def stalled_write(_path, _payload):
+        started.set()
+        release.wait(1.0)
+
+    monkeypatch.setattr(observer, "_append_payload", stalled_write)
+    assert observer.record(**_observer_snapshot("STALLING"))
+    assert started.wait(1.0)
+
+    runner = _runner(observer)
+    began = time.perf_counter()
+    result = _analyze(runner, "NONBLOCKING")
+    elapsed = time.perf_counter() - began
+    assert result is not None
+    assert elapsed < 0.4
+
+    release.set()
+    assert observer.close(timeout=1.0)
+
+
+def test_full_buffer_drops_without_blocking_and_counts_drop(tmp_path, monkeypatch):
+    observer = BuyNowRejectionObserver(tmp_path, buffer_size=1, batch_size=1)
+    started = threading.Event()
+    release = threading.Event()
+
+    def stalled_write(_path, _payload):
+        started.set()
+        release.wait(1.0)
+
+    monkeypatch.setattr(observer, "_append_payload", stalled_write)
+    assert observer.record(**_observer_snapshot("FIRST"))
+    assert started.wait(1.0)
+    assert observer.record(**_observer_snapshot("QUEUED"))
+    began = time.perf_counter()
+    assert observer.record(**_observer_snapshot("DROPPED")) is False
+    assert time.perf_counter() - began < 0.05
+    assert observer.health()["dropped_buffer_full"] == 1
+
+    release.set()
+    assert observer.close(timeout=1.0)
+
+
+def test_writer_failure_is_counted_and_never_propagates(tmp_path, monkeypatch):
+    observer = BuyNowRejectionObserver(tmp_path)
+
+    def fail_write(_path, _payload):
+        raise OSError("disk unavailable")
+
+    monkeypatch.setattr(observer, "_append_payload", fail_write)
+    assert observer.record(**_observer_snapshot())
+    assert observer.close(timeout=1.0)
+    health = observer.health()
+    assert health["write_errors"] == 1
+    assert health["last_error_type"] == "OSError"
+
+
+def test_retained_async_events_are_ordered_valid_jsonl(tmp_path):
+    observer = BuyNowRejectionObserver(tmp_path, batch_size=8)
+    for minute in range(3):
+        snapshot = _observer_snapshot("ORDERED")
+        snapshot["event_timestamp"] = datetime(
+            2026, 9, 14, 10, minute, tzinfo=IST
+        )
+        assert observer.record(**snapshot)
+    assert observer.close(timeout=1.0)
+
+    path = tmp_path / "buy_now_rejection_observability" / "2026-09-14.jsonl"
+    rows = [json.loads(line) for line in path.read_text().splitlines()]
+    assert [row["timestamp_ist"] for row in rows] == [
+        "2026-09-14T10:00:00.000000+05:30",
+        "2026-09-14T10:01:00.000000+05:30",
+        "2026-09-14T10:02:00.000000+05:30",
+    ]
+    assert len({row["event_id"] for row in rows}) == 3
+    assert len({row["candidate_id"] for row in rows}) == 1
+    assert observer.health()["written"] == 3
+
+
+def test_shutdown_flush_is_bounded_when_disk_is_stalled(tmp_path, monkeypatch):
+    observer = BuyNowRejectionObserver(
+        tmp_path, buffer_size=2, flush_timeout_seconds=0.02
+    )
+    started = threading.Event()
+    release = threading.Event()
+
+    def stalled_write(_path, _payload):
+        started.set()
+        release.wait(1.0)
+
+    monkeypatch.setattr(observer, "_append_payload", stalled_write)
+    assert observer.record(**_observer_snapshot())
+    assert started.wait(1.0)
+    began = time.perf_counter()
+    assert observer.close() is False
+    assert time.perf_counter() - began < 0.2
+    assert observer.health()["flush_timeouts"] == 1
+
+    release.set()
+    assert observer.close(timeout=1.0)
 
 
 def test_offline_summary_measures_gate_failure_until_first_later_pass():

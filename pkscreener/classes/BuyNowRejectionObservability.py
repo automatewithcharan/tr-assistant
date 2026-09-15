@@ -8,19 +8,19 @@ selector.  Journals are written below
 
 from __future__ import annotations
 
+import atexit
+import copy
 import hashlib
 import json
 import math
 import os
+import queue
 import threading
 import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping, Optional
 from zoneinfo import ZoneInfo
-
-from PKDevTools.classes.log import default_logger
-
 
 IST = ZoneInfo("Asia/Kolkata")
 SCHEMA_VERSION = 1
@@ -371,40 +371,175 @@ def build_selector_event(
 
 
 class BuyNowRejectionObserver:
-    """Append selector traces without allowing any exception to escape."""
+    """Submit selector traces to a bounded, fail-open background writer."""
 
     def __init__(
         self,
         output_dir: str | Path,
         *,
         clock: Optional[Callable[[], datetime]] = None,
+        buffer_size: int = 8192,
+        batch_size: int = 256,
+        batch_linger_seconds: float = 0.01,
+        flush_timeout_seconds: float = 2.0,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.clock = clock or (lambda: datetime.now(tz=IST))
-        self._lock = threading.Lock()
+        self.buffer_size = max(1, int(buffer_size))
+        self.batch_size = max(1, int(batch_size))
+        self.batch_linger_seconds = max(0.0, float(batch_linger_seconds))
+        self.flush_timeout_seconds = max(0.0, float(flush_timeout_seconds))
+        self._queue: queue.Queue[dict[str, Any]] = queue.Queue(
+            maxsize=self.buffer_size
+        )
+        self._stats_lock = threading.Lock()
+        self._state_lock = threading.Lock()
+        self._accepting = True
+        self._stop = threading.Event()
+        self._stats: dict[str, Any] = {
+            "submitted": 0,
+            "enqueued": 0,
+            "dropped_buffer_full": 0,
+            "dropped_closed": 0,
+            "submission_errors": 0,
+            "invalid_events": 0,
+            "written": 0,
+            "write_errors": 0,
+            "flush_timeouts": 0,
+            "last_error_type": None,
+        }
+        self._worker = threading.Thread(
+            target=self._writer_loop,
+            name="buy-now-rejection-observer",
+            daemon=True,
+        )
+        self._worker.start()
+        atexit.register(self.close)
+
+    def _increment(self, name: str, amount: int = 1, error: Any = None) -> None:
+        with self._stats_lock:
+            self._stats[name] += amount
+            if error is not None:
+                self._stats["last_error_type"] = type(error).__name__
+
+    def health(self) -> dict[str, Any]:
+        """Return counters without exposing mutable writer state."""
+        with self._stats_lock:
+            result = dict(self._stats)
+        result.update(
+            {
+                "buffer_size": self.buffer_size,
+                "queue_depth": self._queue.qsize(),
+                "accepting": self._accepting,
+                "worker_alive": self._worker.is_alive(),
+            }
+        )
+        return result
 
     def record(self, **snapshot: Any) -> bool:
+        """Deep-copy and enqueue without waiting for serialization or disk I/O."""
+        self._increment("submitted")
         try:
-            event = build_selector_event(clock=self.clock, **snapshot)
-            if not event["symbol"]:
+            detached = copy.deepcopy(snapshot)
+            if detached.get("event_timestamp") in (None, ""):
+                detached["event_timestamp"] = self.clock()
+            with self._state_lock:
+                accepting = self._accepting
+            if not accepting:
+                self._increment("dropped_closed")
                 return False
-            payload = (json.dumps(event, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
-            journal_dir = self.output_dir / "buy_now_rejection_observability"
-            journal_dir.mkdir(parents=True, exist_ok=True)
-            path = journal_dir / f"{event['trading_date']}.jsonl"
-            with self._lock:
-                fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
-                try:
-                    os.write(fd, payload)
-                finally:
-                    os.close(fd)
+            try:
+                self._queue.put_nowait(detached)
+            except queue.Full:
+                self._increment("dropped_buffer_full")
+                return False
+            self._increment("enqueued")
             return True
         except Exception as exc:
-            default_logger().warning(
-                "Buy Now rejection telemetry append failed: "
-                f"{type(exc).__name__}"
-            )
+            self._increment("submission_errors", error=exc)
             return False
+
+    def _writer_loop(self) -> None:
+        while not self._stop.is_set() or not self._queue.empty():
+            try:
+                first = self._queue.get(timeout=0.05)
+            except queue.Empty:
+                continue
+            batch = [first]
+            if self.batch_linger_seconds and not self._stop.is_set():
+                self._stop.wait(self.batch_linger_seconds)
+            while len(batch) < self.batch_size:
+                try:
+                    batch.append(self._queue.get_nowait())
+                except queue.Empty:
+                    break
+            try:
+                self._write_batch(batch)
+            except Exception as exc:
+                self._increment("write_errors", len(batch), error=exc)
+            finally:
+                for _item in batch:
+                    self._queue.task_done()
+
+    def _write_batch(self, snapshots: list[dict[str, Any]]) -> None:
+        payloads: dict[Path, list[bytes]] = {}
+        for snapshot in snapshots:
+            try:
+                event = build_selector_event(clock=self.clock, **snapshot)
+                if not event["symbol"]:
+                    self._increment("invalid_events")
+                    continue
+                path = (
+                    self.output_dir
+                    / "buy_now_rejection_observability"
+                    / f"{event['trading_date']}.jsonl"
+                )
+                payloads.setdefault(path, []).append(
+                    (
+                        json.dumps(
+                            event,
+                            sort_keys=True,
+                            separators=(",", ":"),
+                        )
+                        + "\n"
+                    ).encode("utf-8")
+                )
+            except Exception as exc:
+                self._increment("write_errors", error=exc)
+        for path, parts in payloads.items():
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                self._append_payload(path, b"".join(parts))
+                self._increment("written", len(parts))
+            except Exception as exc:
+                self._increment("write_errors", len(parts), error=exc)
+
+    @staticmethod
+    def _append_payload(path: Path, payload: bytes) -> None:
+        fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_APPEND, 0o600)
+        try:
+            view = memoryview(payload)
+            while view:
+                written = os.write(fd, view)
+                if written <= 0:
+                    raise OSError("telemetry append made no progress")
+                view = view[written:]
+        finally:
+            os.close(fd)
+
+    def close(self, timeout: Optional[float] = None) -> bool:
+        """Stop accepting events and attempt a bounded queue flush."""
+        with self._state_lock:
+            self._accepting = False
+        self._stop.set()
+        wait_seconds = (
+            self.flush_timeout_seconds if timeout is None else max(0.0, timeout)
+        )
+        self._worker.join(wait_seconds)
+        if self._worker.is_alive():
+            self._increment("flush_timeouts")
+            return False
+        return self._queue.empty()
 
 
 def load_events(paths: Iterable[str | Path]) -> list[dict[str, Any]]:
