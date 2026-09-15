@@ -30,6 +30,10 @@ from PKDevTools.classes.log import default_logger
 
 from pkscreener.classes.ActionableReport import ActionableReportRunner
 try:
+    from pkscreener.classes.BuyNowRejectionObservability import BuyNowRejectionObserver
+except Exception:  # Shadow observability must never prevent scanner startup.
+    BuyNowRejectionObserver = None
+try:
     from pkscreener.classes.AlertTimingObservability import (
         AlertTimingObserver,
         deliver_with_observability,
@@ -444,6 +448,7 @@ class SignalMonitorRunner:
             max_workers=max_workers,
             use_live_kite=use_live_kite,
             strong_buy_only=strong_buy_only,
+            buy_now_rejection_observer=self._buy_now_rejection_observer,
         )
         self.performance_tracker = SignalPerformanceTracker(
             config_manager=config_manager,
@@ -6661,6 +6666,24 @@ class SignalMonitorRunner:
             except Exception as exc:
                 default_logger().warning(
                     f"Alert timing telemetry initialization failed: {type(exc).__name__}"
+                )
+
+        self._buy_now_rejection_observer = None
+        if (
+            BuyNowRejectionObserver is not None
+            and self._env_truthy(
+                "SIGNALMONITOR_ENABLE_BUY_NOW_REJECTION_OBSERVABILITY",
+                "1",
+            )
+        ):
+            try:
+                self._buy_now_rejection_observer = BuyNowRejectionObserver(
+                    self.output_dir
+                )
+            except Exception as exc:
+                default_logger().warning(
+                    "Buy Now rejection telemetry initialization failed; "
+                    f"scanner operation continues: {type(exc).__name__}"
                 )
 
         self._tradingview_delivery_available = bool(

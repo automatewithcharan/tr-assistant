@@ -11,7 +11,7 @@ import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, as_completed
-from typing import Callable, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 import pandas as pd
 
@@ -76,6 +76,7 @@ class ActionableReportRunner:
         max_workers: int = 0,  # 0 = auto, tunable through ACTIONABLE_MAX_WORKERS
         use_live_kite: bool = False,
         strong_buy_only: bool = False,
+        buy_now_rejection_observer: Optional[Any] = None,
     ):
         self.config_manager = config_manager
         self.universe = universe
@@ -90,6 +91,7 @@ class ActionableReportRunner:
         self.max_workers = max(1, int(max_workers or 0)) if max_workers else auto_workers
         self.use_live_kite = bool(use_live_kite)
         self.strong_buy_only = bool(strong_buy_only)
+        self._buy_now_rejection_observer = buy_now_rejection_observer
         self.buy_ready_max_gap_pct = 0.60
         self.strong_buy_max_gap_pct = 0.35
         self.momentum_buy_min_score = 75.0
@@ -459,29 +461,378 @@ class ActionableReportRunner:
             self._thread_local.signals = TradingSignals(self.config_manager)
         return self._thread_local.fetcher, self._thread_local.signals
 
+    def _buy_now_shadow_thresholds(self) -> Dict[str, Any]:
+        """Snapshot the exact configured selector limits without changing them."""
+        pre_filter = getattr(self, "_pre_filter", None)
+        return {
+            "prefilter_min_candles": getattr(pre_filter, "min_candles", None),
+            "prefilter_min_price": getattr(pre_filter, "min_price", None),
+            "prefilter_max_price": getattr(pre_filter, "max_price", None),
+            "prefilter_min_avg_volume": getattr(pre_filter, "min_avg_volume", None),
+            "prefilter_min_avg_trade_value": getattr(pre_filter, "min_avg_trade_value", None),
+            "prefilter_max_effective_spread_pct": (
+                float(pre_filter.max_spread_pct) * 3.0
+                if pre_filter is not None else None
+            ),
+            "min_confidence": getattr(self, "min_confidence", None),
+            "buy_ready_max_gap_pct": getattr(self, "buy_ready_max_gap_pct", None),
+            "min_trade_value": getattr(self, "min_trade_value", None),
+            "min_volume_ratio": getattr(self, "min_volume_ratio", None),
+            "actionable_min_kalman_quality": 35.0,
+            "strong_source_action": "BUY",
+            "strong_buy_min_confidence": getattr(self, "strong_buy_min_confidence", None),
+            "strong_buy_max_gap_pct": getattr(self, "strong_buy_max_gap_pct", None),
+            "strong_buy_min_trade_value": getattr(self, "strong_buy_min_trade_value", None),
+            "strong_buy_min_volume_ratio": getattr(self, "strong_buy_min_volume_ratio", None),
+            "strong_min_kalman_quality": 50.0,
+            "momentum_setup_requirements": {
+                "score_min": getattr(self, "momentum_buy_min_score", None),
+                "change_pct": "> 0",
+                "volume_ratio_min": 1.5,
+                "entry_gap_pct_max": 0.80,
+                "ma_contradiction": False,
+            },
+            "momentum_buy_min_score": getattr(self, "momentum_buy_min_score", None),
+            "momentum_positive_change_pct": "> 0",
+            "momentum_min_volume_ratio": 1.5,
+            "momentum_max_entry_gap_pct": 0.80,
+            "momentum_ma_contradiction": False,
+            "stretched_momentum_buy_min_change_pct": getattr(self, "stretched_momentum_buy_min_change_pct", None),
+            "stretched_momentum_buy_min_rsi": getattr(self, "stretched_momentum_buy_min_rsi", None),
+            "stretched_momentum_requires_positive_gap": True,
+            "early_momentum_buy_min_score": getattr(self, "early_momentum_buy_min_score", None),
+            "early_momentum_buy_min_volume_ratio": getattr(self, "early_momentum_buy_min_volume_ratio", None),
+            "early_momentum_buy_max_gap_pct": getattr(self, "early_momentum_buy_max_gap_pct", None),
+            "early_momentum_buy_max_change_pct": getattr(self, "early_momentum_buy_max_change_pct", None),
+            "early_momentum_min_kalman_quality": 60.0,
+            "early_momentum_required_trend": "up",
+            "early_momentum_buy_max_rsi": getattr(self, "early_momentum_buy_max_rsi", None),
+            "buy_now_min_volume_ratio": getattr(self, "buy_now_min_volume_ratio", None),
+            "regular_momentum_min_kalman_quality": 50.0,
+            "regular_momentum_forbidden_trend": "down",
+        }
+
+    @staticmethod
+    def _buy_now_prefilter_inputs(data: Optional[pd.DataFrame]) -> Dict[str, Any]:
+        """Capture only the OHLCV values the existing prefilter has already seen."""
+        try:
+            if data is None or not hasattr(data, "columns") or data.empty:
+                return {"history_count": 0, "volume_column_present": False}
+            last = data.iloc[-1]
+            volume_column = "volume" if "volume" in data.columns else (
+                "Volume" if "Volume" in data.columns else None
+            )
+            recent = data.tail(20)
+            avg_volume = float(recent[volume_column].mean()) if volume_column else None
+            close = float(last.get("close", 0) or 0)
+            avg_close = float(recent["close"].mean()) if "close" in recent.columns else close
+            high = float(last.get("high", 0) or 0)
+            low = float(last.get("low", 0) or 0)
+            return {
+                "history_count": len(data),
+                "close": close,
+                "volume_column_present": volume_column is not None,
+                "avg_volume_20": avg_volume,
+                "avg_trade_value_20": avg_volume * avg_close if avg_volume is not None else None,
+                "last_bar_spread_pct": ((high - low) / low * 100.0) if low > 0 else None,
+                "last_low_positive": low > 0,
+            }
+        except Exception:
+            # Diagnostic extraction must never become a new selector failure.
+            return {}
+
+    def _record_buy_now_shadow(self, **snapshot: Any) -> None:
+        """Invoke the side channel with a detached snapshot and swallow failures."""
+        observer = getattr(self, "_buy_now_rejection_observer", None)
+        if observer is None:
+            return
+        try:
+            detached = {
+                key: dict(value) if isinstance(value, Mapping) else value
+                for key, value in snapshot.items()
+            }
+            observer.record(**detached)
+        except Exception as exc:
+            default_logger().warning(
+                "Buy Now rejection telemetry failed open: "
+                f"{type(exc).__name__}"
+            )
+
+    def _record_buy_now_not_evaluable(
+        self,
+        symbol: str,
+        reason: str,
+        *,
+        prefilter_inputs: Optional[Mapping[str, Any]] = None,
+        event_timestamp: Any = None,
+    ) -> None:
+        try:
+            self._record_buy_now_shadow(
+                symbol=symbol,
+                source="actionable_report",
+                event_timestamp=event_timestamp,
+                selector_inputs={},
+                thresholds=self._buy_now_shadow_thresholds(),
+                final_action=None,
+                prefilter_inputs=prefilter_inputs,
+                decision_override="NOT_EVALUABLE",
+                primary_rejection_reason=reason,
+                evaluation_mode="not_evaluable",
+            )
+        except Exception:
+            return
+
+    def _record_cached_buy_now_shadow(
+        self,
+        symbol: str,
+        row: Mapping[str, Any],
+        prefilter_inputs: Mapping[str, Any],
+        evaluation_timestamp: Any = None,
+    ) -> None:
+        try:
+            quality_checks = str(row.get("QualityChecks") or "")
+            final_action = str(row.get("NowAction") or "")
+            base_action = "Watch for Buy" if "momentum promotion" in quality_checks else final_action
+            adjusted_action = str(row.get("Action") or "")
+            reason_text = str(row.get("Reason") or "")
+            inputs = self._buy_now_selector_inputs(
+                raw_action=None,
+                adjusted_action=adjusted_action,
+                signal=str(row.get("Signal") or ""),
+                confidence=self._optional_float(row.get("ConfidencePct")),
+                close=self._optional_float(row.get("LTP")),
+                entry=self._optional_float(row.get("Entry")),
+                stop_loss=self._optional_float(row.get("StopLoss")),
+                current_volume=self._optional_float(row.get("Volume")),
+                avg_volume_20=self._optional_float(row.get("AvgVolume20")),
+                avg_trade_value_20=self._optional_float(row.get("AvgTradeValue20")),
+                volume_ratio=self._optional_float(row.get("VolumeRatio")),
+                entry_gap_pct=self._optional_float(row.get("EntryGapPct")),
+                trigger_ready=bool(row.get("TriggerReady")),
+                change_pct=self._optional_float(row.get("ChangePct")),
+                rsi=self._optional_float(row.get("RSI")),
+                kalman_quality=self._optional_float(row.get("KalmanQuality")),
+                kalman_trend=str(row.get("KalmanTrend") or "").strip().lower(),
+                vol_regime=str(row.get("VolRegime") or "").strip().lower(),
+                noise_spike=None,
+                reason_text=reason_text,
+                momentum_score=self._optional_float(row.get("MomentumScore")),
+                momentum_setup=str(row.get("MomentumSetup") or ""),
+                momentum_reason=str(row.get("MomentumReason") or ""),
+            )
+            inputs["cached_result_run_at"] = row.get("RunAt")
+            self._record_buy_now_shadow(
+                symbol=symbol,
+                source="actionable_report",
+                event_timestamp=evaluation_timestamp,
+                selector_inputs=inputs,
+                thresholds=self._buy_now_shadow_thresholds(),
+                final_action=final_action,
+                base_action=base_action,
+                prefilter_inputs=prefilter_inputs,
+                evaluation_mode="cached",
+            )
+        except Exception:
+            return
+
+    def _buy_now_selector_inputs(
+        self,
+        *,
+        raw_action: Optional[str],
+        adjusted_action: str,
+        signal: Optional[str],
+        confidence: Optional[float],
+        close: Optional[float],
+        entry: Optional[float],
+        stop_loss: Optional[float],
+        current_volume: Optional[float],
+        avg_volume_20: Optional[float],
+        avg_trade_value_20: Optional[float],
+        volume_ratio: Optional[float],
+        entry_gap_pct: Optional[float],
+        trigger_ready: bool,
+        change_pct: Optional[float],
+        rsi: Optional[float],
+        kalman_quality: Optional[float],
+        kalman_trend: str,
+        vol_regime: str,
+        noise_spike: Optional[bool],
+        reason_text: str,
+        momentum_score: Optional[float],
+        momentum_setup: str,
+        momentum_reason: str,
+    ) -> Dict[str, Any]:
+        """Describe the existing selector predicates from their actual inputs."""
+        bearish_trend = any(
+            marker in reason_text.lower()
+            for marker in ("bearish alignment", "below all major ma", "death cross")
+        )
+        stretched_chase = bool(
+            change_pct is not None and change_pct >= 8.0
+            and rsi is not None and rsi >= 88.0
+            and not trigger_ready
+        )
+        near_trigger = bool(
+            trigger_ready
+            or (
+                entry_gap_pct is not None
+                and entry_gap_pct <= self.buy_ready_max_gap_pct
+            )
+        )
+        strong_trigger = bool(
+            trigger_ready
+            or (
+                entry_gap_pct is not None
+                and entry_gap_pct <= self.strong_buy_max_gap_pct
+            )
+        )
+        liquidity_ok = (
+            avg_trade_value_20 is not None
+            and avg_trade_value_20 >= self.min_trade_value
+        )
+        volume_ok = volume_ratio is not None and volume_ratio >= self.min_volume_ratio
+        strong_liquidity_ok = (
+            avg_trade_value_20 is not None
+            and avg_trade_value_20 >= self.strong_buy_min_trade_value
+        )
+        strong_volume_ok = (
+            volume_ratio is not None
+            and volume_ratio >= self.strong_buy_min_volume_ratio
+        )
+        momentum_setup_eligible = momentum_setup == "Momentum Buy"
+        ma_contradiction = "ma contradiction" in str(momentum_reason or "").lower()
+        stretched_momentum_continuation = bool(
+            change_pct is not None
+            and change_pct >= self.stretched_momentum_buy_min_change_pct
+            and rsi is not None
+            and rsi >= self.stretched_momentum_buy_min_rsi
+            and entry_gap_pct is not None
+            and entry_gap_pct > 0.0
+        )
+        return {
+            "raw_action": raw_action,
+            "adjusted_action": adjusted_action,
+            "signal": signal,
+            "confidence": confidence,
+            "close": close,
+            "entry": entry,
+            "stop_loss": stop_loss,
+            "current_volume": current_volume,
+            "avg_volume_20": avg_volume_20,
+            "avg_trade_value_20": avg_trade_value_20,
+            "volume_ratio": volume_ratio,
+            "entry_gap_pct": entry_gap_pct,
+            "trigger_ready": trigger_ready,
+            "change_pct": change_pct,
+            "rsi": rsi,
+            "kalman_quality": kalman_quality,
+            "kalman_trend": kalman_trend,
+            "vol_regime": vol_regime,
+            "noise_spike": noise_spike,
+            "reason_text": reason_text,
+            "momentum_score": momentum_score,
+            "momentum_setup": momentum_setup or "NONE",
+            "momentum_reason": momentum_reason or "NONE",
+            "change_pct_basis": "last_close_vs_previous_row_close",
+            "volume_ratio_basis": "current_row_volume_vs_tail20_mean_including_current",
+            "traded_value_basis": "tail20_mean_of_close_times_volume",
+            "strong_buy_only": self.strong_buy_only,
+            "standard_buy_route_enabled": not self.strong_buy_only,
+            "momentum_promotion_enabled": not self.strong_buy_only,
+            "bearish_trend": bearish_trend,
+            "stretched_chase": stretched_chase,
+            "kalman_safety_ok": (
+                kalman_quality is not None
+                and not (
+                    kalman_quality < 30.0
+                    or (kalman_trend == "down" and kalman_quality < 35.0)
+                )
+            ),
+            "volatility_regime_ok": vol_regime != "extreme" if vol_regime else None,
+            "confidence_ok": confidence is not None and confidence >= self.min_confidence,
+            "near_trigger": near_trigger,
+            "liquidity_ok": liquidity_ok,
+            "volume_ok": volume_ok,
+            "actionable_kalman_ok": kalman_quality is not None and kalman_quality >= 35.0,
+            "strong_source_action": adjusted_action.strip().upper() == "BUY",
+            "strong_confidence_ok": confidence is not None and confidence >= self.strong_buy_min_confidence,
+            "strong_trigger": strong_trigger,
+            "strong_liquidity_ok": strong_liquidity_ok,
+            "strong_volume_ok": strong_volume_ok,
+            "strong_kalman_ok": kalman_quality is not None and kalman_quality >= 50.0,
+            "momentum_setup_eligible": momentum_setup_eligible,
+            "momentum_score_ok": momentum_score is not None and momentum_score >= self.momentum_buy_min_score,
+            "momentum_positive_change_ok": change_pct is not None and change_pct > 0.0,
+            "momentum_volume_ok": volume_ratio is not None and volume_ratio >= 1.5,
+            "momentum_gap_ok": entry_gap_pct is not None and entry_gap_pct <= 0.80,
+            "momentum_ma_contradiction": ma_contradiction,
+            "momentum_ma_clear": not ma_contradiction,
+            "momentum_stretched_continuation_clear": not stretched_momentum_continuation,
+            "early_momentum_score_ok": momentum_score is not None and momentum_score >= self.early_momentum_buy_min_score,
+            "early_momentum_volume_ok": volume_ratio is not None and volume_ratio >= self.early_momentum_buy_min_volume_ratio,
+            "early_momentum_gap_ok": entry_gap_pct is not None and entry_gap_pct <= self.early_momentum_buy_max_gap_pct,
+            "early_momentum_change_ok": change_pct is not None and change_pct <= self.early_momentum_buy_max_change_pct,
+            "early_momentum_kalman_ok": kalman_quality is not None and kalman_quality >= 60.0,
+            "early_momentum_trend_ok": kalman_trend == "up",
+            "early_momentum_rsi_ok": rsi is not None and rsi <= self.early_momentum_buy_max_rsi,
+            "regular_momentum_volume_ok": volume_ratio is not None and volume_ratio >= self.buy_now_min_volume_ratio,
+            "regular_momentum_kalman_ok": kalman_quality is not None and kalman_quality >= 50.0,
+            "regular_momentum_trend_ok": bool(kalman_trend) and kalman_trend != "down",
+        }
+
     def _analyze_symbol(self, symbol: str) -> Optional[Dict]:
         """Analyze a single symbol and return an actionable row."""
         try:
             fetcher, signals = self._get_thread_components()
             data = self._load_prepared_base_data(symbol, fetcher)
+            prefilter_inputs = self._buy_now_prefilter_inputs(data)
             if len(data) < 60:
+                self._record_buy_now_not_evaluable(
+                    symbol,
+                    "insufficient_history",
+                    prefilter_inputs=prefilter_inputs,
+                )
                 return None
 
             # Pre-filter: fast liquidity/quality gates before expensive analysis
             eligible, reason = self._pre_filter.is_eligible(data)
             if not eligible:
                 default_logger().debug(f"Pre-filter rejected {symbol}: {reason}")
+                self._record_buy_now_shadow(
+                    symbol=symbol,
+                    source="actionable_report",
+                    event_timestamp=None,
+                    selector_inputs={},
+                    thresholds=self._buy_now_shadow_thresholds(),
+                    final_action=None,
+                    prefilter_inputs=prefilter_inputs,
+                    decision_override="REJECTED",
+                    primary_rejection_reason=f"prefilter:{reason}",
+                    evaluation_mode="prefilter_rejected",
+                )
                 return None
 
             if self.use_live_kite and self.live_ticks:
                 data = self._apply_live_tick(symbol, data)
                 if data is None or len(data) < 60:
+                    self._record_buy_now_not_evaluable(
+                        symbol,
+                        "live_tick_overlay_unavailable",
+                        prefilter_inputs=self._buy_now_prefilter_inputs(data),
+                    )
                     return None
+                prefilter_inputs = self._buy_now_prefilter_inputs(data)
 
             # Fast-path: return cached analysis if data fingerprint unchanged
             fingerprint = self._data_fingerprint(symbol, data)
             cached_row = self._get_cached_analysis(symbol, fingerprint)
             if cached_row is not None:
+                self._record_cached_buy_now_shadow(
+                    symbol,
+                    cached_row,
+                    prefilter_inputs,
+                    PKDateUtilities.currentDateTime(),
+                )
                 return cached_row
 
             # Incremental indicator state: warm up once, update O(1) on each tick
@@ -495,12 +846,17 @@ class ActionableReportRunner:
                     self.use_live_kite and str(symbol).strip().upper() in self.live_ticks
                 ),
                 incr_indicators=incr_indicators,
+                prefilter_inputs=prefilter_inputs,
             )
             if row is not None:
                 self._store_cached_analysis(symbol, fingerprint, row)
             return row
         except Exception as exc:
             default_logger().debug(f"Actionable analysis failed for {symbol}: {exc}", exc_info=True)
+            self._record_buy_now_not_evaluable(
+                symbol,
+                f"analysis_error:{type(exc).__name__}",
+            )
             return None
 
     def _get_incremental_indicators(self, symbol: str, data: pd.DataFrame) -> Optional[Dict]:
@@ -561,9 +917,20 @@ class ActionableReportRunner:
         run_at_text: Optional[str] = None,
         live_tick_used: bool = False,
         incr_indicators: Optional[Dict] = None,
+        prefilter_inputs: Optional[Mapping[str, Any]] = None,
     ) -> Optional[Dict]:
         """Analyze an already prepared OHLCV frame using the same live-signal logic."""
         if data is None or len(data) < 30:
+            self._record_buy_now_not_evaluable(
+                symbol,
+                "insufficient_analysis_history",
+                prefilter_inputs=(
+                    prefilter_inputs
+                    if prefilter_inputs is not None
+                    else self._buy_now_prefilter_inputs(data)
+                ),
+                event_timestamp=run_at_text,
+            )
             return None
 
         signals = signals or self.signals
@@ -576,7 +943,8 @@ class ActionableReportRunner:
         volume_ratio = (volume / avg_volume_20) if avg_volume_20 else 0.0
         avg_trade_value_20 = float((data["close"].tail(20) * data["volume"].tail(20)).mean())
         atr = self._compute_atr(data, close)
-        action = self._signal_to_action(result.signal)
+        raw_action = self._signal_to_action(result.signal)
+        action = raw_action
 
         # --- Advanced quality gate: Kalman trend + GARCH volatility ---
         close_arr = data["close"].values.astype(float)
@@ -611,6 +979,8 @@ class ActionableReportRunner:
         volume_ok = volume_ratio >= self.min_volume_ratio
         strong_liquidity_ok = avg_trade_value_20 >= self.strong_buy_min_trade_value
         strong_volume_ok = volume_ratio >= self.strong_buy_min_volume_ratio
+        rsi_value = float(result.indicators.get("RSI", 50))
+        selector_reason_text = " | ".join(result.reasons[:5]) if result.reasons else ""
         now_action, quality_checks = self._determine_now_action(
             action=action,
             confidence=float(result.confidence),
@@ -623,13 +993,14 @@ class ActionableReportRunner:
             volume_ok=volume_ok,
             strong_liquidity_ok=strong_liquidity_ok,
             strong_volume_ok=strong_volume_ok,
-            reason_text=" | ".join(result.reasons[:5]) if result.reasons else "",
+            reason_text=selector_reason_text,
             kalman_quality=kalman_quality,
             kalman_trend=kalman_trend,
             vol_regime=vol_regime,
             change_pct=change_pct,
-            rsi=float(result.indicators.get("RSI", 50)),
+            rsi=rsi_value,
         )
+        base_now_action = now_action
         momentum_score, momentum_setup, momentum_reason = self._score_momentum_setup(
             action=action,
             now_action=now_action,
@@ -658,10 +1029,10 @@ class ActionableReportRunner:
                 liquidity_ok=liquidity_ok,
                 kalman_quality=kalman_quality,
                 kalman_trend=kalman_trend,
-                rsi=float(result.indicators.get("RSI", 50)),
+                rsi=rsi_value,
             )
 
-        return {
+        row = {
             "Symbol": symbol,
             "Action": action,
             "NowAction": now_action,
@@ -692,7 +1063,7 @@ class ActionableReportRunner:
             "RiskPerShare": risk_per_share,
             "QualityChecks": quality_checks,
             "Reason": " | ".join(result.reasons[:3]) if result.reasons else "No strong reason",
-            "RSI": round(float(result.indicators.get("RSI", 50)), 1),
+            "RSI": round(rsi_value, 1),
             "CCI": round(float(result.indicators.get("CCI", 0)), 1),
             "MFI": round(float(result.indicators.get("MFI", 50)), 1),
             "KalmanQuality": round(kalman_quality, 1),
@@ -702,6 +1073,53 @@ class ActionableReportRunner:
             "RunAt": run_at_text or PKDateUtilities.currentDateTime().strftime("%Y-%m-%d %H:%M:%S"),
             "Week52High": round(float(data["high"].tail(252).max()), 2) if "high" in data.columns and len(data) >= 10 else 0.0,
         }
+        try:
+            selector_inputs = self._buy_now_selector_inputs(
+                raw_action=raw_action,
+                adjusted_action=action,
+                signal=result.signal.name.replace("_", " "),
+                confidence=float(result.confidence),
+                close=close,
+                entry=entry,
+                stop_loss=stop_loss,
+                current_volume=volume,
+                avg_volume_20=avg_volume_20,
+                avg_trade_value_20=avg_trade_value_20,
+                volume_ratio=volume_ratio,
+                entry_gap_pct=entry_gap_pct,
+                trigger_ready=trigger_ready,
+                change_pct=change_pct,
+                rsi=rsi_value,
+                kalman_quality=kalman_quality,
+                kalman_trend=kalman_trend,
+                vol_regime=vol_regime,
+                noise_spike=(
+                    bool(sq.get("noise_spike"))
+                    if "noise_spike" in sq else None
+                ),
+                reason_text=selector_reason_text,
+                momentum_score=momentum_score,
+                momentum_setup=momentum_setup,
+                momentum_reason=momentum_reason,
+            )
+            self._record_buy_now_shadow(
+                symbol=symbol,
+                source="actionable_report",
+                event_timestamp=row["RunAt"],
+                selector_inputs=selector_inputs,
+                thresholds=self._buy_now_shadow_thresholds(),
+                final_action=now_action,
+                base_action=base_now_action,
+                prefilter_inputs=(
+                    prefilter_inputs
+                    if prefilter_inputs is not None
+                    else self._buy_now_prefilter_inputs(data)
+                ),
+                evaluation_mode="computed",
+            )
+        except Exception:
+            pass
+        return row
 
     def _score_momentum_setup(
         self,
@@ -1003,6 +1421,17 @@ class ActionableReportRunner:
             return float(value)
         except Exception:
             return 0.0
+
+    @staticmethod
+    def _optional_float(value) -> Optional[float]:
+        """Preserve missing telemetry values instead of manufacturing zero."""
+        try:
+            if value in [None, "", "None"]:
+                return None
+            number = float(value)
+            return number if number == number else None
+        except Exception:
+            return None
 
     def _first_positive(self, *values: float) -> float:
         """Return the first positive numeric candidate, else 0."""
