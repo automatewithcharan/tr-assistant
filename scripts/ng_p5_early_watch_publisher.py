@@ -29,6 +29,15 @@ from pkscreener.classes.NGPublisherHealth import (  # noqa: E402
 from pkscreener.classes.NGTradedValueShadowExperiment import (  # noqa: E402
     NGTradedValueShadowRecorder,
 )
+from pkscreener.classes.P5RejectionObservability import (  # noqa: E402
+    P5RejectionObserver,
+)
+
+
+def _env_truthy(name: str) -> bool:
+    return str(os.environ.get(name, "") or "").strip().lower() in {
+        "1", "true", "yes", "y", "on",
+    }
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -134,6 +143,11 @@ def main(argv: list[str] | None = None) -> int:
         max_attempts=args.max_attempts,
         retry_backoff_seconds=args.retry_backoff_seconds,
         shadow_experiment_recorder=shadow_recorder,
+        p5_rejection_observer=(
+            P5RejectionObserver(args.state_dir.parent)
+            if _env_truthy("NG_P5_ENABLE_REJECTION_OBSERVABILITY")
+            else None
+        ),
     )
     stopping = False
 

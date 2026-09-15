@@ -30,9 +30,13 @@ from PKDevTools.classes.log import default_logger
 
 from pkscreener.classes.ActionableReport import ActionableReportRunner
 try:
-    from pkscreener.classes.BuyNowRejectionObservability import BuyNowRejectionObserver
+    from pkscreener.classes.BuyNowRejectionObservability import (
+        BuyNowRejectionObserver,
+        enabled_from_environment as buy_now_observability_enabled,
+    )
 except Exception:  # Shadow observability must never prevent scanner startup.
     BuyNowRejectionObserver = None
+    buy_now_observability_enabled = None
 try:
     from pkscreener.classes.AlertTimingObservability import (
         AlertTimingObserver,
@@ -6671,10 +6675,8 @@ class SignalMonitorRunner:
         self._buy_now_rejection_observer = None
         if (
             BuyNowRejectionObserver is not None
-            and self._env_truthy(
-                "SIGNALMONITOR_ENABLE_BUY_NOW_REJECTION_OBSERVABILITY",
-                "1",
-            )
+            and buy_now_observability_enabled is not None
+            and buy_now_observability_enabled()
         ):
             try:
                 self._buy_now_rejection_observer = BuyNowRejectionObserver(

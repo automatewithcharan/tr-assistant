@@ -6,6 +6,7 @@ signal engine to produce a practical BUY / SELL / HOLD report with simple
 entry, stop-loss, and target levels.
 """
 
+import copy
 import hashlib
 import os
 import threading
@@ -547,10 +548,7 @@ class ActionableReportRunner:
         if observer is None:
             return
         try:
-            detached = {
-                key: dict(value) if isinstance(value, Mapping) else value
-                for key, value in snapshot.items()
-            }
+            detached = copy.deepcopy(snapshot)
             observer.record(**detached)
         except Exception as exc:
             default_logger().warning(

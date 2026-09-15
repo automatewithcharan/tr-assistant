@@ -8,6 +8,7 @@ publisher-owned directory.
 
 from __future__ import annotations
 
+import copy
 import csv
 import hashlib
 import json
@@ -421,6 +422,7 @@ class NGP5EarlyWatchPublisher:
         coverage_status_path: Optional[Path | str] = None,
         coverage_history_path: Optional[Path | str] = None,
         shadow_experiment_recorder: Optional[Any] = None,
+        p5_rejection_observer: Optional[Any] = None,
     ) -> None:
         self.source_dir = Path(source_dir)
         self.state_dir = Path(state_dir)
@@ -432,6 +434,8 @@ class NGP5EarlyWatchPublisher:
         # Experiment 4 is an observational sink only.  Its return value is never
         # consulted by qualification, queuing, delivery, or deduplication.
         self.shadow_experiment_recorder = shadow_experiment_recorder
+        # This side channel cannot participate in policy, state, or delivery.
+        self.p5_rejection_observer = p5_rejection_observer
         self.coverage_status_path = (
             Path(coverage_status_path)
             if coverage_status_path is not None
@@ -1219,6 +1223,22 @@ class NGP5EarlyWatchPublisher:
                     self._state_dirty = True
                 continue
             evaluation = evaluate_p5(row, opening)
+            if self.p5_rejection_observer is not None:
+                try:
+                    self.p5_rejection_observer.record(
+                        evaluation_inputs=copy.deepcopy(evaluation.inputs),
+                        qualification_result=bool(evaluation.qualifies),
+                        qualification_reason=str(evaluation.reason),
+                        source_record={
+                            "path": str(path.resolve()),
+                            "byte_offset_start": start,
+                            "byte_offset_end": end,
+                            "row_sha256": source_row_id(raw),
+                        },
+                    )
+                except Exception:
+                    # A telemetry failure must not alter frozen P5 behavior.
+                    pass
             if self.shadow_experiment_recorder is not None:
                 try:
                     self.shadow_experiment_recorder.observe_p5(

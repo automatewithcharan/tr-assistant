@@ -9,8 +9,10 @@ from pandas.testing import assert_frame_equal
 
 from pkscreener.classes.ActionableReport import ActionableReportRunner
 from pkscreener.classes.BuyNowRejectionObservability import (
+    ENV_FLAG,
     BuyNowRejectionObserver,
     build_selector_event,
+    enabled_from_environment,
     load_events,
     summarize_by_date_symbol,
 )
@@ -26,6 +28,12 @@ class _SignalResult:
     confidence = 30.0
     reasons = ["bullish alignment", "above average volume"]
     indicators = {"RSI": 55.0, "CCI": 80.0, "MFI": 60.0}
+
+
+def test_buy_now_observability_requires_explicit_environment_opt_in():
+    assert enabled_from_environment({}) is False
+    assert enabled_from_environment({ENV_FLAG: "0"}) is False
+    assert enabled_from_environment({ENV_FLAG: "1"}) is True
 
 
 class _Signals:
@@ -138,6 +146,30 @@ def test_observer_cannot_mutate_candidate_state_or_selector_inputs():
     mutated = _analyze(_runner(_CaptureObserver(mutate=True)))
     assert mutated == baseline
     assert mutated["ConfidencePct"] == 30.0
+
+
+def test_observer_receives_a_deeply_detached_snapshot():
+    capture = _CaptureObserver()
+    runner = _runner(capture)
+    snapshot = {
+        "symbol": "AAA",
+        "source": "actionable_report",
+        "event_timestamp": datetime(2026, 9, 14, 10, 0, tzinfo=IST),
+        "selector_inputs": {"nested": {"value": 1}},
+        "thresholds": {"nested": {"value": 2}},
+        "final_action": "Watch for Buy",
+    }
+
+    class _NestedMutator:
+        def record(self, **event):
+            event["selector_inputs"]["nested"]["value"] = 999
+            event["thresholds"]["nested"]["value"] = 999
+
+    runner._buy_now_rejection_observer = _NestedMutator()
+    runner._record_buy_now_shadow(**snapshot)
+
+    assert snapshot["selector_inputs"]["nested"]["value"] == 1
+    assert snapshot["thresholds"]["nested"]["value"] == 2
 
 
 def test_observability_does_not_affect_report_ranking():

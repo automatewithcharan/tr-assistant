@@ -27,6 +27,15 @@ SCHEMA_VERSION = 1
 SELECTOR_BUILD = "actionable-report-buy-now-v1"
 DECISIONS = frozenset({"QUALIFIED", "REJECTED", "NOT_EVALUABLE"})
 GATE_STATUSES = frozenset({"pass", "fail", "unknown"})
+ENV_FLAG = "SIGNALMONITOR_ENABLE_BUY_NOW_REJECTION_OBSERVABILITY"
+
+
+def enabled_from_environment(environ: Optional[Mapping[str, str]] = None) -> bool:
+    """Require an explicit truthy flag; absence is always disabled."""
+    source = os.environ if environ is None else environ
+    return str(source.get(ENV_FLAG, "") or "").strip().lower() in {
+        "1", "true", "yes", "y", "on",
+    }
 
 
 def _finite(value: Any) -> Optional[float]:

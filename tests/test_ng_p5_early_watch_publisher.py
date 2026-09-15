@@ -26,7 +26,16 @@ from pkscreener.classes.NGP5EarlyWatchPublisher import (
     evaluate_p5,
     validate_webhook_url,
 )
-from scripts.ng_p5_early_watch_publisher import _parser, main as cli_main
+from pkscreener.classes.P5RejectionObservability import (
+    P5RejectionObserver,
+    build_p5_rejection_event,
+    summarize_by_date_symbol,
+)
+from scripts.ng_p5_early_watch_publisher import (
+    _env_truthy,
+    _parser,
+    main as cli_main,
+)
 
 
 HEADER = [
@@ -1155,3 +1164,87 @@ def test_delivered_persisted_before_queue_removal_does_not_retry(tmp_path, monke
     )
     assert restarted.deliver_pending("2026-09-09") == 0
     assert no_duplicate.messages == []
+
+
+def test_p5_rejection_observability_is_explicit_opt_in(monkeypatch):
+    monkeypatch.delenv("NG_P5_ENABLE_REJECTION_OBSERVABILITY", raising=False)
+    assert _env_truthy("NG_P5_ENABLE_REJECTION_OBSERVABILITY") is False
+    monkeypatch.setenv("NG_P5_ENABLE_REJECTION_OBSERVABILITY", "1")
+    assert _env_truthy("NG_P5_ENABLE_REJECTION_OBSERVABILITY") is True
+
+
+def test_p5_observability_reports_all_frozen_gates_and_unknown_values():
+    rejected = evaluate_p5(
+        row(DayChangePct="4", TradedValue="1000", RankImprovement="1"), set()
+    )
+    event = build_p5_rejection_event(
+        evaluation_inputs=rejected.inputs,
+        qualification_result=rejected.qualifies,
+        qualification_reason=rejected.reason,
+    )
+    assert event["final_decision"] == "REJECTED"
+    assert event["primary_rejection_reason"] == rejected.reason
+    assert event["gates"]["day_change_band"]["status"] == "fail"
+    assert event["gates"]["minimum_turnover"]["status"] == "fail"
+    assert event["gates"]["minimum_rank_improvement"]["status"] == "fail"
+
+    missing = evaluate_p5(row(TradedValue=""), set())
+    unknown = build_p5_rejection_event(
+        evaluation_inputs=missing.inputs,
+        qualification_result=missing.qualifies,
+        qualification_reason=missing.reason,
+    )
+    assert unknown["final_decision"] == "NOT_EVALUABLE"
+    assert unknown["gates"]["minimum_turnover"]["status"] == "unknown"
+    assert unknown["gates"]["minimum_turnover"]["observed_value"] is None
+
+
+@pytest.mark.parametrize("observer_mode", ["mutate", "raise"])
+def test_p5_observer_cannot_change_qualification_state_or_delivery(
+    tmp_path, observer_mode
+):
+    source = tmp_path / observer_mode / "source" / "live_features_2026-09-09.csv"
+    candidate = row(Symbol="UNCHANGED")
+    write_rows(source, [candidate])
+
+    class _HostileObserver:
+        def record(self, **snapshot):
+            snapshot["evaluation_inputs"]["day_change_pct"] = 999
+            if observer_mode == "raise":
+                raise OSError("telemetry disk unavailable")
+
+    publisher = NGP5EarlyWatchPublisher(
+        source.parent,
+        tmp_path / observer_mode / "publisher",
+        p5_rejection_observer=_HostileObserver(),
+    )
+    assert publisher.process_feature_file(source) == 1
+    observed = journal_rows(tmp_path / observer_mode / "publisher")[0]["event"]
+    assert observed["qualification_result"] is True
+    assert observed["policy_inputs"]["day_change_pct"] == 1.0
+    assert publisher.transport is None
+
+
+def test_p5_repeated_evaluations_are_retained_and_first_pass_is_reconstructable(
+    tmp_path,
+):
+    observer = P5RejectionObserver(tmp_path)
+    evaluations = [
+        evaluate_p5(row(When="2026-09-14 10:00:00", TradedValue="1000"), set()),
+        evaluate_p5(row(When="2026-09-14 10:05:00"), set()),
+    ]
+    for evaluation in evaluations:
+        assert observer.record(
+            evaluation_inputs=evaluation.inputs,
+            qualification_result=evaluation.qualifies,
+            qualification_reason=evaluation.reason,
+        )
+
+    path = tmp_path / "p5_rejection_observability" / "2026-09-14.jsonl"
+    events = [json.loads(line) for line in path.read_text().splitlines()]
+    assert len(events) == 2
+    assert len({event["event_id"] for event in events}) == 2
+    assert events[0]["candidate_id"] == events[1]["candidate_id"]
+    summary = summarize_by_date_symbol(events)[0]
+    assert summary["evaluation_count"] == 2
+    assert summary["first_qualified_at"] == "2026-09-14T10:05:00+05:30"
