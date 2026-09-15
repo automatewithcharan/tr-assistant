@@ -396,6 +396,7 @@ class AssistantLiveSupervisor:
 
     LIVE_RESTART_PREFIXES = ("pkscreener/",)
     LIVE_RESTART_FILES = {"pkscreener.ini", "requirements.txt"}
+    CODE_UPDATE_RESTART_ENV = "ASSISTANT_ENABLE_CODE_UPDATE_RESTART"
 
     def __init__(self, config_manager, session_id: int) -> None:
         self.config_manager = config_manager
@@ -411,11 +412,22 @@ class AssistantLiveSupervisor:
         self.stop_requested = False
         self._code_commit: Optional[str] = self._read_git_head()
         self._code_check_counter: int = 0
+        self._code_update_restart_enabled = _env_truthy(
+            self.CODE_UPDATE_RESTART_ENV,
+            "0",
+        )
         self._signal_handlers_installed = False
 
     def run(self) -> None:
         self._install_signal_handlers()
         self.store.mark_session_running(self.session_id, os.getpid())
+        self.store.add_event(
+            self.session_id,
+            "info",
+            "supervisor",
+            "Code-update auto-restart: "
+            + ("enabled" if self._code_update_restart_enabled else "disabled"),
+        )
         try:
             if self.settings.prewarm:
                 self._run_prewarm()
@@ -737,10 +749,11 @@ class AssistantLiveSupervisor:
         )
 
     def _check_for_code_update(self) -> None:
-        """Restart children only when a commit changes live worker code.
+        """Observe HEAD changes and optionally restart for live worker code.
 
         Research scripts, tests, documentation, and dashboard-only changes do
         not justify interrupting the shared Kite stream during market hours.
+        Live worker changes restart the process only when explicitly enabled.
         """
         current = self._read_git_head()
         if current and current != self._code_commit:
@@ -759,6 +772,18 @@ class AssistantLiveSupervisor:
                     (
                         f"Non-live code updated ({prev_short} → {current[:7]}); "
                         "ticker and workers kept running."
+                    ),
+                )
+                return
+            if not self._code_update_restart_enabled:
+                self._code_commit = current
+                self.store.add_event(
+                    self.session_id,
+                    "info",
+                    "supervisor",
+                    (
+                        f"Live code updated ({prev_short} → {current[:7]}); "
+                        "code-update auto-restart disabled; workers kept running."
                     ),
                 )
                 return
