@@ -418,6 +418,14 @@ enableDirectMomentumResearchAlerts = input.bool(false, "Send F0 direct-momentum 
 // It reuses EC0's 1% reference stop / +1%/+2%/+3% ladder and the existing
 // D_STOP_BUFFER_ATR for a structural bar-low stop.
 
+// BEGIN RESEARCH GATE ABLATION INPUTS — additive measurement only.
+grpGateAblation = "14. Lane C Gate Ablation Shadow"
+enableGateAblationStudy = input.bool(false, "Track S0-S5 Lane C gate ablations", group=grpGateAblation,
+     tooltip="Research only and OFF by default. Records at most one coherent Lane-C-style confirmed momentum event per symbol/session. It never changes A/B/C/D/E or F0 qualification, position state, sizing, stops, targets, or actionable alerts.")
+enableGateAblationTelemetry = input.bool(false, "Send S0-S5 research telemetry alerts", group=grpGateAblation,
+     tooltip="Research only and OFF by default. Enable together with the study and collect NG RESEARCH GA ENTRY/RESULT messages using a dedicated TradingView alert/webhook. Do not use this stream for actions.")
+// END RESEARCH GATE ABLATION INPUTS.
+
 // ─────────────────────────────────────────────────────────────────────────────
 // FROZEN v0.2 hypothesis constants. Do not tune from screenshots.
 // ─────────────────────────────────────────────────────────────────────────────
@@ -516,6 +524,21 @@ fmtTimeIST(int ts) =>
 
 actionMeta(string eventType, int ts) =>
     " | Build " + BUILD_ID + " | EventType " + eventType + " | Symbol " + syminfo.ticker + " | BarTime " + fmtTimeIST(ts)
+
+// BEGIN RESEARCH GATE ABLATION HELPERS — never referenced by live logic.
+gaAddFailure(string failures, bool gatePassed, string gateName) =>
+    gatePassed ? failures : failures + (str.length(failures) == 0 ? "" : ",") + gateName
+
+gaYN(bool value) =>
+    value ? "Y" : "N"
+
+gaOrder(int targetBar, int stopBar) =>
+    na(targetBar) and na(stopBar) ? "NEITHER" :
+     na(stopBar) ? "TARGET_FIRST" :
+     na(targetBar) ? "STOP_FIRST" :
+     targetBar < stopBar ? "TARGET_FIRST" :
+     stopBar < targetBar ? "STOP_FIRST" : "AMBIGUOUS_SAME_BAR"
+// END RESEARCH GATE ABLATION HELPERS.
 
 // Final-quantity economics. These helpers are display/research only except that
 // the ticket formatter reports the already-determined executable quantity.
@@ -1608,6 +1631,11 @@ varip int    cTerminalBar      = na
 varip string cLastExitReason   = ""
 varip string cLastRejectReason = "—"
 varip int    cLastRejectBar    = na
+// BEGIN COVERAGE OBSERVABILITY C DECLARATIONS — display/research only.
+varip string cConfirmedDiag    = "C: no confirmed probe yet"
+varip int    cConfirmedDiagTime = na
+varip float  cLastConfirmedVolRatio = na
+// END COVERAGE OBSERVABILITY C DECLARATIONS.
 varip bool   cLiveEngineStarted = false
 
 // Lane-C0 coverage study — FORWARD MEASUREMENT ONLY.
@@ -1669,6 +1697,11 @@ if newDayReset or not isFiveMinute
     cLastExitReason  := ""
     cLastRejectReason := "—"
     cLastRejectBar    := na
+    // BEGIN COVERAGE OBSERVABILITY C RESET — display/research only.
+    cConfirmedDiag    := "C: no confirmed probe yet"
+    cConfirmedDiagTime := na
+    cLastConfirmedVolRatio := na
+// END COVERAGE OBSERVABILITY C RESET.
     c0StudyActive         := false
     c0StudyDone           := false
     c0StudyEntryBar       := na
@@ -1741,6 +1774,11 @@ cMomentumQuality = barstate.isconfirmed and entryWindowOpen and contextGood and
 // Remember the reason on the actual momentum-attempt bar rather than later
 // reporting only the current candle's blocker.
 cAttemptBar = barstate.isconfirmed and entryWindowOpen and contextGood and close > open and not na(priorHigh) and close > priorHigh
+// BEGIN COVERAGE OBSERVABILITY C CONFIRMED VOLUME — display/research only.
+if barstate.isrealtime and barstate.isconfirmed
+    cLastConfirmedVolRatio := completedBarVolRatio
+// END COVERAGE OBSERVABILITY C CONFIRMED VOLUME.
+
 if cState == 0 and cAttemptBar
     cLastRejectReason := na(atr) or atr <= 0 ? "ATR unavailable" :
          barRange < atr * C_MIN_RANGE_ATR ? "Range < 1.0 ATR" :
@@ -1751,6 +1789,26 @@ if cState == 0 and cAttemptBar
          na(cEmaExtensionAtr) or cEmaExtensionAtr > C_MAX_CLOSE_ABOVE_EMA_ATR ? "Too extended from EMA" :
          "Momentum bar passed"
     cLastRejectBar := bar_index
+
+// BEGIN COVERAGE OBSERVABILITY C PROBE — display/research only.
+// Retain the first failed Lane-C gate from the last
+// confirmed fast-mover probe. Because this updates only on a confirmed bar, a
+// forming next candle cannot replace the evidence from the momentum candle.
+bool cConfirmedProbeBar = barstate.isrealtime and barstate.isconfirmed and entryWindowOpen and fastMoverCore
+if cState == 0 and cConfirmedProbeBar
+    cConfirmedDiag := not contextGood ? "C BLOCKED: CONTEXT" :
+         close <= open ? "C BLOCKED: NEED BULL CLOSE" :
+         na(priorHigh) or close <= priorHigh ? "C BLOCKED: NO 8-BAR BO" :
+         na(atr) or atr <= 0 ? "C BLOCKED: ATR UNAVAILABLE" :
+         barRange < atr * C_MIN_RANGE_ATR ? "C BLOCKED: RANGE " + str.tostring(barRange / atr, "#.##") + " ATR" :
+         bodyFraction < C_MIN_BODY_FRACTION ? "C BLOCKED: BODY " + str.tostring(bodyFraction * 100.0, "#.#") + "%" :
+         closePosition < C_MIN_CLOSE_POSITION ? "C BLOCKED: CLOSE " + str.tostring(closePosition * 100.0, "#.#") + "%" :
+         na(completedBarVolRatio) or completedBarVolRatio < C_MIN_VOLUME_RATIO ? "C BLOCKED: CONF VOL " + (na(completedBarVolRatio) ? "—" : str.tostring(completedBarVolRatio, "#.##") + "x") :
+         na(rsSpreadPct) or rsSpreadPct < C_MIN_RS_PCT ? "C BLOCKED: RS " + (na(rsSpreadPct) ? "—" : str.tostring(rsSpreadPct, "#.##") + "%") :
+         na(cEmaExtensionAtr) or cEmaExtensionAtr > C_MAX_CLOSE_ABOVE_EMA_ATR ? "C BLOCKED: EXT " + (na(cEmaExtensionAtr) ? "—" : str.tostring(cEmaExtensionAtr, "#.##") + " ATR") :
+         "C MOMENTUM PASSED: ARM CHECK"
+    cConfirmedDiagTime := time_close
+// END COVERAGE OBSERVABILITY C PROBE.
 
 if cState == 0 and (na(freshSetupAfterBar) or bar_index > freshSetupAfterBar) and autoState != 3 and bState != 3 and dState != 3 and eState != 3 and cMomentumQuality
     cEntryCandidate = high + syminfo.mintick
@@ -1772,6 +1830,10 @@ if cState == 0 and (na(freshSetupAfterBar) or bar_index > freshSetupAfterBar) an
     if cRiskOk and cRoomOk
         cLastRejectReason := "QUALIFIED / ARMED"
         cLastRejectBar    := bar_index
+        // BEGIN COVERAGE OBSERVABILITY C ARMED — display/research only.
+        cConfirmedDiag    := "C ARMED @ " + str.tostring(cEntryCandidate, format.mintick) + " / WAIT 2ND CLOSE"
+        cConfirmedDiagTime := time_close
+        // END COVERAGE OBSERVABILITY C ARMED.
 
         // C0 research launch: same EXISTING qualification, different timing only.
         // Forward-only so the 1/2/3% vs stop event order is observed tick-by-tick,
@@ -1831,6 +1893,10 @@ if cState == 0 and (na(freshSetupAfterBar) or bar_index > freshSetupAfterBar) an
     else
         cLastRejectReason := not cRiskOk ? "Risk > 0.90 ATR" : "Not enough room to resistance"
         cLastRejectBar    := bar_index
+        // BEGIN COVERAGE OBSERVABILITY C RISK — display/research only.
+        cConfirmedDiag    := not cRiskOk ? "C BLOCKED: RISK " + (na(atr) or atr <= 0 ? "—" : str.tostring(cRiskCandidate / atr, "#.##") + " ATR") : "C BLOCKED: ROOM <1R"
+        cConfirmedDiagTime := time_close
+        // END COVERAGE OBSERVABILITY C RISK.
 
 // Optional confirmed Fast-Mover coverage telemetry. Research only; OFF by
 // default. This deliberately probes bars that fail before cAttemptBar too, so
@@ -3541,7 +3607,14 @@ plot(enableEarlyConfirmedShadowStudy and (ec0StudyActive or ec0StudyDone) ? ec0S
 // confirmedBullishActionBar, priorHigh, D_STOP_BUFFER_ATR and EC0's percent ladder.
 // F0 never modifies any live lane or actionable alert.
 // ─────────────────────────────────────────────────────────────────────────────
-varip bool   f0StudyStartedToday    = false
+// F0 samples distinct sequential episodes. It reuses the existing fast-mover
+// episode count/rearm controls; no new screenshot-derived threshold is added.
+varip int    f0StudyCountToday      = 0
+varip bool   f0EpisodeArmed         = true
+varip int    f0EpisodeOffBars       = 0
+varip int    f0LastSampleTime       = na
+varip string f0LastDecision         = "F0: no confirmed decision yet"
+varip int    f0LastDecisionTime     = na
 varip bool   f0StudyActive          = false
 varip bool   f0StudyDone            = false
 varip int    f0StudyEntryBar        = na
@@ -3590,7 +3663,12 @@ varip string f0StudyLastSummary     = "—"
 varip int    f0StudyResultEventBar  = na
 
 if newDayReset or not isFiveMinute
-    f0StudyStartedToday   := false
+    f0StudyCountToday     := 0
+    f0EpisodeArmed        := true
+    f0EpisodeOffBars      := 0
+    f0LastSampleTime      := na
+    f0LastDecision        := "F0: no confirmed decision yet"
+    f0LastDecisionTime    := na
     f0StudyActive         := false
     f0StudyDone           := false
     f0StudyEntryBar       := na
@@ -3641,11 +3719,46 @@ if newDayReset or not isFiveMinute
 bool f0FreshBreakout = not na(priorHigh) and close > priorHigh
 bool f0NoLiveTrade = autoState != 3 and bState != 3 and cState != 3 and dState != 3 and eState != 3
 bool f0FreshAfterTrade = na(freshSetupAfterBar) or bar_index > freshSetupAfterBar
-bool f0LaunchNow = enableDirectMomentumShadowStudy and
-     not f0StudyStartedToday and not f0StudyActive and not f0StudyDone and
-     barstate.isrealtime and confirmedBullishActionBar and entryWindowOpen and
+bool f0SignalQualifies = barstate.isrealtime and confirmedBullishActionBar and entryWindowOpen and
      ec0CoreNoDayMove and f0FreshBreakout and f0NoLiveTrade and f0FreshAfterTrade and
      not na(atr) and atr > 0
+
+float f0EntryCandidateNow      = close
+float f0RefStopCandidateNow    = f0EntryCandidateNow * (1.0 - EC0_STUDY_REF_STOP_PCT / 100.0)
+float f0StructStopCandidateNow = not na(atr) ? low - math.max(syminfo.mintick, atr * D_STOP_BUFFER_ATR) : na
+float f0StructRiskCandidateNow = f0EntryCandidateNow - f0StructStopCandidateNow
+float f0QtyStructCandidateNow  = calcQty(f0EntryCandidateNow, f0StructStopCandidateNow)
+bool f0CandidateViable = f0EntryCandidateNow > 0 and f0RefStopCandidateNow > 0 and
+     f0StructRiskCandidateNow > 0 and f0QtyStructCandidateNow >= 1
+bool f0LaunchNow = enableDirectMomentumShadowStudy and not f0StudyActive and
+     f0StudyCountToday < FAST_MAX_WATCHES_DAY and f0EpisodeArmed and
+     f0SignalQualifies and f0CandidateViable
+
+// A completed episode must be followed by the already-established number of
+// non-qualifying fast-mover bars before F0 can sample again. Off-bars observed
+// while the prior sample is active do not count toward the next episode.
+if barstate.isrealtime and barstate.isconfirmed and not f0StudyActive and f0StudyCountToday > 0 and not f0EpisodeArmed
+    if f0SignalQualifies
+        f0EpisodeOffBars := 0
+    else
+        f0EpisodeOffBars += 1
+        if f0EpisodeOffBars >= FAST_REARM_BARS
+            f0EpisodeArmed := true
+
+if barstate.isrealtime and barstate.isconfirmed and entryWindowOpen and not f0LaunchNow
+    f0LastDecision := not enableDirectMomentumShadowStudy ? "F0 BLOCKED: STUDY OFF" :
+         f0StudyActive ? "F0 BLOCKED: TRACKING " + fmtTimeIST(f0StudyEntryTime) :
+         f0StudyCountToday >= FAST_MAX_WATCHES_DAY ? "F0 BLOCKED: MAX " + str.tostring(FAST_MAX_WATCHES_DAY) + " / LAST " + fmtTimeIST(f0LastSampleTime) :
+         not f0EpisodeArmed ? "F0 BLOCKED: REARM " + str.tostring(f0EpisodeOffBars) + "/" + str.tostring(FAST_REARM_BARS) + " / LAST " + fmtTimeIST(f0LastSampleTime) :
+         not confirmedBullishActionBar ? "F0 BLOCKED: NEED BULL CONF" :
+         not ec0CoreNoDayMove ? "F0 BLOCKED: EC0 CONTEXT" :
+         not f0FreshBreakout ? "F0 BLOCKED: NO 8-BAR BO" :
+         not f0NoLiveTrade ? "F0 BLOCKED: LIVE TRADE" :
+         not f0FreshAfterTrade ? "F0 BLOCKED: BEFORE FRESH BAR" :
+         na(atr) or atr <= 0 ? "F0 BLOCKED: ATR UNAVAILABLE" :
+         f0StructRiskCandidateNow <= 0 ? "F0 BLOCKED: STRUCT RISK" :
+         f0QtyStructCandidateNow < 1 ? "F0 BLOCKED: QTY 0" : "F0 BLOCKED: NOT VIABLE"
+    f0LastDecisionTime := time_close
 
 if f0LaunchNow
     float f0EntryCandidate      = close
@@ -3656,7 +3769,12 @@ if f0LaunchNow
     float f0QtyStructCandidate  = calcQty(f0EntryCandidate, f0StructStopCandidate)
 
     if f0EntryCandidate > 0 and f0RefStopCandidate > 0 and f0StructRiskCandidate > 0 and f0QtyStructCandidate >= 1
-        f0StudyStartedToday   := true
+        f0StudyCountToday    += 1
+        f0EpisodeArmed        := false
+        f0EpisodeOffBars      := 0
+        f0LastSampleTime      := time_close
+        f0LastDecision        := "F0 DIRECT SHADOW @ " + str.tostring(f0EntryCandidate, format.mintick) + " / EP " + str.tostring(f0StudyCountToday)
+        f0LastDecisionTime    := time_close
         f0StudyActive         := true
         f0StudyDone           := false
         f0StudyEntryBar       := bar_index
@@ -3709,6 +3827,7 @@ if f0LaunchNow
 
         if enablePineAlerts and enableDirectMomentumResearchAlerts
             alert("NG RESEARCH F0 DIRECT ENTRY | " + syminfo.ticker +
+                  " | Episode " + str.tostring(f0StudyCountToday) + "/" + str.tostring(FAST_MAX_WATCHES_DAY) +
                   " | Entry " + str.tostring(f0StudyEntry, format.mintick) +
                   " | StructSL " + str.tostring(f0StudyStructStop, format.mintick) +
                   " | StructQty " + str.tostring(f0StudyQtyStruct, "#") +
@@ -3798,6 +3917,7 @@ if enableDirectMomentumShadowStudy and f0StudyActive and barstate.isrealtime
         f0StudyResultEventBar := bar_index
         f0StudyDone   := true
         f0StudyActive := false
+        f0EpisodeOffBars := 0
 
         if enablePineAlerts and enableDirectMomentumResearchAlerts
             alert("NG RESEARCH F0 DIRECT RESULT | " + syminfo.ticker +
@@ -3823,6 +3943,240 @@ if enableDirectMomentumShadowStudy and f0StudyActive and barstate.isrealtime
 // F0 results are available through the optional dedicated research alerts and
 // compact dashboard status. No new plot/plotshape calls are added because the
 // existing script already operates close to Pine's plot-count ceiling.
+
+// BEGIN RESEARCH GATE ABLATION LOGIC — additive, forward-only, no action path.
+//
+// Common base = every Lane-C momentum-bar gate except the three gates under
+// ablation (8-bar breakout, close position, current completed-bar volume).
+// S0 is the current full momentum-bar predicate. S1-S4 remove only the named
+// gate(s). S5 is a diagnostic label inside S3, never an independent eligibility
+// rule. One first qualifying event per symbol/session is retained for this
+// separate ablation study, preventing consecutive candles from being treated as
+// independent opportunities while its outcomes run to EOD.
+bool gaGateWindow    = entryWindowOpen
+bool gaGateContext   = contextGood
+bool gaGateBull      = close > open
+bool gaGateBreakout  = not na(priorHigh) and close > priorHigh
+bool gaGateAtr       = not na(atr) and atr > 0
+bool gaGateRange     = gaGateAtr and barRange >= atr * C_MIN_RANGE_ATR
+bool gaGateBody      = bodyFraction >= C_MIN_BODY_FRACTION
+bool gaGateClosePos  = closePosition >= C_MIN_CLOSE_POSITION
+bool gaGateVolume    = not na(completedBarVolRatio) and completedBarVolRatio >= C_MIN_VOLUME_RATIO
+bool gaGateRs        = not na(rsSpreadPct) and rsSpreadPct >= C_MIN_RS_PCT
+bool gaGateExtension = not na(cEmaExtensionAtr) and cEmaExtensionAtr <= C_MAX_CLOSE_ABOVE_EMA_ATR
+bool gaCommonBase    = barstate.isconfirmed and gaGateWindow and gaGateContext and gaGateBull and
+     gaGateAtr and gaGateRange and gaGateBody and gaGateRs and gaGateExtension
+bool gaS0 = gaCommonBase and gaGateBreakout and gaGateClosePos and gaGateVolume
+bool gaS1 = gaCommonBase and gaGateClosePos and gaGateVolume
+bool gaS2 = gaCommonBase and gaGateBreakout and gaGateVolume
+bool gaS3 = gaCommonBase and gaGateBreakout and gaGateClosePos
+bool gaS4 = gaCommonBase and gaGateVolume
+bool gaS5 = gaCommonBase and gaGateBreakout and gaGateClosePos and not gaGateVolume
+bool gaAnyVariant = gaS0 or gaS1 or gaS2 or gaS3 or gaS4
+// Include the existing Lane-C breakout-attempt and F0/EC0 pre-breakout
+// populations even when another Lane-C gate fails. This is what preserves the
+// complete simultaneous failure vector instead of observing winners only.
+bool gaCoherentCandidate = gaAnyVariant or cAttemptBar or
+     (barstate.isconfirmed and entryWindowOpen and confirmedBullishActionBar and ec0CoreNoDayMove)
+
+varip bool   gaStartedToday = false
+varip bool   gaActive       = false
+varip bool   gaDone         = false
+varip int    gaEntryBar     = na
+varip int    gaEntryTime    = na
+varip string gaCandidateId  = "—"
+varip string gaVariants     = "—"
+varip float  gaEntry        = na
+varip float  gaHighest      = na
+varip float  gaLowest       = na
+varip int    gaMfeTime      = na
+varip int    gaMaeTime      = na
+varip int    gaP05Bar       = na
+varip int    gaP1Bar        = na
+varip int    gaP2Bar        = na
+varip int    gaP3Bar        = na
+varip int    gaN05Bar       = na
+varip int    gaN1Bar        = na
+varip int    gaN2Bar        = na
+varip float  gaReturn5m     = na
+varip float  gaReturn15m    = na
+varip float  gaReturn30m    = na
+varip float  gaReturnEod    = na
+varip int    gaResultBar    = na
+
+if newDayReset or not isFiveMinute or not enableGateAblationStudy
+    gaStartedToday := false
+    gaActive       := false
+    gaDone         := false
+    gaEntryBar     := na
+    gaEntryTime    := na
+    gaCandidateId  := "—"
+    gaVariants     := "—"
+    gaEntry        := na
+    gaHighest      := na
+    gaLowest       := na
+    gaMfeTime      := na
+    gaMaeTime      := na
+    gaP05Bar       := na
+    gaP1Bar        := na
+    gaP2Bar        := na
+    gaP3Bar        := na
+    gaN05Bar       := na
+    gaN1Bar        := na
+    gaN2Bar        := na
+    gaReturn5m     := na
+    gaReturn15m    := na
+    gaReturn30m    := na
+    gaReturnEod    := na
+    gaResultBar    := na
+
+bool gaLaunchNow = enableGateAblationStudy and not gaStartedToday and not gaActive and not gaDone and
+     barstate.isrealtime and gaCoherentCandidate
+
+if gaLaunchNow
+    gaStartedToday := true
+    gaActive       := true
+    gaDone         := false
+    gaEntryBar     := bar_index
+    gaEntryTime    := time_close
+    gaCandidateId  := syminfo.ticker + "-" + str.tostring(time_close)
+    gaVariants     := (gaS0 ? "S0," : "") + (gaS1 ? "S1," : "") + (gaS2 ? "S2," : "") +
+         (gaS3 ? "S3," : "") + (gaS4 ? "S4," : "") + (gaS5 ? "S5," : "")
+    gaVariants     := str.length(gaVariants) == 0 ? "NONE" : gaVariants
+    gaEntry        := close
+    gaHighest      := close
+    gaLowest       := close
+    gaMfeTime      := time_close
+    gaMaeTime      := time_close
+    gaP05Bar       := na
+    gaP1Bar        := na
+    gaP2Bar        := na
+    gaP3Bar        := na
+    gaN05Bar       := na
+    gaN1Bar        := na
+    gaN2Bar        := na
+    gaReturn5m     := na
+    gaReturn15m    := na
+    gaReturn30m    := na
+    gaReturnEod    := na
+    gaResultBar    := na
+
+    string gaAllFailures = ""
+    gaAllFailures := gaAddFailure(gaAllFailures, gaGateWindow, "WINDOW")
+    gaAllFailures := gaAddFailure(gaAllFailures, gaGateContext, "CONTEXT")
+    gaAllFailures := gaAddFailure(gaAllFailures, gaGateBull, "BULL")
+    gaAllFailures := gaAddFailure(gaAllFailures, gaGateBreakout, "BREAKOUT8")
+    gaAllFailures := gaAddFailure(gaAllFailures, gaGateAtr, "ATR")
+    gaAllFailures := gaAddFailure(gaAllFailures, gaGateRange, "RANGE")
+    gaAllFailures := gaAddFailure(gaAllFailures, gaGateBody, "BODY")
+    gaAllFailures := gaAddFailure(gaAllFailures, gaGateClosePos, "CLOSEPOS")
+    gaAllFailures := gaAddFailure(gaAllFailures, gaGateVolume, "VOLUME")
+    gaAllFailures := gaAddFailure(gaAllFailures, gaGateRs, "RS")
+    gaAllFailures := gaAddFailure(gaAllFailures, gaGateExtension, "EXTENSION")
+    gaAllFailures := str.length(gaAllFailures) == 0 ? "NONE" : gaAllFailures
+
+    // Mirrors the dashboard's first-match order; the complete vector above is
+    // retained separately so a displayed breakout/close failure cannot hide volume.
+    string gaFirstBlocker = cState != 0 ? (cState == 2 ? "C_STAGE_READY" : cState == 3 ? "C_STAGE_TRADE" : cState == 5 ? "C_STAGE_MISS" : "C_STAGE_EXIT") :
+         not gaGateContext ? "CONTEXT" :
+         not gaGateBreakout ? "NO_8BAR_BREAKOUT" :
+         not gaGateAtr or not gaGateRange ? "RANGE_LT_1ATR" :
+         not gaGateBody ? "BODY_LT_65" :
+         not gaGateClosePos ? "WEAK_CLOSE" :
+         not gaGateVolume ? "VOLUME_LT_2X" :
+         not gaGateRs ? "RS_LT_1" :
+         not gaGateExtension ? "TOO_EXTENDED" : "QUALIFYING"
+    float gaRangeAtr = gaGateAtr ? barRange / atr : na
+    float gaVwapDistAtr = gaGateAtr and not na(vwap) ? (close - vwap) / atr : na
+    float gaSessionHighDistancePct = not na(ef0SessionHigh) and ef0SessionHigh > 0 ?
+         (ef0SessionHigh - close) / ef0SessionHigh * 100.0 : na
+
+    if enablePineAlerts and enableGateAblationTelemetry
+        alert("NG RESEARCH GA ENTRY" +
+              " | DateTime " + str.format_time(time_close, "yyyy-MM-dd HH:mm", "Asia/Kolkata") +
+              " | Candidate " + gaCandidateId +
+              " | Symbol " + syminfo.ticker +
+              " | Variants " + gaVariants +
+              " | LaneCtx A" + str.tostring(autoState) + "/B" + str.tostring(bState) + "/C" + str.tostring(cState) + "/D" + str.tostring(dState) + "/E" + str.tostring(eState) +
+              " | Entry " + str.tostring(gaEntry, format.mintick) +
+              " | Day " + (na(stockDayPct) ? "NA" : str.tostring(stockDayPct, "#.##")) +
+              " | DayRS " + (na(dayRsPct) ? "NA" : str.tostring(dayRsPct, "#.##")) +
+              " | IntraRS " + (na(rsSpreadPct) ? "NA" : str.tostring(rsSpreadPct, "#.##")) +
+              " | ATR " + (na(atr) ? "NA" : str.tostring(atr, format.mintick)) +
+              " | EMAExtATR " + (na(cEmaExtensionAtr) ? "NA" : str.tostring(cEmaExtensionAtr, "#.###")) +
+              " | VWAPDistATR " + (na(gaVwapDistAtr) ? "NA" : str.tostring(gaVwapDistAtr, "#.###")) +
+              " | PriorHigh " + (na(priorHigh) ? "NA" : str.tostring(priorHigh, format.mintick)) +
+              " | RangeATR " + (na(gaRangeAtr) ? "NA" : str.tostring(gaRangeAtr, "#.###")) +
+              " | BodyFrac " + str.tostring(bodyFraction, "#.####") +
+              " | ClosePos " + str.tostring(closePosition, "#.####") +
+              " | VolRatio " + (na(completedBarVolRatio) ? "NA" : str.tostring(completedBarVolRatio, "#.###")) +
+              " | Liquidity " + gaYN(liquidityOk) +
+              " | SessionHigh " + (na(ef0SessionHigh) ? "NA" : str.tostring(ef0SessionHigh, format.mintick)) +
+              " | DistSessionHighPct " + (na(gaSessionHighDistancePct) ? "NA" : str.tostring(gaSessionHighDistancePct, "#.###")) +
+              " | Gates W/Ctx/Bull/BO/ATR/Rng/Body/Close/Vol/RS/Ext " +
+                   gaYN(gaGateWindow) + "/" + gaYN(gaGateContext) + "/" + gaYN(gaGateBull) + "/" + gaYN(gaGateBreakout) + "/" +
+                   gaYN(gaGateAtr) + "/" + gaYN(gaGateRange) + "/" + gaYN(gaGateBody) + "/" + gaYN(gaGateClosePos) + "/" +
+                   gaYN(gaGateVolume) + "/" + gaYN(gaGateRs) + "/" + gaYN(gaGateExtension) +
+              " | FirstBlocker " + gaFirstBlocker +
+              " | AllFailures " + gaAllFailures +
+              actionMeta("RESEARCH_GA_ENTRY", time),
+              alert.freq_once_per_bar_close)
+
+if enableGateAblationStudy and gaActive and barstate.isrealtime and barstate.isconfirmed and
+     not na(gaEntryBar) and bar_index > gaEntryBar
+    if high > gaHighest
+        gaHighest := high
+        gaMfeTime := time_close
+    if low < gaLowest
+        gaLowest := low
+        gaMaeTime := time_close
+
+    gaP05Bar := na(gaP05Bar) and high >= gaEntry * 1.005 ? bar_index : gaP05Bar
+    gaP1Bar  := na(gaP1Bar)  and high >= gaEntry * 1.01  ? bar_index : gaP1Bar
+    gaP2Bar  := na(gaP2Bar)  and high >= gaEntry * 1.02  ? bar_index : gaP2Bar
+    gaP3Bar  := na(gaP3Bar)  and high >= gaEntry * 1.03  ? bar_index : gaP3Bar
+    gaN05Bar := na(gaN05Bar) and low  <= gaEntry * 0.995 ? bar_index : gaN05Bar
+    gaN1Bar  := na(gaN1Bar)  and low  <= gaEntry * 0.99  ? bar_index : gaN1Bar
+    gaN2Bar  := na(gaN2Bar)  and low  <= gaEntry * 0.98  ? bar_index : gaN2Bar
+
+    int gaBarsForward = bar_index - gaEntryBar
+    gaReturn5m  := gaBarsForward == 1 ? (close / gaEntry - 1.0) * 100.0 : gaReturn5m
+    gaReturn15m := gaBarsForward == 3 ? (close / gaEntry - 1.0) * 100.0 : gaReturn15m
+    gaReturn30m := gaBarsForward == 6 ? (close / gaEntry - 1.0) * 100.0 : gaReturn30m
+
+    bool gaFinishNow = atOrAfterForceExit
+    if gaFinishNow and (na(gaResultBar) or gaResultBar != bar_index)
+        gaReturnEod := (close / gaEntry - 1.0) * 100.0
+        float gaMfePct = (gaHighest / gaEntry - 1.0) * 100.0
+        float gaMaePct = (gaLowest / gaEntry - 1.0) * 100.0
+        float gaTimeToMfe = not na(gaMfeTime) ? (gaMfeTime - gaEntryTime) / 60000.0 : na
+        float gaTimeToMae = not na(gaMaeTime) ? (gaMaeTime - gaEntryTime) / 60000.0 : na
+        gaResultBar := bar_index
+        gaDone      := true
+        gaActive    := false
+
+        if enablePineAlerts and enableGateAblationTelemetry
+            alert("NG RESEARCH GA RESULT" +
+                  " | DateTime " + str.format_time(gaEntryTime, "yyyy-MM-dd HH:mm", "Asia/Kolkata") +
+                  " | Candidate " + gaCandidateId +
+                  " | Symbol " + syminfo.ticker +
+                  " | Variants " + gaVariants +
+                  " | +0.5/+1/+2/+3 " + gaYN(not na(gaP05Bar)) + "/" + gaYN(not na(gaP1Bar)) + "/" + gaYN(not na(gaP2Bar)) + "/" + gaYN(not na(gaP3Bar)) +
+                  " | -0.5/-1/-2 " + gaYN(not na(gaN05Bar)) + "/" + gaYN(not na(gaN1Bar)) + "/" + gaYN(not na(gaN2Bar)) +
+                  " | MFE " + str.tostring(gaMfePct, "#.###") +
+                  " | MAE " + str.tostring(gaMaePct, "#.###") +
+                  " | TimeMFE " + (na(gaTimeToMfe) ? "NA" : str.tostring(gaTimeToMfe, "#.#")) +
+                  " | TimeMAE " + (na(gaTimeToMae) ? "NA" : str.tostring(gaTimeToMae, "#.#")) +
+                  " | Order0.5 " + gaOrder(gaP05Bar, gaN05Bar) +
+                  " | Order1 " + gaOrder(gaP1Bar, gaN1Bar) +
+                  " | Order2 " + gaOrder(gaP2Bar, gaN2Bar) +
+                  " | Ret5 " + (na(gaReturn5m) ? "NA" : str.tostring(gaReturn5m, "#.###")) +
+                  " | Ret15 " + (na(gaReturn15m) ? "NA" : str.tostring(gaReturn15m, "#.###")) +
+                  " | Ret30 " + (na(gaReturn30m) ? "NA" : str.tostring(gaReturn30m, "#.###")) +
+                  " | RetEOD " + str.tostring(gaReturnEod, "#.###") +
+                  actionMeta("RESEARCH_GA_RESULT", time),
+                  alert.freq_all)
+// END RESEARCH GATE ABLATION LOGIC.
 
 int focusLane = 0
 if aEntryNow or aStopNow or aTargetNow or aPartialNow
@@ -4075,8 +4429,9 @@ string eBlocker = not enableLaneE ? "E OFF" :
 // reason for a recent confirmed attempt so a forming next bar cannot hide why
 // the prior momentum bar failed. A uses its actual current state/blocker.
 string aCoverageDiag = autoState != 0 ? "A " + aStage : aBlocker
-string cCoverageDiag = cState != 0 ? "C " + cStage :
-     not na(cLastRejectBar) and bar_index - cLastRejectBar <= 2 ? "C: " + cLastRejectReason : cBlocker
+string cCoverageDiag = cState == 2 ? cConfirmedDiag :
+     cState != 0 ? "C " + cStage :
+     not na(cConfirmedDiagTime) ? cConfirmedDiag + " @ " + fmtTimeIST(cConfirmedDiagTime) : cBlocker
 string dCoverageDiag = dState != 0 ? "D " + dStage :
      not na(dLastRejectBar) and bar_index - dLastRejectBar <= 2 ? "D: " + dLastRejectReason : "D SCAN"
 string fastCoverageWhy = aCoverageDiag + " | " + cCoverageDiag + " | " + dCoverageDiag
@@ -4097,6 +4452,7 @@ string actionTxt = not isFiveMinute ? "NO TRADE" :
 
 string whyTxt = anyInTrade ? "Trade managed automatically" :
      f0LaunchNow ? "F0 SHADOW • DIRECT CLOSE" :
+     fastMoverCore ? cCoverageDiag + " | " + f0LastDecision :
      f0StudyActive and not anyReady and not anyWaiting ? "F0 shadow tracking direct entry" :
      eState == 2 and not enableLaneEActionable ? "E shadow ready • no BUY" :
      eState == 2 ? "E ready: new local break" :
@@ -4128,7 +4484,7 @@ if barstate.islast
         color ctxBg = emaTrendUp and aboveVWAP and liquidityOk ? goodBg : neutralBg
         string strengthTxt = "D " + fmtPct(stockDayPct) + " | RS " + fmtPct(dayRsPct) + " | I " + fmtPct(rsSpreadPct)
         color strengthBg = dayFast and rsFast and intraFast ? goodBg : (not na(stockDayPct) and stockDayPct > 0 and not na(dayRsPct) and dayRsPct > 0 ? warnBg : neutralBg)
-        string volumeTxt = "Now " + (na(volPace) ? "—" : str.tostring(volPace, "#.##") + "x") + " | MoverPeak " + (na(sessionVolStrength) ? "—" : str.tostring(sessionVolStrength, "#.##") + "x") + (volSession ? " ✓" : "")
+        string volumeTxt = "Pace " + (na(volPace) ? "—" : str.tostring(volPace, "#.##") + "x") + " | Conf " + (na(cLastConfirmedVolRatio) ? "—" : str.tostring(cLastConfirmedVolRatio, "#.##") + "x") + " | Peak " + (na(sessionVolStrength) ? "—" : str.tostring(sessionVolStrength, "#.##") + "x") + (volSession ? " ✓" : "")
         color volumeBg = volSession ? goodBg : (volFast ? warnBg : neutralBg)
         string levelTxt = "PDH " + fmtPx(pdh) + " | PWH " + fmtPx(pwh)
         string tradeTxt = focusLane == 0 ? "—" : focusTxt + " E " + fmtPx(focusEntry) + " | S " + fmtPx(focusStop) + " | T " + fmtPx(focusTarget) + " | Q " + (na(focusInitialQty) ? "—" : str.tostring(focusInitialQty, "#"))
