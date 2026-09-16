@@ -120,6 +120,8 @@ def test_f0_uses_existing_episode_controls_and_remains_shadow_only() -> None:
     assert "buyTicket(" not in f0
     assert "partialTicket(" not in f0
     assert "stopTicket(" not in f0
+    assert "\nrunF0Study() =>\n" in f0
+    assert "\n[f0LaunchNow, f0StudyActive, f0LastDecision] = runF0Study()\n" in f0
 
 
 def test_gate_ablation_is_scoped_to_avoid_ce10295() -> None:

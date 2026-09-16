@@ -3609,195 +3609,90 @@ plot(enableEarlyConfirmedShadowStudy and (ec0StudyActive or ec0StudyDone) ? ec0S
 // ─────────────────────────────────────────────────────────────────────────────
 // F0 samples distinct sequential episodes. It reuses the existing fast-mover
 // episode count/rearm controls; no new screenshot-derived threshold is added.
-varip int    f0StudyCountToday      = 0
-varip bool   f0EpisodeArmed         = true
-varip int    f0EpisodeOffBars       = 0
-varip int    f0LastSampleTime       = na
-varip string f0LastDecision         = "F0: no confirmed decision yet"
-varip int    f0LastDecisionTime     = na
-varip bool   f0StudyActive          = false
-varip bool   f0StudyDone            = false
-varip int    f0StudyEntryBar        = na
-varip int    f0StudyEntryTime       = na
-varip float  f0StudyEntry           = na
-varip float  f0StudyRefStop         = na
-varip float  f0StudyStructStop      = na
-varip float  f0StudyStructRisk      = na
-varip float  f0StudyStructRiskAtr   = na
-varip float  f0StudyQtyRef          = na
-varip float  f0StudyQtyStruct       = na
-varip float  f0StudyActualRisk      = na
-varip float  f0StudyRiskUtilPct     = na
-varip float  f0StudyFull2RGross     = na
-varip float  f0StudyFirstTakeQty    = na
-varip float  f0StudyRunnerQty       = na
-varip string f0StudyLimitReason     = "—"
-varip float  f0StudyStruct2R        = na
-varip float  f0StudyT1              = na
-varip float  f0StudyT2              = na
-varip float  f0StudyT3              = na
-varip float  f0StudyHighest         = na
-varip float  f0StudyLowest          = na
-varip bool   f0StudyT1Hit           = false
-varip bool   f0StudyT2Hit           = false
-varip bool   f0StudyT3Hit           = false
-varip bool   f0StudyRefStopHit      = false
-varip bool   f0StudyStructStopHit   = false
-varip bool   f0StudyStruct2RHit     = false
-varip int    f0StudyT1Time          = na
-varip int    f0StudyT2Time          = na
-varip int    f0StudyT3Time          = na
-varip int    f0StudyRefStopTime     = na
-varip int    f0StudyStructStopTime  = na
-varip int    f0StudyStruct2RTime    = na
-varip int    f0StudyLiveBuyTime     = na
-varip string f0StudyLiveBuyLane     = "NONE"
-varip float  f0StudyDayPctAtEntry   = na
-varip float  f0StudyDayRsAtEntry    = na
-varip float  f0StudyIntraRsAtEntry  = na
-varip float  f0StudyVolAtEntry      = na
-varip float  f0StudyExtAtrAtEntry   = na
-varip string f0StudyCStateAtEntry   = "—"
-varip string f0StudyEndReason       = "—"
-varip string f0StudyLastSummary     = "—"
-varip int    f0StudyResultEventBar  = na
+runF0Study() =>
+    varip int    f0StudyCountToday      = 0
+    varip bool   f0EpisodeArmed         = true
+    varip int    f0EpisodeOffBars       = 0
+    varip int    f0LastSampleTime       = na
+    varip string f0LastDecision         = "F0: no confirmed decision yet"
+    varip int    f0LastDecisionTime     = na
+    varip bool   f0StudyActive          = false
+    varip bool   f0StudyDone            = false
+    varip int    f0StudyEntryBar        = na
+    varip int    f0StudyEntryTime       = na
+    varip float  f0StudyEntry           = na
+    varip float  f0StudyRefStop         = na
+    varip float  f0StudyStructStop      = na
+    varip float  f0StudyStructRisk      = na
+    varip float  f0StudyStructRiskAtr   = na
+    varip float  f0StudyQtyRef          = na
+    varip float  f0StudyQtyStruct       = na
+    varip float  f0StudyActualRisk      = na
+    varip float  f0StudyRiskUtilPct     = na
+    varip float  f0StudyFull2RGross     = na
+    varip float  f0StudyFirstTakeQty    = na
+    varip float  f0StudyRunnerQty       = na
+    varip string f0StudyLimitReason     = "—"
+    varip float  f0StudyStruct2R        = na
+    varip float  f0StudyT1              = na
+    varip float  f0StudyT2              = na
+    varip float  f0StudyT3              = na
+    varip float  f0StudyHighest         = na
+    varip float  f0StudyLowest          = na
+    varip bool   f0StudyT1Hit           = false
+    varip bool   f0StudyT2Hit           = false
+    varip bool   f0StudyT3Hit           = false
+    varip bool   f0StudyRefStopHit      = false
+    varip bool   f0StudyStructStopHit   = false
+    varip bool   f0StudyStruct2RHit     = false
+    varip int    f0StudyT1Time          = na
+    varip int    f0StudyT2Time          = na
+    varip int    f0StudyT3Time          = na
+    varip int    f0StudyRefStopTime     = na
+    varip int    f0StudyStructStopTime  = na
+    varip int    f0StudyStruct2RTime    = na
+    varip int    f0StudyLiveBuyTime     = na
+    varip string f0StudyLiveBuyLane     = "NONE"
+    varip float  f0StudyDayPctAtEntry   = na
+    varip float  f0StudyDayRsAtEntry    = na
+    varip float  f0StudyIntraRsAtEntry  = na
+    varip float  f0StudyVolAtEntry      = na
+    varip float  f0StudyExtAtrAtEntry   = na
+    varip string f0StudyCStateAtEntry   = "—"
+    varip string f0StudyEndReason       = "—"
+    varip string f0StudyLastSummary     = "—"
+    varip int    f0StudyResultEventBar  = na
 
-if newDayReset or not isFiveMinute
-    f0StudyCountToday     := 0
-    f0EpisodeArmed        := true
-    f0EpisodeOffBars      := 0
-    f0LastSampleTime      := na
-    f0LastDecision        := "F0: no confirmed decision yet"
-    f0LastDecisionTime    := na
-    f0StudyActive         := false
-    f0StudyDone           := false
-    f0StudyEntryBar       := na
-    f0StudyEntryTime      := na
-    f0StudyEntry          := na
-    f0StudyRefStop        := na
-    f0StudyStructStop     := na
-    f0StudyStructRisk     := na
-    f0StudyStructRiskAtr  := na
-    f0StudyQtyRef         := na
-    f0StudyQtyStruct      := na
-    f0StudyActualRisk     := na
-    f0StudyRiskUtilPct    := na
-    f0StudyFull2RGross    := na
-    f0StudyFirstTakeQty   := na
-    f0StudyRunnerQty      := na
-    f0StudyLimitReason    := "—"
-    f0StudyStruct2R       := na
-    f0StudyT1             := na
-    f0StudyT2             := na
-    f0StudyT3             := na
-    f0StudyHighest        := na
-    f0StudyLowest         := na
-    f0StudyT1Hit          := false
-    f0StudyT2Hit          := false
-    f0StudyT3Hit          := false
-    f0StudyRefStopHit     := false
-    f0StudyStructStopHit  := false
-    f0StudyStruct2RHit    := false
-    f0StudyT1Time         := na
-    f0StudyT2Time         := na
-    f0StudyT3Time         := na
-    f0StudyRefStopTime    := na
-    f0StudyStructStopTime := na
-    f0StudyStruct2RTime   := na
-    f0StudyLiveBuyTime    := na
-    f0StudyLiveBuyLane    := "NONE"
-    f0StudyDayPctAtEntry  := na
-    f0StudyDayRsAtEntry   := na
-    f0StudyIntraRsAtEntry := na
-    f0StudyVolAtEntry     := na
-    f0StudyExtAtrAtEntry  := na
-    f0StudyCStateAtEntry  := "—"
-    f0StudyEndReason      := "—"
-    f0StudyLastSummary    := "—"
-    f0StudyResultEventBar := na
-
-bool f0FreshBreakout = not na(priorHigh) and close > priorHigh
-bool f0NoLiveTrade = autoState != 3 and bState != 3 and cState != 3 and dState != 3 and eState != 3
-bool f0FreshAfterTrade = na(freshSetupAfterBar) or bar_index > freshSetupAfterBar
-bool f0SignalQualifies = barstate.isrealtime and confirmedBullishActionBar and entryWindowOpen and
-     ec0CoreNoDayMove and f0FreshBreakout and f0NoLiveTrade and f0FreshAfterTrade and
-     not na(atr) and atr > 0
-
-float f0EntryCandidateNow      = close
-float f0RefStopCandidateNow    = f0EntryCandidateNow * (1.0 - EC0_STUDY_REF_STOP_PCT / 100.0)
-float f0StructStopCandidateNow = not na(atr) ? low - math.max(syminfo.mintick, atr * D_STOP_BUFFER_ATR) : na
-float f0StructRiskCandidateNow = f0EntryCandidateNow - f0StructStopCandidateNow
-float f0QtyStructCandidateNow  = calcQty(f0EntryCandidateNow, f0StructStopCandidateNow)
-bool f0CandidateViable = f0EntryCandidateNow > 0 and f0RefStopCandidateNow > 0 and
-     f0StructRiskCandidateNow > 0 and f0QtyStructCandidateNow >= 1
-bool f0LaunchNow = enableDirectMomentumShadowStudy and not f0StudyActive and
-     f0StudyCountToday < FAST_MAX_WATCHES_DAY and f0EpisodeArmed and
-     f0SignalQualifies and f0CandidateViable
-
-// A completed episode must be followed by the already-established number of
-// non-qualifying fast-mover bars before F0 can sample again. Off-bars observed
-// while the prior sample is active do not count toward the next episode.
-if barstate.isrealtime and barstate.isconfirmed and not f0StudyActive and f0StudyCountToday > 0 and not f0EpisodeArmed
-    if f0SignalQualifies
-        f0EpisodeOffBars := 0
-    else
-        f0EpisodeOffBars += 1
-        if f0EpisodeOffBars >= FAST_REARM_BARS
-            f0EpisodeArmed := true
-
-if barstate.isrealtime and barstate.isconfirmed and entryWindowOpen and not f0LaunchNow
-    f0LastDecision := not enableDirectMomentumShadowStudy ? "F0 BLOCKED: STUDY OFF" :
-         f0StudyActive ? "F0 BLOCKED: TRACKING " + fmtTimeIST(f0StudyEntryTime) :
-         f0StudyCountToday >= FAST_MAX_WATCHES_DAY ? "F0 BLOCKED: MAX " + str.tostring(FAST_MAX_WATCHES_DAY) + " / LAST " + fmtTimeIST(f0LastSampleTime) :
-         not f0EpisodeArmed ? "F0 BLOCKED: REARM " + str.tostring(f0EpisodeOffBars) + "/" + str.tostring(FAST_REARM_BARS) + " / LAST " + fmtTimeIST(f0LastSampleTime) :
-         not confirmedBullishActionBar ? "F0 BLOCKED: NEED BULL CONF" :
-         not ec0CoreNoDayMove ? "F0 BLOCKED: EC0 CONTEXT" :
-         not f0FreshBreakout ? "F0 BLOCKED: NO 8-BAR BO" :
-         not f0NoLiveTrade ? "F0 BLOCKED: LIVE TRADE" :
-         not f0FreshAfterTrade ? "F0 BLOCKED: BEFORE FRESH BAR" :
-         na(atr) or atr <= 0 ? "F0 BLOCKED: ATR UNAVAILABLE" :
-         f0StructRiskCandidateNow <= 0 ? "F0 BLOCKED: STRUCT RISK" :
-         f0QtyStructCandidateNow < 1 ? "F0 BLOCKED: QTY 0" : "F0 BLOCKED: NOT VIABLE"
-    f0LastDecisionTime := time_close
-
-if f0LaunchNow
-    float f0EntryCandidate      = close
-    float f0RefStopCandidate    = f0EntryCandidate * (1.0 - EC0_STUDY_REF_STOP_PCT / 100.0)
-    float f0StructStopCandidate = low - math.max(syminfo.mintick, atr * D_STOP_BUFFER_ATR)
-    float f0StructRiskCandidate = f0EntryCandidate - f0StructStopCandidate
-    float f0QtyRefCandidate     = calcQty(f0EntryCandidate, f0RefStopCandidate)
-    float f0QtyStructCandidate  = calcQty(f0EntryCandidate, f0StructStopCandidate)
-
-    if f0EntryCandidate > 0 and f0RefStopCandidate > 0 and f0StructRiskCandidate > 0 and f0QtyStructCandidate >= 1
-        f0StudyCountToday    += 1
-        f0EpisodeArmed        := false
+    if newDayReset or not isFiveMinute
+        f0StudyCountToday     := 0
+        f0EpisodeArmed        := true
         f0EpisodeOffBars      := 0
-        f0LastSampleTime      := time_close
-        f0LastDecision        := "F0 DIRECT SHADOW @ " + str.tostring(f0EntryCandidate, format.mintick) + " / EP " + str.tostring(f0StudyCountToday)
-        f0LastDecisionTime    := time_close
-        f0StudyActive         := true
+        f0LastSampleTime      := na
+        f0LastDecision        := "F0: no confirmed decision yet"
+        f0LastDecisionTime    := na
+        f0StudyActive         := false
         f0StudyDone           := false
-        f0StudyEntryBar       := bar_index
-        f0StudyEntryTime      := time_close
-        f0StudyEntry          := f0EntryCandidate
-        f0StudyRefStop        := f0RefStopCandidate
-        f0StudyStructStop     := f0StructStopCandidate
-        f0StudyStructRisk     := f0StructRiskCandidate
-        f0StudyStructRiskAtr  := f0StructRiskCandidate / atr
-        f0StudyQtyRef         := f0QtyRefCandidate
-        f0StudyQtyStruct      := f0QtyStructCandidate
-        f0StudyStruct2R       := f0StudyEntry + f0StudyStructRisk * rrMultiple
-        f0StudyActualRisk     := calcActualEffectiveRisk(f0StudyEntry, f0StudyStructStop, f0StudyQtyStruct)
-        f0StudyRiskUtilPct    := calcRiskUtilizationPct(f0StudyActualRisk)
-        f0StudyFull2RGross    := calcFullFirstTakeGross(f0StudyEntry, f0StudyStruct2R, f0StudyQtyStruct)
-        f0StudyFirstTakeQty   := calcPartialQty(f0StudyQtyStruct)
-        f0StudyRunnerQty      := math.max(f0StudyQtyStruct - f0StudyFirstTakeQty, 0.0)
-        f0StudyLimitReason    := calcSizeLimitReason(f0StudyEntry, f0StudyStructStop)
-        f0StudyT1             := f0StudyEntry * (1.0 + EC0_STUDY_T1_PCT / 100.0)
-        f0StudyT2             := f0StudyEntry * (1.0 + EC0_STUDY_T2_PCT / 100.0)
-        f0StudyT3             := f0StudyEntry * (1.0 + EC0_STUDY_T3_PCT / 100.0)
-        f0StudyHighest        := f0StudyEntry
-        f0StudyLowest         := f0StudyEntry
+        f0StudyEntryBar       := na
+        f0StudyEntryTime      := na
+        f0StudyEntry          := na
+        f0StudyRefStop        := na
+        f0StudyStructStop     := na
+        f0StudyStructRisk     := na
+        f0StudyStructRiskAtr  := na
+        f0StudyQtyRef         := na
+        f0StudyQtyStruct      := na
+        f0StudyActualRisk     := na
+        f0StudyRiskUtilPct    := na
+        f0StudyFull2RGross    := na
+        f0StudyFirstTakeQty   := na
+        f0StudyRunnerQty      := na
+        f0StudyLimitReason    := "—"
+        f0StudyStruct2R       := na
+        f0StudyT1             := na
+        f0StudyT2             := na
+        f0StudyT3             := na
+        f0StudyHighest        := na
+        f0StudyLowest         := na
         f0StudyT1Hit          := false
         f0StudyT2Hit          := false
         f0StudyT3Hit          := false
@@ -3812,133 +3707,243 @@ if f0LaunchNow
         f0StudyStruct2RTime   := na
         f0StudyLiveBuyTime    := na
         f0StudyLiveBuyLane    := "NONE"
-        f0StudyDayPctAtEntry  := stockDayPct
-        f0StudyDayRsAtEntry   := dayRsPct
-        f0StudyIntraRsAtEntry := rsSpreadPct
-        f0StudyVolAtEntry     := fastVolStrength
-        f0StudyExtAtrAtEntry  := (close - ema20) / atr
-        f0StudyCStateAtEntry  := cState == 2 ? "C READY" :
-             cState == 3 ? "C TRADE" :
-             not na(cLastRejectBar) and bar_index - cLastRejectBar <= 1 ? cLastRejectReason :
-             "NO C ARM"
-        f0StudyEndReason      := "RUNNING"
-        f0StudyLastSummary    := "RUNNING"
+        f0StudyDayPctAtEntry  := na
+        f0StudyDayRsAtEntry   := na
+        f0StudyIntraRsAtEntry := na
+        f0StudyVolAtEntry     := na
+        f0StudyExtAtrAtEntry  := na
+        f0StudyCStateAtEntry  := "—"
+        f0StudyEndReason      := "—"
+        f0StudyLastSummary    := "—"
         f0StudyResultEventBar := na
 
-        if enablePineAlerts and enableDirectMomentumResearchAlerts
-            alert("NG RESEARCH F0 DIRECT ENTRY | " + syminfo.ticker +
-                  " | Episode " + str.tostring(f0StudyCountToday) + "/" + str.tostring(FAST_MAX_WATCHES_DAY) +
-                  " | Entry " + str.tostring(f0StudyEntry, format.mintick) +
-                  " | StructSL " + str.tostring(f0StudyStructStop, format.mintick) +
-                  " | StructQty " + str.tostring(f0StudyQtyStruct, "#") +
-                  " | Risk " + fmtCash(f0StudyActualRisk) + "/" + fmtCash(riskBudget) +
-                  " | RiskUtil " + (na(f0StudyRiskUtilPct) ? "—" : str.tostring(f0StudyRiskUtilPct, "#.#") + "%") +
-                  " | " + f0StudyLimitReason +
-                  " | 2R " + str.tostring(f0StudyStruct2R, format.mintick) +
-                  " | 2RGross " + fmtCash(f0StudyFull2RGross) +
-                  " | Take/Run " + str.tostring(f0StudyFirstTakeQty, "#") + "/" + str.tostring(f0StudyRunnerQty, "#") +
-                  " | Day " + (na(f0StudyDayPctAtEntry) ? "—" : str.tostring(f0StudyDayPctAtEntry, "#.##") + "%") +
-                  " | DayRS " + (na(f0StudyDayRsAtEntry) ? "—" : str.tostring(f0StudyDayRsAtEntry, "#.##") + "%") +
-                  " | IntraRS " + (na(f0StudyIntraRsAtEntry) ? "—" : str.tostring(f0StudyIntraRsAtEntry, "#.##") + "%") +
-                  " | Vol " + (na(f0StudyVolAtEntry) ? "—" : str.tostring(f0StudyVolAtEntry, "#.##") + "x") +
-                  " | ExtATR " + (na(f0StudyExtAtrAtEntry) ? "—" : str.tostring(f0StudyExtAtrAtEntry, "#.##")) +
-                  " | C " + f0StudyCStateAtEntry +
-                  actionMeta("RESEARCH_F0_ENTRY", time),
-                  alert.freq_once_per_bar_close)
+    bool f0FreshBreakout = not na(priorHigh) and close > priorHigh
+    bool f0NoLiveTrade = autoState != 3 and bState != 3 and cState != 3 and dState != 3 and eState != 3
+    bool f0FreshAfterTrade = na(freshSetupAfterBar) or bar_index > freshSetupAfterBar
+    bool f0SignalQualifies = barstate.isrealtime and confirmedBullishActionBar and entryWindowOpen and
+         ec0CoreNoDayMove and f0FreshBreakout and f0NoLiveTrade and f0FreshAfterTrade and
+         not na(atr) and atr > 0
 
-if enableDirectMomentumShadowStudy and f0StudyActive and barstate.isrealtime
-    bool f0PostEntry = not na(f0StudyEntryBar) and bar_index > f0StudyEntryBar
+    float f0EntryCandidateNow      = close
+    float f0RefStopCandidateNow    = f0EntryCandidateNow * (1.0 - EC0_STUDY_REF_STOP_PCT / 100.0)
+    float f0StructStopCandidateNow = not na(atr) ? low - math.max(syminfo.mintick, atr * D_STOP_BUFFER_ATR) : na
+    float f0StructRiskCandidateNow = f0EntryCandidateNow - f0StructStopCandidateNow
+    float f0QtyStructCandidateNow  = calcQty(f0EntryCandidateNow, f0StructStopCandidateNow)
+    bool f0CandidateViable = f0EntryCandidateNow > 0 and f0RefStopCandidateNow > 0 and
+         f0StructRiskCandidateNow > 0 and f0QtyStructCandidateNow >= 1
+    bool f0LaunchNow = enableDirectMomentumShadowStudy and not f0StudyActive and
+         f0StudyCountToday < FAST_MAX_WATCHES_DAY and f0EpisodeArmed and
+         f0SignalQualifies and f0CandidateViable
 
-    if na(f0StudyLiveBuyTime)
-        if aEntryNow
-            f0StudyLiveBuyTime := timenow
-            f0StudyLiveBuyLane := "A"
-        else if bEntryNow
-            f0StudyLiveBuyTime := timenow
-            f0StudyLiveBuyLane := "B"
-        else if cEntryNow
-            f0StudyLiveBuyTime := timenow
-            f0StudyLiveBuyLane := "C"
-        else if dEntryNow
-            f0StudyLiveBuyTime := timenow
-            f0StudyLiveBuyLane := "D"
-        else if eEntryNow
-            f0StudyLiveBuyTime := timenow
-            f0StudyLiveBuyLane := "E"
+    // A completed episode must be followed by the already-established number of
+    // non-qualifying fast-mover bars before F0 can sample again. Off-bars observed
+    // while the prior sample is active do not count toward the next episode.
+    if barstate.isrealtime and barstate.isconfirmed and not f0StudyActive and f0StudyCountToday > 0 and not f0EpisodeArmed
+        if f0SignalQualifies
+            f0EpisodeOffBars := 0
+        else
+            f0EpisodeOffBars += 1
+            if f0EpisodeOffBars >= FAST_REARM_BARS
+                f0EpisodeArmed := true
 
-    if f0PostEntry
-        f0StudyHighest := na(f0StudyHighest) ? high : math.max(f0StudyHighest, high)
-        f0StudyLowest  := na(f0StudyLowest)  ? low  : math.min(f0StudyLowest, low)
+    if barstate.isrealtime and barstate.isconfirmed and entryWindowOpen and not f0LaunchNow
+        f0LastDecision := not enableDirectMomentumShadowStudy ? "F0 BLOCKED: STUDY OFF" :
+             f0StudyActive ? "F0 BLOCKED: TRACKING " + fmtTimeIST(f0StudyEntryTime) :
+             f0StudyCountToday >= FAST_MAX_WATCHES_DAY ? "F0 BLOCKED: MAX " + str.tostring(FAST_MAX_WATCHES_DAY) + " / LAST " + fmtTimeIST(f0LastSampleTime) :
+             not f0EpisodeArmed ? "F0 BLOCKED: REARM " + str.tostring(f0EpisodeOffBars) + "/" + str.tostring(FAST_REARM_BARS) + " / LAST " + fmtTimeIST(f0LastSampleTime) :
+             not confirmedBullishActionBar ? "F0 BLOCKED: NEED BULL CONF" :
+             not ec0CoreNoDayMove ? "F0 BLOCKED: EC0 CONTEXT" :
+             not f0FreshBreakout ? "F0 BLOCKED: NO 8-BAR BO" :
+             not f0NoLiveTrade ? "F0 BLOCKED: LIVE TRADE" :
+             not f0FreshAfterTrade ? "F0 BLOCKED: BEFORE FRESH BAR" :
+             na(atr) or atr <= 0 ? "F0 BLOCKED: ATR UNAVAILABLE" :
+             f0StructRiskCandidateNow <= 0 ? "F0 BLOCKED: STRUCT RISK" :
+             f0QtyStructCandidateNow < 1 ? "F0 BLOCKED: QTY 0" : "F0 BLOCKED: NOT VIABLE"
+        f0LastDecisionTime := time_close
 
-        if not f0StudyT1Hit and close >= f0StudyT1
-            f0StudyT1Hit  := true
-            f0StudyT1Time := timenow
-        if not f0StudyT2Hit and close >= f0StudyT2
-            f0StudyT2Hit  := true
-            f0StudyT2Time := timenow
-        if not f0StudyT3Hit and close >= f0StudyT3
-            f0StudyT3Hit  := true
-            f0StudyT3Time := timenow
+    if f0LaunchNow
+        float f0EntryCandidate      = close
+        float f0RefStopCandidate    = f0EntryCandidate * (1.0 - EC0_STUDY_REF_STOP_PCT / 100.0)
+        float f0StructStopCandidate = low - math.max(syminfo.mintick, atr * D_STOP_BUFFER_ATR)
+        float f0StructRiskCandidate = f0EntryCandidate - f0StructStopCandidate
+        float f0QtyRefCandidate     = calcQty(f0EntryCandidate, f0RefStopCandidate)
+        float f0QtyStructCandidate  = calcQty(f0EntryCandidate, f0StructStopCandidate)
 
-        if not f0StudyRefStopHit and close <= f0StudyRefStop
-            f0StudyRefStopHit  := true
-            f0StudyRefStopTime := timenow
-        if not f0StudyStructStopHit and close <= f0StudyStructStop
-            f0StudyStructStopHit  := true
-            f0StudyStructStopTime := timenow
-        if not f0StudyStruct2RHit and close >= f0StudyStruct2R
-            f0StudyStruct2RHit  := true
-            f0StudyStruct2RTime := timenow
+        if f0EntryCandidate > 0 and f0RefStopCandidate > 0 and f0StructRiskCandidate > 0 and f0QtyStructCandidate >= 1
+            f0StudyCountToday    += 1
+            f0EpisodeArmed        := false
+            f0EpisodeOffBars      := 0
+            f0LastSampleTime      := time_close
+            f0LastDecision        := "F0 DIRECT SHADOW @ " + str.tostring(f0EntryCandidate, format.mintick) + " / EP " + str.tostring(f0StudyCountToday)
+            f0LastDecisionTime    := time_close
+            f0StudyActive         := true
+            f0StudyDone           := false
+            f0StudyEntryBar       := bar_index
+            f0StudyEntryTime      := time_close
+            f0StudyEntry          := f0EntryCandidate
+            f0StudyRefStop        := f0RefStopCandidate
+            f0StudyStructStop     := f0StructStopCandidate
+            f0StudyStructRisk     := f0StructRiskCandidate
+            f0StudyStructRiskAtr  := f0StructRiskCandidate / atr
+            f0StudyQtyRef         := f0QtyRefCandidate
+            f0StudyQtyStruct      := f0QtyStructCandidate
+            f0StudyStruct2R       := f0StudyEntry + f0StudyStructRisk * rrMultiple
+            f0StudyActualRisk     := calcActualEffectiveRisk(f0StudyEntry, f0StudyStructStop, f0StudyQtyStruct)
+            f0StudyRiskUtilPct    := calcRiskUtilizationPct(f0StudyActualRisk)
+            f0StudyFull2RGross    := calcFullFirstTakeGross(f0StudyEntry, f0StudyStruct2R, f0StudyQtyStruct)
+            f0StudyFirstTakeQty   := calcPartialQty(f0StudyQtyStruct)
+            f0StudyRunnerQty      := math.max(f0StudyQtyStruct - f0StudyFirstTakeQty, 0.0)
+            f0StudyLimitReason    := calcSizeLimitReason(f0StudyEntry, f0StudyStructStop)
+            f0StudyT1             := f0StudyEntry * (1.0 + EC0_STUDY_T1_PCT / 100.0)
+            f0StudyT2             := f0StudyEntry * (1.0 + EC0_STUDY_T2_PCT / 100.0)
+            f0StudyT3             := f0StudyEntry * (1.0 + EC0_STUDY_T3_PCT / 100.0)
+            f0StudyHighest        := f0StudyEntry
+            f0StudyLowest         := f0StudyEntry
+            f0StudyT1Hit          := false
+            f0StudyT2Hit          := false
+            f0StudyT3Hit          := false
+            f0StudyRefStopHit     := false
+            f0StudyStructStopHit  := false
+            f0StudyStruct2RHit    := false
+            f0StudyT1Time         := na
+            f0StudyT2Time         := na
+            f0StudyT3Time         := na
+            f0StudyRefStopTime    := na
+            f0StudyStructStopTime := na
+            f0StudyStruct2RTime   := na
+            f0StudyLiveBuyTime    := na
+            f0StudyLiveBuyLane    := "NONE"
+            f0StudyDayPctAtEntry  := stockDayPct
+            f0StudyDayRsAtEntry   := dayRsPct
+            f0StudyIntraRsAtEntry := rsSpreadPct
+            f0StudyVolAtEntry     := fastVolStrength
+            f0StudyExtAtrAtEntry  := (close - ema20) / atr
+            f0StudyCStateAtEntry  := cState == 2 ? "C READY" :
+                 cState == 3 ? "C TRADE" :
+                 not na(cLastRejectBar) and bar_index - cLastRejectBar <= 1 ? cLastRejectReason :
+                 "NO C ARM"
+            f0StudyEndReason      := "RUNNING"
+            f0StudyLastSummary    := "RUNNING"
+            f0StudyResultEventBar := na
 
-    bool f0BothStopsHit = f0StudyRefStopHit and f0StudyStructStopHit
-    bool f0FinishT3     = f0StudyT3Hit
-    bool f0FinishEod    = forceExitNow
+            if enablePineAlerts and enableDirectMomentumResearchAlerts
+                alert("NG RESEARCH F0 DIRECT ENTRY | " + syminfo.ticker +
+                      " | Episode " + str.tostring(f0StudyCountToday) + "/" + str.tostring(FAST_MAX_WATCHES_DAY) +
+                      " | Entry " + str.tostring(f0StudyEntry, format.mintick) +
+                      " | StructSL " + str.tostring(f0StudyStructStop, format.mintick) +
+                      " | StructQty " + str.tostring(f0StudyQtyStruct, "#") +
+                      " | Risk " + fmtCash(f0StudyActualRisk) + "/" + fmtCash(riskBudget) +
+                      " | RiskUtil " + (na(f0StudyRiskUtilPct) ? "—" : str.tostring(f0StudyRiskUtilPct, "#.#") + "%") +
+                      " | " + f0StudyLimitReason +
+                      " | 2R " + str.tostring(f0StudyStruct2R, format.mintick) +
+                      " | 2RGross " + fmtCash(f0StudyFull2RGross) +
+                      " | Take/Run " + str.tostring(f0StudyFirstTakeQty, "#") + "/" + str.tostring(f0StudyRunnerQty, "#") +
+                      " | Day " + (na(f0StudyDayPctAtEntry) ? "—" : str.tostring(f0StudyDayPctAtEntry, "#.##") + "%") +
+                      " | DayRS " + (na(f0StudyDayRsAtEntry) ? "—" : str.tostring(f0StudyDayRsAtEntry, "#.##") + "%") +
+                      " | IntraRS " + (na(f0StudyIntraRsAtEntry) ? "—" : str.tostring(f0StudyIntraRsAtEntry, "#.##") + "%") +
+                      " | Vol " + (na(f0StudyVolAtEntry) ? "—" : str.tostring(f0StudyVolAtEntry, "#.##") + "x") +
+                      " | ExtATR " + (na(f0StudyExtAtrAtEntry) ? "—" : str.tostring(f0StudyExtAtrAtEntry, "#.##")) +
+                      " | C " + f0StudyCStateAtEntry +
+                      actionMeta("RESEARCH_F0_ENTRY", time),
+                      alert.freq_once_per_bar_close)
 
-    if (f0BothStopsHit or f0FinishT3 or f0FinishEod) and (na(f0StudyResultEventBar) or f0StudyResultEventBar != bar_index)
-        float f0MfePct = not na(f0StudyHighest) and f0StudyEntry > 0 ? (f0StudyHighest / f0StudyEntry - 1.0) * 100.0 : na
-        float f0MaePct = not na(f0StudyLowest) and f0StudyEntry > 0 ? (f0StudyLowest / f0StudyEntry - 1.0) * 100.0 : na
-        float f0T1Min  = not na(f0StudyT1Time) and not na(f0StudyEntryTime) ? (f0StudyT1Time - f0StudyEntryTime) / 60000.0 : na
-        float f0T2Min  = not na(f0StudyT2Time) and not na(f0StudyEntryTime) ? (f0StudyT2Time - f0StudyEntryTime) / 60000.0 : na
-        float f0T3Min  = not na(f0StudyT3Time) and not na(f0StudyEntryTime) ? (f0StudyT3Time - f0StudyEntryTime) / 60000.0 : na
-        float f0LiveBuyMin = not na(f0StudyLiveBuyTime) and not na(f0StudyEntryTime) ? (f0StudyLiveBuyTime - f0StudyEntryTime) / 60000.0 : na
+    if enableDirectMomentumShadowStudy and f0StudyActive and barstate.isrealtime
+        bool f0PostEntry = not na(f0StudyEntryBar) and bar_index > f0StudyEntryBar
 
-        bool f0T1BeforeRef = f0StudyT1Hit and (not f0StudyRefStopHit or f0StudyT1Time < f0StudyRefStopTime)
-        bool f0T2BeforeRef = f0StudyT2Hit and (not f0StudyRefStopHit or f0StudyT2Time < f0StudyRefStopTime)
-        bool f0T3BeforeRef = f0StudyT3Hit and (not f0StudyRefStopHit or f0StudyT3Time < f0StudyRefStopTime)
-        bool f0T1BeforeStruct = f0StudyT1Hit and (not f0StudyStructStopHit or f0StudyT1Time < f0StudyStructStopTime)
-        bool f0T2BeforeStruct = f0StudyT2Hit and (not f0StudyStructStopHit or f0StudyT2Time < f0StudyStructStopTime)
-        bool f0T3BeforeStruct = f0StudyT3Hit and (not f0StudyStructStopHit or f0StudyT3Time < f0StudyStructStopTime)
+        if na(f0StudyLiveBuyTime)
+            if aEntryNow
+                f0StudyLiveBuyTime := timenow
+                f0StudyLiveBuyLane := "A"
+            else if bEntryNow
+                f0StudyLiveBuyTime := timenow
+                f0StudyLiveBuyLane := "B"
+            else if cEntryNow
+                f0StudyLiveBuyTime := timenow
+                f0StudyLiveBuyLane := "C"
+            else if dEntryNow
+                f0StudyLiveBuyTime := timenow
+                f0StudyLiveBuyLane := "D"
+            else if eEntryNow
+                f0StudyLiveBuyTime := timenow
+                f0StudyLiveBuyLane := "E"
 
-        f0StudyEndReason := f0FinishT3 ? "+3%" : f0BothStopsHit ? "BOTH STOPS" : "EOD"
-        f0StudyLastSummary := "End " + f0StudyEndReason +
-             " | Ref +1/+2/+3 " + (f0T1BeforeRef ? "Y" : "N") + "/" + (f0T2BeforeRef ? "Y" : "N") + "/" + (f0T3BeforeRef ? "Y" : "N") +
-             " | Struct +1/+2/+3 " + (f0T1BeforeStruct ? "Y" : "N") + "/" + (f0T2BeforeStruct ? "Y" : "N") + "/" + (f0T3BeforeStruct ? "Y" : "N") +
-             " | Struct2R " + (f0StudyStruct2RHit ? "Y" : "N")
-        f0StudyResultEventBar := bar_index
-        f0StudyDone   := true
-        f0StudyActive := false
-        f0EpisodeOffBars := 0
+        if f0PostEntry
+            f0StudyHighest := na(f0StudyHighest) ? high : math.max(f0StudyHighest, high)
+            f0StudyLowest  := na(f0StudyLowest)  ? low  : math.min(f0StudyLowest, low)
 
-        if enablePineAlerts and enableDirectMomentumResearchAlerts
-            alert("NG RESEARCH F0 DIRECT RESULT | " + syminfo.ticker +
-                  " | Entry " + str.tostring(f0StudyEntry, format.mintick) +
-                  " | RefStop " + str.tostring(f0StudyRefStop, format.mintick) +
-                  " | StructStop " + str.tostring(f0StudyStructStop, format.mintick) +
-                  " | StructQty " + str.tostring(f0StudyQtyStruct, "#") +
-                  " | End " + f0StudyEndReason +
-                  " | RefT1/T2/T3 " + (f0T1BeforeRef ? "Y" : "N") + "/" + (f0T2BeforeRef ? "Y" : "N") + "/" + (f0T3BeforeRef ? "Y" : "N") +
-                  " | StructT1/T2/T3 " + (f0T1BeforeStruct ? "Y" : "N") + "/" + (f0T2BeforeStruct ? "Y" : "N") + "/" + (f0T3BeforeStruct ? "Y" : "N") +
-                  " | Struct2R " + (f0StudyStruct2RHit ? "Y" : "N") +
-                  " | T1Min " + (na(f0T1Min) ? "—" : str.tostring(f0T1Min, "#.#")) +
-                  " | T2Min " + (na(f0T2Min) ? "—" : str.tostring(f0T2Min, "#.#")) +
-                  " | T3Min " + (na(f0T3Min) ? "—" : str.tostring(f0T3Min, "#.#")) +
-                  " | MFE " + (na(f0MfePct) ? "—" : str.tostring(f0MfePct, "#.##") + "%") +
-                  " | MAE " + (na(f0MaePct) ? "—" : str.tostring(f0MaePct, "#.##") + "%") +
-                  " | LiveBuy " + f0StudyLiveBuyLane +
-                  " | LiveBuyDelay " + (na(f0LiveBuyMin) ? "—" : str.tostring(f0LiveBuyMin, "#.#") + "m") +
-                  " | CAtEntry " + f0StudyCStateAtEntry +
-                  actionMeta("RESEARCH_F0_RESULT", time),
-                  alert.freq_all)
+            if not f0StudyT1Hit and close >= f0StudyT1
+                f0StudyT1Hit  := true
+                f0StudyT1Time := timenow
+            if not f0StudyT2Hit and close >= f0StudyT2
+                f0StudyT2Hit  := true
+                f0StudyT2Time := timenow
+            if not f0StudyT3Hit and close >= f0StudyT3
+                f0StudyT3Hit  := true
+                f0StudyT3Time := timenow
+
+            if not f0StudyRefStopHit and close <= f0StudyRefStop
+                f0StudyRefStopHit  := true
+                f0StudyRefStopTime := timenow
+            if not f0StudyStructStopHit and close <= f0StudyStructStop
+                f0StudyStructStopHit  := true
+                f0StudyStructStopTime := timenow
+            if not f0StudyStruct2RHit and close >= f0StudyStruct2R
+                f0StudyStruct2RHit  := true
+                f0StudyStruct2RTime := timenow
+
+        bool f0BothStopsHit = f0StudyRefStopHit and f0StudyStructStopHit
+        bool f0FinishT3     = f0StudyT3Hit
+        bool f0FinishEod    = forceExitNow
+
+        if (f0BothStopsHit or f0FinishT3 or f0FinishEod) and (na(f0StudyResultEventBar) or f0StudyResultEventBar != bar_index)
+            float f0MfePct = not na(f0StudyHighest) and f0StudyEntry > 0 ? (f0StudyHighest / f0StudyEntry - 1.0) * 100.0 : na
+            float f0MaePct = not na(f0StudyLowest) and f0StudyEntry > 0 ? (f0StudyLowest / f0StudyEntry - 1.0) * 100.0 : na
+            float f0T1Min  = not na(f0StudyT1Time) and not na(f0StudyEntryTime) ? (f0StudyT1Time - f0StudyEntryTime) / 60000.0 : na
+            float f0T2Min  = not na(f0StudyT2Time) and not na(f0StudyEntryTime) ? (f0StudyT2Time - f0StudyEntryTime) / 60000.0 : na
+            float f0T3Min  = not na(f0StudyT3Time) and not na(f0StudyEntryTime) ? (f0StudyT3Time - f0StudyEntryTime) / 60000.0 : na
+            float f0LiveBuyMin = not na(f0StudyLiveBuyTime) and not na(f0StudyEntryTime) ? (f0StudyLiveBuyTime - f0StudyEntryTime) / 60000.0 : na
+
+            bool f0T1BeforeRef = f0StudyT1Hit and (not f0StudyRefStopHit or f0StudyT1Time < f0StudyRefStopTime)
+            bool f0T2BeforeRef = f0StudyT2Hit and (not f0StudyRefStopHit or f0StudyT2Time < f0StudyRefStopTime)
+            bool f0T3BeforeRef = f0StudyT3Hit and (not f0StudyRefStopHit or f0StudyT3Time < f0StudyRefStopTime)
+            bool f0T1BeforeStruct = f0StudyT1Hit and (not f0StudyStructStopHit or f0StudyT1Time < f0StudyStructStopTime)
+            bool f0T2BeforeStruct = f0StudyT2Hit and (not f0StudyStructStopHit or f0StudyT2Time < f0StudyStructStopTime)
+            bool f0T3BeforeStruct = f0StudyT3Hit and (not f0StudyStructStopHit or f0StudyT3Time < f0StudyStructStopTime)
+
+            f0StudyEndReason := f0FinishT3 ? "+3%" : f0BothStopsHit ? "BOTH STOPS" : "EOD"
+            f0StudyLastSummary := "End " + f0StudyEndReason +
+                 " | Ref +1/+2/+3 " + (f0T1BeforeRef ? "Y" : "N") + "/" + (f0T2BeforeRef ? "Y" : "N") + "/" + (f0T3BeforeRef ? "Y" : "N") +
+                 " | Struct +1/+2/+3 " + (f0T1BeforeStruct ? "Y" : "N") + "/" + (f0T2BeforeStruct ? "Y" : "N") + "/" + (f0T3BeforeStruct ? "Y" : "N") +
+                 " | Struct2R " + (f0StudyStruct2RHit ? "Y" : "N")
+            f0StudyResultEventBar := bar_index
+            f0StudyDone   := true
+            f0StudyActive := false
+            f0EpisodeOffBars := 0
+
+            if enablePineAlerts and enableDirectMomentumResearchAlerts
+                alert("NG RESEARCH F0 DIRECT RESULT | " + syminfo.ticker +
+                      " | Entry " + str.tostring(f0StudyEntry, format.mintick) +
+                      " | RefStop " + str.tostring(f0StudyRefStop, format.mintick) +
+                      " | StructStop " + str.tostring(f0StudyStructStop, format.mintick) +
+                      " | StructQty " + str.tostring(f0StudyQtyStruct, "#") +
+                      " | End " + f0StudyEndReason +
+                      " | RefT1/T2/T3 " + (f0T1BeforeRef ? "Y" : "N") + "/" + (f0T2BeforeRef ? "Y" : "N") + "/" + (f0T3BeforeRef ? "Y" : "N") +
+                      " | StructT1/T2/T3 " + (f0T1BeforeStruct ? "Y" : "N") + "/" + (f0T2BeforeStruct ? "Y" : "N") + "/" + (f0T3BeforeStruct ? "Y" : "N") +
+                      " | Struct2R " + (f0StudyStruct2RHit ? "Y" : "N") +
+                      " | T1Min " + (na(f0T1Min) ? "—" : str.tostring(f0T1Min, "#.#")) +
+                      " | T2Min " + (na(f0T2Min) ? "—" : str.tostring(f0T2Min, "#.#")) +
+                      " | T3Min " + (na(f0T3Min) ? "—" : str.tostring(f0T3Min, "#.#")) +
+                      " | MFE " + (na(f0MfePct) ? "—" : str.tostring(f0MfePct, "#.##") + "%") +
+                      " | MAE " + (na(f0MaePct) ? "—" : str.tostring(f0MaePct, "#.##") + "%") +
+                      " | LiveBuy " + f0StudyLiveBuyLane +
+                      " | LiveBuyDelay " + (na(f0LiveBuyMin) ? "—" : str.tostring(f0LiveBuyMin, "#.#") + "m") +
+                      " | CAtEntry " + f0StudyCStateAtEntry +
+                      actionMeta("RESEARCH_F0_RESULT", time),
+                      alert.freq_all)
+
+    [f0LaunchNow, f0StudyActive, f0LastDecision]
+
+[f0LaunchNow, f0StudyActive, f0LastDecision] = runF0Study()
 
 // F0 results are available through the optional dedicated research alerts and
 // compact dashboard status. No new plot/plotshape calls are added because the
