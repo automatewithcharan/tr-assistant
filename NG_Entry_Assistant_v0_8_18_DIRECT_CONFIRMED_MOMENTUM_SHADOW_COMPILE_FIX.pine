@@ -3945,237 +3945,240 @@ if enableDirectMomentumShadowStudy and f0StudyActive and barstate.isrealtime
 // existing script already operates close to Pine's plot-count ceiling.
 
 // BEGIN RESEARCH GATE ABLATION LOGIC — additive, forward-only, no action path.
-//
-// Common base = every Lane-C momentum-bar gate except the three gates under
-// ablation (8-bar breakout, close position, current completed-bar volume).
-// S0 is the current full momentum-bar predicate. S1-S4 remove only the named
-// gate(s). S5 is a diagnostic label inside S3, never an independent eligibility
-// rule. One first qualifying event per symbol/session is retained for this
-// separate ablation study, preventing consecutive candles from being treated as
-// independent opportunities while its outcomes run to EOD.
-bool gaGateWindow    = entryWindowOpen
-bool gaGateContext   = contextGood
-bool gaGateBull      = close > open
-bool gaGateBreakout  = not na(priorHigh) and close > priorHigh
-bool gaGateAtr       = not na(atr) and atr > 0
-bool gaGateRange     = gaGateAtr and barRange >= atr * C_MIN_RANGE_ATR
-bool gaGateBody      = bodyFraction >= C_MIN_BODY_FRACTION
-bool gaGateClosePos  = closePosition >= C_MIN_CLOSE_POSITION
-bool gaGateVolume    = not na(completedBarVolRatio) and completedBarVolRatio >= C_MIN_VOLUME_RATIO
-bool gaGateRs        = not na(rsSpreadPct) and rsSpreadPct >= C_MIN_RS_PCT
-bool gaGateExtension = not na(cEmaExtensionAtr) and cEmaExtensionAtr <= C_MAX_CLOSE_ABOVE_EMA_ATR
-bool gaCommonBase    = barstate.isconfirmed and gaGateWindow and gaGateContext and gaGateBull and
-     gaGateAtr and gaGateRange and gaGateBody and gaGateRs and gaGateExtension
-bool gaS0 = gaCommonBase and gaGateBreakout and gaGateClosePos and gaGateVolume
-bool gaS1 = gaCommonBase and gaGateClosePos and gaGateVolume
-bool gaS2 = gaCommonBase and gaGateBreakout and gaGateVolume
-bool gaS3 = gaCommonBase and gaGateBreakout and gaGateClosePos
-bool gaS4 = gaCommonBase and gaGateVolume
-bool gaS5 = gaCommonBase and gaGateBreakout and gaGateClosePos and not gaGateVolume
-bool gaAnyVariant = gaS0 or gaS1 or gaS2 or gaS3 or gaS4
-// Include the existing Lane-C breakout-attempt and F0/EC0 pre-breakout
-// populations even when another Lane-C gate fails. This is what preserves the
-// complete simultaneous failure vector instead of observing winners only.
-bool gaCoherentCandidate = gaAnyVariant or cAttemptBar or
-     (barstate.isconfirmed and entryWindowOpen and confirmedBullishActionBar and ec0CoreNoDayMove)
+runGateAblation() =>
+    //
+    // Common base = every Lane-C momentum-bar gate except the three gates under
+    // ablation (8-bar breakout, close position, current completed-bar volume).
+    // S0 is the current full momentum-bar predicate. S1-S4 remove only the named
+    // gate(s). S5 is a diagnostic label inside S3, never an independent eligibility
+    // rule. One first qualifying event per symbol/session is retained for this
+    // separate ablation study, preventing consecutive candles from being treated as
+    // independent opportunities while its outcomes run to EOD.
+    bool gaGateWindow    = entryWindowOpen
+    bool gaGateContext   = contextGood
+    bool gaGateBull      = close > open
+    bool gaGateBreakout  = not na(priorHigh) and close > priorHigh
+    bool gaGateAtr       = not na(atr) and atr > 0
+    bool gaGateRange     = gaGateAtr and barRange >= atr * C_MIN_RANGE_ATR
+    bool gaGateBody      = bodyFraction >= C_MIN_BODY_FRACTION
+    bool gaGateClosePos  = closePosition >= C_MIN_CLOSE_POSITION
+    bool gaGateVolume    = not na(completedBarVolRatio) and completedBarVolRatio >= C_MIN_VOLUME_RATIO
+    bool gaGateRs        = not na(rsSpreadPct) and rsSpreadPct >= C_MIN_RS_PCT
+    bool gaGateExtension = not na(cEmaExtensionAtr) and cEmaExtensionAtr <= C_MAX_CLOSE_ABOVE_EMA_ATR
+    bool gaCommonBase    = barstate.isconfirmed and gaGateWindow and gaGateContext and gaGateBull and
+         gaGateAtr and gaGateRange and gaGateBody and gaGateRs and gaGateExtension
+    bool gaS0 = gaCommonBase and gaGateBreakout and gaGateClosePos and gaGateVolume
+    bool gaS1 = gaCommonBase and gaGateClosePos and gaGateVolume
+    bool gaS2 = gaCommonBase and gaGateBreakout and gaGateVolume
+    bool gaS3 = gaCommonBase and gaGateBreakout and gaGateClosePos
+    bool gaS4 = gaCommonBase and gaGateVolume
+    bool gaS5 = gaCommonBase and gaGateBreakout and gaGateClosePos and not gaGateVolume
+    bool gaAnyVariant = gaS0 or gaS1 or gaS2 or gaS3 or gaS4
+    // Include the existing Lane-C breakout-attempt and F0/EC0 pre-breakout
+    // populations even when another Lane-C gate fails. This is what preserves the
+    // complete simultaneous failure vector instead of observing winners only.
+    bool gaCoherentCandidate = gaAnyVariant or cAttemptBar or
+         (barstate.isconfirmed and entryWindowOpen and confirmedBullishActionBar and ec0CoreNoDayMove)
 
-varip bool   gaStartedToday = false
-varip bool   gaActive       = false
-varip bool   gaDone         = false
-varip int    gaEntryBar     = na
-varip int    gaEntryTime    = na
-varip string gaCandidateId  = "—"
-varip string gaVariants     = "—"
-varip float  gaEntry        = na
-varip float  gaHighest      = na
-varip float  gaLowest       = na
-varip int    gaMfeTime      = na
-varip int    gaMaeTime      = na
-varip int    gaP05Bar       = na
-varip int    gaP1Bar        = na
-varip int    gaP2Bar        = na
-varip int    gaP3Bar        = na
-varip int    gaN05Bar       = na
-varip int    gaN1Bar        = na
-varip int    gaN2Bar        = na
-varip float  gaReturn5m     = na
-varip float  gaReturn15m    = na
-varip float  gaReturn30m    = na
-varip float  gaReturnEod    = na
-varip int    gaResultBar    = na
+    varip bool   gaStartedToday = false
+    varip bool   gaActive       = false
+    varip bool   gaDone         = false
+    varip int    gaEntryBar     = na
+    varip int    gaEntryTime    = na
+    varip string gaCandidateId  = "—"
+    varip string gaVariants     = "—"
+    varip float  gaEntry        = na
+    varip float  gaHighest      = na
+    varip float  gaLowest       = na
+    varip int    gaMfeTime      = na
+    varip int    gaMaeTime      = na
+    varip int    gaP05Bar       = na
+    varip int    gaP1Bar        = na
+    varip int    gaP2Bar        = na
+    varip int    gaP3Bar        = na
+    varip int    gaN05Bar       = na
+    varip int    gaN1Bar        = na
+    varip int    gaN2Bar        = na
+    varip float  gaReturn5m     = na
+    varip float  gaReturn15m    = na
+    varip float  gaReturn30m    = na
+    varip float  gaReturnEod    = na
+    varip int    gaResultBar    = na
 
-if newDayReset or not isFiveMinute or not enableGateAblationStudy
-    gaStartedToday := false
-    gaActive       := false
-    gaDone         := false
-    gaEntryBar     := na
-    gaEntryTime    := na
-    gaCandidateId  := "—"
-    gaVariants     := "—"
-    gaEntry        := na
-    gaHighest      := na
-    gaLowest       := na
-    gaMfeTime      := na
-    gaMaeTime      := na
-    gaP05Bar       := na
-    gaP1Bar        := na
-    gaP2Bar        := na
-    gaP3Bar        := na
-    gaN05Bar       := na
-    gaN1Bar        := na
-    gaN2Bar        := na
-    gaReturn5m     := na
-    gaReturn15m    := na
-    gaReturn30m    := na
-    gaReturnEod    := na
-    gaResultBar    := na
+    if newDayReset or not isFiveMinute or not enableGateAblationStudy
+        gaStartedToday := false
+        gaActive       := false
+        gaDone         := false
+        gaEntryBar     := na
+        gaEntryTime    := na
+        gaCandidateId  := "—"
+        gaVariants     := "—"
+        gaEntry        := na
+        gaHighest      := na
+        gaLowest       := na
+        gaMfeTime      := na
+        gaMaeTime      := na
+        gaP05Bar       := na
+        gaP1Bar        := na
+        gaP2Bar        := na
+        gaP3Bar        := na
+        gaN05Bar       := na
+        gaN1Bar        := na
+        gaN2Bar        := na
+        gaReturn5m     := na
+        gaReturn15m    := na
+        gaReturn30m    := na
+        gaReturnEod    := na
+        gaResultBar    := na
 
-bool gaLaunchNow = enableGateAblationStudy and not gaStartedToday and not gaActive and not gaDone and
-     barstate.isrealtime and gaCoherentCandidate
+    bool gaLaunchNow = enableGateAblationStudy and not gaStartedToday and not gaActive and not gaDone and
+         barstate.isrealtime and gaCoherentCandidate
 
-if gaLaunchNow
-    gaStartedToday := true
-    gaActive       := true
-    gaDone         := false
-    gaEntryBar     := bar_index
-    gaEntryTime    := time_close
-    gaCandidateId  := syminfo.ticker + "-" + str.tostring(time_close)
-    gaVariants     := (gaS0 ? "S0," : "") + (gaS1 ? "S1," : "") + (gaS2 ? "S2," : "") +
-         (gaS3 ? "S3," : "") + (gaS4 ? "S4," : "") + (gaS5 ? "S5," : "")
-    gaVariants     := str.length(gaVariants) == 0 ? "NONE" : gaVariants
-    gaEntry        := close
-    gaHighest      := close
-    gaLowest       := close
-    gaMfeTime      := time_close
-    gaMaeTime      := time_close
-    gaP05Bar       := na
-    gaP1Bar        := na
-    gaP2Bar        := na
-    gaP3Bar        := na
-    gaN05Bar       := na
-    gaN1Bar        := na
-    gaN2Bar        := na
-    gaReturn5m     := na
-    gaReturn15m    := na
-    gaReturn30m    := na
-    gaReturnEod    := na
-    gaResultBar    := na
+    if gaLaunchNow
+        gaStartedToday := true
+        gaActive       := true
+        gaDone         := false
+        gaEntryBar     := bar_index
+        gaEntryTime    := time_close
+        gaCandidateId  := syminfo.ticker + "-" + str.tostring(time_close)
+        gaVariants     := (gaS0 ? "S0," : "") + (gaS1 ? "S1," : "") + (gaS2 ? "S2," : "") +
+             (gaS3 ? "S3," : "") + (gaS4 ? "S4," : "") + (gaS5 ? "S5," : "")
+        gaVariants     := str.length(gaVariants) == 0 ? "NONE" : gaVariants
+        gaEntry        := close
+        gaHighest      := close
+        gaLowest       := close
+        gaMfeTime      := time_close
+        gaMaeTime      := time_close
+        gaP05Bar       := na
+        gaP1Bar        := na
+        gaP2Bar        := na
+        gaP3Bar        := na
+        gaN05Bar       := na
+        gaN1Bar        := na
+        gaN2Bar        := na
+        gaReturn5m     := na
+        gaReturn15m    := na
+        gaReturn30m    := na
+        gaReturnEod    := na
+        gaResultBar    := na
 
-    string gaAllFailures = ""
-    gaAllFailures := gaAddFailure(gaAllFailures, gaGateWindow, "WINDOW")
-    gaAllFailures := gaAddFailure(gaAllFailures, gaGateContext, "CONTEXT")
-    gaAllFailures := gaAddFailure(gaAllFailures, gaGateBull, "BULL")
-    gaAllFailures := gaAddFailure(gaAllFailures, gaGateBreakout, "BREAKOUT8")
-    gaAllFailures := gaAddFailure(gaAllFailures, gaGateAtr, "ATR")
-    gaAllFailures := gaAddFailure(gaAllFailures, gaGateRange, "RANGE")
-    gaAllFailures := gaAddFailure(gaAllFailures, gaGateBody, "BODY")
-    gaAllFailures := gaAddFailure(gaAllFailures, gaGateClosePos, "CLOSEPOS")
-    gaAllFailures := gaAddFailure(gaAllFailures, gaGateVolume, "VOLUME")
-    gaAllFailures := gaAddFailure(gaAllFailures, gaGateRs, "RS")
-    gaAllFailures := gaAddFailure(gaAllFailures, gaGateExtension, "EXTENSION")
-    gaAllFailures := str.length(gaAllFailures) == 0 ? "NONE" : gaAllFailures
+        string gaAllFailures = ""
+        gaAllFailures := gaAddFailure(gaAllFailures, gaGateWindow, "WINDOW")
+        gaAllFailures := gaAddFailure(gaAllFailures, gaGateContext, "CONTEXT")
+        gaAllFailures := gaAddFailure(gaAllFailures, gaGateBull, "BULL")
+        gaAllFailures := gaAddFailure(gaAllFailures, gaGateBreakout, "BREAKOUT8")
+        gaAllFailures := gaAddFailure(gaAllFailures, gaGateAtr, "ATR")
+        gaAllFailures := gaAddFailure(gaAllFailures, gaGateRange, "RANGE")
+        gaAllFailures := gaAddFailure(gaAllFailures, gaGateBody, "BODY")
+        gaAllFailures := gaAddFailure(gaAllFailures, gaGateClosePos, "CLOSEPOS")
+        gaAllFailures := gaAddFailure(gaAllFailures, gaGateVolume, "VOLUME")
+        gaAllFailures := gaAddFailure(gaAllFailures, gaGateRs, "RS")
+        gaAllFailures := gaAddFailure(gaAllFailures, gaGateExtension, "EXTENSION")
+        gaAllFailures := str.length(gaAllFailures) == 0 ? "NONE" : gaAllFailures
 
-    // Mirrors the dashboard's first-match order; the complete vector above is
-    // retained separately so a displayed breakout/close failure cannot hide volume.
-    string gaFirstBlocker = cState != 0 ? (cState == 2 ? "C_STAGE_READY" : cState == 3 ? "C_STAGE_TRADE" : cState == 5 ? "C_STAGE_MISS" : "C_STAGE_EXIT") :
-         not gaGateContext ? "CONTEXT" :
-         not gaGateBreakout ? "NO_8BAR_BREAKOUT" :
-         not gaGateAtr or not gaGateRange ? "RANGE_LT_1ATR" :
-         not gaGateBody ? "BODY_LT_65" :
-         not gaGateClosePos ? "WEAK_CLOSE" :
-         not gaGateVolume ? "VOLUME_LT_2X" :
-         not gaGateRs ? "RS_LT_1" :
-         not gaGateExtension ? "TOO_EXTENDED" : "QUALIFYING"
-    float gaRangeAtr = gaGateAtr ? barRange / atr : na
-    float gaVwapDistAtr = gaGateAtr and not na(vwap) ? (close - vwap) / atr : na
-    float gaSessionHighDistancePct = not na(ef0SessionHigh) and ef0SessionHigh > 0 ?
-         (ef0SessionHigh - close) / ef0SessionHigh * 100.0 : na
-
-    if enablePineAlerts and enableGateAblationTelemetry
-        alert("NG RESEARCH GA ENTRY" +
-              " | DateTime " + str.format_time(time_close, "yyyy-MM-dd HH:mm", "Asia/Kolkata") +
-              " | Candidate " + gaCandidateId +
-              " | Symbol " + syminfo.ticker +
-              " | Variants " + gaVariants +
-              " | LaneCtx A" + str.tostring(autoState) + "/B" + str.tostring(bState) + "/C" + str.tostring(cState) + "/D" + str.tostring(dState) + "/E" + str.tostring(eState) +
-              " | Entry " + str.tostring(gaEntry, format.mintick) +
-              " | Day " + (na(stockDayPct) ? "NA" : str.tostring(stockDayPct, "#.##")) +
-              " | DayRS " + (na(dayRsPct) ? "NA" : str.tostring(dayRsPct, "#.##")) +
-              " | IntraRS " + (na(rsSpreadPct) ? "NA" : str.tostring(rsSpreadPct, "#.##")) +
-              " | ATR " + (na(atr) ? "NA" : str.tostring(atr, format.mintick)) +
-              " | EMAExtATR " + (na(cEmaExtensionAtr) ? "NA" : str.tostring(cEmaExtensionAtr, "#.###")) +
-              " | VWAPDistATR " + (na(gaVwapDistAtr) ? "NA" : str.tostring(gaVwapDistAtr, "#.###")) +
-              " | PriorHigh " + (na(priorHigh) ? "NA" : str.tostring(priorHigh, format.mintick)) +
-              " | RangeATR " + (na(gaRangeAtr) ? "NA" : str.tostring(gaRangeAtr, "#.###")) +
-              " | BodyFrac " + str.tostring(bodyFraction, "#.####") +
-              " | ClosePos " + str.tostring(closePosition, "#.####") +
-              " | VolRatio " + (na(completedBarVolRatio) ? "NA" : str.tostring(completedBarVolRatio, "#.###")) +
-              " | Liquidity " + gaYN(liquidityOk) +
-              " | SessionHigh " + (na(ef0SessionHigh) ? "NA" : str.tostring(ef0SessionHigh, format.mintick)) +
-              " | DistSessionHighPct " + (na(gaSessionHighDistancePct) ? "NA" : str.tostring(gaSessionHighDistancePct, "#.###")) +
-              " | Gates W/Ctx/Bull/BO/ATR/Rng/Body/Close/Vol/RS/Ext " +
-                   gaYN(gaGateWindow) + "/" + gaYN(gaGateContext) + "/" + gaYN(gaGateBull) + "/" + gaYN(gaGateBreakout) + "/" +
-                   gaYN(gaGateAtr) + "/" + gaYN(gaGateRange) + "/" + gaYN(gaGateBody) + "/" + gaYN(gaGateClosePos) + "/" +
-                   gaYN(gaGateVolume) + "/" + gaYN(gaGateRs) + "/" + gaYN(gaGateExtension) +
-              " | FirstBlocker " + gaFirstBlocker +
-              " | AllFailures " + gaAllFailures +
-              actionMeta("RESEARCH_GA_ENTRY", time),
-              alert.freq_once_per_bar_close)
-
-if enableGateAblationStudy and gaActive and barstate.isrealtime and barstate.isconfirmed and
-     not na(gaEntryBar) and bar_index > gaEntryBar
-    if high > gaHighest
-        gaHighest := high
-        gaMfeTime := time_close
-    if low < gaLowest
-        gaLowest := low
-        gaMaeTime := time_close
-
-    gaP05Bar := na(gaP05Bar) and high >= gaEntry * 1.005 ? bar_index : gaP05Bar
-    gaP1Bar  := na(gaP1Bar)  and high >= gaEntry * 1.01  ? bar_index : gaP1Bar
-    gaP2Bar  := na(gaP2Bar)  and high >= gaEntry * 1.02  ? bar_index : gaP2Bar
-    gaP3Bar  := na(gaP3Bar)  and high >= gaEntry * 1.03  ? bar_index : gaP3Bar
-    gaN05Bar := na(gaN05Bar) and low  <= gaEntry * 0.995 ? bar_index : gaN05Bar
-    gaN1Bar  := na(gaN1Bar)  and low  <= gaEntry * 0.99  ? bar_index : gaN1Bar
-    gaN2Bar  := na(gaN2Bar)  and low  <= gaEntry * 0.98  ? bar_index : gaN2Bar
-
-    int gaBarsForward = bar_index - gaEntryBar
-    gaReturn5m  := gaBarsForward == 1 ? (close / gaEntry - 1.0) * 100.0 : gaReturn5m
-    gaReturn15m := gaBarsForward == 3 ? (close / gaEntry - 1.0) * 100.0 : gaReturn15m
-    gaReturn30m := gaBarsForward == 6 ? (close / gaEntry - 1.0) * 100.0 : gaReturn30m
-
-    bool gaFinishNow = atOrAfterForceExit
-    if gaFinishNow and (na(gaResultBar) or gaResultBar != bar_index)
-        gaReturnEod := (close / gaEntry - 1.0) * 100.0
-        float gaMfePct = (gaHighest / gaEntry - 1.0) * 100.0
-        float gaMaePct = (gaLowest / gaEntry - 1.0) * 100.0
-        float gaTimeToMfe = not na(gaMfeTime) ? (gaMfeTime - gaEntryTime) / 60000.0 : na
-        float gaTimeToMae = not na(gaMaeTime) ? (gaMaeTime - gaEntryTime) / 60000.0 : na
-        gaResultBar := bar_index
-        gaDone      := true
-        gaActive    := false
+        // Mirrors the dashboard's first-match order; the complete vector above is
+        // retained separately so a displayed breakout/close failure cannot hide volume.
+        string gaFirstBlocker = cState != 0 ? (cState == 2 ? "C_STAGE_READY" : cState == 3 ? "C_STAGE_TRADE" : cState == 5 ? "C_STAGE_MISS" : "C_STAGE_EXIT") :
+             not gaGateContext ? "CONTEXT" :
+             not gaGateBreakout ? "NO_8BAR_BREAKOUT" :
+             not gaGateAtr or not gaGateRange ? "RANGE_LT_1ATR" :
+             not gaGateBody ? "BODY_LT_65" :
+             not gaGateClosePos ? "WEAK_CLOSE" :
+             not gaGateVolume ? "VOLUME_LT_2X" :
+             not gaGateRs ? "RS_LT_1" :
+             not gaGateExtension ? "TOO_EXTENDED" : "QUALIFYING"
+        float gaRangeAtr = gaGateAtr ? barRange / atr : na
+        float gaVwapDistAtr = gaGateAtr and not na(vwap) ? (close - vwap) / atr : na
+        float gaSessionHighDistancePct = not na(ef0SessionHigh) and ef0SessionHigh > 0 ?
+             (ef0SessionHigh - close) / ef0SessionHigh * 100.0 : na
 
         if enablePineAlerts and enableGateAblationTelemetry
-            alert("NG RESEARCH GA RESULT" +
-                  " | DateTime " + str.format_time(gaEntryTime, "yyyy-MM-dd HH:mm", "Asia/Kolkata") +
+            alert("NG RESEARCH GA ENTRY" +
+                  " | DateTime " + str.format_time(time_close, "yyyy-MM-dd HH:mm", "Asia/Kolkata") +
                   " | Candidate " + gaCandidateId +
                   " | Symbol " + syminfo.ticker +
                   " | Variants " + gaVariants +
-                  " | +0.5/+1/+2/+3 " + gaYN(not na(gaP05Bar)) + "/" + gaYN(not na(gaP1Bar)) + "/" + gaYN(not na(gaP2Bar)) + "/" + gaYN(not na(gaP3Bar)) +
-                  " | -0.5/-1/-2 " + gaYN(not na(gaN05Bar)) + "/" + gaYN(not na(gaN1Bar)) + "/" + gaYN(not na(gaN2Bar)) +
-                  " | MFE " + str.tostring(gaMfePct, "#.###") +
-                  " | MAE " + str.tostring(gaMaePct, "#.###") +
-                  " | TimeMFE " + (na(gaTimeToMfe) ? "NA" : str.tostring(gaTimeToMfe, "#.#")) +
-                  " | TimeMAE " + (na(gaTimeToMae) ? "NA" : str.tostring(gaTimeToMae, "#.#")) +
-                  " | Order0.5 " + gaOrder(gaP05Bar, gaN05Bar) +
-                  " | Order1 " + gaOrder(gaP1Bar, gaN1Bar) +
-                  " | Order2 " + gaOrder(gaP2Bar, gaN2Bar) +
-                  " | Ret5 " + (na(gaReturn5m) ? "NA" : str.tostring(gaReturn5m, "#.###")) +
-                  " | Ret15 " + (na(gaReturn15m) ? "NA" : str.tostring(gaReturn15m, "#.###")) +
-                  " | Ret30 " + (na(gaReturn30m) ? "NA" : str.tostring(gaReturn30m, "#.###")) +
-                  " | RetEOD " + str.tostring(gaReturnEod, "#.###") +
-                  actionMeta("RESEARCH_GA_RESULT", time),
-                  alert.freq_all)
+                  " | LaneCtx A" + str.tostring(autoState) + "/B" + str.tostring(bState) + "/C" + str.tostring(cState) + "/D" + str.tostring(dState) + "/E" + str.tostring(eState) +
+                  " | Entry " + str.tostring(gaEntry, format.mintick) +
+                  " | Day " + (na(stockDayPct) ? "NA" : str.tostring(stockDayPct, "#.##")) +
+                  " | DayRS " + (na(dayRsPct) ? "NA" : str.tostring(dayRsPct, "#.##")) +
+                  " | IntraRS " + (na(rsSpreadPct) ? "NA" : str.tostring(rsSpreadPct, "#.##")) +
+                  " | ATR " + (na(atr) ? "NA" : str.tostring(atr, format.mintick)) +
+                  " | EMAExtATR " + (na(cEmaExtensionAtr) ? "NA" : str.tostring(cEmaExtensionAtr, "#.###")) +
+                  " | VWAPDistATR " + (na(gaVwapDistAtr) ? "NA" : str.tostring(gaVwapDistAtr, "#.###")) +
+                  " | PriorHigh " + (na(priorHigh) ? "NA" : str.tostring(priorHigh, format.mintick)) +
+                  " | RangeATR " + (na(gaRangeAtr) ? "NA" : str.tostring(gaRangeAtr, "#.###")) +
+                  " | BodyFrac " + str.tostring(bodyFraction, "#.####") +
+                  " | ClosePos " + str.tostring(closePosition, "#.####") +
+                  " | VolRatio " + (na(completedBarVolRatio) ? "NA" : str.tostring(completedBarVolRatio, "#.###")) +
+                  " | Liquidity " + gaYN(liquidityOk) +
+                  " | SessionHigh " + (na(ef0SessionHigh) ? "NA" : str.tostring(ef0SessionHigh, format.mintick)) +
+                  " | DistSessionHighPct " + (na(gaSessionHighDistancePct) ? "NA" : str.tostring(gaSessionHighDistancePct, "#.###")) +
+                  " | Gates W/Ctx/Bull/BO/ATR/Rng/Body/Close/Vol/RS/Ext " +
+                       gaYN(gaGateWindow) + "/" + gaYN(gaGateContext) + "/" + gaYN(gaGateBull) + "/" + gaYN(gaGateBreakout) + "/" +
+                       gaYN(gaGateAtr) + "/" + gaYN(gaGateRange) + "/" + gaYN(gaGateBody) + "/" + gaYN(gaGateClosePos) + "/" +
+                       gaYN(gaGateVolume) + "/" + gaYN(gaGateRs) + "/" + gaYN(gaGateExtension) +
+                  " | FirstBlocker " + gaFirstBlocker +
+                  " | AllFailures " + gaAllFailures +
+                  actionMeta("RESEARCH_GA_ENTRY", time),
+                  alert.freq_once_per_bar_close)
+
+    if enableGateAblationStudy and gaActive and barstate.isrealtime and barstate.isconfirmed and
+         not na(gaEntryBar) and bar_index > gaEntryBar
+        if high > gaHighest
+            gaHighest := high
+            gaMfeTime := time_close
+        if low < gaLowest
+            gaLowest := low
+            gaMaeTime := time_close
+
+        gaP05Bar := na(gaP05Bar) and high >= gaEntry * 1.005 ? bar_index : gaP05Bar
+        gaP1Bar  := na(gaP1Bar)  and high >= gaEntry * 1.01  ? bar_index : gaP1Bar
+        gaP2Bar  := na(gaP2Bar)  and high >= gaEntry * 1.02  ? bar_index : gaP2Bar
+        gaP3Bar  := na(gaP3Bar)  and high >= gaEntry * 1.03  ? bar_index : gaP3Bar
+        gaN05Bar := na(gaN05Bar) and low  <= gaEntry * 0.995 ? bar_index : gaN05Bar
+        gaN1Bar  := na(gaN1Bar)  and low  <= gaEntry * 0.99  ? bar_index : gaN1Bar
+        gaN2Bar  := na(gaN2Bar)  and low  <= gaEntry * 0.98  ? bar_index : gaN2Bar
+
+        int gaBarsForward = bar_index - gaEntryBar
+        gaReturn5m  := gaBarsForward == 1 ? (close / gaEntry - 1.0) * 100.0 : gaReturn5m
+        gaReturn15m := gaBarsForward == 3 ? (close / gaEntry - 1.0) * 100.0 : gaReturn15m
+        gaReturn30m := gaBarsForward == 6 ? (close / gaEntry - 1.0) * 100.0 : gaReturn30m
+
+        bool gaFinishNow = atOrAfterForceExit
+        if gaFinishNow and (na(gaResultBar) or gaResultBar != bar_index)
+            gaReturnEod := (close / gaEntry - 1.0) * 100.0
+            float gaMfePct = (gaHighest / gaEntry - 1.0) * 100.0
+            float gaMaePct = (gaLowest / gaEntry - 1.0) * 100.0
+            float gaTimeToMfe = not na(gaMfeTime) ? (gaMfeTime - gaEntryTime) / 60000.0 : na
+            float gaTimeToMae = not na(gaMaeTime) ? (gaMaeTime - gaEntryTime) / 60000.0 : na
+            gaResultBar := bar_index
+            gaDone      := true
+            gaActive    := false
+
+            if enablePineAlerts and enableGateAblationTelemetry
+                alert("NG RESEARCH GA RESULT" +
+                      " | DateTime " + str.format_time(gaEntryTime, "yyyy-MM-dd HH:mm", "Asia/Kolkata") +
+                      " | Candidate " + gaCandidateId +
+                      " | Symbol " + syminfo.ticker +
+                      " | Variants " + gaVariants +
+                      " | +0.5/+1/+2/+3 " + gaYN(not na(gaP05Bar)) + "/" + gaYN(not na(gaP1Bar)) + "/" + gaYN(not na(gaP2Bar)) + "/" + gaYN(not na(gaP3Bar)) +
+                      " | -0.5/-1/-2 " + gaYN(not na(gaN05Bar)) + "/" + gaYN(not na(gaN1Bar)) + "/" + gaYN(not na(gaN2Bar)) +
+                      " | MFE " + str.tostring(gaMfePct, "#.###") +
+                      " | MAE " + str.tostring(gaMaePct, "#.###") +
+                      " | TimeMFE " + (na(gaTimeToMfe) ? "NA" : str.tostring(gaTimeToMfe, "#.#")) +
+                      " | TimeMAE " + (na(gaTimeToMae) ? "NA" : str.tostring(gaTimeToMae, "#.#")) +
+                      " | Order0.5 " + gaOrder(gaP05Bar, gaN05Bar) +
+                      " | Order1 " + gaOrder(gaP1Bar, gaN1Bar) +
+                      " | Order2 " + gaOrder(gaP2Bar, gaN2Bar) +
+                      " | Ret5 " + (na(gaReturn5m) ? "NA" : str.tostring(gaReturn5m, "#.###")) +
+                      " | Ret15 " + (na(gaReturn15m) ? "NA" : str.tostring(gaReturn15m, "#.###")) +
+                      " | Ret30 " + (na(gaReturn30m) ? "NA" : str.tostring(gaReturn30m, "#.###")) +
+                      " | RetEOD " + str.tostring(gaReturnEod, "#.###") +
+                      actionMeta("RESEARCH_GA_RESULT", time),
+                      alert.freq_all)
+
+runGateAblation()
 // END RESEARCH GATE ABLATION LOGIC.
 
 int focusLane = 0

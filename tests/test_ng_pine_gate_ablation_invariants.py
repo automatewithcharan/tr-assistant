@@ -122,6 +122,19 @@ def test_f0_uses_existing_episode_controls_and_remains_shadow_only() -> None:
     assert "stopTicket(" not in f0
 
 
+def test_gate_ablation_is_scoped_to_avoid_ce10295() -> None:
+    """S0-S5 declarations must stay inside one function, not global scope."""
+    text = PINE.read_text()
+    logic = text.split("// BEGIN RESEARCH GATE ABLATION LOGIC", 1)[1].split(
+        "// END RESEARCH GATE ABLATION LOGIC", 1
+    )[0]
+    assert "\nrunGateAblation() =>\n" in logic
+    assert "\nrunGateAblation()\n" in logic
+    for line in logic.splitlines():
+        if re.match(r"^(?:bool|int|float|string|var|varip)\s+ga", line):
+            raise AssertionError(f"top-level GA declaration would risk CE10295: {line}")
+
+
 def test_research_is_off_by_default_and_has_no_plot_or_alertcondition() -> None:
     text = PINE.read_text()
     logic = text.split("// BEGIN RESEARCH GATE ABLATION LOGIC", 1)[1].split(
