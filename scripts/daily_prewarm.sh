@@ -62,6 +62,14 @@ if [ -f "$SESSION_FILE" ]; then
     fi
 fi
 
+# Refresh the official NSE listing and Kite identity map before prewarming.
+# A stale list silently excludes newly listed stocks from every live scan.
+if ! TERM=xterm "$PYTHON" "$REPO/scripts/refresh_nse_universe.py" >> "$LOG" 2>&1; then
+    echo "[$(date -u +'%Y-%m-%d %H:%M:%S')] Prewarm: NSE universe refresh failed" >> "$LOG"
+    send_discord "🚨 **NSE universe refresh failed** — live scanner coverage may be stale."
+    exit 1
+fi
+
 # Run standalone prewarm (exits when done — does NOT start a trading session)
 # 1. Refresh NSE allstocks
 TERM=xterm $PYTHON -m pkscreener.pkscreenercli     --kiteprewarm allstocks     --kiteprewarmforce     --kiteprewarmworkers 8     >> $LOG 2>&1

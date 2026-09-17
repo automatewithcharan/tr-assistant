@@ -223,6 +223,8 @@ class SignalMonitorRunner:
         self.run_at_str = self.run_at.strftime("%Y-%m-%d %H:%M:%S")
         self.timestamp = self.run_at.strftime("%Y%m%d_%H%M%S")
         self._previous_live_ticks_by_symbol: Dict[str, Dict] = {}
+        self._pending_refresh_symbols: Dict[str, Tuple[int, float]] = {}
+        self._refresh_queue_date = self.run_at.date().isoformat()
         self._cycle_number = 0
         self._preload_done = False
         self.fast_mode = bool(self.FAST_MODE)
@@ -888,7 +890,7 @@ class SignalMonitorRunner:
             default_logger().debug(f"Partial monitor board save failed: {exc}", exc_info=True)
 
     def _select_symbols_for_cycle(self, symbols: List[str], previous_simple_df: pd.DataFrame) -> List[str]:
-        """Return either the full universe or only changed live-tick symbols for this cycle."""
+        """Retain changed symbols until their full scan actually runs."""
         if not self.use_live_kite:
             return symbols
 
@@ -900,75 +902,77 @@ class SignalMonitorRunner:
             str(symbol).strip().upper(): tick
             for symbol, tick in current_ticks.items()
         }
-        if self._cycle_number <= 0:
-            if self.streaming_mode:
-                bootstrap_symbols = self._bootstrap_symbols_for_first_cycle(
-                    symbols,
-                    current_ticks,
-                    previous_simple_df,
-                )
-                if bootstrap_symbols:
-                    self._previous_live_ticks_by_symbol = current_tick_snapshot
-                    return bootstrap_symbols
-            self._previous_live_ticks_by_symbol = current_tick_snapshot
-            return self._sort_symbols_by_change(symbols, current_ticks)[: self.STREAM_BOOTSTRAP_MAX_SYMBOLS]
-
-        previous_ticks = self._previous_live_ticks_by_symbol
+        today = self.run_at.date().isoformat()
+        if getattr(self, "_refresh_queue_date", "") != today:
+            self._pending_refresh_symbols = {}
+            self._refresh_queue_date = today
+            self._previous_live_ticks_by_symbol = {}
+        previous_ticks = getattr(self, "_previous_live_ticks_by_symbol", {}) or {}
         self._previous_live_ticks_by_symbol = current_tick_snapshot
-        if not previous_ticks:
-            return self._sort_symbols_by_change(symbols, current_ticks)[: self.STREAM_BOOTSTRAP_MAX_SYMBOLS]
-        if self._cycle_number % self.FULL_REFRESH_EVERY_CYCLES == 0:
-            return self._sort_symbols_by_change(symbols, current_ticks)[: self.MAX_CHANGED_SYMBOLS_PER_CYCLE]
-
+        first_snapshot = not previous_ticks
+        periodic_refresh = (
+            not first_snapshot
+            and self._cycle_number > 0
+            and self._cycle_number % self.FULL_REFRESH_EVERY_CYCLES == 0
+        )
         previous_simple_map = self._simple_row_map(previous_simple_df)
-        # Refresh hot sectors at most once every 60s — cheap O(N_ticks) scan
-        # over current ticks finds sectors with 2+ movers >= 3%.
-        self._refresh_hot_sectors(current_ticks)
-        changed_symbols: List[Tuple[float, str]] = []
+        bootstrap = set(
+            self._bootstrap_symbols_for_first_cycle(symbols, current_ticks, previous_simple_df)
+            if first_snapshot and self.streaming_mode else []
+        )
+        if not first_snapshot and not periodic_refresh:
+            self._refresh_hot_sectors(current_ticks)
+        pending = getattr(self, "_pending_refresh_symbols", {}) or {}
+        cycle = int(getattr(self, "_cycle_number", 0) or 0)
+        allowed = {str(symbol).strip().upper() for symbol in symbols}
+        pending = {symbol: item for symbol, item in pending.items()
+                   if symbol in allowed and symbol in current_tick_snapshot}
         for symbol in symbols:
             normalized_symbol = str(symbol).strip().upper()
             current_tick = current_ticks.get(normalized_symbol)
             if not current_tick:
                 continue
             previous_tick = previous_ticks.get(normalized_symbol)
-            if previous_tick is None:
-                # New symbol — prioritize by current daily change% so big movers
-                # aren't stuck behind alphabetically-first stocks on first encounter.
-                try:
-                    close = float(current_tick.get("close", 0) or 0)
-                    ltp = float(current_tick.get("last_price", 0) or 0)
-                    init_priority = abs((ltp - close) / close * 100.0) if close > 0 else 0.0
-                except Exception:
-                    init_priority = 0.0
-                changed_symbols.append((init_priority, normalized_symbol))
-                continue
-            current_marker = (
-                current_tick.get("last_price"),
-                current_tick.get("volume_traded"),
-                current_tick.get("last_trade_time"),
-                current_tick.get("exchange_timestamp"),
-                current_tick.get("received_at"),
-            )
-            previous_marker = (
-                previous_tick.get("last_price"),
-                previous_tick.get("volume_traded"),
-                previous_tick.get("last_trade_time"),
-                previous_tick.get("exchange_timestamp"),
-                previous_tick.get("received_at"),
-            )
-            if current_marker != previous_marker and self._symbol_needs_refresh(
-                normalized_symbol,
-                previous_tick,
-                current_tick,
-                previous_simple_map.get(normalized_symbol),
-            ):
+            if first_snapshot or periodic_refresh or previous_tick is None:
+                priority = abs(self._to_float(current_tick.get("change"))) * 10.0
+                if normalized_symbol in bootstrap:
+                    priority += 100.0
+            else:
+                current_marker = (
+                    current_tick.get("last_price"),
+                    current_tick.get("volume_traded"),
+                    current_tick.get("last_trade_time"),
+                    current_tick.get("exchange_timestamp"),
+                    current_tick.get("received_at"),
+                )
+                previous_marker = (
+                    previous_tick.get("last_price"),
+                    previous_tick.get("volume_traded"),
+                    previous_tick.get("last_trade_time"),
+                    previous_tick.get("exchange_timestamp"),
+                    previous_tick.get("received_at"),
+                )
+                if current_marker == previous_marker or not self._symbol_needs_refresh(
+                    normalized_symbol, previous_tick, current_tick,
+                    previous_simple_map.get(normalized_symbol),
+                ):
+                    continue
                 priority = self._symbol_priority(current_tick, previous_tick, symbol=normalized_symbol)
-                changed_symbols.append((priority, normalized_symbol))
+            first_cycle, old_priority = pending.get(normalized_symbol, (cycle, priority))
+            pending[normalized_symbol] = (first_cycle, max(old_priority, priority))
+        def queue_score(symbol: str) -> float:
+            first_cycle, priority = pending[symbol]
+            change = self._to_float(current_tick_snapshot[symbol].get("change"))
+            early_move_bonus = 200.0 if 1.0 <= change <= 3.5 else 0.0
+            return priority + early_move_bonus + min(600.0, 20.0 * max(0, cycle - first_cycle))
 
-        # Process highest-priority symbols first so that if the cycle is long,
-        # the most impactful stocks (big movers / strong order-book imbalance) are done first.
-        changed_symbols.sort(key=lambda item: -item[0])
-        return [sym for _, sym in changed_symbols[: self.MAX_CHANGED_SYMBOLS_PER_CYCLE]]
+        selected = sorted(pending, key=lambda symbol: (-queue_score(symbol), symbol))[
+            : self.MAX_CHANGED_SYMBOLS_PER_CYCLE
+        ]
+        for symbol in selected:
+            pending.pop(symbol, None)
+        self._pending_refresh_symbols = pending
+        return selected
 
     def _bootstrap_symbols_for_first_cycle(
         self,
