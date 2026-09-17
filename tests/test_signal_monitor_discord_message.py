@@ -1454,6 +1454,15 @@ def test_buy_now_board_delta_splits_safely_without_dropping_symbols():
     assert all(combined.count(f"`{symbol}`") == 0 for symbol in exit_symbols)
 
 
+def test_buy_now_board_chart_link_escapes_symbol():
+    runner = _make_runner()
+    messages = runner._build_buy_now_board_digest_messages(
+        [{"symbol": "M&M"}], [], [], 100.0, 100.0
+    )
+
+    assert "symbol=NSE%3AM%26M" in messages[0]
+
+
 def test_buy_now_board_attention_ranking_is_lexicographic_and_missing_last():
     runner = _make_runner()
     board = pd.DataFrame(

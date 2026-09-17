@@ -18,6 +18,7 @@ import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
+from urllib.parse import quote
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -6228,7 +6229,7 @@ class SignalMonitorRunner:
                     rendered = self._format_buy_now_board_metric(value, suffix, signed)
                     metrics.append(f"{label} `{rendered}`")
             lines = [
-                f"**NEW:** `{symbol}` · [Open chart](https://www.tradingview.com/chart/?symbol=NSE%3A{symbol})"
+                f"**NEW:** `{symbol}` · [Open chart](https://www.tradingview.com/chart/?symbol={quote('NSE:' + symbol, safe='')})"
             ]
             if metrics:
                 lines.append(" | ".join(metrics))
