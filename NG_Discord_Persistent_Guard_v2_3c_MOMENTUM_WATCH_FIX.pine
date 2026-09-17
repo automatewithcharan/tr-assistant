@@ -1,0 +1,792 @@
+// File: NG_Discord_Persistent_Guard_v2_3c_MOMENTUM_WATCH_FIX.pine
+//@version=6
+indicator("NG Discord Persistent Guard v2.3c", shorttitle="NGGv23c", overlay=true, max_labels_count=160, max_lines_count=20)
+plot(close, title="Compiler Anchor", display=display.none)
+
+// Discord/Python already found the stock.
+// This script stays alive for the current trading day and watches for fresh momentum
+// episodes. Each episode gets a short confirmation window, then BUY or cooldown.
+// It never waits indefinitely and never buys a skipped episode later without a fresh rearm.
+// Entry has two paths: controlled early continuation, or completed pullback + reclaim.
+// Extended impulses are not chased. Pullback BUYs must reclaim the episode level after a
+// completed pullback bar. Stops get ATR breathing room while quantity scales down to keep
+// planned risk controlled. Favorable movement progressively reduces risk before TP1,
+// while strong trades retain a large adaptive runner without a fixed profit ceiling.
+//
+// Run the alert on a 1-minute chart.
+// Confirmed 5-minute context is requested internally.
+// A separate, once-per-day MOMENTUM WATCH reports a fresh breakout even if the
+// stricter BUY rules reject it. A watch is never a trade recommendation.
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Inputs
+// ─────────────────────────────────────────────────────────────────────────────
+grpDecision = "1. Episode / confirmation"
+confirmBars = input.int(2, "Confirmation length (1m bars)", minval=2, maxval=3, group=grpDecision)
+maxAttempts = input.int(2, "Attempts per episode", minval=1, maxval=3, group=grpDecision)
+minConfirmBody = input.float(0.40, "Minimum 2m body/range", minval=0.20, maxval=0.80, step=0.05, group=grpDecision)
+minConfirmClosePos = input.float(0.60, "Minimum 2m close position", minval=0.50, maxval=0.90, step=0.05, group=grpDecision)
+minMomentumScore = input.int(3, "Minimum momentum score (0-6)", minval=1, maxval=6, group=grpDecision)
+skipCooldownMinutes = input.int(5, "Cooldown after skipped episode", minval=2, maxval=30, group=grpDecision)
+tradeCooldownMinutes = input.int(10, "Cooldown after completed trade", minval=2, maxval=60, group=grpDecision)
+maxEpisodesPerDay = input.int(12, "Maximum episodes per alert/day", minval=1, maxval=30, group=grpDecision)
+maxTradesPerDay = input.int(3, "Maximum trades per alert/day", minval=1, maxval=10, group=grpDecision)
+monitorCurrentDayOnly = input.bool(true, "Lock alert on the next trading day", group=grpDecision)
+
+grpSeed = "2. Fresh momentum rearm"
+seedLookback = input.int(5, "Fresh 1m breakout lookback", minval=3, maxval=20, group=grpSeed)
+seedMinBody = input.float(0.45, "Seed candle minimum body/range", minval=0.20, maxval=0.80, step=0.05, group=grpSeed)
+seedMinClosePos = input.float(0.65, "Seed candle minimum close position", minval=0.50, maxval=0.95, step=0.05, group=grpSeed)
+seedVolumeRatio = input.float(1.25, "Seed minimum 1m volume ratio", minval=1.0, maxval=4.0, step=0.05, group=grpSeed)
+seedStrongVolumeRatio = input.float(1.80, "Strong-volume rearm ratio", minval=1.2, maxval=5.0, step=0.10, group=grpSeed)
+seedMaxExtensionAtr = input.float(2.50, "Maximum extension to watch for pullback (ATR)", minval=1.0, maxval=4.0, step=0.05, group=grpSeed, tooltip="Above the continuation threshold, NG Guard switches to PULLBACK instead of chasing. Only moves beyond this wider limit are ignored as extremely stretched.")
+rearmResetMinutes = input.int(20, "Allow strong-volume reset after minutes", minval=5, maxval=90, group=grpSeed)
+
+grpEntry = "3. Continuation / pullback entry"
+continuationMaxExtensionAtr = input.float(0.75, "Continuation max extension above 5m EMA (ATR)", minval=0.20, maxval=2.0, step=0.05, group=grpEntry)
+continuationMaxChaseAtr = input.float(0.55, "Continuation max seed-to-entry chase (ATR)", minval=0.20, maxval=1.5, step=0.05, group=grpEntry)
+impulseRangeAtrForPullback = input.float(0.85, "Send oversized 1m impulse to pullback mode (ATR)", minval=0.30, maxval=2.0, step=0.05, group=grpEntry)
+pullbackMaxBars = input.int(5, "Maximum pullback/reclaim bars", minval=2, maxval=10, group=grpEntry)
+pullbackMaxDepthAtr = input.float(0.65, "Maximum pullback depth from episode high (ATR)", minval=0.20, maxval=1.5, step=0.05, group=grpEntry)
+pullbackSupportBufferAtr = input.float(0.15, "Allowed wick below EMA/VWAP support (ATR)", minval=0.0, maxval=0.50, step=0.05, group=grpEntry)
+pullbackMaxSellVolRatio = input.float(1.60, "Maximum heavy red pullback volume ratio", minval=1.0, maxval=4.0, step=0.10, group=grpEntry)
+reclaimMinBody = input.float(0.35, "Reclaim candle minimum body/range", minval=0.20, maxval=0.80, step=0.05, group=grpEntry)
+reclaimMinClosePos = input.float(0.65, "Reclaim candle minimum close position", minval=0.50, maxval=0.95, step=0.05, group=grpEntry)
+reclaimMinVolRatio = input.float(1.00, "Reclaim minimum 1m volume ratio", minval=0.50, maxval=3.0, step=0.10, group=grpEntry)
+
+grpSafety = "4. Safety / falling-knife veto"
+emaLen = input.int(20, "5m EMA length", minval=5, maxval=50, group=grpSafety)
+atrLen = input.int(14, "5m ATR length", minval=5, maxval=50, group=grpSafety)
+maxNegativeEmaSlopePct = input.float(0.10, "Maximum 5m EMA decline per bar (%)", minval=0.0, maxval=0.50, step=0.01, group=grpSafety)
+strongRedVetoAtr = input.float(0.80, "Strong previous 5m red-body veto (ATR)", minval=0.4, maxval=1.5, step=0.1, group=grpSafety)
+maxChaseAtr = input.float(1.00, "Maximum episode-start→entry chase (ATR)", minval=0.25, maxval=2.0, step=0.05, group=grpSafety)
+maxDropAtr = input.float(0.50, "Maximum entry below episode start (ATR)", minval=0.0, maxval=1.0, step=0.05, group=grpSafety)
+minStopAtr = input.float(0.40, "Minimum stop distance (ATR)", minval=0.15, maxval=0.80, step=0.05, group=grpSafety)
+maxStopAtr = input.float(0.90, "Maximum stop distance (ATR)", minval=0.40, maxval=1.50, step=0.05, group=grpSafety)
+stopBufferAtr = input.float(0.05, "Structural stop buffer (ATR)", minval=0.0, maxval=0.30, step=0.05, group=grpSafety)
+minRoomR = input.float(0.75, "Minimum room to PDH/PWH (R)", minval=0.0, maxval=2.0, step=0.25, group=grpSafety)
+
+grpMomentum = "5. Momentum score / liquidity"
+benchmark = input.symbol("NSE:NIFTY", "Benchmark", group=grpMomentum)
+rsScorePct = input.float(0.50, "RS score threshold (%)", minval=0.0, maxval=3.0, step=0.1, group=grpMomentum)
+volumeScoreRatio = input.float(1.50, "Confirmation volume score ratio", minval=1.0, maxval=4.0, step=0.1, group=grpMomentum)
+strongBodyScore = input.float(0.60, "Strong-body score threshold", minval=0.4, maxval=0.9, step=0.05, group=grpMomentum)
+strongCloseScore = input.float(0.75, "Strong-close score threshold", minval=0.5, maxval=0.95, step=0.05, group=grpMomentum)
+goodRoomScoreR = input.float(1.50, "Good-room score threshold (R)", minval=0.5, maxval=3.0, step=0.25, group=grpMomentum)
+liquidityLen = input.int(20, "5m liquidity lookback", minval=5, maxval=50, group=grpMomentum)
+minAvg5mTurnover = input.float(250000.0, "Minimum average 5m turnover (₹)", minval=0, step=50000, group=grpMomentum)
+
+grpRisk = "6. Position / adaptive exits"
+maxIntradayExposure = input.float(300000.0, "Maximum intraday exposure per trade (₹)", minval=10000, step=25000, group=grpRisk, tooltip="Safety ceiling only. Risk-based sizing remains primary. Set this to the notional exposure your broker/account can actually support.")
+riskBudget = input.float(500.0, "Maximum planned risk per trade (₹)", minval=50, step=50, group=grpRisk)
+firstTakeR = input.float(1.50, "First profit milestone (R)", minval=1.0, maxval=3.0, step=0.25, group=grpRisk)
+partialPctScore3 = input.float(60.0, "Sell at TP1 when score = 3 (%)", minval=20.0, maxval=90.0, step=5.0, group=grpRisk)
+partialPctScore4 = input.float(40.0, "Sell at TP1 when score = 4 (%)", minval=15.0, maxval=80.0, step=5.0, group=grpRisk)
+partialPctScore5 = input.float(25.0, "Sell at TP1 when score = 5 (%)", minval=10.0, maxval=70.0, step=5.0, group=grpRisk)
+partialPctScore6 = input.float(20.0, "Sell at TP1 when score = 6 (%)", minval=10.0, maxval=60.0, step=5.0, group=grpRisk)
+estimatedRoundTripCostPct = input.float(0.10, "Estimated total round-trip costs + slippage (%)", minval=0.0, maxval=1.0, step=0.01, group=grpRisk)
+estimatedFixedCost = input.float(20.0, "Estimated fixed costs per trade (₹)", minval=0.0, step=5.0, group=grpRisk)
+minimumExpectedNetAtTP1 = input.float(250.0, "Minimum estimated whole-position net at 1.5R (₹)", minval=0.0, step=50.0, group=grpRisk, tooltip="Economics check only. It never pushes TP1 farther away; it rejects trades whose full-position 1.5R economics are too small after estimated costs.")
+riskReduceTriggerR = input.float(0.60, "Reduce risk after favorable R", minval=0.30, maxval=1.0, step=0.05, group=grpRisk)
+riskReduceStopR = input.float(-0.25, "Stop R after first protection", minval=-0.75, maxval=0.0, step=0.05, group=grpRisk)
+breakEvenTriggerR = input.float(0.80, "Protect breakeven after R", minval=0.50, maxval=1.50, step=0.05, group=grpRisk)
+profitLockTriggerR = input.float(1.00, "Lock profit after favorable R", minval=0.75, maxval=2.0, step=0.05, group=grpRisk)
+profitLockStopR = input.float(0.20, "Locked stop profit (R)", minval=0.0, maxval=0.75, step=0.05, group=grpRisk)
+runnerEmaLen = input.int(9, "Runner EMA length", minval=5, maxval=30, group=grpRisk)
+runnerBufferAtr = input.float(0.15, "Runner EMA buffer (ATR)", minval=0.0, maxval=0.75, step=0.05, group=grpRisk)
+softExitMinutes = input.int(20, "Recycle weak pre-TP trade after minutes", minval=5, maxval=60, group=grpRisk)
+softExitMinR = input.float(0.50, "Minimum progress at recycle check (R)", minval=-0.5, maxval=2.0, step=0.25, group=grpRisk)
+hardExitMinutes = input.int(30, "Hard pre-TP recycle exit after minutes", minval=10, maxval=90, group=grpRisk)
+
+grpSession = "7. Session"
+entryStartHour = input.int(9, "Allow episodes from hour (IST)", minval=9, maxval=15, group=grpSession)
+entryStartMinute = input.int(20, "Allow episodes from minute (IST)", minval=0, maxval=59, group=grpSession)
+entryCutoffHour = input.int(15, "Stop new episodes at hour (IST)", minval=9, maxval=15, group=grpSession)
+entryCutoffMinute = input.int(0, "Stop new episodes at minute (IST)", minval=0, maxval=59, group=grpSession)
+forceExitHour = input.int(15, "Force exit hour (IST)", minval=14, maxval=15, group=grpSession)
+forceExitMinute = input.int(20, "Force exit minute (IST)", minval=0, maxval=29, group=grpSession)
+
+grpAlerts = "8. Alerts / display"
+enableAlerts = input.bool(true, "Enable script alerts", group=grpAlerts)
+sendMomentumWatch = input.bool(true, "Alert on fresh run-up (WATCH, not BUY)", group=grpAlerts)
+watchMinDayGainPct = input.float(1.0, "WATCH minimum gain from previous close (%)", minval=0.0, maxval=20.0, step=0.25, group=grpAlerts)
+sendSkipAlerts = input.bool(false, "Send SKIP alerts", group=grpAlerts)
+sendRearmAlerts = input.bool(false, "Send REARM alerts", group=grpAlerts)
+showDashboard = input.bool(true, "Show dashboard", group=grpAlerts)
+showLabels = input.bool(true, "Show event labels", group=grpAlerts)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+const int ONE_MINUTE_MS = 60000
+const string BUILD = "v2.3c"
+
+fmtPrice(float value) =>
+    na(value) ? "—" : str.tostring(value, format.mintick)
+
+fmtCash(float value) =>
+    na(value) ? "—" : "₹" + str.tostring(value, "#.##")
+
+calcQty(float entryValue, float stopValue) =>
+    float riskPerShareValue = entryValue - stopValue
+    float byRisk = riskPerShareValue > 0 ? math.floor(riskBudget / riskPerShareValue) : 0.0
+    float byExposure = entryValue > 0 ? math.floor(maxIntradayExposure / entryValue) : 0.0
+    math.max(math.min(byRisk, byExposure), 0.0)
+
+partialPercentForScore(int scoreValue) =>
+    scoreValue >= 6 ? partialPctScore6 : scoreValue == 5 ? partialPctScore5 : scoreValue == 4 ? partialPctScore4 : partialPctScore3
+
+estimateCosts(float entryValue, float exitValue, float qtyValue) =>
+    float turnover = math.max(entryValue + exitValue, 0.0) * math.max(qtyValue, 0.0)
+    turnover * estimatedRoundTripCostPct / 100.0 + estimatedFixedCost
+
+sessionEntryOpen(int ts) =>
+    int hh = hour(ts, "Asia/Kolkata")
+    int mm = minute(ts, "Asia/Kolkata")
+    bool afterStart = hh > entryStartHour or (hh == entryStartHour and mm >= entryStartMinute)
+    bool beforeCutoff = hh < entryCutoffHour or (hh == entryCutoffHour and mm < entryCutoffMinute)
+    afterStart and beforeCutoff
+
+forceExitNow(int ts) =>
+    int hh = hour(ts, "Asia/Kolkata")
+    int mm = minute(ts, "Asia/Kolkata")
+    hh > forceExitHour or (hh == forceExitHour and mm >= forceExitMinute)
+
+dayKey(int ts) =>
+    year(ts, "Asia/Kolkata") * 10000 + month(ts, "Asia/Kolkata") * 100 + dayofmonth(ts, "Asia/Kolkata")
+
+stateText(int stateValue) =>
+    stateValue == 0 ? "WAIT START" : stateValue == 1 ? "WAIT FRESH" : stateValue == 2 ? "DECIDING" : stateValue == 3 ? "TRADE" : stateValue == 4 ? "COOLDOWN" : "LOCKED"
+
+pathText(int pathValue) =>
+    pathValue == 1 ? "CONT" : pathValue == 2 ? "PULLBACK" : "—"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Stable confirmed 5m context
+// ─────────────────────────────────────────────────────────────────────────────
+bool isOneMinute = timeframe.isminutes and timeframe.multiplier == 1
+
+[ctxOpen5, ctxHigh5, ctxLow5, ctxClose5, ctxAtr5, ctxEma5, ctxEma5Prev, ctxPriorHigh5, ctxAvgTurn5] = request.security(syminfo.tickerid, "5", [open[1], high[1], low[1], close[1], ta.atr(atrLen)[1], ta.ema(close, emaLen)[1], ta.ema(close, emaLen)[2], ta.highest(high, 8)[1], ta.sma(close * volume, liquidityLen)[1]], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+
+float pdh = request.security(syminfo.tickerid, "D", high[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+float pwh = request.security(syminfo.tickerid, "W", high[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+float previousDayClose = request.security(syminfo.tickerid, "D", close[1], gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+float stockDayOpen = request.security(syminfo.tickerid, "D", open, gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+float benchDayOpen = request.security(benchmark, "D", open, gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_on)
+float benchNow = request.security(benchmark, "1", close, gaps=barmerge.gaps_off, lookahead=barmerge.lookahead_off)
+
+float sessionVwap = ta.vwap(hlc3)
+float avg1mVolume = ta.sma(volume[1], 20)
+float runnerEma = ta.ema(close, runnerEmaLen)
+float recent1mHigh = ta.highest(high[1], seedLookback)
+
+float stockRetPct = not na(stockDayOpen) and stockDayOpen > 0 ? (close / stockDayOpen - 1.0) * 100.0 : na
+float benchRetPct = not na(benchDayOpen) and benchDayOpen > 0 and not na(benchNow) ? (benchNow / benchDayOpen - 1.0) * 100.0 : na
+float rsPct = not na(stockRetPct) and not na(benchRetPct) ? stockRetPct - benchRetPct : na
+float emaSlopePct = not na(ctxEma5) and not na(ctxEma5Prev) and ctxEma5Prev != 0 ? (ctxEma5 / ctxEma5Prev - 1.0) * 100.0 : na
+bool liquidityOk = not na(ctxAvgTurn5) and ctxAvgTurn5 >= minAvg5mTurnover
+
+// ─────────────────────────────────────────────────────────────────────────────
+// State
+// 0 wait realtime start, 1 wait fresh episode, 2 deciding, 3 trade,
+// 4 cooldown, 5 locked.
+// ─────────────────────────────────────────────────────────────────────────────
+varip int state = 0
+varip bool initialized = false
+varip int initializedDay = na
+varip int cooldownUntil = na
+varip int episodesToday = 0
+varip int tradesToday = 0
+varip bool momentumWatchSent = false
+
+varip int episodeStartTime = na
+varip float episodeStartPrice = na
+varip float episodeStartAtr = na
+varip float episodeHigh = na
+varip float lastEpisodeHigh = na
+varip int lastEpisodeEndTime = na
+
+varip int entryPath = 0
+varip int pullbackBars = 0
+varip float pullbackLow = na
+varip bool pullbackSeen = false
+
+varip int attemptsSeen = 0
+varip int aggregateCount = 0
+varip float aggregateOpen = na
+varip float aggregateHigh = na
+varip float aggregateLow = na
+varip float aggregateClose = na
+varip float aggregateVolume = 0.0
+varip float postEpisodeLow = na
+varip string lastReason = "Waiting for realtime start"
+varip int lastScore = 0
+
+varip float entryPrice = na
+varip float initialStop = na
+varip float managedStop = na
+varip float riskPerShare = na
+varip float targetPrice = na
+varip float initialQty = na
+varip float remainingQty = na
+varip float realizedPnl = 0.0
+varip int entryTime = na
+varip bool partialTaken = false
+varip bool breakEvenProtected = false
+
+bool buyEvent = false
+bool sellEvent = false
+bool skipEvent = false
+bool rearmEvent = false
+bool momentumWatchEvent = false
+string eventText = ""
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Initialize one server/chart instance.
+// ─────────────────────────────────────────────────────────────────────────────
+if barstate.isrealtime and not initialized and isOneMinute
+    initialized := true
+    initializedDay := dayKey(timenow)
+    state := sessionEntryOpen(timenow) ? 1 : 0
+    lastReason := sessionEntryOpen(timenow) ? "Waiting for fresh momentum episode" : "Waiting for entry window"
+
+// Current-day-only protection.
+if barstate.isrealtime and initialized and monitorCurrentDayOnly and dayKey(timenow) != initializedDay
+    if state != 3
+        state := 5
+        lastReason := "NEW DAY: recreate alert for a fresh Discord candidate"
+
+// If next-day monitoring is allowed, reset counters and rearm.
+if barstate.isrealtime and initialized and not monitorCurrentDayOnly and dayKey(timenow) != initializedDay
+    initializedDay := dayKey(timenow)
+    state := sessionEntryOpen(timenow) ? 1 : 0
+    cooldownUntil := na
+    episodesToday := 0
+    tradesToday := 0
+    momentumWatchSent := false
+    lastEpisodeHigh := na
+    lastEpisodeEndTime := na
+    lastReason := "New day reset"
+
+// Entry window opens after instance creation.
+if barstate.isrealtime and initialized and state == 0 and sessionEntryOpen(timenow)
+    state := 1
+    lastReason := "Waiting for fresh momentum episode"
+
+// Entry window closed for new episodes.
+if barstate.isrealtime and initialized and state == 1 and not sessionEntryOpen(timenow)
+    state := 5
+    lastReason := "NO NEW EPISODES: entry window closed"
+
+// Cooldown finishes into fresh-episode watch.
+if barstate.isrealtime and state == 4 and not na(cooldownUntil) and timenow >= cooldownUntil
+    if sessionEntryOpen(timenow) and episodesToday < maxEpisodesPerDay and tradesToday < maxTradesPerDay
+        state := 1
+        lastReason := "Cooldown complete: waiting for fresh momentum"
+    else
+        state := 5
+        lastReason := "Episode/trade limit or entry window closed"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Fresh-momentum seed. This is the only way a skipped/completed alert rearms.
+// ─────────────────────────────────────────────────────────────────────────────
+float seedRange = high - low
+float seedBody = close - open
+float seedBodyFraction = seedRange > 0 ? seedBody / seedRange : 0.0
+float seedClosePosition = seedRange > 0 ? (close - low) / seedRange : 0.0
+float seedVolRatio = not na(avg1mVolume) and avg1mVolume > 0 ? volume / avg1mVolume : na
+float seedExtensionAtr = not na(ctxAtr5) and ctxAtr5 > 0 and not na(ctxEma5) ? (close - ctxEma5) / ctxAtr5 : na
+bool seedBull = close > open
+bool seedShape = seedBull and seedBodyFraction >= seedMinBody and seedClosePosition >= seedMinClosePos
+bool seedBreakout = not na(recent1mHigh) and close > recent1mHigh
+bool seedVolume = not na(seedVolRatio) and seedVolRatio >= seedVolumeRatio
+bool seedStrongVolume = not na(seedVolRatio) and seedVolRatio >= seedStrongVolumeRatio
+bool seedAboveVwapOrEma = (not na(sessionVwap) and close >= sessionVwap) or (not na(ctxEma5) and close >= ctxEma5)
+bool seedEmaNotCollapsing = not na(emaSlopePct) and emaSlopePct >= -(maxNegativeEmaSlopePct * 2.0)
+bool seedExtensionOk = not na(seedExtensionAtr) and seedExtensionAtr <= seedMaxExtensionAtr
+bool seedLiquidityOk = liquidityOk
+bool seedStructureFresh = seedBreakout
+bool seedResetByTimeVolume = not na(lastEpisodeEndTime) and timenow - lastEpisodeEndTime >= rearmResetMinutes * ONE_MINUTE_MS and seedStrongVolume
+bool seedBeyondOldEpisode = na(lastEpisodeHigh) or close > lastEpisodeHigh or seedResetByTimeVolume
+bool seedEvidence = seedStructureFresh or seedStrongVolume
+float seedRangeAtr = not na(ctxAtr5) and ctxAtr5 > 0 ? seedRange / ctxAtr5 : na
+bool seedNeedsPullback = (not na(seedExtensionAtr) and seedExtensionAtr > continuationMaxExtensionAtr) or (not na(seedRangeAtr) and seedRangeAtr >= impulseRangeAtrForPullback)
+bool freshSeed = barstate.isrealtime and barstate.isconfirmed and state == 1 and sessionEntryOpen(time_close) and seedShape and seedAboveVwapOrEma and seedEmaNotCollapsing and seedExtensionOk and seedLiquidityOk and seedBeyondOldEpisode and seedEvidence
+
+if barstate.isrealtime and barstate.isconfirmed and state == 1
+    if not seedShape
+        lastReason := "Seed blocker: weak 1m candle"
+    else if not seedAboveVwapOrEma
+        lastReason := "Seed blocker: below VWAP and 5m EMA"
+    else if not seedEmaNotCollapsing
+        lastReason := "Seed blocker: 5m EMA falling hard"
+    else if not seedExtensionOk
+        lastReason := "Seed blocker: too extreme even for pullback watch"
+    else if not seedLiquidityOk
+        lastReason := "Seed blocker: low liquidity"
+    else if not seedBeyondOldEpisode
+        lastReason := "Seed blocker: not a new episode"
+    else if not seedEvidence
+        lastReason := "Seed blocker: no breakout/strong volume"
+    else
+        lastReason := "Fresh momentum seed ready"
+
+if freshSeed
+    state := 2
+    episodesToday += 1
+    episodeStartTime := time_close
+    episodeStartPrice := close
+    episodeStartAtr := ctxAtr5
+    episodeHigh := high
+    attemptsSeen := 0
+    entryPath := seedNeedsPullback ? 2 : 1
+    pullbackBars := 0
+    pullbackLow := low
+    pullbackSeen := false
+    postEpisodeLow := low
+    lastScore := 0
+    rearmEvent := true
+
+    if entryPath == 1
+        aggregateCount := 1
+        aggregateOpen := open
+        aggregateHigh := high
+        aggregateLow := low
+        aggregateClose := close
+        aggregateVolume := volume
+        lastReason := "Early controlled momentum: confirming continuation"
+    else
+        aggregateCount := 0
+        aggregateOpen := na
+        aggregateHigh := na
+        aggregateLow := na
+        aggregateClose := na
+        aggregateVolume := 0.0
+        lastReason := "Impulse extended: waiting for controlled pullback/reclaim"
+
+    if sendRearmAlerts and enableAlerts
+        alert("NG REARM | " + syminfo.ticker + " | Episode " + str.tostring(episodesToday) + " | Path " + pathText(entryPath), alert.freq_once_per_bar_close)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Entry engine: controlled continuation OR controlled pullback + reclaim.
+// ─────────────────────────────────────────────────────────────────────────────
+if barstate.isrealtime and barstate.isconfirmed and state == 2 and time_close > episodeStartTime
+    bool evalEvent = false
+    float evalOpen = na
+    float evalHigh = na
+    float evalLow = na
+    float evalClose = na
+    float evalVolume = na
+    int evalBars = 1
+
+    episodeHigh := math.max(episodeHigh, high)
+    postEpisodeLow := math.min(postEpisodeLow, low)
+
+    if entryPath == 1
+        aggregateHigh := math.max(aggregateHigh, high)
+        aggregateLow := math.min(aggregateLow, low)
+        aggregateClose := close
+        aggregateVolume += volume
+        aggregateCount += 1
+
+        if aggregateCount >= confirmBars
+            float continuationExtensionAtr = not na(ctxAtr5) and ctxAtr5 > 0 and not na(ctxEma5) ? (aggregateClose - ctxEma5) / ctxAtr5 : na
+            float continuationChaseAtr = not na(episodeStartAtr) and episodeStartAtr > 0 ? (aggregateClose - episodeStartPrice) / episodeStartAtr : na
+            bool continuationExtended = (not na(continuationExtensionAtr) and continuationExtensionAtr > continuationMaxExtensionAtr) or (not na(continuationChaseAtr) and continuationChaseAtr > continuationMaxChaseAtr)
+
+            if continuationExtended
+                entryPath := 2
+                pullbackBars := 0
+                pullbackLow := low
+                pullbackSeen := false
+                aggregateCount := 0
+                aggregateOpen := na
+                aggregateHigh := na
+                aggregateLow := na
+                aggregateClose := na
+                aggregateVolume := 0.0
+                lastReason := "Continuation became extended: wait pullback/reclaim"
+            else
+                evalEvent := true
+                evalOpen := aggregateOpen
+                evalHigh := aggregateHigh
+                evalLow := aggregateLow
+                evalClose := aggregateClose
+                evalVolume := aggregateVolume
+                evalBars := confirmBars
+
+    else if entryPath == 2
+        pullbackBars += 1
+        pullbackLow := na(pullbackLow) ? low : math.min(pullbackLow, low)
+
+        float supportBase = na
+        if not na(ctxEma5) and not na(sessionVwap)
+            supportBase := math.max(ctxEma5, sessionVwap)
+        else if not na(ctxEma5)
+            supportBase := ctxEma5
+        else
+            supportBase := sessionVwap
+
+        float supportFloor = not na(supportBase) and not na(ctxAtr5) ? supportBase - ctxAtr5 * pullbackSupportBufferAtr : na
+        float depthAtr = not na(ctxAtr5) and ctxAtr5 > 0 ? (episodeHigh - pullbackLow) / ctxAtr5 : na
+        float currentVolRatio = not na(avg1mVolume) and avg1mVolume > 0 ? volume / avg1mVolume : na
+        bool redBar = close < open
+        bool heavyRedVolume = redBar and not na(currentVolRatio) and currentVolRatio > pullbackMaxSellVolRatio
+        bool supportBroken = not na(supportFloor) and close < supportFloor
+        bool depthBroken = not na(depthAtr) and depthAtr > pullbackMaxDepthAtr
+
+        bool pullbackWasSeen = pullbackSeen
+        pullbackSeen := pullbackSeen or low < episodeStartPrice or close < episodeStartPrice
+
+        float reclaimRange = high - low
+        float reclaimBodyFraction = reclaimRange > 0 ? (close - open) / reclaimRange : 0.0
+        float reclaimClosePosition = reclaimRange > 0 ? (close - low) / reclaimRange : 0.0
+        bool reclaimVolumeOk = not na(currentVolRatio) and currentVolRatio >= reclaimMinVolRatio
+        bool reclaimLevelOk = close >= episodeStartPrice
+        bool reclaimCandle = pullbackWasSeen and reclaimLevelOk and close > open and close > high[1] and reclaimBodyFraction >= reclaimMinBody and reclaimClosePosition >= reclaimMinClosePos and reclaimVolumeOk
+
+        if supportBroken or depthBroken or heavyRedVolume
+            lastReason := supportBroken ? "PULLBACK FAILED: support lost" : depthBroken ? "PULLBACK FAILED: too deep" : "PULLBACK FAILED: heavy sell volume"
+            skipEvent := true
+            lastEpisodeHigh := episodeHigh
+            lastEpisodeEndTime := time_close
+            cooldownUntil := time_close + skipCooldownMinutes * ONE_MINUTE_MS
+            state := 4
+            eventText := "NG SKIP | " + syminfo.ticker + " | " + lastReason + " | Episode " + str.tostring(episodesToday)
+        else if reclaimCandle
+            evalEvent := true
+            evalOpen := open
+            evalHigh := high
+            evalLow := low
+            evalClose := close
+            evalVolume := volume
+            evalBars := 1
+        else if pullbackBars >= pullbackMaxBars
+            lastReason := "PULLBACK TIMEOUT: no bullish reclaim"
+            skipEvent := true
+            lastEpisodeHigh := episodeHigh
+            lastEpisodeEndTime := time_close
+            cooldownUntil := time_close + skipCooldownMinutes * ONE_MINUTE_MS
+            state := 4
+            eventText := "NG SKIP | " + syminfo.ticker + " | " + lastReason + " | Episode " + str.tostring(episodesToday)
+        else
+            lastReason := pullbackSeen ? "Controlled pullback: waiting for reclaim above episode level" : "Waiting for completed pullback before reclaim"
+
+    if evalEvent and state == 2
+        float confirmRange = evalHigh - evalLow
+        float confirmBody = evalClose - evalOpen
+        float bodyFraction = confirmRange > 0 ? confirmBody / confirmRange : 0.0
+        float closePosition = confirmRange > 0 ? (evalClose - evalLow) / confirmRange : 0.0
+        bool confirmBull = evalClose > evalOpen
+        bool confirmShapeOk = confirmBull and bodyFraction >= minConfirmBody and closePosition >= minConfirmClosePos
+
+        bool emaSlopeSafe = not na(emaSlopePct) and emaSlopePct >= -maxNegativeEmaSlopePct
+        bool aboveEma = not na(ctxEma5) and evalClose >= ctxEma5
+        bool aboveVwap = not na(sessionVwap) and evalClose >= sessionVwap
+        float previousRedBody = not na(ctxOpen5) and not na(ctxClose5) ? ctxOpen5 - ctxClose5 : na
+        bool strongPreviousRed = not na(previousRedBody) and not na(ctxAtr5) and ctxClose5 < ctxOpen5 and previousRedBody >= ctxAtr5 * strongRedVetoAtr
+        bool fallingKnifeVeto = strongPreviousRed and evalClose < ctxOpen5
+
+        float chaseAtr = not na(episodeStartPrice) and not na(episodeStartAtr) and episodeStartAtr > 0 ? (evalClose - episodeStartPrice) / episodeStartAtr : na
+        float dropAtr = not na(episodeStartPrice) and not na(episodeStartAtr) and episodeStartAtr > 0 ? (episodeStartPrice - evalClose) / episodeStartAtr : na
+        bool chaseOk = not na(chaseAtr) and chaseAtr <= maxChaseAtr
+        bool dropOk = not na(dropAtr) and dropAtr <= maxDropAtr
+
+        float rawStop = not na(postEpisodeLow) and not na(ctxAtr5) ? postEpisodeLow - ctxAtr5 * stopBufferAtr : na
+        float minDistanceStop = not na(ctxAtr5) ? evalClose - ctxAtr5 * minStopAtr : na
+        float stopCandidate = not na(rawStop) and not na(minDistanceStop) ? math.min(rawStop, minDistanceStop) : na
+        float riskCandidate = not na(stopCandidate) ? evalClose - stopCandidate : na
+        bool riskOk = not na(riskCandidate) and not na(ctxAtr5) and riskCandidate > 0 and riskCandidate <= ctxAtr5 * maxStopAtr
+
+        float nextResistance = na
+        if not na(pdh) and pdh > evalClose
+            nextResistance := pdh
+        if not na(pwh) and pwh > evalClose
+            nextResistance := na(nextResistance) ? pwh : math.min(nextResistance, pwh)
+
+        float qtyCandidate = riskOk ? calcQty(evalClose, stopCandidate) : 0.0
+        bool qtyOk = qtyCandidate >= 1
+        float targetDistanceCandidate = riskOk ? riskCandidate * firstTakeR : na
+        float targetCandidate = not na(targetDistanceCandidate) ? evalClose + targetDistanceCandidate : na
+        float roomR = riskOk and not na(nextResistance) ? (nextResistance - evalClose) / riskCandidate : na
+        bool roomOk = riskOk and (na(nextResistance) or roomR >= minRoomR)
+
+        float confirmVolumeRatio = not na(avg1mVolume) and avg1mVolume > 0 ? evalVolume / (avg1mVolume * evalBars) : na
+        bool scoreVolume = not na(confirmVolumeRatio) and confirmVolumeRatio >= volumeScoreRatio
+        bool scoreBreakout = (not na(ctxPriorHigh5) and evalClose > ctxPriorHigh5) or (entryPath == 2 and evalClose > episodeStartPrice)
+        bool scoreRs = not na(rsPct) and rsPct >= rsScorePct
+        bool scoreBody = bodyFraction >= strongBodyScore
+        bool scoreClose = closePosition >= strongCloseScore
+        bool scoreRoom = na(nextResistance) or (not na(roomR) and roomR >= goodRoomScoreR)
+
+        int momentumScore = 0
+        momentumScore += scoreVolume ? 1 : 0
+        momentumScore += scoreBreakout ? 1 : 0
+        momentumScore += scoreRs ? 1 : 0
+        momentumScore += scoreBody ? 1 : 0
+        momentumScore += scoreClose ? 1 : 0
+        momentumScore += scoreRoom ? 1 : 0
+        lastScore := momentumScore
+
+        float expectedCostsAtTp1 = qtyOk ? estimateCosts(evalClose, targetCandidate, qtyCandidate) : na
+        float expectedWholeGrossAtTp1 = qtyOk ? qtyCandidate * targetDistanceCandidate : na
+        float expectedWholeNetAtTp1 = qtyOk ? expectedWholeGrossAtTp1 - nz(expectedCostsAtTp1, 0.0) : na
+        bool economicsOk = qtyOk and not na(expectedWholeNetAtTp1) and expectedWholeNetAtTp1 >= minimumExpectedNetAtTP1
+
+        bool hardSafetyOk = confirmShapeOk and emaSlopeSafe and aboveEma and aboveVwap and liquidityOk and not fallingKnifeVeto and chaseOk and dropOk and riskOk and roomOk and qtyOk and economicsOk
+        bool terminalVeto = not emaSlopeSafe or not aboveEma or not aboveVwap or not liquidityOk or fallingKnifeVeto or not chaseOk or not dropOk or not riskOk or not qtyOk or not roomOk or not economicsOk
+        bool qualified = hardSafetyOk and momentumScore >= minMomentumScore
+
+        string reason = "QUALIFIED"
+        if not confirmBull
+            reason := entryPath == 1 ? "CONTINUATION NOT BULLISH" : "RECLAIM NOT BULLISH"
+        else if not confirmShapeOk
+            reason := entryPath == 1 ? "CONTINUATION CANDLE TOO WEAK" : "RECLAIM CANDLE TOO WEAK"
+        else if not emaSlopeSafe
+            reason := "5m EMA FALLING TOO FAST"
+        else if not aboveEma
+            reason := "BELOW 5m EMA"
+        else if not aboveVwap
+            reason := "BELOW VWAP"
+        else if fallingKnifeVeto
+            reason := "FALLING-KNIFE VETO"
+        else if not liquidityOk
+            reason := "LOW LIQUIDITY"
+        else if not chaseOk
+            reason := "TOO LATE / CHASING"
+        else if not dropOk
+            reason := "DROPPED TOO FAR AFTER EPISODE START"
+        else if not riskOk
+            reason := "STRUCTURAL RISK TOO LARGE"
+        else if not qtyOk
+            reason := "QTY ZERO"
+        else if not roomOk
+            reason := "INSUFFICIENT ROOM"
+        else if not economicsOk
+            reason := "1.5R ECONOMICS TOO SMALL"
+        else if momentumScore < minMomentumScore
+            reason := "MOMENTUM SCORE " + str.tostring(momentumScore) + "/6"
+
+        lastReason := reason
+
+        if qualified and tradesToday < maxTradesPerDay
+            state := 3
+            tradesToday += 1
+            entryPrice := evalClose
+            initialStop := stopCandidate
+            managedStop := stopCandidate
+            riskPerShare := riskCandidate
+            targetPrice := targetCandidate
+            initialQty := qtyCandidate
+            remainingQty := qtyCandidate
+            realizedPnl := 0.0
+            entryTime := time_close
+            partialTaken := false
+            breakEvenProtected := false
+            buyEvent := true
+
+            float adaptivePartialPct = partialPercentForScore(lastScore)
+            float partialQtyPreview = initialQty >= 2 ? math.max(math.floor(initialQty * adaptivePartialPct / 100.0), 1.0) : initialQty
+            float runnerQtyPreview = math.max(initialQty - partialQtyPreview, 0.0)
+            float maxLossPreview = initialQty * riskPerShare
+            float expectedTp1Costs = estimateCosts(entryPrice, targetPrice, initialQty)
+            float expectedWholeGross = initialQty * (targetPrice - entryPrice)
+            float expectedWholeNet = expectedWholeGross - expectedTp1Costs
+            eventText := "NG BUY | " + syminfo.ticker + " | Path " + pathText(entryPath) + " | Entry " + fmtPrice(entryPrice) + " | Qty " + str.tostring(initialQty, "#") + " | SL " + fmtPrice(initialStop) + " | TP1 " + fmtPrice(targetPrice) + " | Score " + str.tostring(lastScore) + "/6 | MaxLoss " + fmtCash(maxLossPreview) + " | 1.5RNet~ " + fmtCash(expectedWholeNet) + " | Take " + str.tostring(adaptivePartialPct, "#") + "% | Runner " + str.tostring(runnerQtyPreview, "#")
+        else
+            attemptsSeen += 1
+
+            if terminalVeto or attemptsSeen >= maxAttempts or tradesToday >= maxTradesPerDay
+                skipEvent := true
+                lastEpisodeHigh := episodeHigh
+                lastEpisodeEndTime := time_close
+                cooldownUntil := time_close + skipCooldownMinutes * ONE_MINUTE_MS
+                state := tradesToday >= maxTradesPerDay ? 5 : 4
+                eventText := "NG SKIP | " + syminfo.ticker + " | Path " + pathText(entryPath) + " | " + lastReason + " | Episode " + str.tostring(episodesToday) + " | Attempts " + str.tostring(attemptsSeen) + "/" + str.tostring(maxAttempts)
+            else if entryPath == 1
+                entryPath := 2
+                pullbackBars := 0
+                pullbackLow := low
+                pullbackSeen := false
+                aggregateCount := 0
+                aggregateOpen := na
+                aggregateHigh := na
+                aggregateLow := na
+                aggregateClose := na
+                aggregateVolume := 0.0
+                lastReason := "Continuation rejected: wait controlled pullback/reclaim"
+            else
+                lastReason := "Reclaim attempt " + str.tostring(attemptsSeen) + " failed: " + reason
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Trade management
+// ─────────────────────────────────────────────────────────────────────────────
+// The entry is decided at this bar's close. Its earlier high/low happened before
+// the simulated entry and must not immediately trigger an exit.
+if barstate.isrealtime and state == 3 and not na(entryTime) and time_close > entryTime
+    int minutesHeld = not na(entryTime) ? int(math.floor(float(timenow - entryTime) / ONE_MINUTE_MS)) : 0
+    float progressR = not na(riskPerShare) and riskPerShare > 0 ? (close - entryPrice) / riskPerShare : na
+
+    float favorableR = not na(riskPerShare) and riskPerShare > 0 ? (high - entryPrice) / riskPerShare : na
+
+    if not partialTaken and not na(favorableR) and favorableR >= riskReduceTriggerR
+        managedStop := math.max(managedStop, entryPrice + riskPerShare * riskReduceStopR)
+
+    if not breakEvenProtected and not partialTaken and not na(favorableR) and favorableR >= breakEvenTriggerR
+        managedStop := math.max(managedStop, entryPrice)
+        breakEvenProtected := true
+
+    if not partialTaken and not na(favorableR) and favorableR >= profitLockTriggerR
+        managedStop := math.max(managedStop, entryPrice + riskPerShare * profitLockStopR)
+
+    if partialTaken and not na(ctxAtr5)
+        float runnerCandidate = runnerEma - ctxAtr5 * runnerBufferAtr
+        if not na(runnerCandidate) and runnerCandidate > managedStop and runnerCandidate < close
+            managedStop := runnerCandidate
+
+    // `low` can be from before a stop was raised within this same realtime bar.
+    // Use the current traded price to avoid a false immediate stop alert.
+    bool stopNow = close <= managedStop
+    bool forceNow = forceExitNow(timenow)
+    bool firstTakeNow = not partialTaken and close >= targetPrice
+    bool softRecycleNow = not partialTaken and minutesHeld >= softExitMinutes and (na(progressR) or progressR < softExitMinR)
+    bool hardRecycleNow = not partialTaken and minutesHeld >= hardExitMinutes
+
+    if stopNow
+        float exitPrice = managedStop
+        realizedPnl += (exitPrice - entryPrice) * remainingQty
+        eventText := "NG SELL | " + syminfo.ticker + " | " + (partialTaken ? "RUNNER STOP" : exitPrice > entryPrice ? "PROFIT PROTECT" : breakEvenProtected ? "BREAKEVEN" : exitPrice > initialStop ? "REDUCED-RISK STOP" : "STOP") + " | Exit " + fmtPrice(exitPrice) + " | Qty " + str.tostring(remainingQty, "#") + " | PnL~ " + fmtCash(realizedPnl)
+        remainingQty := 0
+        sellEvent := true
+        lastEpisodeHigh := episodeHigh
+        lastEpisodeEndTime := time_close
+        cooldownUntil := time_close + tradeCooldownMinutes * ONE_MINUTE_MS
+        state := tradesToday >= maxTradesPerDay ? 5 : 4
+        lastReason := "Trade closed: cooldown"
+    else if forceNow
+        float exitPrice = close
+        realizedPnl += (exitPrice - entryPrice) * remainingQty
+        eventText := "NG SELL | " + syminfo.ticker + " | EOD EXIT | Exit " + fmtPrice(exitPrice) + " | Qty " + str.tostring(remainingQty, "#") + " | PnL~ " + fmtCash(realizedPnl)
+        remainingQty := 0
+        sellEvent := true
+        state := 5
+        lastReason := "Trading day finished"
+    else if firstTakeNow
+        float adaptivePartialPctNow = partialPercentForScore(lastScore)
+        float takeQty = initialQty >= 2 ? math.max(math.floor(initialQty * adaptivePartialPctNow / 100.0), 1.0) : initialQty
+        takeQty := math.min(takeQty, remainingQty)
+        realizedPnl += (targetPrice - entryPrice) * takeQty
+        remainingQty -= takeQty
+        managedStop := math.max(managedStop, entryPrice)
+        breakEvenProtected := true
+        partialTaken := remainingQty > 0
+        sellEvent := true
+
+        if remainingQty <= 0
+            eventText := "NG SELL | " + syminfo.ticker + " | FULL TP | Exit " + fmtPrice(targetPrice) + " | Qty " + str.tostring(takeQty, "#") + " | PnL~ " + fmtCash(realizedPnl)
+            lastEpisodeHigh := episodeHigh
+            lastEpisodeEndTime := time_close
+            cooldownUntil := time_close + tradeCooldownMinutes * ONE_MINUTE_MS
+            state := tradesToday >= maxTradesPerDay ? 5 : 4
+        else
+            eventText := "NG SELL PARTIAL | " + syminfo.ticker + " | TP1 " + fmtPrice(targetPrice) + " | Sell " + str.tostring(takeQty, "#") + " | Runner " + str.tostring(remainingQty, "#") + " | Booked~ " + fmtCash(realizedPnl)
+    else if softRecycleNow or hardRecycleNow
+        float exitPrice = close
+        realizedPnl += (exitPrice - entryPrice) * remainingQty
+        string exitWhy = hardRecycleNow ? "HARD TIME EXIT" : "SOFT RECYCLE"
+        eventText := "NG SELL | " + syminfo.ticker + " | " + exitWhy + " | Exit " + fmtPrice(exitPrice) + " | Qty " + str.tostring(remainingQty, "#") + " | PnL~ " + fmtCash(realizedPnl)
+        remainingQty := 0
+        sellEvent := true
+        lastEpisodeHigh := episodeHigh
+        lastEpisodeEndTime := time_close
+        cooldownUntil := time_close + tradeCooldownMinutes * ONE_MINUTE_MS
+        state := tradesToday >= maxTradesPerDay ? 5 : 4
+        lastReason := "Trade recycled: cooldown"
+
+// Track high while a decision/trade episode is active.
+if barstate.isrealtime and (state == 2 or state == 3)
+    episodeHigh := na(episodeHigh) ? high : math.max(episodeHigh, high)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Alerts
+// ─────────────────────────────────────────────────────────────────────────────
+float watchDayGainPct = not na(previousDayClose) and previousDayClose > 0 ? (close / previousDayClose - 1.0) * 100.0 : na
+bool watchBreakout = not na(recent1mHigh) and close > recent1mHigh
+bool watchAboveSupport = (not na(sessionVwap) and close >= sessionVwap) or (not na(ctxEma5) and close >= ctxEma5)
+bool freshRunUp = barstate.isrealtime and barstate.isconfirmed and isOneMinute and initialized and dayKey(timenow) == initializedDay and sessionEntryOpen(time_close) and not momentumWatchSent and state != 3 and not buyEvent and close > open and watchBreakout and watchAboveSupport and not na(watchDayGainPct) and watchDayGainPct >= watchMinDayGainPct
+
+if enableAlerts and sendMomentumWatch and freshRunUp
+    momentumWatchSent := true
+    momentumWatchEvent := true
+    alert("NG MOMENTUM WATCH | " + syminfo.ticker + " | Day " + str.tostring(watchDayGainPct, "#.##") + "% | Last " + fmtPrice(close) + " | Fresh 1m high | Guard " + stateText(state) + " | NOT A BUY; wait for risk/entry review", alert.freq_all)
+
+if enableAlerts and buyEvent
+    alert(eventText, alert.freq_once_per_bar_close)
+
+if enableAlerts and sellEvent
+    // SELL can occur before a 1m bar closes. `freq_once_per_bar_close` silently
+    // drops such exits; state already prevents duplicate exit decisions.
+    alert(eventText, alert.freq_all)
+
+if enableAlerts and sendSkipAlerts and skipEvent
+    alert(eventText, alert.freq_once_per_bar_close)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Visuals
+// ─────────────────────────────────────────────────────────────────────────────
+plot(state == 3 ? entryPrice : na, "Entry", color=color.new(color.blue, 0), linewidth=2, style=plot.style_linebr)
+plot(state == 3 ? managedStop : na, "Managed Stop", color=color.new(color.red, 0), linewidth=2, style=plot.style_linebr)
+plot(state == 3 and not partialTaken ? targetPrice : na, "TP1", color=color.new(color.green, 0), linewidth=2, style=plot.style_linebr)
+
+if showLabels and buyEvent
+    label.new(bar_index, low, "BUY\n" + fmtPrice(entryPrice) + "\nScore " + str.tostring(lastScore) + "/6", style=label.style_label_up, textcolor=color.white, color=color.new(color.green, 15), size=size.tiny)
+
+if showLabels and sellEvent
+    label.new(bar_index, high, "SELL\n" + fmtCash(realizedPnl), style=label.style_label_down, textcolor=color.white, color=color.new(color.red, 15), size=size.tiny)
+
+if showLabels and skipEvent
+    label.new(bar_index, high, "SKIP\n" + lastReason, style=label.style_label_down, textcolor=color.white, color=color.new(color.orange, 15), size=size.tiny)
+
+if showLabels and momentumWatchEvent
+    label.new(bar_index, low, "WATCH\n" + str.tostring(watchDayGainPct, "#.##") + "%", style=label.style_label_up, textcolor=color.white, color=color.new(color.blue, 15), size=size.tiny)
+
+bgcolor(not isOneMinute ? color.new(color.red, 88) : na, title="Use 1m chart warning")
+
+var table dash = table.new(position.top_right, 2, 13, bgcolor=color.new(color.black, 15), frame_color=color.new(color.gray, 60), frame_width=1)
+
+if barstate.islast and showDashboard
+    float openPnl = state == 3 ? realizedPnl + (close - entryPrice) * remainingQty : realizedPnl
+    int cooldownSeconds = state == 4 and not na(cooldownUntil) ? int(math.max(0.0, math.ceil(float(cooldownUntil - timenow) / 1000.0))) : 0
+    string modeValue = isOneMinute ? "1m ENGINE / 5m CONTEXT" : "USE 1m CHART"
+    string episodeValue = str.tostring(episodesToday) + "/" + str.tostring(maxEpisodesPerDay)
+    string tradeValue = str.tostring(tradesToday) + "/" + str.tostring(maxTradesPerDay)
+    string attemptValue = state == 2 ? pathText(entryPath) + " " + str.tostring(attemptsSeen) + "/" + str.tostring(maxAttempts) : "—"
+    string confirmValue = state == 2 and entryPath == 1 ? str.tostring(aggregateCount) + "/" + str.tostring(confirmBars) : state == 2 and entryPath == 2 ? "PB " + str.tostring(pullbackBars) + "/" + str.tostring(pullbackMaxBars) : "—"
+    string cooldownValue = state == 4 ? str.tostring(cooldownSeconds) + "s" : "—"
+
+    table.cell(dash, 0, 0, "NG Guard", text_color=color.white, bgcolor=color.new(color.blue, 45))
+    table.cell(dash, 1, 0, BUILD, text_color=color.white, bgcolor=color.new(color.blue, 45))
+    table.cell(dash, 0, 1, "Mode", text_color=color.silver)
+    table.cell(dash, 1, 1, modeValue, text_color=isOneMinute ? color.white : color.yellow)
+    table.cell(dash, 0, 2, "State", text_color=color.silver)
+    table.cell(dash, 1, 2, stateText(state), text_color=color.white)
+    table.cell(dash, 0, 3, "Episodes", text_color=color.silver)
+    table.cell(dash, 1, 3, episodeValue, text_color=color.white)
+    table.cell(dash, 0, 4, "Trades", text_color=color.silver)
+    table.cell(dash, 1, 4, tradeValue, text_color=color.white)
+    table.cell(dash, 0, 5, "Attempts", text_color=color.silver)
+    table.cell(dash, 1, 5, attemptValue, text_color=color.white)
+    table.cell(dash, 0, 6, "Confirm", text_color=color.silver)
+    table.cell(dash, 1, 6, confirmValue, text_color=color.white)
+    table.cell(dash, 0, 7, "Score", text_color=color.silver)
+    table.cell(dash, 1, 7, str.tostring(lastScore) + "/6", text_color=color.white)
+    table.cell(dash, 0, 8, "Cooldown", text_color=color.silver)
+    table.cell(dash, 1, 8, cooldownValue, text_color=color.white)
+    table.cell(dash, 0, 9, "Why", text_color=color.silver)
+    table.cell(dash, 1, 9, lastReason, text_color=color.white)
+    table.cell(dash, 0, 10, "Entry / SL / TP1", text_color=color.silver)
+    table.cell(dash, 1, 10, fmtPrice(entryPrice) + " / " + fmtPrice(managedStop) + " / " + fmtPrice(targetPrice), text_color=color.white)
+    table.cell(dash, 0, 11, "PnL~ / Note", text_color=color.silver)
+    table.cell(dash, 1, 11, fmtCash(openPnl) + " | Chart copy ≠ server after reload", text_color=color.white)
+    table.cell(dash, 0, 12, "Run-up watch", text_color=color.silver)
+    table.cell(dash, 1, 12, momentumWatchSent ? "SENT TODAY" : sendMomentumWatch ? "WAIT NEW 1m HIGH" : "OFF", text_color=momentumWatchSent ? color.lime : color.white)
