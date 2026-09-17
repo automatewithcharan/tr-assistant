@@ -1,4 +1,4 @@
-"""Capped, paper-only Discord review digest from archived P5 observations."""
+"""Capped, paper-only Discord review digest from opening and P5 observations."""
 
 from __future__ import annotations
 
@@ -14,6 +14,7 @@ from pkscreener.classes.NGP5EarlyWatchPublisher import IST
 
 
 MAX_SYMBOLS_PER_DAY = 5
+MAX_OPENING_SYMBOLS = 2
 MIN_TURNOVER = 50_000_000.0  # INR, review filter only
 MAX_SPREAD_BPS = 20.0
 MIN_BUY_SELL_RATIO = 1.2
@@ -91,6 +92,60 @@ def load_observations(journal: Path, day: str) -> list[dict[str, Any]]:
     return list(events.values())
 
 
+def eligible_opening(event: Mapping[str, Any]) -> bool:
+    """Conservative attention filter on the scanner's opening PASS events."""
+    if event.get("kind") != "leader_ignition":
+        return False
+    fields = event.get("causal_fields") or {}
+    stamp = _timestamp(event.get("qualification_timestamp"))
+    pullback = _number(fields.get("PullbackPct"))
+    day_change = _number(fields.get("DayChangePct"))
+    from_open = _number(fields.get("OpenMovePct"))
+    return bool(
+        event.get("symbol") and stamp is not None
+        and 9 * 60 + 15 <= stamp.hour * 60 + stamp.minute <= 9 * 60 + 20
+        and (_number(fields.get("TradedValue")) or 0) >= MIN_TURNOVER
+        and (_number(fields.get("BuyerSellerRatio")) or 0) >= 1.4
+        and from_open is not None and 0.5 <= from_open <= 2.0
+        and pullback is not None and 0 <= pullback <= 0.5
+        and day_change is not None and 0 <= day_change <= 3.0
+        and _number(fields.get("Score")) is not None
+    )
+
+
+def load_opening_observations(journal: Path, day: str) -> list[dict[str, Any]]:
+    if not journal.is_file():
+        return []
+    events: dict[str, dict[str, Any]] = {}
+    with journal.open(encoding="utf-8") as handle:
+        for line in handle:
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if row.get("delivery_state") != "OBSERVED":
+                continue
+            event = row.get("event") or {}
+            if event.get("session_date") == day and eligible_opening(event):
+                events[str(event["event_id"])] = event
+    return list(events.values())
+
+
+def select_opening_candidates(
+    events: list[dict[str, Any]], now: dt.datetime, sent_symbols: set[str]
+) -> list[dict[str, Any]]:
+    candidates = [
+        event for event in events
+        if eligible_opening(event)
+        and (_timestamp(event["qualification_timestamp"]) or now) <= now
+        and str(event["symbol"]).upper() not in sent_symbols
+    ]
+    return sorted(
+        candidates,
+        key=lambda e: (-float(e["causal_fields"]["Score"]), str(e["symbol"])),
+    )[:min(MAX_OPENING_SYMBOLS, MAX_SYMBOLS_PER_DAY - len(sent_symbols))]
+
+
 def select_candidates(
     events: list[dict[str, Any]], now: dt.datetime, sent_symbols: set[str]
 ) -> list[dict[str, Any]]:
@@ -113,10 +168,12 @@ def select_candidates(
 
 
 def current_slot(now: dt.datetime) -> str | None:
-    """Digest windows start at 09:45 IST and repeat every 30 minutes."""
+    """One opening review at 09:20, then every 30 minutes from 09:45."""
     now = now.astimezone(IST)
     minute = now.hour * 60 + now.minute
     first, end = 9 * 60 + 45, 15 * 60 + 15
+    if 9 * 60 + 20 <= minute < first:
+        return "09:20"
     if minute < first or minute >= end:
         return None
     slot = first + (minute - first) // 30 * 30
@@ -124,31 +181,46 @@ def current_slot(now: dt.datetime) -> str | None:
 
 
 def build_message(events: list[dict[str, Any]], slot: str) -> str:
+    opening = slot == "09:20"
     lines = [
-        f"🟡 **NG REVIEW SHORTLIST · {slot} IST**",
+        f"🟡 **NG {'OPENING' if opening else 'POST-OPEN'} REVIEW · {slot} IST**",
         "**NOT A BUY SIGNAL · PAPER / SKIP**",
-        "At most five new symbols today. Check the chart before any decision.",
+        "Early, unconfirmed watch. Check the chart before any decision."
+        if opening else "At most five new symbols today. Check the chart before any decision.",
         "",
     ]
     for event in events:
-        p = event["policy_inputs"]
-        symbol = str(p["symbol"]).upper()
-        lines.append(
-            f"**{symbol}** · ₹{_number(p.get('last_price')) or 0:.2f} "
-            f"· open +{_number(p.get('open_change_pct')) or 0:.2f}% "
-            f"· rank {p.get('current_rank', '?')} "
-            f"· B/S {_number(p.get('buy_sell_ratio')) or 0:.2f} "
-            f"· spread {_number(p.get('spread_bps')) or 0:.1f} bps "
-            f"· ₹{(_number(p.get('turnover')) or 0) / 10_000_000:.1f} Cr "
-            f"· [chart](https://www.tradingview.com/chart/?symbol=NSE%3A{symbol})"
-        )
-    lines += ["", "Filtered from post-open P5 watches; ranking is unvalidated for profit."]
+        if opening:
+            f = event["causal_fields"]
+            symbol = str(event["symbol"]).upper()
+            lines.append(
+                f"**{symbol}** · ₹{_number(f.get('PriceNow')) or 0:.2f} "
+                f"· open +{_number(f.get('OpenMovePct')) or 0:.2f}% "
+                f"· B/S {_number(f.get('BuyerSellerRatio')) or 0:.2f} "
+                f"· ₹{(_number(f.get('TradedValue')) or 0) / 10_000_000:.1f} Cr "
+                f"· [chart](https://www.tradingview.com/chart/?symbol=NSE%3A{symbol})"
+            )
+        else:
+            p = event["policy_inputs"]
+            symbol = str(p["symbol"]).upper()
+            lines.append(
+                f"**{symbol}** · ₹{_number(p.get('last_price')) or 0:.2f} "
+                f"· open +{_number(p.get('open_change_pct')) or 0:.2f}% "
+                f"· rank {p.get('current_rank', '?')} "
+                f"· B/S {_number(p.get('buy_sell_ratio')) or 0:.2f} "
+                f"· spread {_number(p.get('spread_bps')) or 0:.1f} bps "
+                f"· ₹{(_number(p.get('turnover')) or 0) / 10_000_000:.1f} Cr "
+                f"· [chart](https://www.tradingview.com/chart/?symbol=NSE%3A{symbol})"
+            )
+    lines += ["", "Review ranking is unvalidated for profit."]
     return "\n".join(lines)
 
 
 class NGWatchDigest:
-    def __init__(self, p5_state_root: Path, state_root: Path, transport: Any, *, clock=None):
+    def __init__(self, p5_state_root: Path, state_root: Path, transport: Any, *,
+                 leader_state_root: Path | None = None, clock=None):
         self.p5_state_root = Path(p5_state_root)
+        self.leader_state_root = Path(leader_state_root) if leader_state_root else self.p5_state_root.parent / "ng_leader_ignition_watch"
         self.state_root = Path(state_root)
         self.transport = transport
         self.clock = clock or (lambda: dt.datetime.now(IST))
@@ -189,15 +261,21 @@ class NGWatchDigest:
             return {"status": "already_processed", "slot": slot}
         if float(state.get("retry_after_epoch", 0)) > now.timestamp():
             return {"status": "retry_wait", "slot": slot}
-        journal = self.p5_state_root / day / "evidence" / f"events_{day}.jsonl"
-        selected = select_candidates(load_observations(journal, day), now, set(state["sent_symbols"]))
+        if slot == "09:20":
+            journal = self.leader_state_root / day / "evidence" / f"events_{day}.jsonl"
+            selected = select_opening_candidates(
+                load_opening_observations(journal, day), now, set(state["sent_symbols"])
+            )
+        else:
+            journal = self.p5_state_root / day / "evidence" / f"events_{day}.jsonl"
+            selected = select_candidates(load_observations(journal, day), now, set(state["sent_symbols"]))
         if not selected:
             state["last_slot"] = slot
             self._save(day, state)
             return {"status": "no_candidates", "slot": slot}
         if self.transport is None:
             return {"status": "no_transport", "slot": slot, "candidates": len(selected)}
-        symbols = [str(e["policy_inputs"]["symbol"]).upper() for e in selected]
+        symbols = [str(e["symbol"] if slot == "09:20" else e["policy_inputs"]["symbol"]).upper() for e in selected]
         try:
             result = self.transport.post(build_message(selected, slot))
         except Exception as exc:

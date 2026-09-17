@@ -24,6 +24,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--p5-state-root", type=Path,
                         default=ROOT / "results/Data/ng_p5_early_watch_shadow")
+    parser.add_argument("--leader-state-root", type=Path,
+                        default=ROOT / "results/Data/ng_leader_ignition_watch")
     parser.add_argument("--state-root", type=Path,
                         default=ROOT / "results/Data/ng_watch_digest")
     parser.add_argument("--webhook-env", default="NG_QUALITY_WATCH_DISCORD_WEBHOOK_URL")
@@ -44,7 +46,8 @@ def main(argv: list[str] | None = None) -> int:
         print("NG digest already running", file=sys.stderr)
         return 2
     transport = DiscordWebhookTransport(webhook) if webhook else None
-    publisher = NGWatchDigest(args.p5_state_root, args.state_root, transport)
+    publisher = NGWatchDigest(args.p5_state_root, args.state_root, transport,
+                              leader_state_root=args.leader_state_root)
     stopping = False
 
     def stop(_signum: int, _frame: object) -> None:

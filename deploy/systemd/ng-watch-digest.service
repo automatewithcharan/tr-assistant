@@ -12,7 +12,7 @@ WorkingDirectory=/home/charan_sai/tr-assistant-digest
 EnvironmentFile=/home/charan_sai/tr-assistant/.env.dev
 Environment=TZ=Asia/Kolkata
 Environment=PYTHONDONTWRITEBYTECODE=1
-ExecStart=/home/charan_sai/tr-assistant/.venv/bin/python /home/charan_sai/tr-assistant-digest/scripts/ng_watch_digest.py --p5-state-root /home/charan_sai/tr-assistant/results/Data/ng_p5_early_watch_shadow --state-root /home/charan_sai/tr-assistant/results/Data/ng_watch_digest
+ExecStart=/home/charan_sai/tr-assistant/.venv/bin/python /home/charan_sai/tr-assistant-digest/scripts/ng_watch_digest.py --p5-state-root /home/charan_sai/tr-assistant/results/Data/ng_p5_early_watch_shadow --leader-state-root /home/charan_sai/tr-assistant/results/Data/ng_leader_ignition_watch --state-root /home/charan_sai/tr-assistant/results/Data/ng_watch_digest
 Restart=on-failure
 RestartSec=15s
 KillSignal=SIGTERM

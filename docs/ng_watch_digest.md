@@ -10,15 +10,15 @@ shortlist changes notification delivery without changing scanner qualification.
 Run both existing publishers with `--archive-only`. They still record every
 qualified event in their existing evidence journals, mark its raw notification
 `ARCHIVED_FOR_DIGEST`, and never post that individual message. This terminal
-state prevents a restart from resurrecting the raw notification. The opening
-Leader Ignition journal is research only; opening events never enter the digest.
+state prevents a restart from resurrecting the raw notification.
 
 Run `scripts/ng_watch_digest.py` separately using the existing
-`NG_QUALITY_WATCH_DISCORD_WEBHOOK_URL`. It reads post-09:30 P5 `OBSERVED` events
-from `results/Data/ng_p5_early_watch_shadow/YYYY-MM-DD/evidence/`. At 09:45 IST
-and every 30 minutes until 15:15, it sends at most one digest with new symbols.
-No more than five distinct symbols are sent per IST session. A slot with no
-eligible events sends nothing. The source journal is retained in full.
+`NG_QUALITY_WATCH_DISCORD_WEBHOOK_URL`. At 09:20 IST it reads Leader Ignition
+`OBSERVED` events and sends at most two opening watch symbols. At 09:45 IST and
+every 30 minutes until 15:15, it reads post-09:30 P5 `OBSERVED` events and
+sends at most one digest with new symbols. The opening symbols consume two of
+the five distinct-symbol slots available per IST session. A slot with no
+eligible events sends nothing. Both source journals are retained in full.
 
 ## Review filter
 
@@ -27,12 +27,16 @@ points, a buyer/seller ratio of at least 1.2, and a move from the open between
 0% and 3%. Candidates older than 30 minutes are not included. A deterministic
 score orders eligible candidates by rank improvement, buyer/seller ratio,
 turnover, move acceleration, spread, and distance from the open. Missing inputs
-fail the review filter. These rules manage attention; they have **not** been
+fail the review filter. The opening digest requires at least ₹5 Cr turnover,
+buyer/seller ratio at least 1.4, a 0.5–2% move from the open, day change no
+more than 3%, and pullback no more than 0.5%. It uses the scanner's existing
+Leader Ignition score to rank opening candidates. These rules manage attention;
+they have **not** been
 validated as a profitable entry strategy. The Discord message says
 `NOT A BUY SIGNAL · PAPER / SKIP`.
 
-On a replay of the September 15 and 16 evidence, the policy would have sent
-zero symbols on September 15 and five on September 16 across two digests.
+On a replay of the September 15 and 16 evidence, the policy selected two
+opening symbols on each day, then zero and three later symbols respectively.
 This replay checks notification volume, not investment performance.
 
 ## State and safety
@@ -50,6 +54,7 @@ Start the digest with:
 ```bash
 .venv/bin/python scripts/ng_watch_digest.py \
   --p5-state-root results/Data/ng_p5_early_watch_shadow \
+  --leader-state-root results/Data/ng_leader_ignition_watch \
   --state-root results/Data/ng_watch_digest
 ```
 

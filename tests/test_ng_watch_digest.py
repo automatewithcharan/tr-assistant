@@ -6,7 +6,9 @@ import json
 from pkscreener.classes.NGP5EarlyWatchPublisher import DeliveryResult, IST
 from pkscreener.classes.NGP5EarlyWatchPublisher import NGP5EarlyWatchPublisher
 from pkscreener.classes.NGLeaderIgnitionWatchPublisher import NGLeaderIgnitionWatchPublisher
-from pkscreener.classes.NGWatchDigest import NGWatchDigest, build_message, eligible
+from pkscreener.classes.NGWatchDigest import (
+    NGWatchDigest, build_message, current_slot, eligible, eligible_opening,
+)
 
 
 DAY = "2026-09-16"
@@ -43,6 +45,45 @@ def append_observed(root, payload):
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("a") as handle:
         handle.write(json.dumps({"delivery_state": "OBSERVED", "event": payload}) + "\n")
+
+
+def opening_event(symbol: str, at: str, score: float, **fields):
+    data = {
+        "Score": score, "PriceNow": 250, "OpenMovePct": 1.0,
+        "DayChangePct": 1.2, "TradedValue": 100_000_000,
+        "BuyerSellerRatio": 2.0, "PullbackPct": 0.0,
+    }
+    data.update(fields)
+    return {
+        "kind": "leader_ignition", "event_id": f"leader-{symbol}",
+        "session_date": DAY, "symbol": symbol,
+        "qualification_timestamp": f"{DAY}T{at}+05:30",
+        "causal_fields": data,
+    }
+
+
+def test_opening_digest_uses_two_slots_then_post_open_uses_three(tmp_path):
+    leader = tmp_path / "leader"
+    p5 = tmp_path / "p5"
+    transport = Transport()
+    now = [dt.datetime(2026, 9, 16, 9, 19, tzinfo=IST)]
+    digest = NGWatchDigest(p5, tmp_path / "digest", transport,
+                           leader_state_root=leader, clock=lambda: now[0])
+    for symbol, score in [("FIRST", 700), ("SECOND", 680), ("THIRD", 660)]:
+        append_observed(leader, opening_event(symbol, "09:18:00", score))
+    append_observed(leader, opening_event("WEAK", "09:18:00", 800, BuyerSellerRatio=0.7))
+    assert current_slot(now[0]) is None
+    assert digest.process()["status"] == "outside_window"
+    now[0] = dt.datetime(2026, 9, 16, 9, 20, tzinfo=IST)
+    assert digest.process()["symbols"] == ["FIRST", "SECOND"]
+    assert "Early, unconfirmed watch" in transport.messages[0]
+    assert digest.process()["status"] == "already_processed"
+    for symbol in ["FIRST", "POST1", "POST2", "POST3", "POST4"]:
+        append_observed(p5, event(symbol, "09:40:00"))
+    now[0] = dt.datetime(2026, 9, 16, 9, 45, tzinfo=IST)
+    assert digest.process()["symbols"] == ["POST1", "POST2", "POST3"]
+    assert len(transport.messages) == 2
+    assert not eligible_opening(opening_event("BAD", "09:18:00", 800, PullbackPct=None))
 
 
 def test_digest_suppresses_opening_and_limits_daily_symbols(tmp_path):
