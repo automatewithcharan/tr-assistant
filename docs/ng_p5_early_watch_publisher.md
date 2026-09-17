@@ -1,5 +1,9 @@
 # NG P5 EARLY WATCH publisher
 
+Live deployment now uses `--archive-only` for this publisher and the separate
+[NG review shortlist](ng_watch_digest.md) for Discord notifications. The raw
+delivery instructions below describe the legacy standalone mode.
+
 This standalone process tails the full-universe live feature recorder and
 publishes the frozen P5 human-review observation. It does not import, call, or
 write SignalMonitor state. An EARLY WATCH is not a buy signal.

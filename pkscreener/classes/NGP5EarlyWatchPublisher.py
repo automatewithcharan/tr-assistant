@@ -626,7 +626,7 @@ class NGP5EarlyWatchPublisher:
                                     set(session.get("upgraded", [])) | {symbol}
                                 )
                                 self._state_dirty = True
-                    if state in {"DELIVERED", "FAILED", EXPIRED_STALE_SESSION} and bool(
+                    if state in {"DELIVERED", "FAILED", EXPIRED_STALE_SESSION, "ARCHIVED_FOR_DIGEST"} and bool(
                         row.get("terminal")
                     ):
                         transitions[delivery_id] = state
@@ -1547,6 +1547,31 @@ class NGP5EarlyWatchPublisher:
             self._state_dirty = True
             self._save_state()
         return delivered
+
+    def archive_pending(self, current_session: str) -> int:
+        """Keep P5 events as evidence while a digest handles notifications."""
+        day = _valid_session_date(current_session)
+        archived = 0
+        for delivery_id in list(self.state["pending"]):
+            pending = self.state["pending"][delivery_id]
+            event = pending.get("event") or {}
+            if event.get("session_date") != day:
+                continue
+            self._append_evidence(day, {
+                "event_id": event["event_id"],
+                "delivery_id": delivery_id,
+                "event_kind": event.get("kind") or "p5",
+                "delivery_state": "ARCHIVED_FOR_DIGEST",
+                "delivery_attempts": int(pending.get("attempts", 0)),
+                "http_status": None,
+                "delivered_timestamp": None,
+                "terminal": True,
+            })
+            self.state["pending"].pop(delivery_id, None)
+            self._state_dirty = True
+            archived += 1
+        self._save_if_dirty()
+        return archived
 
     def process_session(self, session_date: str) -> Dict[str, int]:
         session_date = _valid_session_date(session_date)

@@ -1,5 +1,9 @@
 # NG QUALITY WATCH — Leader Ignition publisher
 
+Live deployment now uses `--archive-only` for this publisher and the separate
+[NG review shortlist](ng_watch_digest.md) for Discord notifications. The raw
+delivery instructions below describe the legacy standalone mode.
+
 This standalone subscriber publishes existing Leader Ignition `PASS` evidence
 for human chart review. It is informational only. Pine remains responsible for
 entry qualification.

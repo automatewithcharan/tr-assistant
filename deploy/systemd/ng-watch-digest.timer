@@ -1,0 +1,11 @@
+[Unit]
+Description=Start NG review digest at 09:05 IST on weekdays
+
+[Timer]
+OnCalendar=Mon..Fri *-*-* 09:05:00 Asia/Kolkata
+AccuracySec=1s
+Persistent=false
+Unit=ng-watch-digest.service
+
+[Install]
+WantedBy=timers.target

@@ -74,6 +74,7 @@ def _parser() -> argparse.ArgumentParser:
     parser.set_defaults(enable_upgrades=False)
     parser.add_argument("--session-date", help="YYYY-MM-DD; defaults to current IST date")
     parser.add_argument("--once", action="store_true", help="Process available complete rows once")
+    parser.add_argument("--archive-only", action="store_true", help="Record events without raw Discord messages")
     parser.add_argument("--poll-seconds", type=float, default=2.0)
     parser.add_argument("--http-timeout-seconds", type=float, default=10.0)
     parser.add_argument("--max-attempts", type=int, default=3)
@@ -113,7 +114,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"NG P5 publisher already running for state directory {args.state_dir}", file=sys.stderr)
         return 2
 
-    webhook = os.environ.get(args.webhook_env, "").strip()
+    webhook = "" if args.archive_only else os.environ.get(args.webhook_env, "").strip()
     if webhook:
         try:
             webhook = validate_webhook_url(webhook)
@@ -125,7 +126,7 @@ def main(argv: list[str] | None = None) -> int:
         if webhook
         else None
     )
-    if transport is None:
+    if transport is None and not args.archive_only:
         print(
             f"[{_now_ist().isoformat()}] {args.webhook_env} is unset; observations will queue without delivery",
             file=sys.stderr,
@@ -162,6 +163,8 @@ def main(argv: list[str] | None = None) -> int:
         session_date = args.session_date or _now_ist().astimezone(IST).date().isoformat()
         try:
             result = publisher.process_session(session_date)
+            if args.archive_only:
+                result["archived"] = publisher.archive_pending(session_date)
             try:
                 health_dir = args.health_output_dir or args.state_dir / "health"
                 write_publisher_health_snapshot(

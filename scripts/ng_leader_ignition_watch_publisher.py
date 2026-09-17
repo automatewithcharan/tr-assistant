@@ -51,6 +51,7 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--session-date", help="YYYY-MM-DD; defaults to current IST date")
     parser.add_argument("--once", action="store_true", help="Process available live rows once")
+    parser.add_argument("--archive-only", action="store_true", help="Record events without raw Discord messages")
     parser.add_argument("--poll-seconds", type=float, default=2.0)
     parser.add_argument("--http-timeout-seconds", type=float, default=10.0)
     parser.add_argument("--max-attempts", type=int, default=3)
@@ -77,7 +78,7 @@ def main(argv: list[str] | None = None) -> int:
         print("Invalid --session-date; expected YYYY-MM-DD", file=sys.stderr)
         return 2
 
-    webhook = os.environ.get(args.webhook_env, "").strip()
+    webhook = "" if args.archive_only else os.environ.get(args.webhook_env, "").strip()
     if webhook:
         try:
             webhook = validate_webhook_url(webhook)
@@ -89,7 +90,7 @@ def main(argv: list[str] | None = None) -> int:
         if webhook
         else None
     )
-    if transport is None:
+    if transport is None and not args.archive_only:
         print(
             f"[{_now_ist().isoformat()}] {args.webhook_env} is unset; live observations will queue without delivery",
             file=sys.stderr,
@@ -121,6 +122,8 @@ def main(argv: list[str] | None = None) -> int:
         signal.signal(signal.SIGTERM, stop)
         while not stopping:
             result = publisher.process_session(session_date)
+            if args.archive_only:
+                result["archived"] = publisher.archive_pending(session_date)
             try:
                 health_dir = args.health_output_dir or args.state_dir / "health"
                 write_publisher_health_snapshot(

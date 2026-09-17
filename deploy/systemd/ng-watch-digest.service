@@ -1,0 +1,29 @@
+[Unit]
+Description=NG capped paper-only review digest
+After=network-online.target ng-p5-early-watch.service
+Wants=network-online.target ng-p5-early-watch.service
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=charan_sai
+WorkingDirectory=/home/charan_sai/tr-assistant-digest
+EnvironmentFile=/home/charan_sai/tr-assistant/.env.dev
+Environment=TZ=Asia/Kolkata
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/home/charan_sai/tr-assistant/.venv/bin/python /home/charan_sai/tr-assistant-digest/scripts/ng_watch_digest.py --p5-state-root /home/charan_sai/tr-assistant/results/Data/ng_p5_early_watch_shadow --state-root /home/charan_sai/tr-assistant/results/Data/ng_watch_digest
+Restart=on-failure
+RestartSec=15s
+KillSignal=SIGTERM
+KillMode=control-group
+TimeoutStopSec=30s
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ng-watch-digest
+
+[Install]
+WantedBy=multi-user.target

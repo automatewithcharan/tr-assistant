@@ -810,6 +810,31 @@ class NGLeaderIgnitionWatchPublisher:
             self._save_state()
         return delivered
 
+    def archive_pending(self, current_session: str) -> int:
+        """Keep qualified events in evidence without sending raw Discord alerts."""
+        day = _valid_session_date(current_session)
+        archived = 0
+        for delivery_id in list(self.state["pending"]):
+            pending = self.state["pending"][delivery_id]
+            event = pending.get("event") or {}
+            if event.get("session_date") != day:
+                continue
+            self._append_evidence(day, {
+                "event_id": event["event_id"],
+                "delivery_id": delivery_id,
+                "event_kind": "leader_ignition",
+                "delivery_state": "ARCHIVED_FOR_DIGEST",
+                "delivery_attempts": int(pending.get("attempts", 0)),
+                "http_status": None,
+                "delivered_timestamp": None,
+                "terminal": True,
+            })
+            self.state["pending"].pop(delivery_id, None)
+            self._state_dirty = True
+            archived += 1
+        self._save_if_dirty()
+        return archived
+
     def _terminal_failure(
         self,
         event: Mapping[str, Any],
