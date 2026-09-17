@@ -1,0 +1,29 @@
+[Unit]
+Description=NG NSE Top 20 gainers Discord watch
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=300
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=charan_sai
+WorkingDirectory=/home/charan_sai/tr-assistant-digest
+EnvironmentFile=/home/charan_sai/tr-assistant/.env.dev
+Environment=TZ=Asia/Kolkata
+Environment=PYTHONDONTWRITEBYTECODE=1
+ExecStart=/home/charan_sai/tr-assistant/.venv/bin/python /home/charan_sai/tr-assistant-digest/scripts/ng_nse_top_gainers_watch.py --state-root /home/charan_sai/tr-assistant/results/Data/ng_nse_top_gainers_watch
+Restart=on-failure
+RestartSec=15s
+KillSignal=SIGTERM
+KillMode=control-group
+TimeoutStopSec=30s
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ng-nse-top-gainers-watch
+
+[Install]
+WantedBy=multi-user.target
