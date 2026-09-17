@@ -301,6 +301,9 @@ class SignalMonitorRunner:
             int(float(os.environ.get("TRADINGVIEW_CANDIDATE_MAX_TOTAL_ATTEMPTS", "6") or "6")),
         )
         self.monitor_heartbeat_minutes = max(0.0, float(os.environ.get("SIGNALMONITOR_HEARTBEAT_MINUTES", "10") or "10"))
+        self.monitor_heartbeat_discord_enabled = self._env_truthy(
+            "SIGNALMONITOR_HEARTBEAT_DISCORD_ENABLED", "0"
+        )
         self.buy_board_digest_seconds = max(
             0.0,
             float(os.environ.get("SIGNALMONITOR_BUY_BOARD_DIGEST_SECONDS", "60") or "60"),
@@ -5772,7 +5775,9 @@ class SignalMonitorRunner:
         alerts_df: pd.DataFrame,
         current_simple_df: Optional[pd.DataFrame] = None,
     ) -> None:
-        """Send periodic Discord status so quiet periods do not look like downtime."""
+        """Send optional diagnostic status; keep routine cycles out of Discord."""
+        if not getattr(self, "monitor_heartbeat_discord_enabled", False):
+            return
         if "discord" not in self.alert_channels:
             return
         if not self._is_regular_market_hours():
@@ -5947,6 +5952,7 @@ class SignalMonitorRunner:
         self._buy_now_board_digest_baseline: Optional[Set[str]] = None
         self._buy_now_board_queue_signature = ""
         self._buy_now_board_queue_delivered_at = 0.0
+        self._buy_now_board_notified_symbols: Set[str] = set()
         try:
             path = self._buy_now_board_state_file()
             if not path.exists():
@@ -5961,6 +5967,13 @@ class SignalMonitorRunner:
             symbols = payload.get("active_symbols", [])
             if not isinstance(symbols, list):
                 return set()
+            notified = payload.get("notified_symbols", symbols)
+            if isinstance(notified, list):
+                self._buy_now_board_notified_symbols = {
+                    str(symbol or "").strip().upper()
+                    for symbol in notified
+                    if str(symbol or "").strip()
+                }
             pending_entries = payload.get("pending_entries", [])
             pending_exits = payload.get("pending_exits", [])
             if isinstance(pending_entries, list):
@@ -6020,6 +6033,9 @@ class SignalMonitorRunner:
             payload = {
                 "trading_date": trading_date,
                 "active_symbols": sorted(active_symbols),
+                "notified_symbols": sorted(
+                    getattr(self, "_buy_now_board_notified_symbols", set()) or set()
+                ),
                 "pending_entries": list(
                     getattr(self, "_buy_now_board_pending_entries", []) or []
                 ),
@@ -6187,86 +6203,48 @@ class SignalMonitorRunner:
         window_ended_at: float,
         include_queue: bool = True,
     ) -> List[str]:
-        """Build a safely split transition delta, optionally with a queue update."""
-        if not entries and not exits and not include_queue:
+        """Describe only newly observed symbols, with enough context to review them."""
+        if not entries:
             return []
-        selector_status = (
-            "VALIDATED (unchanged; does not approve this board notification)"
-            if bool(getattr(self, "goal_selector_validated", False))
-            else "NOT VALIDATED"
-        )
-        window_start = datetime.fromtimestamp(window_started_at).strftime("%H:%M:%S")
-        window_end = datetime.fromtimestamp(window_ended_at).strftime("%H:%M:%S")
-        active_count = len(ranked_queue)
-        shown_queue = self._buy_now_board_displayed_queue(ranked_queue)
-        hidden_count = max(0, active_count - len(shown_queue))
+        window_start = datetime.fromtimestamp(
+            window_started_at, ZoneInfo("Asia/Kolkata")
+        ).strftime("%H:%M:%S")
+        window_end = datetime.fromtimestamp(
+            window_ended_at, ZoneInfo("Asia/Kolkata")
+        ).strftime("%H:%M:%S")
         blocks: List[str] = []
-        for index, entry in enumerate(entries):
-            blocks.append(
-                ("**NEW & STILL ACTIVE:**\n" if index == 0 else "")
-                + f"`{entry.get('symbol', '')}`"
-            )
-        for index, exit_row in enumerate(exits):
-            blocks.append(
-                ("**EXITED:**\n" if index == 0 else "")
-                + f"`{exit_row.get('symbol', '')}`"
-            )
-        if include_queue:
-            review_first = shown_queue[:10]
-            next_up = shown_queue[10:15]
-            if review_first:
-                queue_lines = ["**PINE PRIORITY UPDATE**", "**REVIEW FIRST**"]
-                for rank, row in enumerate(review_first, start=1):
-                    queue_lines.append(
-                        f"{rank}. `{row.get('symbol', '')}` — Strength "
-                        + self._format_buy_now_board_metric(row.get("strength"))
-                        + " | Vol "
-                        + self._format_buy_now_board_metric(row.get("volume_ratio"), "x")
-                        + " | Day "
-                        + self._format_buy_now_board_metric(row.get("change_pct"), "%", signed=True)
-                        + " | Gap "
-                        + self._format_buy_now_board_metric(row.get("entry_gap_pct"), "%")
-                    )
-                if next_up:
-                    queue_lines.extend(["", "**NEXT UP**"])
-                    queue_lines.extend(
-                        f"{rank}. `{row.get('symbol', '')}`"
-                        for rank, row in enumerate(next_up, start=11)
-                    )
-                blocks.append("\n".join(queue_lines))
-            blocks.append(
-                f"Active board: `{active_count}`\n"
-                f"Additional retained candidates: `{hidden_count}`"
-            )
-        else:
-            blocks.append(f"Active board: `{active_count}`")
+        for entry in entries:
+            symbol = str(entry.get("symbol", "") or "").strip().upper()
+            metrics = []
+            for label, key, suffix, signed in (
+                ("Price", "price_now", "", False),
+                ("Day", "change_pct", "%", True),
+                ("Strength", "strength", "", False),
+                ("Volume", "volume_ratio", "x", False),
+                ("Gap", "entry_gap_pct", "%", False),
+            ):
+                value = entry.get(key)
+                if value is not None:
+                    rendered = self._format_buy_now_board_metric(value, suffix, signed)
+                    metrics.append(f"{label} `{rendered}`")
+            lines = [
+                f"**NEW:** `{symbol}` · [Open chart](https://www.tradingview.com/chart/?symbol=NSE%3A{symbol})"
+            ]
+            if metrics:
+                lines.append(" | ".join(metrics))
+            observed_at = str(entry.get("observed_at", "") or "").strip()
+            if observed_at:
+                lines.append(f"Seen `{observed_at}`")
+            blocks.append("\n".join(lines))
 
         header = "\n".join(
             [
-                "**BUY NOW BOARD — MANUAL REVIEW**",
-                f"Source `{self._alert_source_label()}` | Window `{window_start}–{window_end}`",
-                f"Transitions: new `{len(entries)}` | exited `{len(exits)}` | active `{active_count}`",
+                "**NEW BOARD SYMBOL — MANUAL REVIEW**",
+                f"Source `{self._alert_source_label()}` | IST window `{window_start}–{window_end}`",
+                f"New symbols `{len(entries)}` | active board `{len(ranked_queue)}`",
             ]
         )
-        footer_lines = []
-        if include_queue:
-            footer_lines.extend(
-                [
-                    "Attention ranking only — NOT a validated profitability score.",
-                    "Use the highest-ranked unmonitored candidate when a Pine alert slot is free; recycle to the next candidate after completion/invalidation.",
-                ]
-            )
-        if exits:
-            footer_lines.append(
-                "Exited names are possible Pine-slot release candidates only if no other source/setup still justifies monitoring them."
-            )
-        footer_lines.extend(
-            [
-                "Existing general/swing Buy Now board. Manual TradingView/Pine review only.",
-                f"Not an approved trade. Goal selector: `{selector_status}` | Auto-buy: `DISABLED`",
-            ]
-        )
-        footer = "\n".join(footer_lines)
+        footer = "General/swing board only. Check the chart before adding a Pine alert. Not an approved trade; auto-buy disabled."
 
         chunks: List[List[str]] = []
         current_blocks: List[str] = []
@@ -6320,6 +6298,7 @@ class SignalMonitorRunner:
             self._buy_now_board_pending_exits = []
             self._buy_now_board_digest_started_at = None
             self._buy_now_board_digest_baseline = None
+            self._buy_now_board_notified_symbols = set(current)
             ranked_queue = self._rank_buy_now_board(current_simple_df)
             self._buy_now_board_queue_signature = self._buy_now_board_queue_signature_for(
                 ranked_queue
@@ -6343,78 +6322,37 @@ class SignalMonitorRunner:
 
         now_ts = time.time()
         pending_entries = list(getattr(self, "_buy_now_board_pending_entries", []) or [])
-        pending_exits = list(getattr(self, "_buy_now_board_pending_exits", []) or [])
-        if entrants or exits:
+        notified = set(getattr(self, "_buy_now_board_notified_symbols", set()) or set())
+        if entrants:
             if getattr(self, "_buy_now_board_digest_started_at", None) is None:
                 self._buy_now_board_digest_started_at = now_ts
-                self._buy_now_board_digest_baseline = set(previous)
-        baseline = getattr(self, "_buy_now_board_digest_baseline", None)
-        if baseline is not None:
-            entry_by_symbol = {
-                str(row.get("symbol", "") or "").upper(): row
-                for row in pending_entries
-            }
-            exit_by_symbol = {
-                str(row.get("symbol", "") or "").upper(): row
-                for row in pending_exits
-            }
-            pending_entries = [
-                entry_by_symbol.get(symbol)
-                or self._buy_now_board_entry_snapshot(current_simple_df, symbol)
-                for symbol in sorted(current.difference(baseline))
-            ]
-            pending_exits = [
-                exit_by_symbol.get(symbol)
-                or {
-                    "symbol": symbol,
-                    "observed_at": str(getattr(self, "run_at_str", "") or ""),
-                }
-                for symbol in sorted(baseline.difference(current))
-            ]
-            if not pending_entries and not pending_exits:
-                self._buy_now_board_digest_started_at = None
-                self._buy_now_board_digest_baseline = None
+        pending_by_symbol = {
+            str(row.get("symbol", "") or "").strip().upper(): row
+            for row in pending_entries
+        }
+        pending_entries = [
+            pending_by_symbol.get(symbol)
+            or self._buy_now_board_entry_snapshot(current_simple_df, symbol)
+            for symbol in sorted(current.difference(notified))
+            if symbol not in notified
+            and (symbol in pending_by_symbol or symbol in entrants)
+        ]
+        if not pending_entries:
+            self._buy_now_board_digest_started_at = None
         self._buy_now_board_pending_entries = pending_entries
-        self._buy_now_board_pending_exits = pending_exits
+        self._buy_now_board_pending_exits = []
 
-        # Always replace membership rather than accumulating a shown-today set:
-        # removing exited names is what makes a later genuine re-entry alertable.
         self._active_buy_now_board = current
         self._save_buy_now_board_state(current)
 
-        ranked_queue = self._rank_buy_now_board(current_simple_df)
-        queue_signature = self._buy_now_board_queue_signature_for(ranked_queue)
-        delivered_signature = str(
-            getattr(self, "_buy_now_board_queue_signature", "") or ""
-        )
-        if not delivered_signature:
-            # Migrate a same-day legacy state silently. Its membership remains a
-            # trustworthy restart baseline, but it predates queue signatures.
-            self._buy_now_board_queue_signature = queue_signature
-            self._buy_now_board_queue_delivered_at = now_ts
-            delivered_signature = queue_signature
-            self._save_buy_now_board_state(current)
-        queue_changed = queue_signature != delivered_signature
-        refresh_seconds = max(
-            0.0,
-            float(getattr(self, "buy_board_queue_refresh_seconds", 600.0) or 0.0),
-        )
-        delivered_at = float(
-            getattr(self, "_buy_now_board_queue_delivered_at", 0.0) or 0.0
-        )
-        queue_refresh_due = bool(
-            refresh_seconds > 0.0
-            and delivered_at > 0.0
-            and now_ts - delivered_at >= refresh_seconds
-        )
-        if not pending_entries and not pending_exits and not queue_changed and not queue_refresh_due:
+        if not pending_entries:
             return entrants
         digest_seconds = max(
             0.0,
             float(getattr(self, "buy_board_digest_seconds", 60.0) or 0.0),
         )
         started_at = float(self._buy_now_board_digest_started_at or now_ts)
-        if (pending_entries or pending_exits) and now_ts - started_at < digest_seconds:
+        if now_ts - started_at < digest_seconds:
             return entrants
         if (
             "discord" not in getattr(self, "alert_channels", set())
@@ -6422,31 +6360,23 @@ class SignalMonitorRunner:
         ):
             return entrants
 
-        include_queue = queue_changed or queue_refresh_due
         delivery_pending_entries = self._filter_manual_discord_records(
             pending_entries,
             "buy_now_board",
         )
-        delivery_pending_exits = self._filter_manual_discord_records(
-            pending_exits,
-            "buy_now_board",
-        )
-        delivery_ranked_queue = self._filter_manual_discord_records(
-            ranked_queue,
-            "buy_now_board",
-        )
+        ranked_queue = self._rank_buy_now_board(current_simple_df)
         messages = self._build_buy_now_board_digest_messages(
             delivery_pending_entries,
-            delivery_pending_exits,
-            delivery_ranked_queue,
+            [],
+            ranked_queue,
             started_at,
             now_ts,
-            include_queue=include_queue,
+            include_queue=False,
         )
         delivered = True
         board_delivery_rows = {
             str(row.get("symbol", "") or "").strip().upper(): row
-            for row in [*delivery_pending_entries, *delivery_ranked_queue]
+            for row in delivery_pending_entries
             if str(row.get("symbol", "") or "").strip()
         }
         for message in messages:
@@ -6466,6 +6396,20 @@ class SignalMonitorRunner:
                         delivery_events.append(timing_event)
                 result = self._deliver_with_optional_timing(message, delivery_events)
                 delivered = result is not False
+                if delivered:
+                    acknowledged = {
+                        symbol for symbol in board_delivery_rows
+                        if f"**NEW:** `{symbol}`" in message
+                    }
+                    self._buy_now_board_notified_symbols = set(
+                        getattr(self, "_buy_now_board_notified_symbols", set()) or set()
+                    ).union(acknowledged)
+                    self._buy_now_board_pending_entries = [
+                        row for row in self._buy_now_board_pending_entries
+                        if str(row.get("symbol", "") or "").strip().upper()
+                        not in acknowledged
+                    ]
+                    self._save_buy_now_board_state(current)
             except Exception as exc:
                 default_logger().debug(
                     f"Buy Now board Discord delivery failed: {exc}", exc_info=True
@@ -6480,9 +6424,6 @@ class SignalMonitorRunner:
         self._buy_now_board_pending_exits = []
         self._buy_now_board_digest_started_at = None
         self._buy_now_board_digest_baseline = None
-        if include_queue:
-            self._buy_now_board_queue_signature = queue_signature
-            self._buy_now_board_queue_delivered_at = now_ts
         self._save_buy_now_board_state(current)
         return entrants
 

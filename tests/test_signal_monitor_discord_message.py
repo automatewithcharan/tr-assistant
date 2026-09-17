@@ -1058,6 +1058,7 @@ def test_discord_send_chunks_goal_alerts_that_do_not_fit_one_message():
 
 def test_monitor_heartbeat_reports_active_scanner_without_fresh_buy(monkeypatch):
     runner = _make_runner()
+    runner.monitor_heartbeat_discord_enabled = True
     runner.goal_max_trades_per_day = 20
     sent_messages = []
     runner._send_discord_alert = sent_messages.append
@@ -1089,8 +1090,20 @@ def test_monitor_heartbeat_reports_active_scanner_without_fresh_buy(monkeypatch)
     assert "VOLTAS" in sent_messages[0]
 
 
+def test_monitor_heartbeat_is_silent_by_default():
+    runner = _make_runner()
+    runner._is_regular_market_hours = lambda: True
+    sent = []
+    runner._send_discord_alert = sent.append
+
+    runner._send_monitor_heartbeat(pd.DataFrame([{"ScannedSymbols": 3000}]), pd.DataFrame())
+
+    assert sent == []
+
+
 def test_monitor_heartbeat_explains_unvalidated_selector_lock(monkeypatch):
     runner = _make_runner()
+    runner.monitor_heartbeat_discord_enabled = True
     runner.goal_selector_validated = False
     runner._is_regular_market_hours = lambda: True
     monkeypatch.setattr(runner, "_load_daily_symbol_set", lambda *_args, **_kwargs: set())
@@ -1115,6 +1128,7 @@ def test_monitor_heartbeat_explains_unvalidated_selector_lock(monkeypatch):
 
 def test_monitor_heartbeat_previews_board_names_and_overlap(monkeypatch):
     runner = _make_runner()
+    runner.monitor_heartbeat_discord_enabled = True
     runner.goal_selector_validated = False
     runner._is_regular_market_hours = lambda: True
     monkeypatch.setattr(runner, "_load_daily_symbol_set", lambda *_args, **_kwargs: set())
@@ -1175,11 +1189,10 @@ def test_buy_now_board_delta_cold_bootstrap_baselines_31_then_alerts_one_new(tmp
     )
     assert runner._send_buy_now_board_delta(with_new) == ["FRESH"]
     combined = "\n".join(sent_messages)
-    assert "BUY NOW BOARD — MANUAL REVIEW" in combined
+    assert "NEW BOARD SYMBOL — MANUAL REVIEW" in combined
     assert "`FRESH`" in combined
-    assert "Not an approved trade." in combined
-    assert "Goal selector: `NOT VALIDATED`" in combined
-    assert "Auto-buy: `DISABLED`" in combined
+    assert "Not an approved trade" in combined
+    assert "auto-buy disabled" in combined
 
 
 def test_buy_now_board_digest_batches_transitions_across_cycles(monkeypatch, tmp_path):
@@ -1234,10 +1247,12 @@ def test_buy_now_board_digest_batches_transitions_across_cycles(monkeypatch, tmp
 
     assert len(sent_messages) == 1
     message = sent_messages[0]
-    assert "Transitions: new `2` | exited `0` | active `2`" in message
-    assert message.count("`AAA`") == 2  # transition plus changed queue
-    assert message.count("`BBB`") == 2
-    assert "PINE PRIORITY UPDATE" in message
+    assert "New symbols `2` | active board `2`" in message
+    assert message.count("`AAA`") == 1
+    assert message.count("`BBB`") == 1
+    assert "PINE PRIORITY UPDATE" not in message
+    assert "Price `101.0`" in message
+    assert "IST window `05:31:50–05:32:51`" in message
 
 
 def test_buy_now_board_pending_digest_survives_same_day_restart(monkeypatch, tmp_path):
@@ -1270,8 +1285,8 @@ def test_buy_now_board_pending_digest_survives_same_day_restart(monkeypatch, tmp
 
     assert restarted._send_buy_now_board_delta(board) == []
     assert len(sent_messages) == 1
-    assert "Transitions: new `1`" in sent_messages[0]
-    assert sent_messages[0].count("`AAA`") == 2  # NEW section plus changed queue.
+    assert "New symbols `1`" in sent_messages[0]
+    assert sent_messages[0].count("`AAA`") == 1
 
 
 def test_buy_now_board_delta_same_day_restart_does_not_fake_alert(tmp_path):
@@ -1300,7 +1315,7 @@ def test_buy_now_board_delta_same_day_restart_does_not_fake_alert(tmp_path):
     assert restarted_messages == []
 
 
-def test_buy_now_board_delta_same_day_exit_then_reentry_alerts(tmp_path):
+def test_buy_now_board_delta_same_day_exit_then_reentry_stays_silent(tmp_path):
     runner = _make_runner()
     runner.output_dir = str(tmp_path)
     runner._buy_now_board_state_path = str(tmp_path / "buy_now_board_state.json")
@@ -1319,10 +1334,7 @@ def test_buy_now_board_delta_same_day_exit_then_reentry_alerts(tmp_path):
     ) == []
     assert runner._active_buy_now_board == set()
     assert runner._send_buy_now_board_delta(buy_now) == ["AAA"]
-    assert len(sent_messages) == 2
-    assert "**EXITED:**" in sent_messages[0]
-    assert "possible Pine-slot release candidates" in sent_messages[0]
-    assert "**NEW & STILL ACTIVE:**" in sent_messages[1]
+    assert sent_messages == []
 
 
 def test_buy_now_board_delta_previous_day_state_is_ignored_and_rebaselined(tmp_path):
@@ -1393,8 +1405,8 @@ def test_buy_now_board_delta_uses_full_merged_board_for_incremental_cycle(tmp_pa
     assert runner._active_buy_now_board == {"AAA", "BBB"}
     assert len(sent_messages) == 1
     assert "`BBB`" in sent_messages[0]
-    assert "**NEW & STILL ACTIVE:**\n`BBB`" in sent_messages[0]
-    assert "**NEW & STILL ACTIVE:**\n`AAA`" not in sent_messages[0]
+    assert "**NEW:** `BBB`" in sent_messages[0]
+    assert "**NEW:** `AAA`" not in sent_messages[0]
 
 
 def test_buy_now_board_delta_batches_all_fresh_entrants_without_eight_name_cap():
@@ -1416,7 +1428,7 @@ def test_buy_now_board_delta_batches_all_fresh_entrants_without_eight_name_cap()
     runner._send_buy_now_board_delta(board)
 
     combined = "\n".join(sent_messages)
-    assert all("Transitions: new `12` | exited `0` | active `12`" in message for message in sent_messages)
+    assert all("New symbols `12` | active board `12`" in message for message in sent_messages)
     assert all(f"`{symbol}`" in combined for symbol in symbols)
 
 
@@ -1439,7 +1451,7 @@ def test_buy_now_board_delta_splits_safely_without_dropping_symbols():
     assert all(len(message) <= 1900 for message in messages)
     combined = "\n".join(messages)
     assert all(combined.count(f"`{symbol}`") == 1 for symbol in symbols)
-    assert all(combined.count(f"`{symbol}`") == 1 for symbol in exit_symbols)
+    assert all(combined.count(f"`{symbol}`") == 0 for symbol in exit_symbols)
 
 
 def test_buy_now_board_attention_ranking_is_lexicographic_and_missing_last():
@@ -1507,8 +1519,8 @@ def test_buy_now_board_queue_retains_rank_beyond_20_and_display_limit(tmp_path):
     assert "QUEUE24" in runner._active_buy_now_board
     assert len(sent_messages) >= 1
     combined = "\n".join(sent_messages)
-    assert "Active board: `25`" in combined
-    assert "Additional retained candidates: `20`" in combined
+    assert "active board `25`" in combined
+    assert "PINE PRIORITY UPDATE" not in combined
     # Every entrant remains in the NEW section even though only five queue rows display.
     assert all(f"`QUEUE{index:02d}`" in combined for index in range(25))
 
@@ -1624,7 +1636,7 @@ def test_buy_now_board_transition_is_acknowledged_once_after_success(tmp_path):
     assert runner._send_buy_now_board_delta(board) == ["AAA"]
     assert runner._send_buy_now_board_delta(board) == []
     assert len(sent) == 1
-    assert sent[0].count("**NEW & STILL ACTIVE:**") == 1
+    assert sent[0].count("**NEW:**") == 1
     payload = json.loads((tmp_path / "buy_now_board_state.json").read_text())
     assert payload["pending_entries"] == []
     assert payload["pending_exits"] == []
@@ -1648,9 +1660,7 @@ def test_buy_now_board_exit_is_acknowledged_once(tmp_path):
     runner._send_buy_now_board_delta(empty)
     runner._send_buy_now_board_delta(empty)
 
-    assert len(sent) == 1
-    assert sent[0].count("**EXITED:**") == 1
-    assert sent[0].count("`AAA`") == 1
+    assert sent == []
 
 
 def test_buy_now_board_enter_exit_in_window_collapses_to_final_state(monkeypatch, tmp_path):
@@ -1735,7 +1745,7 @@ def test_buy_now_board_sub_display_precision_rank_noise_is_silent(tmp_path):
     assert sent == []
 
 
-def test_buy_now_board_displayed_composition_change_sends_compact_queue(tmp_path):
+def test_buy_now_board_displayed_composition_change_is_silent(tmp_path):
     runner = _make_runner()
     runner._buy_now_board_state_path = str(tmp_path / "buy_now_board_state.json")
     runner._active_buy_now_board = set()
@@ -1759,12 +1769,7 @@ def test_buy_now_board_displayed_composition_change_sends_compact_queue(tmp_path
     promoted.loc[promoted["Stock"].eq("Q15"), "Signal Strength %"] = 200
     runner._send_buy_now_board_delta(promoted)
 
-    assert len(sent) == 1
-    assert "PINE PRIORITY UPDATE" in sent[0]
-    assert "**REVIEW FIRST**" in sent[0]
-    assert "**NEXT UP**" in sent[0]
-    assert "Additional retained candidates: `1`" in sent[0]
-    assert "NEW & STILL ACTIVE" not in sent[0]
+    assert sent == []
 
 
 def test_buy_now_board_new_below_display_limit_sends_delta_without_queue(tmp_path):
@@ -1801,9 +1806,9 @@ def test_buy_now_board_new_below_display_limit_sends_delta_without_queue(tmp_pat
 
     assert len(sent) == 1
     assert sent[0].count("`LOW_RANK`") == 1
-    assert "**NEW & STILL ACTIVE:**" in sent[0]
+    assert "**NEW:**" in sent[0]
     assert "PINE PRIORITY UPDATE" not in sent[0]
-    assert "Active board: `16`" in sent[0]
+    assert "active board `16`" in sent[0]
 
 
 def test_buy_now_board_failed_send_keeps_pending_until_success(tmp_path):
@@ -1831,6 +1836,44 @@ def test_buy_now_board_failed_send_keeps_pending_until_success(tmp_path):
     assert len(sent) == 1
     successful_payload = json.loads((tmp_path / "buy_now_board_state.json").read_text())
     assert successful_payload["pending_entries"] == []
+
+
+def test_buy_now_board_partial_send_acks_each_successful_part(tmp_path):
+    runner = _make_runner()
+    runner._buy_now_board_state_path = str(tmp_path / "buy_now_board_state.json")
+    runner._active_buy_now_board = set()
+    runner._buy_now_board_state_valid = False
+    runner._buy_now_board_state_date = ""
+    runner.buy_board_digest_seconds = 0
+    runner._is_regular_market_hours = lambda: True
+    empty = pd.DataFrame(columns=["Stock", "What To Do"])
+    board = pd.DataFrame([
+        {"Stock": f"LONG_SYMBOL_{index:03d}", "What To Do": "Buy Now"}
+        for index in range(40)
+    ])
+    runner._send_buy_now_board_delta(empty)
+    attempts = []
+
+    def fail_second(message):
+        attempts.append(message)
+        return len(attempts) != 2
+
+    runner._send_discord_alert = fail_second
+    runner._send_buy_now_board_delta(board)
+    assert len(attempts) == 2
+    payload = json.loads((tmp_path / "buy_now_board_state.json").read_text())
+    acknowledged = set(payload["notified_symbols"])
+    assert acknowledged
+    assert len(acknowledged) < len(board)
+    assert all(f"**NEW:** `{symbol}`" in attempts[0] for symbol in acknowledged)
+
+    retry = []
+    runner._send_discord_alert = retry.append
+    runner._send_buy_now_board_delta(board)
+    assert retry
+    assert all(f"**NEW:** `{symbol}`" not in "\n".join(retry) for symbol in acknowledged)
+    final_payload = json.loads((tmp_path / "buy_now_board_state.json").read_text())
+    assert len(final_payload["notified_symbols"]) == len(board)
 
 
 @pytest.mark.parametrize(
@@ -1892,6 +1935,7 @@ def test_discord_sender_reports_delivery_outcome(monkeypatch, status_code, expec
 
 def test_monitor_heartbeat_throttle_survives_runner_restart(monkeypatch, tmp_path):
     runner = _make_runner()
+    runner.monitor_heartbeat_discord_enabled = True
     runner.output_dir = str(tmp_path)
     runner._heartbeat_state_path = str(tmp_path / "heartbeat_state.json")
     runner.goal_max_trades_per_day = 20
