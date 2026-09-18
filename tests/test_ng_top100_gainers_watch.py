@@ -29,7 +29,7 @@ def files(tmp_path, now=NOW, positives=110):
         for i in range(positives):
             writer.writerow({"symbol": f"S{i:04}", "exchange": "NSE",
                              "last_price": 200 - i / 10, "close": 100,
-                             "volume_traded": 1000 + i,
+                             "volume_traded": 10_000 + i,
                              "last_trade_time": f"{now.date()} 09:19:00",
                              "received_at": now.isoformat()})
         for i in range(positives, 600):
@@ -66,6 +66,24 @@ def test_rank_is_full_market_top100_and_ignores_wrong_exchange(tmp_path):
     assert all(row["symbol"] != "S0999" for row in rows)
 
 
+def test_low_share_count_and_low_traded_value_do_not_rank(tmp_path):
+    ticks, universe = files(tmp_path)
+    with ticks.open(newline="") as handle:
+        rows = list(csv.DictReader(handle))
+        fieldnames = list(rows[0])
+    rows[0]["volume_traded"] = "9"
+    rows[1]["volume_traded"] = "3000"  # Above share floor, below ₹10L value floor.
+    with ticks.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    os.utime(ticks, (NOW.timestamp(), NOW.timestamp()))
+    ranked = rank_live_gainers(ticks, universe, NOW)
+    assert len(ranked) == 100
+    assert ranked[0]["symbol"] == "S0002"
+    assert ranked[-1]["symbol"] == "S0101"
+
+
 def test_weak_day_reports_available_positive_names(tmp_path):
     ticks, universe = files(tmp_path, positives=80)
     rows = rank_live_gainers(ticks, universe, NOW)
@@ -97,7 +115,7 @@ def test_skips_official_top20_batches_rest_and_dedupes(tmp_path):
     assert len(result["symbols"]) == 80
     assert len(transport.messages) == 3
     assert "**S0020**" in transport.messages[0]
-    assert "Vol 1,020" in transport.messages[0]
+    assert "Vol 10,020" in transport.messages[0]
     assert all("**S0000**" not in message for message in transport.messages)
     assert all(len(message) <= 2000 for message in transport.messages)
     assert watch.process()["status"] == "up_to_date"

@@ -43,8 +43,9 @@ class Transport:
         return next(self.outcomes)
 
 
-def row(symbol, change=10):
-    return {"symbol": symbol, "perChange": change, "ltp": 100}
+def row(symbol, change=10, shares=10_000, turnover_lakhs=100):
+    return {"symbol": symbol, "perChange": change, "ltp": 100,
+            "trade_quantity": shares, "turnover": turnover_lakhs}
 
 
 def ok():
@@ -107,6 +108,18 @@ def test_official_board_does_not_repeat_broad_feed_symbols(tmp_path):
                                  Session([Response([row("A"), row("B")])]))
     assert watcher.process()["symbols"] == ["B"]
     assert "**A**" not in transport.messages[0]
+
+
+def test_official_board_waits_until_thin_names_meet_both_floors(tmp_path):
+    first = [row("THIN", shares=10), row("LOWVAL", shares=1500, turnover_lakhs=9),
+             row("GOOD")]
+    second = [row("THIN", shares=2000, turnover_lakhs=11),
+              row("LOWVAL", shares=3000, turnover_lakhs=12), row("GOOD")]
+    transport = Transport([ok(), ok()])
+    watcher = NSETopGainersWatch(tmp_path, transport, lambda: NOW,
+                                 Session([Response(first), Response(second)]))
+    assert watcher.process()["symbols"] == ["GOOD"]
+    assert watcher.process()["symbols"] == ["THIN", "LOWVAL"]
 
 
 def test_new_session_resets_deduplication(tmp_path):

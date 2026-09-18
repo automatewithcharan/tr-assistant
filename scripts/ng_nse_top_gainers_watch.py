@@ -32,6 +32,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--universe-path", type=Path,
                         default=Path("/home/charan_sai/tr-assistant/results/Indices/EQUITY_L.csv"))
     parser.add_argument("--top-n", type=int, default=100)
+    parser.add_argument("--min-shares", type=int, default=1000)
+    parser.add_argument("--min-traded-value", type=float, default=1_000_000.0,
+                        help="Minimum cumulative traded rupee value")
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args(argv)
     webhook = os.environ.get("NG_QUALITY_WATCH_DISCORD_WEBHOOK_URL", "").strip()
@@ -50,11 +53,17 @@ def main(argv: list[str] | None = None) -> int:
         except BlockingIOError:
             print("NSE Top 20 publisher already running", file=sys.stderr)
             return 2
+        if args.min_shares < 1 or args.min_traded_value < 0:
+            print("Liquidity minimums must be nonnegative", file=sys.stderr)
+            return 2
         publisher = NSETopGainersWatch(args.state_root, DiscordWebhookTransport(webhook),
-                                      lambda: datetime.now(IST))
+                                      lambda: datetime.now(IST), min_shares=args.min_shares,
+                                      min_traded_value=args.min_traded_value)
         broad = NGTop100GainersWatch(args.state_root / "kite_top100", args.ticks_path,
                                     args.universe_path, args.state_root, publisher.transport,
-                                    lambda: datetime.now(IST), top_n=args.top_n)
+                                    lambda: datetime.now(IST), top_n=args.top_n,
+                                    min_shares=args.min_shares,
+                                    min_traded_value=args.min_traded_value)
         stop_event = threading.Event()
 
         def stop(_signum: int, _frame: object) -> None:

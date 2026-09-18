@@ -31,7 +31,8 @@ def load_eq_universe(path: Path) -> set[str]:
 
 
 def rank_live_gainers(ticks_path: Path, universe_path: Path, now: datetime,
-                      top_n: int = 100) -> list[dict[str, Any]]:
+                      top_n: int = 100, min_shares: int = 1000,
+                      min_traded_value: float = 1_000_000.0) -> list[dict[str, Any]]:
     """Rank today's traded NSE EQ shares; reject stale or partial ticker data."""
     if (now.timestamp() - ticks_path.stat().st_mtime) > 120:
         raise ValueError("Kite ticker snapshot is stale")
@@ -59,22 +60,28 @@ def rank_live_gainers(ticks_path: Path, universe_path: Path, now: datetime,
             if trade_date != now.date() or age < -10 or age > 120:
                 continue
             fresh_count += 1
+            average_price = _number(row.get("average_traded_price"))
+            traded_value = volume * (average_price if average_price is not None and average_price > 0 else price)
+            if volume < min_shares or traded_value < min_traded_value:
+                continue
             change = (price / prior_close - 1.0) * 100.0
             if change <= 0:
                 continue
             rows.append({"symbol": symbol, "change": change, "price": price,
-                         "volume": volume, "received_at": received_at.isoformat()})
+                         "volume": volume, "traded_value": traded_value,
+                         "received_at": received_at.isoformat()})
     if fresh_count < 500:
         raise ValueError(f"Only {fresh_count} fresh NSE EQ trades; need 500 for a broad ranking")
     if not rows:
-        raise ValueError("No fresh positive NSE EQ shares")
+        raise ValueError("No fresh positive NSE EQ shares meeting liquidity minimums")
     rows.sort(key=lambda row: (-row["change"], -row["volume"], row["symbol"]))
     return rows[:top_n]
 
 
-def build_message(now: datetime, rows: list[dict[str, Any]], top_n: int) -> str:
+def build_message(now: datetime, rows: list[dict[str, Any]], top_n: int,
+                  min_shares: int = 1000, min_traded_value: float = 1_000_000.0) -> str:
     lines = [f"📈 **NG NSE EQ TOP {top_n} — WATCH ONLY** | {now:%H:%M} IST",
-             "Live Kite rank; newly seen today (official NSE Top 20 names shown separately):"]
+             f"Live Kite rank; min {min_shares:,} shares and ₹{min_traded_value / 100_000:g}L traded; new today:"]
     for row in rows:
         lines.append(f"• #{row['rank']} **{row['symbol']}**  +{row['change']:.2f}%  ₹{row['price']:,.2f}  Vol {row['volume']:,.0f}")
     lines.append("Rank appearance only; not a BUY signal.")
@@ -87,7 +94,8 @@ def build_message(now: datetime, rows: list[dict[str, Any]], top_n: int) -> str:
 class NGTop100GainersWatch(NSETopGainersWatch):
     def __init__(self, state_root: Path, ticks_path: Path, universe_path: Path,
                  official_state_root: Path, transport: Any, clock: Callable[[], datetime],
-                 top_n: int = 100) -> None:
+                 top_n: int = 100, min_shares: int = 1000,
+                 min_traded_value: float = 1_000_000.0) -> None:
         super().__init__(state_root, transport, clock)
         if not 21 <= top_n <= 200:
             raise ValueError("Top-gainer coverage must be between 21 and 200")
@@ -95,6 +103,8 @@ class NGTop100GainersWatch(NSETopGainersWatch):
         self.universe_path = Path(universe_path)
         self.official_state_root = Path(official_state_root)
         self.top_n = top_n
+        self.min_shares = min_shares
+        self.min_traded_value = min_traded_value
 
     def process(self) -> dict[str, Any]:
         now = self.clock().astimezone(IST)
@@ -107,7 +117,8 @@ class NGTop100GainersWatch(NSETopGainersWatch):
         if float(state.get("retry_after_epoch", 0)) > now.timestamp():
             return {"status": "retry_wait"}
         try:
-            ranked = rank_live_gainers(self.ticks_path, self.universe_path, now, self.top_n)
+            ranked = rank_live_gainers(self.ticks_path, self.universe_path, now,
+                                       self.top_n, self.min_shares, self.min_traded_value)
         except (OSError, ValueError, KeyError) as exc:
             return {"status": "source_failed", "error": str(exc)[:160]}
         official_path = self.official_state_root / f"{day}.json"
@@ -126,7 +137,8 @@ class NGTop100GainersWatch(NSETopGainersWatch):
         for offset in range(0, len(pending), 30):
             batch = pending[offset:offset + 30]
             try:
-                result = self.transport.post(build_message(now, batch, self.top_n))
+                result = self.transport.post(build_message(now, batch, self.top_n,
+                                                           self.min_shares, self.min_traded_value))
             except Exception as exc:
                 return {"status": "delivery_failed", "error": type(exc).__name__,
                         "delivered": len(delivered), "pending": len(pending) - len(delivered)}

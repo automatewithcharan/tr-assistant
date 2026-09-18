@@ -56,10 +56,11 @@ def fetch_board(session: requests.Session, now: datetime) -> tuple[datetime, lis
     return snapshot, result
 
 
-def format_alert(snapshot: datetime, rows: list[dict[str, Any]]) -> str:
+def format_alert(snapshot: datetime, rows: list[dict[str, Any]],
+                 min_shares: int = 1000, min_traded_value: float = 1_000_000.0) -> str:
     lines = [
         f"📈 **NSE TOP 20 GAINERS — WATCH ONLY** | {snapshot:%H:%M} IST",
-        f"{len(rows)} new symbol(s) on NSE's All Securities board today:",
+        f"{len(rows)} new symbol(s); min {min_shares:,} shares and ₹{min_traded_value / 100_000:g}L traded:",
     ]
     for row in rows:
         symbol = str(row["symbol"]).strip().upper()
@@ -75,11 +76,14 @@ def format_alert(snapshot: datetime, rows: list[dict[str, Any]]) -> str:
 
 class NSETopGainersWatch:
     def __init__(self, state_root: Path, transport: Any,
-                 clock: Callable[[], datetime], session: requests.Session | None = None) -> None:
+                 clock: Callable[[], datetime], session: requests.Session | None = None,
+                 min_shares: int = 1000, min_traded_value: float = 1_000_000.0) -> None:
         self.state_root = Path(state_root)
         self.transport = transport
         self.clock = clock
         self.session = session or requests.Session()
+        self.min_shares = min_shares
+        self.min_traded_value = min_traded_value
 
     def _save(self, path: Path, state: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -104,17 +108,29 @@ class NSETopGainersWatch:
             snapshot, rows = fetch_board(self.session, now)
         except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
             return {"status": "source_failed", "error": str(exc)[:200]}
+        eligible_rows = []
+        for row in rows:
+            try:
+                shares = float(row.get("trade_quantity"))
+                # NSE's `turnover` field is reported in ₹ lakhs.
+                traded_value = float(row.get("turnover")) * 100_000.0
+            except (TypeError, ValueError):
+                continue
+            if shares >= self.min_shares and traded_value >= self.min_traded_value:
+                eligible_rows.append(row)
         sent = set(state.get("sent_symbols", []))
         broad_path = self.state_root / "kite_top100" / f"{now.date().isoformat()}.json"
         broad_state = json.loads(broad_path.read_text(encoding="utf-8")) if broad_path.exists() else {}
         already_alerted = sent | set(broad_state.get("sent_symbols", []))
-        new_rows = [row for row in rows if row["symbol"].strip().upper() not in already_alerted]
+        new_rows = [row for row in eligible_rows if row["symbol"].strip().upper() not in already_alerted]
         if not new_rows:
-            return {"status": "up_to_date", "board_size": len(rows), "sent_today": len(sent)}
+            return {"status": "up_to_date", "board_size": len(rows),
+                    "eligible_size": len(eligible_rows), "sent_today": len(sent)}
         if self.transport is None:
             return {"status": "no_transport", "pending": len(new_rows)}
         try:
-            result = self.transport.post(format_alert(snapshot, new_rows))
+            result = self.transport.post(format_alert(snapshot, new_rows,
+                                                      self.min_shares, self.min_traded_value))
         except Exception as exc:
             return {"status": "delivery_failed", "error": type(exc).__name__,
                     "pending": len(new_rows)}
