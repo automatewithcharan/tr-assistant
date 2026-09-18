@@ -10,7 +10,7 @@ import os
 from pathlib import Path
 import signal
 import sys
-import time
+import threading
 from datetime import datetime
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -55,17 +55,16 @@ def main(argv: list[str] | None = None) -> int:
         broad = NGTop100GainersWatch(args.state_root / "kite_top100", args.ticks_path,
                                     args.universe_path, args.state_root, publisher.transport,
                                     lambda: datetime.now(IST), top_n=args.top_n)
-        stopping = False
+        stop_event = threading.Event()
 
         def stop(_signum: int, _frame: object) -> None:
-            nonlocal stopping
-            stopping = True
+            stop_event.set()
 
         signal.signal(signal.SIGTERM, stop)
         signal.signal(signal.SIGINT, stop)
         last_status = None
         last_broad_status = None
-        while not stopping:
+        while not stop_event.is_set():
             result = publisher.process()
             if result["status"] not in {"outside_window", "up_to_date", "retry_wait"} or result["status"] != last_status:
                 print(json.dumps(result, sort_keys=True), flush=True)
@@ -76,7 +75,7 @@ def main(argv: list[str] | None = None) -> int:
             last_broad_status = broad_result["status"]
             if args.once:
                 break
-            time.sleep(max(10.0, args.poll_seconds))
+            stop_event.wait(max(10.0, args.poll_seconds))
     return 0
 
 
