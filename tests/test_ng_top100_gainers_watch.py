@@ -97,6 +97,7 @@ def test_skips_official_top20_batches_rest_and_dedupes(tmp_path):
     assert len(result["symbols"]) == 80
     assert len(transport.messages) == 3
     assert "**S0020**" in transport.messages[0]
+    assert "Vol 1,020" in transport.messages[0]
     assert all("**S0000**" not in message for message in transport.messages)
     assert all(len(message) <= 2000 for message in transport.messages)
     assert watch.process()["status"] == "up_to_date"

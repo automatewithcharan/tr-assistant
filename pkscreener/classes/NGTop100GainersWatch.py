@@ -76,7 +76,7 @@ def build_message(now: datetime, rows: list[dict[str, Any]], top_n: int) -> str:
     lines = [f"📈 **NG NSE EQ TOP {top_n} — WATCH ONLY** | {now:%H:%M} IST",
              "Live Kite rank; newly seen today (official NSE Top 20 names shown separately):"]
     for row in rows:
-        lines.append(f"• #{row['rank']} **{row['symbol']}**  +{row['change']:.2f}%  ₹{row['price']:,.2f}")
+        lines.append(f"• #{row['rank']} **{row['symbol']}**  +{row['change']:.2f}%  ₹{row['price']:,.2f}  Vol {row['volume']:,.0f}")
     lines.append("Rank appearance only; not a BUY signal.")
     message = "\n".join(lines)
     if len(message) > 2000:
