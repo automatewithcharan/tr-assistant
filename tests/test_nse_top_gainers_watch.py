@@ -96,6 +96,19 @@ def test_failed_delivery_is_retried_without_marking_sent(tmp_path):
     assert len(transport.messages) == 2
 
 
+def test_official_board_does_not_repeat_broad_feed_symbols(tmp_path):
+    import json
+
+    broad = tmp_path / "kite_top100"
+    broad.mkdir()
+    (broad / "2026-09-17.json").write_text(json.dumps({"sent_symbols": ["A"]}))
+    transport = Transport([ok()])
+    watcher = NSETopGainersWatch(tmp_path, transport, lambda: NOW,
+                                 Session([Response([row("A"), row("B")])]))
+    assert watcher.process()["symbols"] == ["B"]
+    assert "**A**" not in transport.messages[0]
+
+
 def test_new_session_resets_deduplication(tmp_path):
     transport = Transport([ok(), ok()])
     first = NSETopGainersWatch(tmp_path, transport, lambda: NOW,

@@ -105,7 +105,10 @@ class NSETopGainersWatch:
         except (requests.RequestException, ValueError, KeyError, TypeError) as exc:
             return {"status": "source_failed", "error": str(exc)[:200]}
         sent = set(state.get("sent_symbols", []))
-        new_rows = [row for row in rows if row["symbol"].strip().upper() not in sent]
+        broad_path = self.state_root / "kite_top100" / f"{now.date().isoformat()}.json"
+        broad_state = json.loads(broad_path.read_text(encoding="utf-8")) if broad_path.exists() else {}
+        already_alerted = sent | set(broad_state.get("sent_symbols", []))
+        new_rows = [row for row in rows if row["symbol"].strip().upper() not in already_alerted]
         if not new_rows:
             return {"status": "up_to_date", "board_size": len(rows), "sent_today": len(sent)}
         if self.transport is None:
