@@ -1,0 +1,14 @@
+--- NG_Scalp_Alerts_v1_3_4_3a_OVERLAP_TELEMETRY_FIX.pine
++++ NG_Scalp_Alerts_v1_3_4_4_0915_ENTRY_START.pine
+@@ -2 +2 @@
+-indicator("NG Scalp Alerts v1.3.4.3a - Overlap Telemetry Fix", shorttitle="NGS1343A", overlay=true, max_labels_count=500)
++indicator("NG Scalp Alerts v1.3.4.4 - 09:15 Entry Start", shorttitle="NGS1344", overlay=true, max_labels_count=500)
+@@ -6 +6 @@
+-// v1.3.4.3a separates live Model-A overlap from broader A/B/C/D research overlap.
++// v1.3.4.4 changes only the entry-window start to 09:15 IST (cohort 0915).
+@@ -56 +56 @@
+-entryStartMinute = input.int(20, "Entry start minute IST", minval=0, maxval=59, group=grpTime)
++entryStartMinute = input.int(15, "Entry start minute IST", minval=0, maxval=59, group=grpTime)
+@@ -1822 +1822 @@
+-    table.cell(dash, 1, 0, "v1.3.4.3a RESEARCH", text_color=color.white, bgcolor=color.new(color.blue, 35))
++    table.cell(dash, 1, 0, "v1.3.4.4 RESEARCH", text_color=color.white, bgcolor=color.new(color.blue, 35))
