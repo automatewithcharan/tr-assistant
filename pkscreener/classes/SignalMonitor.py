@@ -178,6 +178,32 @@ class SignalMonitorRunner:
         "Why",
     ]
 
+    # Additive evidence carried only by direct manual-review lanes.  Keeping
+    # these columns outside ALERT_COLUMNS prevents observability from changing
+    # any existing detector, ranker, cap, or generic-alert behavior.
+    DIRECT_CAUSAL_COLUMNS = [
+        "FirstEligibleTime",
+        "FirstEligiblePrice",
+        "QueueSelectedTime",
+        "QueueSelectedPrice",
+        "AnalysisCompletedTime",
+        "QualifiedTime",
+        "QualifiedPrice",
+        "SourceExchangeTimestamp",
+        "TickTimestamp",
+        "VolumeRatio",
+        "TradedValue",
+        "AvgDailyValue",
+        "BuyerSellerRatio",
+        "PullbackPct",
+        "VWAPDistance",
+        "BenchmarkStrength",
+        "SectorStrength",
+        "WarningFlags",
+        "MultiLane",
+        "MultiLaneSources",
+    ]
+
     def __init__(
         self,
         config_manager,
@@ -225,6 +251,10 @@ class SignalMonitorRunner:
         self._previous_live_ticks_by_symbol: Dict[str, Dict] = {}
         self._pending_refresh_symbols: Dict[str, Tuple[int, float]] = {}
         self._refresh_queue_date = self.run_at.date().isoformat()
+        self._direct_causal_by_symbol: Dict[str, Dict[str, Any]] = {}
+        self._direct_lane_timing_states: Dict[Tuple[str, str, str], Tuple[str, str]] = {}
+        self._direct_candidate_lanes_by_symbol: Dict[str, Set[str]] = {}
+        self._direct_candidate_lanes_date = self._refresh_queue_date
         self._cycle_number = 0
         self._preload_done = False
         self.fast_mode = bool(self.FAST_MODE)
@@ -622,6 +652,11 @@ class SignalMonitorRunner:
             actionable_df = pd.DataFrame()
 
         simple_df = self.actionable_runner.build_simple_view(report_df)
+        simple_df = self._annotate_analysis_completed(
+            simple_df,
+            cycle_symbols,
+            self._causal_now(),
+        )
         state_df = self._build_state(simple_df)
         merged_simple_df, merged_state_df = self._merge_with_previous(
             previous_simple_df,
@@ -889,6 +924,103 @@ class SignalMonitorRunner:
         except Exception as exc:
             default_logger().debug(f"Partial monitor board save failed: {exc}", exc_info=True)
 
+    def _causal_now(self) -> datetime:
+        """Return an injectable wall clock for causal stage boundaries."""
+        clock = getattr(self, "_causal_clock", None)
+        if callable(clock):
+            value = clock()
+        else:
+            try:
+                value = PKDateUtilities.currentDateTime()
+            except Exception:
+                value = datetime.now(ZoneInfo("Asia/Kolkata"))
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
+        return value
+
+    @staticmethod
+    def _causal_iso(value: Any) -> str:
+        """Normalize a causal timestamp without manufacturing missing data."""
+        if value in (None, ""):
+            return ""
+        if isinstance(value, datetime):
+            timestamp = value
+        else:
+            try:
+                timestamp = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+            except (TypeError, ValueError):
+                return str(value)
+        if timestamp.tzinfo is None:
+            timestamp = timestamp.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
+        return timestamp.isoformat(timespec="microseconds")
+
+    @staticmethod
+    def _tick_source_timestamps(tick: Dict[str, Any]) -> Tuple[Any, Any]:
+        """Return exchange/source time and local receipt time when supplied."""
+        if not isinstance(tick, dict):
+            return None, None
+        exchange_timestamp = (
+            tick.get("exchange_timestamp")
+            or tick.get("last_trade_time")
+            or tick.get("timestamp")
+        )
+        received_timestamp = tick.get("received_at") or tick.get("tick_timestamp")
+        return exchange_timestamp, received_timestamp
+
+    def _capture_direct_causal_stage(
+        self,
+        symbol: str,
+        tick: Dict[str, Any],
+        stage: str,
+        timestamp: Optional[datetime] = None,
+    ) -> None:
+        """Capture queue stages independently of detector qualification."""
+        normalized = str(symbol or "").strip().upper()
+        if not normalized:
+            return
+        stages = getattr(self, "_direct_causal_by_symbol", None)
+        if stages is None:
+            stages = {}
+            self._direct_causal_by_symbol = stages
+        row = stages.setdefault(normalized, {})
+        event_time = self._causal_iso(timestamp or self._causal_now())
+        price = self._to_float((tick or {}).get("last_price"))
+        exchange_timestamp, received_timestamp = self._tick_source_timestamps(tick or {})
+        if stage == "first_eligible":
+            row.clear()
+            row["FirstEligibleTime"] = event_time
+            row["FirstEligiblePrice"] = price if price > 0 else None
+        elif stage == "queue_selected":
+            row["QueueSelectedTime"] = event_time
+            row["QueueSelectedPrice"] = price if price > 0 else None
+        if exchange_timestamp not in (None, ""):
+            row["SourceExchangeTimestamp"] = self._causal_iso(exchange_timestamp)
+        if received_timestamp not in (None, ""):
+            row["TickTimestamp"] = self._causal_iso(received_timestamp)
+
+    def _annotate_analysis_completed(
+        self,
+        simple_df: pd.DataFrame,
+        symbols: List[str],
+        completed_at: datetime,
+    ) -> pd.DataFrame:
+        """Attach queue and batch-analysis boundaries without changing rows."""
+        if simple_df is None or simple_df.empty or "Stock" not in simple_df.columns:
+            return simple_df
+        annotated = simple_df.copy()
+        selected = {str(symbol or "").strip().upper() for symbol in symbols}
+        stage_map = getattr(self, "_direct_causal_by_symbol", {}) or {}
+        completed = self._causal_iso(completed_at)
+        for index, raw_symbol in annotated["Stock"].items():
+            symbol = str(raw_symbol or "").strip().upper()
+            if symbol not in selected:
+                continue
+            stages = stage_map.setdefault(symbol, {})
+            stages["AnalysisCompletedTime"] = completed
+            for key, value in stages.items():
+                annotated.loc[index, key] = value
+        return annotated
+
     def _select_symbols_for_cycle(self, symbols: List[str], previous_simple_df: pd.DataFrame) -> List[str]:
         """Retain changed symbols until their full scan actually runs."""
         if not self.use_live_kite:
@@ -907,6 +1039,7 @@ class SignalMonitorRunner:
             self._pending_refresh_symbols = {}
             self._refresh_queue_date = today
             self._previous_live_ticks_by_symbol = {}
+            self._direct_causal_by_symbol = {}
         previous_ticks = getattr(self, "_previous_live_ticks_by_symbol", {}) or {}
         self._previous_live_ticks_by_symbol = current_tick_snapshot
         first_snapshot = not previous_ticks
@@ -958,6 +1091,12 @@ class SignalMonitorRunner:
                 ):
                     continue
                 priority = self._symbol_priority(current_tick, previous_tick, symbol=normalized_symbol)
+            if normalized_symbol not in pending:
+                self._capture_direct_causal_stage(
+                    normalized_symbol,
+                    current_tick,
+                    "first_eligible",
+                )
             first_cycle, old_priority = pending.get(normalized_symbol, (cycle, priority))
             pending[normalized_symbol] = (first_cycle, max(old_priority, priority))
         def queue_score(symbol: str) -> float:
@@ -970,6 +1109,11 @@ class SignalMonitorRunner:
             : self.MAX_CHANGED_SYMBOLS_PER_CYCLE
         ]
         for symbol in selected:
+            self._capture_direct_causal_stage(
+                symbol,
+                current_tick_snapshot.get(symbol, {}),
+                "queue_selected",
+            )
             pending.pop(symbol, None)
         self._pending_refresh_symbols = pending
         return selected
@@ -3267,6 +3411,81 @@ class SignalMonitorRunner:
             default_logger().warning(f"Lifecycle evidence unavailable for {source_lane}: {exc}")
             return ""
 
+    @staticmethod
+    def _existing_warning_flags(*values: Any) -> str:
+        """Retain existing warning text; never turn it into a new filter."""
+        warning_tokens = (
+            "low liquidity", "low volume", "below atr", "below vwap",
+            "overbought", "stale", "bearish", "downtrend", "broken",
+        )
+        found: List[str] = []
+        for value in values:
+            for part in str(value or "").replace(",", "|").split("|"):
+                text = part.strip()
+                lowered = text.lower()
+                if text and any(token in lowered for token in warning_tokens) and text not in found:
+                    found.append(text)
+        return " | ".join(found)
+
+    def _direct_causal_fields(
+        self,
+        rec: Dict[str, Any],
+        symbol: str,
+        tick: Dict[str, Any],
+        qualified_at: datetime,
+        qualified_price: float,
+    ) -> Dict[str, Any]:
+        """Build additive direct-lane evidence at the actual pass boundary."""
+        stages = dict((getattr(self, "_direct_causal_by_symbol", {}) or {}).get(symbol, {}))
+        for key in (
+            "FirstEligibleTime", "FirstEligiblePrice", "QueueSelectedTime",
+            "QueueSelectedPrice", "AnalysisCompletedTime",
+            "SourceExchangeTimestamp", "TickTimestamp",
+        ):
+            value = rec.get(key)
+            if value not in (None, ""):
+                stages[key] = value
+        exchange_timestamp, received_timestamp = self._tick_source_timestamps(tick)
+        if exchange_timestamp not in (None, ""):
+            stages["SourceExchangeTimestamp"] = self._causal_iso(exchange_timestamp)
+        if received_timestamp not in (None, ""):
+            stages["TickTimestamp"] = self._causal_iso(received_timestamp)
+        stages["QualifiedTime"] = self._causal_iso(qualified_at)
+        stages["QualifiedPrice"] = qualified_price
+        return stages
+
+    def _append_direct_transition_timing_event(
+        self,
+        lane: str,
+        timing_row: Dict[str, Any],
+        decision: str,
+        reason: str,
+        target: List[Dict[str, Any]],
+    ) -> None:
+        """Emit one compact timing row only when a lane decision transitions."""
+        symbol = str(timing_row.get("Symbol", "") or "").strip().upper()
+        if not symbol:
+            return
+        states = getattr(self, "_direct_lane_timing_states", None)
+        if states is None:
+            states = {}
+            self._direct_lane_timing_states = states
+        key = (self._today_key(), str(lane), symbol)
+        state = (str(decision), str(reason))
+        if states.get(key) == state:
+            return
+        states[key] = state
+        event = self._alert_timing_event_for_row(
+            timing_row,
+            "SOURCE_QUALIFIED" if decision == "pass" else "SOURCE_REJECTED",
+            source=lane,
+            rejection_reason=None if decision == "pass" else reason,
+        )
+        if event is not None:
+            if decision == "pass" and timing_row.get("QualifiedTime"):
+                event["event_timestamp"] = timing_row.get("QualifiedTime")
+            target.append(event)
+
     def _build_early_breakout_alerts(self, current_simple_df: pd.DataFrame) -> pd.DataFrame:
         """Catch fresh +1% to +3.5% movers before they become top-gainer chases."""
         if not getattr(self, "enable_early_breakout_alerts", True):
@@ -3325,6 +3544,7 @@ class SignalMonitorRunner:
                 decision: str,
                 reason: str,
                 observation_id: Optional[str] = None,
+                causal: Optional[Dict[str, Any]] = None,
             ) -> None:
                 buy_depth = depth.get("buy") or []
                 sell_depth = depth.get("sell") or []
@@ -3375,18 +3595,15 @@ class SignalMonitorRunner:
                     "PullbackPct": pullback,
                     "LifecycleObservationId": observation_id,
                 }
-                evaluated = self._alert_timing_event_for_row(
+                if causal:
+                    timing_row.update(causal)
+                self._append_direct_transition_timing_event(
+                    "early_breakout",
                     timing_row,
-                    "SOURCE_EVALUATED",
-                    source="early_breakout",
+                    decision,
+                    reason,
+                    timing_events,
                 )
-                outcome = self._alert_timing_event_for_row(
-                    timing_row,
-                    "SOURCE_QUALIFIED" if decision == "pass" else "SOURCE_REJECTED",
-                    source="early_breakout",
-                    rejection_reason=None if decision == "pass" else reason,
-                )
-                timing_events.extend(event for event in (evaluated, outcome) if event is not None)
 
             in_change_band = (
                 self.EARLY_BREAKOUT_MIN_PCT
@@ -3432,8 +3649,10 @@ class SignalMonitorRunner:
                 continue
 
             week52 = self._to_float(rec.get("Week52High"))
+            distance_52_week_high = None
             if week52 and week52 > 0 and price_now < week52:
                 room_to_high = (week52 - price_now) / price_now * 100.0
+                distance_52_week_high = room_to_high
                 if room_to_high < 2.0:
                     audit("reject", "too close to 52-week high")
                     continue
@@ -3448,6 +3667,7 @@ class SignalMonitorRunner:
                 audit("reject", "quantity below one")
                 continue
 
+            qualified_at = self._causal_now()
             entry = price_now
             stop = round(entry * (1.0 - float(getattr(self, "goal_stop_pct", 1.0) or 1.0) / 100.0), 2)
             target1 = round(entry * (1.0 + float(getattr(self, "goal_target1_pct", 1.5) or 1.5) / 100.0), 2)
@@ -3463,11 +3683,22 @@ class SignalMonitorRunner:
             if day_high > 0:
                 breakout_checks.append(f"near high pullback {pullback:.1f}%")
 
+            causal_fields = self._direct_causal_fields(
+                rec,
+                sym,
+                tick,
+                qualified_at,
+                entry,
+            )
+            warning_flags = self._existing_warning_flags(
+                rec.get("Checks"),
+                rec.get("Why"),
+            )
             lifecycle_id = self._record_direct_lane_observation(
                 "early_breakout",
                 {
                     "symbol": sym,
-                    "feature_available_at": self.run_at,
+                    "feature_available_at": qualified_at,
                     "current_price": entry,
                     "return_from_previous_close": change_pct,
                     "return_from_open": rec.get("Open Change %"),
@@ -3489,20 +3720,29 @@ class SignalMonitorRunner:
                     "benchmark_strength": rec.get("Market Breadth %"),
                     "stale_data": rec.get("StaleData"),
                     "source_watermark": self.run_at,
+                    "first_eligible_time": causal_fields.get("FirstEligibleTime"),
+                    "first_eligible_price": causal_fields.get("FirstEligiblePrice"),
+                    "queue_selected_time": causal_fields.get("QueueSelectedTime"),
+                    "queue_selected_price": causal_fields.get("QueueSelectedPrice"),
+                    "analysis_completed_time": causal_fields.get("AnalysisCompletedTime"),
+                    "qualified_time": causal_fields.get("QualifiedTime"),
+                    "qualified_price": causal_fields.get("QualifiedPrice"),
+                    "source_exchange_timestamp": causal_fields.get("SourceExchangeTimestamp"),
+                    "tick_timestamp": causal_fields.get("TickTimestamp"),
+                    "warning_flags": warning_flags,
                     "missing_reasons": [
                         field for field in ("VWAP", "Sector", "Market Breadth %")
                         if field not in rec or pd.isna(rec.get(field))
                     ],
                 },
                 "early breakout qualification passed",
-                observation_timestamp=self.run_at,
+                observation_timestamp=qualified_at,
             )
-            rows.append(
-                {
+            direct_row = {
                     "Lane": "early_breakout",
                     "LifecycleObservationId": lifecycle_id,
-                    "LifecycleTimestamp": self.run_at.isoformat(timespec="microseconds"),
-                    "When": self.run_at_str,
+                    "LifecycleTimestamp": self._causal_iso(qualified_at),
+                    "When": self._causal_iso(qualified_at),
                     "Symbol": sym,
                     "PreviousAction": action or setup or "None",
                     "NowAction": "🌱 Early Breakout",
@@ -3519,12 +3759,26 @@ class SignalMonitorRunner:
                     "Checks": " | ".join(p for p in breakout_checks if p),
                     "Why": str(rec.get("Why", "") or "").strip()
                     + " | Early breakout lane: +1% to +3.5% move before top-gainer stretch",
+                    "VolumeRatio": volume_ratio,
+                    "TradedValue": rec.get("Traded Value"),
+                    "AvgDailyValue": rec.get("Avg Daily Value"),
+                    "BuyerSellerRatio": bs_ratio,
+                    "PullbackPct": pullback,
+                    "VWAPDistance": rec.get("VWAP Distance"),
+                    "BenchmarkStrength": rec.get("Market Breadth %"),
+                    "SectorStrength": rec.get("Sector Avg Change %"),
+                    "WarningFlags": warning_flags,
+                    "SpreadBps": spread_bps,
+                    "Distance52WeekHighPct": distance_52_week_high,
+                    "StaleData": rec.get("StaleData"),
+                    **causal_fields,
                 }
-            )
+            rows.append(direct_row)
             audit(
                 "pass",
                 "early breakout qualification passed",
                 observation_id=lifecycle_id,
+                causal=causal_fields,
             )
 
         if not rows:
@@ -3538,6 +3792,8 @@ class SignalMonitorRunner:
         out["Lane"] = [row.get("Lane", "early_breakout") for row in rows]
         out["LifecycleObservationId"] = [row.get("LifecycleObservationId", "") for row in rows]
         out["LifecycleTimestamp"] = [row.get("LifecycleTimestamp", "") for row in rows]
+        for column in self.DIRECT_CAUSAL_COLUMNS:
+            out[column] = [row.get(column) for row in rows]
         out.sort_values(
             by=["SignalStrengthPct", "ChangePct", "Symbol"],
             ascending=[False, False, True],
@@ -4095,11 +4351,18 @@ class SignalMonitorRunner:
                 best_bid = depth["buy"][0].get("price")
             if best_ask is None and depth.get("sell"):
                 best_ask = depth["sell"][0].get("price")
+            bid_value = self._to_float(best_bid)
+            ask_value = self._to_float(best_ask)
+            spread_bps = (
+                (ask_value - bid_value) / ((ask_value + bid_value) / 2.0) * 10000.0
+                if ask_value > bid_value > 0 else None
+            )
 
             def audit(
                 decision: str,
                 reason: str,
                 observation_id: Optional[str] = None,
+                causal: Optional[Dict[str, Any]] = None,
             ) -> None:
                 audit_rows.append(
                     {
@@ -4134,18 +4397,15 @@ class SignalMonitorRunner:
                     "PullbackPct": pullback,
                     "LifecycleObservationId": observation_id,
                 }
-                evaluated = self._alert_timing_event_for_row(
+                if causal:
+                    timing_row.update(causal)
+                self._append_direct_transition_timing_event(
+                    "top_gainer_radar",
                     timing_row,
-                    "SOURCE_EVALUATED",
-                    source="top_gainer_radar",
+                    decision,
+                    reason,
+                    timing_events,
                 )
-                outcome = self._alert_timing_event_for_row(
-                    timing_row,
-                    "SOURCE_QUALIFIED" if decision == "pass" else "SOURCE_REJECTED",
-                    source="top_gainer_radar",
-                    rejection_reason=None if decision == "pass" else reason,
-                )
-                timing_events.extend(event for event in (evaluated, outcome) if event is not None)
 
             bearish_markers = (
                 "sell / exit",
@@ -4189,8 +4449,10 @@ class SignalMonitorRunner:
                 continue
 
             week52 = self._to_float(rec.get("Week52High"))
+            distance_52_week_high = None
             if week52 and week52 > 0 and price_now < week52:
                 room_to_high = (week52 - price_now) / price_now * 100.0
+                distance_52_week_high = room_to_high
                 if room_to_high < 2.0:
                     audit("reject", "too close to 52-week high")
                     continue
@@ -4201,6 +4463,7 @@ class SignalMonitorRunner:
                 audit("reject", "quantity below one")
                 continue
 
+            qualified_at = self._causal_now()
             stop = round(price_now * (1.0 - float(getattr(self, "goal_stop_pct", 1.0) or 1.0) / 100.0), 2)
             target1 = round(price_now * (1.0 + float(getattr(self, "goal_target1_pct", 1.5) or 1.5) / 100.0), 2)
             target2 = round(price_now * (1.0 + float(getattr(self, "goal_target2_pct", 3.0) or 3.0) / 100.0), 2)
@@ -4211,11 +4474,22 @@ class SignalMonitorRunner:
                 f"B/S {bs_ratio:.1f}x",
                 f"pullback {pullback:.1f}%",
             ]
+            causal_fields = self._direct_causal_fields(
+                rec,
+                sym,
+                tick,
+                qualified_at,
+                price_now,
+            )
+            warning_flags = self._existing_warning_flags(
+                rec.get("Checks"),
+                rec.get("Why"),
+            )
             lifecycle_id = self._record_direct_lane_observation(
                 "top_gainer_radar",
                 {
                     "symbol": sym,
-                    "feature_available_at": self.run_at,
+                    "feature_available_at": qualified_at,
                     "current_price": price_now,
                     "previous_close": tick.get("ohlc", {}).get("close") if isinstance(tick.get("ohlc"), dict) else rec.get("Previous Close"),
                     "day_open": tick.get("ohlc", {}).get("open") if isinstance(tick.get("ohlc"), dict) else rec.get("Open"),
@@ -4239,20 +4513,29 @@ class SignalMonitorRunner:
                     "benchmark_strength": rec.get("Market Breadth %"),
                     "stale_data": rec.get("StaleData"),
                     "source_watermark": self.run_at,
+                    "first_eligible_time": causal_fields.get("FirstEligibleTime"),
+                    "first_eligible_price": causal_fields.get("FirstEligiblePrice"),
+                    "queue_selected_time": causal_fields.get("QueueSelectedTime"),
+                    "queue_selected_price": causal_fields.get("QueueSelectedPrice"),
+                    "analysis_completed_time": causal_fields.get("AnalysisCompletedTime"),
+                    "qualified_time": causal_fields.get("QualifiedTime"),
+                    "qualified_price": causal_fields.get("QualifiedPrice"),
+                    "source_exchange_timestamp": causal_fields.get("SourceExchangeTimestamp"),
+                    "tick_timestamp": causal_fields.get("TickTimestamp"),
+                    "warning_flags": warning_flags,
                     "missing_reasons": [
                         field for field in ("Previous Close", "Open", "Sector", "Market Breadth %")
                         if field not in rec or pd.isna(rec.get(field))
                     ],
                 },
                 "top-gainer radar qualification passed",
-                observation_timestamp=self.run_at,
+                observation_timestamp=qualified_at,
             )
-            rows.append(
-                {
+            direct_row = {
                     "Lane": "top_gainer_radar",
                     "LifecycleObservationId": lifecycle_id,
-                    "LifecycleTimestamp": self.run_at.isoformat(timespec="microseconds"),
-                    "When": self.run_at_str,
+                    "LifecycleTimestamp": self._causal_iso(qualified_at),
+                    "When": self._causal_iso(qualified_at),
                     "Symbol": sym,
                     "PreviousAction": str(rec.get("What To Do", "") or "None"),
                     "NowAction": "📡 Top Gainer Radar",
@@ -4269,12 +4552,29 @@ class SignalMonitorRunner:
                     "Checks": " | ".join(checks),
                     "Why": str(rec.get("Why", "") or "").strip()
                     + " | Live top-gainer radar: controlled +1.5% to +3.5% move not surfaced by core scanner",
+                    "VolumeRatio": volume_ratio,
+                    "TradedValue": rec.get("Traded Value"),
+                    "AvgDailyValue": rec.get("Avg Daily Value"),
+                    "BuyerSellerRatio": bs_ratio,
+                    "PullbackPct": pullback,
+                    "VWAPDistance": (
+                        ((price_now / self._to_float(tick.get("average_traded_price"))) - 1.0) * 100.0
+                        if self._to_float(tick.get("average_traded_price")) > 0 else rec.get("VWAP Distance")
+                    ),
+                    "BenchmarkStrength": rec.get("Market Breadth %"),
+                    "SectorStrength": rec.get("Sector Avg Change %"),
+                    "WarningFlags": warning_flags,
+                    "SpreadBps": spread_bps,
+                    "Distance52WeekHighPct": distance_52_week_high,
+                    "StaleData": rec.get("StaleData"),
+                    **causal_fields,
                 }
-            )
+            rows.append(direct_row)
             audit(
                 "pass",
                 "radar candidate passed",
                 observation_id=lifecycle_id,
+                causal=causal_fields,
             )
 
         if not rows:
@@ -4288,6 +4588,8 @@ class SignalMonitorRunner:
         out["Lane"] = [row.get("Lane", "top_gainer_radar") for row in rows]
         out["LifecycleObservationId"] = [row.get("LifecycleObservationId", "") for row in rows]
         out["LifecycleTimestamp"] = [row.get("LifecycleTimestamp", "") for row in rows]
+        for column in self.DIRECT_CAUSAL_COLUMNS:
+            out[column] = [row.get(column) for row in rows]
         out.sort_values(by=["SignalStrengthPct", "ChangePct", "Symbol"], ascending=[False, False, True], inplace=True)
         max_per_cycle = max(1, int(getattr(self, "TOP_GAINER_RADAR_MAX_PER_CYCLE", 4) or 4))
         out = out.head(max_per_cycle)
@@ -6530,6 +6832,16 @@ class SignalMonitorRunner:
             "TradedValue": "traded_value",
             "BuyerSellerRatio": "buy_sell_ratio",
             "PullbackPct": "pullback_pct",
+            "FirstEligibleTime": "first_eligible_at",
+            "FirstEligiblePrice": "first_eligible_price",
+            "QueueSelectedTime": "queue_selected_at",
+            "QueueSelectedPrice": "queue_selected_price",
+            "AnalysisCompletedTime": "analysis_completed_at",
+            "QualifiedPrice": "qualified_price",
+            "SourceExchangeTimestamp": "source_exchange_timestamp",
+            "TickTimestamp": "tick_timestamp",
+            "MultiLane": "multi_lane",
+            "MultiLaneSources": "multi_lane_sources",
         }
         context: Dict[str, Any] = {}
         for source_key, target_key in field_map.items():
@@ -6579,7 +6891,7 @@ class SignalMonitorRunner:
             "event_type": event_type,
             "symbol": symbol,
             "source": resolved_source,
-            "event_timestamp": getattr(self, "run_at", None),
+            "event_timestamp": row.get("QualifiedTime") or getattr(self, "run_at", None),
             "trading_date": self._today_key(),
             "observation_id": observation_id,
             "candidate_id": observation_id,
@@ -6765,10 +7077,32 @@ class SignalMonitorRunner:
             row.get("LifecycleTimestamp") or row.get("When") or self.run_at_str
         ).strip()
         observation_id = str(row.get("LifecycleObservationId", "") or "").strip()
+        multi_lane = bool(row.get("MultiLane"))
+        lane_label = f"{lane} | MULTI-LANE" if multi_lane else lane
         lines = [
             "**TRADINGVIEW CANDIDATE — MANUAL REVIEW**",
-            f"`{symbol}` | source `{lane}` | detected `{detected_at}`",
+            f"`{symbol}` | source `{lane_label}` | qualified `{detected_at}`",
         ]
+        first_time = str(row.get("FirstEligibleTime", "") or "").strip()
+        first_price = self._to_float(row.get("FirstEligiblePrice"))
+        if first_time or first_price > 0:
+            lines.append(
+                f"first seen `{first_time or 'unknown'}`"
+                + (f" @ `₹{first_price:.2f}`" if first_price > 0 else "")
+            )
+        qualified_time = str(row.get("QualifiedTime", "") or detected_at).strip()
+        qualified_price = self._to_float(row.get("QualifiedPrice")) or self._to_float(row.get("PriceNow"))
+        lines.append(
+            f"qualification `{qualified_time}`"
+            + (f" @ `₹{qualified_price:.2f}`" if qualified_price > 0 else "")
+        )
+        attempt_time = str(row.get("DiscordAttemptTime", "") or "").strip()
+        attempt_price = self._to_float(row.get("DiscordAttemptPrice"))
+        if attempt_time or attempt_price > 0:
+            lines.append(
+                f"send `{attempt_time or 'unknown'}`"
+                + (f" @ `₹{attempt_price:.2f}`" if attempt_price > 0 else "")
+            )
         price = self._to_float(row.get("PriceNow"))
         change_pct = self._to_float(row.get("ChangePct"))
         metrics = []
@@ -6784,6 +7118,53 @@ class SignalMonitorRunner:
             metrics.append(f"RSI `{rsi:.1f}`")
         if metrics:
             lines.append(" | ".join(metrics))
+        context_metrics = []
+        for label, key, suffix in (
+            ("RVOL", "VolumeRatio", "x"),
+            ("B/S", "BuyerSellerRatio", "x"),
+            ("HOD pb", "PullbackPct", "%"),
+            ("VWAP dist", "VWAPDistance", "%"),
+            ("NIFTY", "BenchmarkStrength", "%"),
+            ("sector", "SectorStrength", "%"),
+        ):
+            value = row.get(key)
+            if value not in (None, ""):
+                context_metrics.append(f"{label} `{self._to_float(value):.2f}{suffix}`")
+        liquidity = row.get("TradedValue")
+        if liquidity in (None, ""):
+            liquidity = row.get("AvgDailyValue")
+        if liquidity not in (None, ""):
+            if isinstance(liquidity, (int, float)):
+                amount = self._to_float(liquidity)
+                if amount >= 10_000_000:
+                    liquidity = f"{amount / 10_000_000:.2f} Cr"
+                elif amount >= 100_000:
+                    liquidity = f"{amount / 100_000:.2f} L"
+                else:
+                    liquidity = f"{amount:.0f}"
+            context_metrics.append(f"liquidity `₹{liquidity}`")
+        if context_metrics:
+            lines.append(" | ".join(context_metrics))
+        timing_metrics = []
+        for label, key in (
+            ("first→qualified", "FirstToQualifiedSeconds"),
+            ("qualified→attempt", "QualifiedToDiscordAttemptSeconds"),
+            ("attempt→success", "DiscordAttemptToSuccessSeconds"),
+        ):
+            value = row.get(key)
+            if value not in (None, ""):
+                timing_metrics.append(f"{label} `{self._to_float(value):.3f}s`")
+        if timing_metrics:
+            lines.append("timing: " + " | ".join(timing_metrics))
+        source_exchange = str(row.get("SourceExchangeTimestamp", "") or "").strip()
+        tick_timestamp = str(row.get("TickTimestamp", "") or "").strip()
+        if source_exchange or tick_timestamp:
+            lines.append(
+                f"source tick exchange `{source_exchange or 'unknown'}` | received `{tick_timestamp or 'unknown'}`"
+            )
+        warnings = str(row.get("WarningFlags", "") or "").strip()
+        if warnings:
+            lines.append(f"Warnings: {warnings}")
         checks = str(row.get("Checks", "") or "").strip()
         reason = str(row.get("Why", "") or "").strip()
         if checks:
@@ -6792,8 +7173,46 @@ class SignalMonitorRunner:
             lines.append(f"Reason: {reason}")
         if observation_id:
             lines.append(f"Lifecycle observation `{observation_id}`")
-        lines.append("Manual TradingView review required. Not an approved trade.")
-        return "\n".join(lines)[:1900]
+        footer = "Manual TradingView review required. Not an approved trade."
+        body = "\n".join(lines)
+        if len(body) + len(footer) + 1 > 1900:
+            body = body[: max(0, 1900 - len(footer) - 2)].rstrip()
+        return body + "\n" + footer
+
+    def _safe_tradingview_candidate_message(
+        self,
+        row: Dict[str, Any],
+        fallback: str = "",
+    ) -> str:
+        """Keep optional payload enrichment from blocking direct delivery."""
+        try:
+            return self._build_tradingview_candidate_message(row)
+        except Exception as exc:
+            default_logger().warning(
+                f"Candidate payload enrichment failed; using minimal payload: {type(exc).__name__}"
+            )
+            if fallback:
+                return fallback[:1900]
+            symbol = str(row.get("Symbol", "") or "").strip().upper()
+            lane = str(row.get("Lane", "") or "").strip()
+            return (
+                "**TRADINGVIEW CANDIDATE — MANUAL REVIEW**\n"
+                f"`{symbol}` | source `{lane}`\n"
+                "Manual TradingView review required. Not an approved trade."
+            )[:1900]
+
+    @staticmethod
+    def _causal_delta_seconds(start: Any, end: Any) -> Optional[float]:
+        try:
+            start_dt = datetime.fromisoformat(str(start or "").replace("Z", "+00:00"))
+            end_dt = datetime.fromisoformat(str(end or "").replace("Z", "+00:00"))
+            if start_dt.tzinfo is None:
+                start_dt = start_dt.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
+            if end_dt.tzinfo is None:
+                end_dt = end_dt.replace(tzinfo=ZoneInfo("Asia/Kolkata"))
+            return round(max(0.0, (end_dt - start_dt).total_seconds()), 6)
+        except (TypeError, ValueError):
+            return None
 
     def _tradingview_delivery_is_available(self) -> bool:
         return bool(
@@ -6844,8 +7263,24 @@ class SignalMonitorRunner:
             if not self._manual_discord_row_is_eligible(row, lane):
                 continue
             symbol = str(row.get("Symbol", "") or "").strip().upper()
+            today = self._today_key()
+            if getattr(self, "_direct_candidate_lanes_date", "") != today:
+                self._direct_candidate_lanes_date = today
+                self._direct_candidate_lanes_by_symbol = {}
+            lane_map = getattr(self, "_direct_candidate_lanes_by_symbol", None)
+            if lane_map is None:
+                lane_map = {}
+                self._direct_candidate_lanes_by_symbol = lane_map
+            observed_lanes = lane_map.setdefault(symbol, set())
+            if observed_lanes and lane not in observed_lanes:
+                row["MultiLane"] = True
+                row["MultiLaneSources"] = ",".join(sorted({*observed_lanes, lane}))
+            observed_lanes.add(lane)
             detected_at = str(
-                row.get("LifecycleTimestamp") or row.get("When") or self.run_at_str
+                row.get("QualifiedTime")
+                or row.get("LifecycleTimestamp")
+                or row.get("When")
+                or self.run_at_str
             ).strip()
             trading_date = detected_at[:10] or self._today_key()
             observation_id = str(row.get("LifecycleObservationId", "") or "").strip()
@@ -6858,7 +7293,7 @@ class SignalMonitorRunner:
                 )
                 identity_kind = "causal_fallback"
 
-            message = self._build_tradingview_candidate_message(row)
+            message = self._safe_tradingview_candidate_message(row)
             common = {
                 "lifecycle_observation_id": observation_id,
                 "trading_date": trading_date,
@@ -6866,11 +7301,23 @@ class SignalMonitorRunner:
                 "source_lane": lane,
                 "detected_at": detected_at,
                 "identity_kind": identity_kind,
+                "first_eligible_at": row.get("FirstEligibleTime"),
+                "first_eligible_price": row.get("FirstEligiblePrice"),
+                "queue_selected_at": row.get("QueueSelectedTime"),
+                "queue_selected_price": row.get("QueueSelectedPrice"),
+                "analysis_completed_at": row.get("AnalysisCompletedTime"),
+                "qualified_at": row.get("QualifiedTime") or detected_at,
+                "qualified_price": row.get("QualifiedPrice") or row.get("PriceNow"),
+                "source_exchange_timestamp": row.get("SourceExchangeTimestamp"),
+                "tick_timestamp": row.get("TickTimestamp"),
+                "multi_lane": bool(row.get("MultiLane")),
+                "multi_lane_sources": row.get("MultiLaneSources"),
             }
             self._deliver_tradingview_candidate(
                 common,
                 message,
                 telemetry_context=self._alert_timing_context_for_row(row),
+                candidate_row=row,
             )
 
     @staticmethod
@@ -6931,16 +7378,96 @@ class SignalMonitorRunner:
                         "source_lane",
                         "detected_at",
                         "identity_kind",
+                        "first_eligible_at",
+                        "first_eligible_price",
+                        "queue_selected_at",
+                        "queue_selected_price",
+                        "analysis_completed_at",
+                        "qualified_at",
+                        "qualified_price",
+                        "source_exchange_timestamp",
+                        "tick_timestamp",
+                        "multi_lane",
+                        "multi_lane_sources",
                     )
                 },
                 message,
+                candidate_row={
+                    "Symbol": state.get("symbol"),
+                    "Lane": state.get("source_lane"),
+                    "LifecycleObservationId": state.get("lifecycle_observation_id"),
+                    "QualifiedTime": state.get("qualified_at") or state.get("detected_at"),
+                    "QualifiedPrice": state.get("qualified_price"),
+                    "FirstEligibleTime": state.get("first_eligible_at"),
+                    "FirstEligiblePrice": state.get("first_eligible_price"),
+                    "QueueSelectedTime": state.get("queue_selected_at"),
+                    "QueueSelectedPrice": state.get("queue_selected_price"),
+                    "AnalysisCompletedTime": state.get("analysis_completed_at"),
+                    "SourceExchangeTimestamp": state.get("source_exchange_timestamp"),
+                    "TickTimestamp": state.get("tick_timestamp"),
+                    "MultiLane": state.get("multi_lane"),
+                    "MultiLaneSources": state.get("multi_lane_sources"),
+                },
             )
+
+    def _candidate_attempt_row(
+        self,
+        common: Dict[str, Any],
+        candidate_row: Optional[Dict[str, Any]],
+        attempted_at: datetime,
+    ) -> Tuple[Dict[str, Any], float]:
+        """Snapshot the live price exactly at a Discord attempt boundary."""
+        row = dict(candidate_row or {})
+        symbol = str(common.get("symbol") or row.get("Symbol") or "").strip().upper()
+        tick = (getattr(getattr(self, "actionable_runner", None), "live_ticks", {}) or {}).get(symbol, {})
+        attempt_price = self._to_float(tick.get("last_price"))
+        if attempt_price <= 0:
+            attempt_price = self._to_float(
+                row.get("QualifiedPrice") or common.get("qualified_price") or row.get("PriceNow")
+            )
+        exchange_timestamp, received_timestamp = self._tick_source_timestamps(tick)
+        row.update(
+            {
+                "Symbol": symbol,
+                "Lane": common.get("source_lane") or row.get("Lane"),
+                "LifecycleObservationId": common.get("lifecycle_observation_id"),
+                "QualifiedTime": row.get("QualifiedTime") or common.get("qualified_at") or common.get("detected_at"),
+                "QualifiedPrice": row.get("QualifiedPrice") or common.get("qualified_price"),
+                "FirstEligibleTime": row.get("FirstEligibleTime") or common.get("first_eligible_at"),
+                "FirstEligiblePrice": row.get("FirstEligiblePrice") or common.get("first_eligible_price"),
+                "QueueSelectedTime": row.get("QueueSelectedTime") or common.get("queue_selected_at"),
+                "QueueSelectedPrice": row.get("QueueSelectedPrice") or common.get("queue_selected_price"),
+                "AnalysisCompletedTime": row.get("AnalysisCompletedTime") or common.get("analysis_completed_at"),
+                "DiscordAttemptTime": self._causal_iso(attempted_at),
+                "DiscordAttemptPrice": attempt_price if attempt_price > 0 else None,
+                "SourceExchangeTimestamp": (
+                    self._causal_iso(exchange_timestamp)
+                    if exchange_timestamp not in (None, "")
+                    else row.get("SourceExchangeTimestamp") or common.get("source_exchange_timestamp")
+                ),
+                "TickTimestamp": (
+                    self._causal_iso(received_timestamp)
+                    if received_timestamp not in (None, "")
+                    else row.get("TickTimestamp") or common.get("tick_timestamp")
+                ),
+                "MultiLane": bool(row.get("MultiLane") or common.get("multi_lane")),
+                "MultiLaneSources": row.get("MultiLaneSources") or common.get("multi_lane_sources"),
+            }
+        )
+        row["FirstToQualifiedSeconds"] = self._causal_delta_seconds(
+            row.get("FirstEligibleTime"), row.get("QualifiedTime")
+        )
+        row["QualifiedToDiscordAttemptSeconds"] = self._causal_delta_seconds(
+            row.get("QualifiedTime"), row.get("DiscordAttemptTime")
+        )
+        return row, attempt_price
 
     def _deliver_tradingview_candidate(
         self,
         common: Dict[str, Any],
         message: str,
         telemetry_context: Optional[Dict[str, Any]] = None,
+        candidate_row: Optional[Dict[str, Any]] = None,
     ) -> None:
         """Run one immediate retry cycle using durable cross-cycle attempt state."""
         if not self._tradingview_delivery_is_available():
@@ -7061,13 +7588,31 @@ class SignalMonitorRunner:
         for local_attempt in range(1, immediate_attempts + 1):
             attempt_count = total_attempts + local_attempt
             attempted_at = self._tradingview_delivery_now()
+            attempt_row, attempt_price = self._candidate_attempt_row(
+                common,
+                candidate_row,
+                attempted_at,
+            )
+            attempt_message = self._safe_tradingview_candidate_message(
+                attempt_row,
+                fallback=message,
+            )
+            attempt_common = {
+                **common,
+                "discord_attempt_at": self._causal_iso(attempted_at),
+                "discord_attempt_price": attempt_price if attempt_price > 0 else None,
+                "source_exchange_timestamp": attempt_row.get("SourceExchangeTimestamp"),
+                "tick_timestamp": attempt_row.get("TickTimestamp"),
+                "first_seen_to_qualified_seconds": attempt_row.get("FirstToQualifiedSeconds"),
+                "qualified_to_discord_attempt_seconds": attempt_row.get("QualifiedToDiscordAttemptSeconds"),
+            }
             # Write-ahead reservation: no HTTP is attempted unless its attempt
             # number is durable. If no later outcome is persisted, restart
             # reconstructs this as delivery_uncertain and will not resend.
             if not self._append_tradingview_delivery_record(
                 {
-                    **common,
-                    "discord_message": message,
+                    **attempt_common,
+                    "discord_message": attempt_message,
                     "send_attempt_at": attempted_at.isoformat(timespec="microseconds"),
                     "delivery_status": "attempt_reserved",
                     "failure_class": "delivery_outcome_unknown",
@@ -7097,12 +7642,15 @@ class SignalMonitorRunner:
                     candidate_id=observation_id or None,
                     context={
                         **dict(telemetry_context or {}),
-                        "qualified_at": common.get("detected_at"),
+                        "qualified_at": common.get("qualified_at") or common.get("detected_at"),
+                        "discord_attempt_price": attempt_price if attempt_price > 0 else None,
+                        "first_seen_to_qualified_seconds": attempt_row.get("FirstToQualifiedSeconds"),
+                        "qualified_to_discord_attempt_seconds": attempt_row.get("QualifiedToDiscordAttemptSeconds"),
                         "attempt_number": attempt_count,
                     },
                 )
             try:
-                response = requests.post(webhook_url, json={"content": message}, timeout=10)
+                response = requests.post(webhook_url, json={"content": attempt_message}, timeout=10)
                 http_status = int(response.status_code)
                 success = 200 <= http_status < 300
                 retryable = http_status == 429 or 500 <= http_status < 600
@@ -7143,9 +7691,10 @@ class SignalMonitorRunner:
                 attempted_at + timedelta(seconds=delay)
                 if not success and retryable and delay > 0 else None
             )
-            delivered_at = (
-                self._tradingview_delivery_now().isoformat(timespec="microseconds")
-                if success else None
+            delivered_at = self._causal_iso(self._tradingview_delivery_now()) if success else None
+            attempt_to_success_seconds = self._causal_delta_seconds(
+                attempt_common.get("discord_attempt_at"),
+                delivered_at,
             )
             if observer is not None:
                 observer.emit(
@@ -7157,7 +7706,11 @@ class SignalMonitorRunner:
                     candidate_id=observation_id or None,
                     context={
                         **dict(telemetry_context or {}),
-                        "qualified_at": common.get("detected_at"),
+                        "qualified_at": common.get("qualified_at") or common.get("detected_at"),
+                        "discord_attempt_price": attempt_price if attempt_price > 0 else None,
+                        "first_seen_to_qualified_seconds": attempt_row.get("FirstToQualifiedSeconds"),
+                        "qualified_to_discord_attempt_seconds": attempt_row.get("QualifiedToDiscordAttemptSeconds"),
+                        "discord_attempt_to_success_seconds": attempt_to_success_seconds,
                         "http_status": http_status,
                         "delivery_duration_ms": round(
                             (time.monotonic() - delivery_started) * 1000.0,
@@ -7169,9 +7722,11 @@ class SignalMonitorRunner:
                 )
             if not self._append_tradingview_delivery_record(
                 {
-                    **common,
-                    "discord_message": message,
+                    **attempt_common,
+                    "discord_message": attempt_message,
                     "send_attempt_at": attempted_at.isoformat(timespec="microseconds"),
+                    "discord_success_at": delivered_at,
+                    "discord_attempt_to_success_seconds": attempt_to_success_seconds,
                     "delivery_status": status,
                     "failure_class": failure_class,
                     "terminal": status in {"delivered", "terminal_failed"},

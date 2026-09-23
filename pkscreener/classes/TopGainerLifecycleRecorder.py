@@ -45,6 +45,10 @@ SIGNAL_FIELDS = {
     "current_rank", "rank_percentile", "previous_rank", "rank_improvement",
     "rank_velocity", "liquidity_state", "surveillance_health", "asm_gsm_state",
     "stale_data", "source_watermark", "missing_reasons", "qualification_reason",
+    "first_eligible_time", "first_eligible_price", "queue_selected_time",
+    "queue_selected_price", "analysis_completed_time", "qualified_time",
+    "qualified_price", "source_exchange_timestamp", "tick_timestamp",
+    "warning_flags", "multi_lane", "multi_lane_sources",
 }
 
 
@@ -287,6 +291,10 @@ class TopGainerLifecycleRecorder:
         self.experiment_version = str(experiment_version or "canonical_v1")
         self.events_path = self.root / "events.jsonl"
         self.derived_path = self.root / "joined_snapshot.csv"
+        self._event_ids: set[str] = set()
+        self._observations_by_id: dict[str, dict[str, Any]] = {}
+        self._event_index_offset = 0
+        self._event_index_inode: Optional[int] = None
 
     @staticmethod
     def lifecycle_id(trading_date: str, symbol: str, observation_timestamp: str,
@@ -307,25 +315,62 @@ class TopGainerLifecycleRecorder:
                 if fcntl is not None:
                     fcntl.flock(lock_handle.fileno(), fcntl.LOCK_UN)
 
+    def _refresh_event_index_locked(self) -> None:
+        """Incrementally index durable events while holding the process lock."""
+        if not self.events_path.exists():
+            self._event_ids.clear()
+            self._observations_by_id.clear()
+            self._event_index_offset = 0
+            self._event_index_inode = None
+            return
+        stat = self.events_path.stat()
+        if (
+            self._event_index_inode != stat.st_ino
+            or stat.st_size < self._event_index_offset
+        ):
+            self._event_ids.clear()
+            self._observations_by_id.clear()
+            self._event_index_offset = 0
+        self._event_index_inode = stat.st_ino
+        with self.events_path.open("r", encoding="utf-8") as handle:
+            handle.seek(self._event_index_offset)
+            for line in handle:
+                if not line.strip():
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError as exc:
+                    raise ValueError("corrupt lifecycle JSONL record") from exc
+                event_id = str(row.get("event_id", ""))
+                if event_id:
+                    self._event_ids.add(event_id)
+                if row.get("event_type") == "candidate_observed":
+                    lifecycle_id = str(row.get("lifecycle_id", ""))
+                    if lifecycle_id:
+                        self._observations_by_id[lifecycle_id] = row
+            self._event_index_offset = handle.tell()
+
     def _append(self, event: dict[str, Any]) -> bool:
         event_json = json.dumps(event, sort_keys=True, separators=(",", ":"), default=str)
         with self._file_lock():
-            existing_ids = set()
-            if self.events_path.exists():
-                for row in self.events_path.read_text(encoding="utf-8").splitlines():
-                    if not row.strip():
-                        continue
-                    try:
-                        existing_ids.add(str(json.loads(row).get("event_id", "")))
-                    except json.JSONDecodeError as exc:
-                        raise ValueError("corrupt lifecycle JSONL record") from exc
-            if event["event_id"] in existing_ids:
+            self._refresh_event_index_locked()
+            if event["event_id"] in self._event_ids:
                 return False
             with self.events_path.open("a", encoding="utf-8") as handle:
                 handle.write(event_json + "\n")
                 handle.flush()
                 os.fsync(handle.fileno())
+                self._event_index_offset = handle.tell()
+                self._event_index_inode = os.fstat(handle.fileno()).st_ino
+            self._event_ids.add(str(event["event_id"]))
+            if event.get("event_type") == "candidate_observed":
+                self._observations_by_id[str(event.get("lifecycle_id") or "")] = event
             return True
+
+    def _observation(self, lifecycle_id: str) -> Optional[dict[str, Any]]:
+        with self._file_lock():
+            self._refresh_event_index_locked()
+            return self._observations_by_id.get(str(lifecycle_id))
 
     def record_observation(self, snapshot: dict[str, Any], source_lane: str,
                            observation_timestamp: Any, universe_id: str = "",
@@ -377,12 +422,9 @@ class TopGainerLifecycleRecorder:
         if event_type not in EVENT_TYPES:
             raise ValueError(f"unsupported lifecycle event: {event_type}")
         ts = _iso(event_timestamp)
-        observations = [row for row in self.replay()
-                        if row.get("event_type") == "candidate_observed"
-                        and row.get("lifecycle_id") == lifecycle_id]
-        if not observations:
+        observation = self._observation(lifecycle_id)
+        if observation is None:
             raise ValueError(f"unknown lifecycle observation: {lifecycle_id}")
-        observation = observations[0]
         event = build_linked_event(observation, event_type, ts, source_lane, payload)
         self._append(event)
         return str(event["event_id"])
