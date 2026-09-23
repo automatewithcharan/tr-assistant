@@ -71,6 +71,14 @@ except Exception:  # Direct delivery is optional; scanner work must continue.
     append_delivery_record = None
     deterministic_fallback_candidate_key = None
     reconstruct_delivery_states = None
+try:
+    from pkscreener.classes.DiscordShadowRanking import (
+        append_shadow_priority_record,
+        calculate_shadow_priority,
+    )
+except Exception:  # Shadow ranking must never prevent scanner startup/delivery.
+    append_shadow_priority_record = None
+    calculate_shadow_priority = None
 
 
 class SignalMonitorRunner:
@@ -7145,6 +7153,49 @@ class SignalMonitorRunner:
             context_metrics.append(f"liquidity `₹{liquidity}`")
         if context_metrics:
             lines.append(" | ".join(context_metrics))
+        shadow_ranking = row.get("ShadowRanking")
+        if isinstance(shadow_ranking, dict):
+            priority = str(shadow_ranking.get("priority") or "C")
+            lines.append(f"**REVIEW PRIORITY: {priority} [SHADOW]**")
+            features = shadow_ranking.get("features") or {}
+            components = shadow_ranking.get("priority_components") or {}
+            ranking_metrics = []
+            for label, key, suffix in (
+                ("RVOL", "rvol", "x"),
+                ("RS NIFTY", "nifty_relative_strength_pct", "%"),
+                ("Sector RS", "sector_strength_pct", "%"),
+                ("HOD pullback", "hod_pullback_pct", "%"),
+                ("VWAP dist", "vwap_distance_pct", "%"),
+            ):
+                value = features.get(key)
+                if value is not None:
+                    ranking_metrics.append(f"{label}: `{float(value):+.2f}{suffix}`")
+            liquidity_component = components.get("liquidity")
+            liquidity_label = (
+                "STRONG" if liquidity_component == 2 else
+                "ADEQUATE" if liquidity_component in {0, 1} else
+                "WEAK" if liquidity_component is not None else "UNKNOWN"
+            )
+            ranking_metrics.append(f"Liquidity: `{liquidity_label}`")
+            if ranking_metrics:
+                lines.append(" | ".join(ranking_metrics))
+            stage_latencies = shadow_ranking.get("stage_latencies_seconds") or {}
+            first_qualified = stage_latencies.get("first_eligible_to_qualified_seconds")
+            before_discord = (shadow_ranking.get("stage_price_drifts_pct") or {}).get(
+                "first_eligible_to_discord_attempt_pct"
+            )
+            ranking_timing = []
+            if first_qualified is not None:
+                ranking_timing.append(f"FirstSeen→Qualified: `{float(first_qualified):.2f}s`")
+            if before_discord is not None:
+                ranking_timing.append(f"Price drift before Discord: `{float(before_discord):+.2f}%`")
+            if features.get("multi_lane"):
+                ranking_timing.append("MULTI-LANE: `YES`")
+            lines.append(" | ".join(ranking_timing))
+            ranking_warnings = list(shadow_ranking.get("warnings") or [])
+            lines.append(
+                "Shadow warnings: " + (", ".join(ranking_warnings) if ranking_warnings else "none")
+            )
         timing_metrics = []
         for label, key in (
             ("first→qualified", "FirstToQualifiedSeconds"),
@@ -7256,6 +7307,7 @@ class SignalMonitorRunner:
         if not self._tradingview_delivery_is_available():
             return
 
+        shadow_records: List[Dict[str, Any]] = []
         for row in candidates_df.to_dict(orient="records"):
             lane = str(row.get("Lane", "") or "").strip()
             if lane not in {"early_breakout", "top_gainer_radar"}:
@@ -7318,7 +7370,9 @@ class SignalMonitorRunner:
                 message,
                 telemetry_context=self._alert_timing_context_for_row(row),
                 candidate_row=row,
+                shadow_records=shadow_records,
             )
+        self._persist_discord_shadow_records(shadow_records)
 
     @staticmethod
     def _tradingview_delivery_now() -> datetime:
@@ -7347,6 +7401,7 @@ class SignalMonitorRunner:
         states = self._tradingview_delivery_states(trading_date)
         if states is None:
             return
+        shadow_records: List[Dict[str, Any]] = []
         for state in states.values():
             if state.get("delivery_status") != "retryable_failed":
                 continue
@@ -7389,6 +7444,7 @@ class SignalMonitorRunner:
                         "tick_timestamp",
                         "multi_lane",
                         "multi_lane_sources",
+                        "shadow_ranking",
                     )
                 },
                 message,
@@ -7407,8 +7463,27 @@ class SignalMonitorRunner:
                     "TickTimestamp": state.get("tick_timestamp"),
                     "MultiLane": state.get("multi_lane"),
                     "MultiLaneSources": state.get("multi_lane_sources"),
+                    "ShadowRanking": state.get("shadow_ranking"),
                 },
+                shadow_records=shadow_records,
             )
+        self._persist_discord_shadow_records(shadow_records)
+
+    def _persist_discord_shadow_records(
+        self,
+        records: List[Dict[str, Any]],
+    ) -> None:
+        """Persist research after the existing HTTP batch, never before it."""
+        if not callable(append_shadow_priority_record):
+            return
+        for record in records:
+            try:
+                append_shadow_priority_record(self.output_dir, record)
+            except Exception as exc:
+                default_logger().warning(
+                    "Discord shadow ranking persistence failed; delivery continues: "
+                    f"{type(exc).__name__}"
+                )
 
     def _candidate_attempt_row(
         self,
@@ -7468,6 +7543,7 @@ class SignalMonitorRunner:
         message: str,
         telemetry_context: Optional[Dict[str, Any]] = None,
         candidate_row: Optional[Dict[str, Any]] = None,
+        shadow_records: Optional[List[Dict[str, Any]]] = None,
     ) -> None:
         """Run one immediate retry cycle using durable cross-cycle attempt state."""
         if not self._tradingview_delivery_is_available():
@@ -7593,6 +7669,18 @@ class SignalMonitorRunner:
                 candidate_row,
                 attempted_at,
             )
+            shadow_ranking = common.get("shadow_ranking")
+            if not isinstance(shadow_ranking, dict) and callable(calculate_shadow_priority):
+                try:
+                    shadow_ranking = calculate_shadow_priority(attempt_row, attempted_at)
+                except Exception as exc:
+                    default_logger().warning(
+                        "Discord shadow ranking failed; delivery continues: "
+                        f"{type(exc).__name__}"
+                    )
+                    shadow_ranking = None
+            if isinstance(shadow_ranking, dict):
+                attempt_row["ShadowRanking"] = shadow_ranking
             attempt_message = self._safe_tradingview_candidate_message(
                 attempt_row,
                 fallback=message,
@@ -7605,6 +7693,7 @@ class SignalMonitorRunner:
                 "tick_timestamp": attempt_row.get("TickTimestamp"),
                 "first_seen_to_qualified_seconds": attempt_row.get("FirstToQualifiedSeconds"),
                 "qualified_to_discord_attempt_seconds": attempt_row.get("QualifiedToDiscordAttemptSeconds"),
+                "shadow_ranking": shadow_ranking if isinstance(shadow_ranking, dict) else None,
             }
             # Write-ahead reservation: no HTTP is attempted unless its attempt
             # number is durable. If no later outcome is persisted, restart
@@ -7741,6 +7830,48 @@ class SignalMonitorRunner:
                 }
             ):
                 return
+            if (
+                attempt_count == 1
+                and isinstance(shadow_ranking, dict)
+                and callable(append_shadow_priority_record)
+            ):
+                # Persist only after HTTP and its durable outcome row. Research
+                # I/O therefore cannot add pre-send latency or veto delivery.
+                try:
+                    persisted_ranking = dict(shadow_ranking)
+                    persisted_latencies = dict(
+                        persisted_ranking.get("stage_latencies_seconds") or {}
+                    )
+                    persisted_latencies["discord_attempt_to_success_seconds"] = (
+                        attempt_to_success_seconds
+                    )
+                    persisted_ranking.update(
+                        {
+                            "stage_latencies_seconds": persisted_latencies,
+                            "discord_success_at": delivered_at,
+                            "delivery_status": status,
+                        }
+                    )
+                    if (
+                        attempt_to_success_seconds is not None
+                        and attempt_to_success_seconds
+                        > float(persisted_ranking.get("largest_latency_seconds") or -1.0)
+                    ):
+                        persisted_ranking["largest_latency_stage"] = (
+                            "discord_attempt_to_success_seconds"
+                        )
+                        persisted_ranking["largest_latency_seconds"] = (
+                            attempt_to_success_seconds
+                        )
+                    if shadow_records is not None:
+                        shadow_records.append(persisted_ranking)
+                    else:
+                        append_shadow_priority_record(output_dir, persisted_ranking)
+                except Exception as exc:
+                    default_logger().warning(
+                        "Discord shadow ranking persistence failed; delivery continues: "
+                        f"{type(exc).__name__}"
+                    )
             if success or status in {"terminal_failed", "retryable_failed"}:
                 return
             if delay > 0:
