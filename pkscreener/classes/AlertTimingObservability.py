@@ -61,6 +61,20 @@ CONTEXT_FIELDS = frozenset(
         "failure_category",
         "attempt_number",
         "alert_batch_id",
+        "first_eligible_at",
+        "first_eligible_price",
+        "queue_selected_at",
+        "queue_selected_price",
+        "analysis_completed_at",
+        "qualified_price",
+        "source_exchange_timestamp",
+        "tick_timestamp",
+        "discord_attempt_price",
+        "first_seen_to_qualified_seconds",
+        "qualified_to_discord_attempt_seconds",
+        "discord_attempt_to_success_seconds",
+        "multi_lane",
+        "multi_lane_sources",
     }
 )
 _DISCORD_WEBHOOK_RE = re.compile(
@@ -163,9 +177,18 @@ class AlertTimingObserver:
             return None
 
         raw_timestamp = event.get("event_timestamp")
-        timestamp = _aware_timestamp(
-            raw_timestamp if isinstance(raw_timestamp, datetime) else self.clock()
-        )
+        if isinstance(raw_timestamp, datetime):
+            timestamp = _aware_timestamp(raw_timestamp)
+        elif raw_timestamp not in (None, ""):
+            try:
+                parsed_timestamp = datetime.fromisoformat(
+                    str(raw_timestamp).replace("Z", "+00:00")
+                )
+                timestamp = _aware_timestamp(parsed_timestamp)
+            except (TypeError, ValueError):
+                timestamp = _aware_timestamp(self.clock())
+        else:
+            timestamp = _aware_timestamp(self.clock())
         trading_date = str(event.get("trading_date") or "").strip()
         if not trading_date:
             trading_date = timestamp.astimezone(ZoneInfo("Asia/Kolkata")).date().isoformat()
