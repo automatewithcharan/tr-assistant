@@ -1,0 +1,1678 @@
+//@version=6
+indicator("NG Scalp Alerts v1.3.4 - Forward Research Persistence", shorttitle="NGScalp1.3.4Research", overlay=true, max_labels_count=500)
+
+// Research-only extension of NG Scalp Alerts v1.1 / v1.2 shadow study.
+// LIVE BUY/SELL/STOP/TARGET logic and live sizing inputs are intentionally preserved.
+// v1.3.4 preserves v1.3.3 live behavior and adds durable research-only telemetry.
+// BUY decisions: confirmed 1m bars only. STOP/TARGET monitoring: realtime.
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Inputs
+// ─────────────────────────────────────────────────────────────────────────────
+grpMode = "1. Operating mode"
+operatingMode = input.string(
+    "LIVE ALERTS",
+    "Mode",
+    options=["LIVE ALERTS", "HISTORICAL SIMULATION"],
+    group=grpMode
+)
+
+grpTrigger = "2. Momentum trigger"
+supertrendAtrLen = input.int(10, "Supertrend ATR length", minval=2, maxval=50, group=grpTrigger)
+supertrendFactor = input.float(3.0, "Supertrend factor", minval=0.5, maxval=10.0, step=0.1, group=grpTrigger)
+triggerMode = input.string(
+    "Flip or breakout",
+    "Trigger",
+    options=["Supertrend flip", "Breakout while bullish", "Flip or breakout"],
+    group=grpTrigger
+)
+breakoutLookback = input.int(4, "Breakout lookback (1m bars)", minval=2, maxval=20, group=grpTrigger)
+requireStrongClose = input.bool(false, "Require strong close quality", group=grpTrigger)
+minClosePosition = input.float(0.75, "Strong-close minimum position", minval=0.50, maxval=0.95, step=0.05, group=grpTrigger)
+
+grpTrend = "3. Trend / safety"
+requireVwap = input.bool(true, "Require close above session VWAP", group=grpTrend)
+oneMinuteAtrLen = input.int(14, "1m ATR length", minval=5, maxval=50, group=grpTrend)
+heavyRedBodyAtr = input.float(0.80, "Previous heavy-red body (ATR)", minval=0.20, maxval=2.0, step=0.10, group=grpTrend)
+heavyRedVolumeRatio = input.float(1.80, "Previous heavy-red volume ratio", minval=1.0, maxval=5.0, step=0.10, group=grpTrend)
+fiveMinuteRedBodyAtr = input.float(0.60, "Completed 5m red body (5m ATR)", minval=0.20, maxval=2.0, step=0.10, group=grpTrend)
+maxSignalRangeAtr = input.float(2.00, "Anti-chase maximum signal-bar range (ATR)", minval=0.50, maxval=4.0, step=0.10, group=grpTrend)
+
+grpRisk = "4. Risk / target"
+riskBudget = input.float(500.0, "Planned risk per trade (₹)", minval=50.0, step=50.0, group=grpRisk)
+maxExposure = input.float(300000.0, "Maximum notional exposure (₹)", minval=10000.0, step=25000.0, group=grpRisk)
+stopBufferAtr = input.float(0.10, "Stop below signal low (ATR)", minval=0.0, maxval=0.50, step=0.05, group=grpRisk)
+minStopAtr = input.float(0.35, "Minimum stop distance (ATR)", minval=0.10, maxval=1.00, step=0.05, group=grpRisk)
+targetR = input.float(1.50, "Target (R)", minval=0.50, maxval=4.0, step=0.10, group=grpRisk)
+
+grpCosts = "5. Groww cost viability"
+requireCostViability = input.bool(true, "Require Groww cost viability", group=grpCosts)
+costCoverageK = input.float(1.00, "Minimum gross / estimated Groww cost", minval=0.50, maxval=3.0, step=0.05, group=grpCosts)
+slippageTicks = input.int(1, "Estimated adverse slippage ticks per leg", minval=0, maxval=10, group=grpCosts)
+
+grpTime = "6. Session / trade control"
+entryStartHour = input.int(9, "Entry start hour IST", minval=9, maxval=15, group=grpTime)
+entryStartMinute = input.int(20, "Entry start minute IST", minval=0, maxval=59, group=grpTime)
+entryCutoffHour = input.int(14, "Entry cutoff hour IST", minval=9, maxval=15, group=grpTime)
+entryCutoffMinute = input.int(50, "Entry cutoff minute IST", minval=0, maxval=59, group=grpTime)
+forceExitHour = input.int(15, "Force-exit hour IST", minval=14, maxval=15, group=grpTime)
+forceExitMinute = input.int(15, "Force-exit minute IST", minval=0, maxval=29, group=grpTime)
+cooldownBars = input.int(2, "Cooldown bars after SELL", minval=0, maxval=20, group=grpTime)
+maxTradesPerDay = input.int(6, "Maximum BUY alerts per stock/day", minval=1, maxval=20, group=grpTime)
+exitOnBearishSupertrend = input.bool(true, "SELL on confirmed bearish Supertrend flip", group=grpTime)
+
+grpDisplay = "7. Display"
+showDashboard = input.bool(true, "Show WAIT / BUY / HOLD / SELL dashboard", group=grpDisplay)
+showSignalLabels = input.bool(true, "Show BUY / SELL labels", group=grpDisplay)
+showSupertrend = input.bool(true, "Show Supertrend", group=grpDisplay)
+showVwap = input.bool(true, "Show VWAP", group=grpDisplay)
+
+// Permanent TradingView-compatible date strings retained for diagnostics/version safety.
+grpDebug = "8. Optional historical window"
+debugWindowStart = input.time(timestamp("10 Aug 2026 00:00 +0530"), "Reference start", group=grpDebug)
+debugWindowEnd = input.time(timestamp("19 Sep 2026 00:00 +0530"), "Reference end", group=grpDebug)
+
+grpResearch = "9. Shadow research (NO live behavior changes)"
+shadowResearchEnabled = input.bool(true, "Enable A/B/C/D shadow exit study", group=grpResearch)
+showResearchDashboard = input.bool(true, "Show shadow research dashboard", group=grpResearch)
+emitResearchSummaryAlert = input.bool(false, "Send EOD shadow summary alert", group=grpResearch)
+emitShadowResultAlert = input.bool(true, "Send one SHADOW_RESULT per completed anchor", group=grpResearch)
+
+// Frozen EXIT_SHADOW_v1 parameters. Do not tune within the forward cohort.
+// v1.3 research fixes: causal runner-MFE accounting, B/C pre-partial exit parity,
+// next-session shadow finalization, richer timing/liquidity telemetry, per-trade EOD export.
+float SHADOW_B_PARTIAL_R = 1.50
+float SHADOW_C_PARTIAL_R = 2.00
+int SHADOW_STOP_B_LOOKBACK = 3
+float SHADOW_STOP_B_BUFFER_ATR = 0.15
+float SHADOW_REFERENCE_ACCOUNT = 500000.0
+float SHADOW_REFERENCE_ALLOCATION_PCT = 0.15
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ─────────────────────────────────────────────────────────────────────────────
+fmtPrice(float value) =>
+    na(value) ? "—" : str.tostring(value, format.mintick)
+
+fmtMoney(float value) =>
+    na(value) ? "—" : "₹" + str.tostring(value, "#.##")
+
+fmtRatio(float value) =>
+    na(value) ? "—" : str.tostring(value, "#.##") + "x"
+
+fmtR(float value) =>
+    na(value) ? "—" : str.tostring(value, "#.##") + "R"
+
+fmtValue(float value) =>
+    na(value) ? "NA" : str.tostring(value, "#.####")
+
+fmtTime(int value) =>
+    na(value) ? "NA" : str.format_time(value, "yyyy-MM-dd'T'HH:mm:ss", "Asia/Kolkata") + "+05:30"
+
+fmtDate(int value) =>
+    na(value) ? "NA" : str.format_time(value, "yyyy-MM-dd", "Asia/Kolkata")
+
+yn(bool value) =>
+    value ? "Y" : "N"
+
+countBullExpansion(float atrSeries) =>
+    int count = 0
+    bool contiguous = true
+    for offset = 0 to 4
+        bool expansion = close[offset] > open[offset] and not na(atrSeries[offset]) and high[offset] - low[offset] >= atrSeries[offset]
+        if contiguous and expansion
+            count += 1
+        else
+            contiguous := false
+    count
+
+shadowReasonExact(string reason) =>
+    not str.contains(reason, "FALLBACK") and not str.contains(reason, "AMBIGUOUS")
+
+entryWindowOpen(int ts) =>
+    int hh = hour(ts, "Asia/Kolkata")
+    int mm = minute(ts, "Asia/Kolkata")
+    bool afterStart = hh > entryStartHour or (hh == entryStartHour and mm >= entryStartMinute)
+    bool beforeCutoff = hh < entryCutoffHour or (hh == entryCutoffHour and mm < entryCutoffMinute)
+    afterStart and beforeCutoff
+
+forceExitNow(int ts) =>
+    int hh = hour(ts, "Asia/Kolkata")
+    int mm = minute(ts, "Asia/Kolkata")
+    hh > forceExitHour or (hh == forceExitHour and mm >= forceExitMinute)
+
+calcQty(float entryValue, float stopValue) =>
+    float riskPerShareValue = entryValue - stopValue
+    float byRisk = riskPerShareValue > 0 ? math.floor(riskBudget / riskPerShareValue) : 0.0
+    float byExposure = entryValue > 0 ? math.floor(maxExposure / entryValue) : 0.0
+    int(math.max(math.min(byRisk, byExposure), 0.0))
+
+growBrokerage(float notionalValue) =>
+    float base = math.min(20.0, notionalValue * 0.001)
+    base < 5.0 ? math.min(5.0, notionalValue * 0.025) : base
+
+growwRoundTripCost(float entryValue, float exitValue, int qtyValue, int slipTicks) =>
+    // NSE cash-market split effective 01-Mar-2026: transaction charge ₹306.99/crore
+    // + IPFT ₹0.01/crore = ₹307/crore each side. Total outflow is unchanged
+    // versus the older ₹297 + ₹10 split, but the components below are current.
+    float qtyFloat = float(qtyValue)
+    float entryNotional = entryValue * qtyFloat
+    float exitNotional = exitValue * qtyFloat
+    float brokerageEntry = growBrokerage(entryNotional)
+    float brokerageExit = growBrokerage(exitNotional)
+    float stampDuty = entryNotional * 0.00003
+    float stt = exitNotional * 0.00025
+    float exchangeCharges = (entryNotional + exitNotional) * 0.000030699
+    float sebiCharges = (entryNotional + exitNotional) * 0.000001
+    float ipftCharges = (entryNotional + exitNotional) * 0.000000001
+    float gstBase = brokerageEntry + brokerageExit + exchangeCharges + sebiCharges + ipftCharges
+    float gst = gstBase * 0.18
+    float chargesExSlippage = brokerageEntry + brokerageExit + stampDuty + stt + exchangeCharges + sebiCharges + ipftCharges + gst
+    float modeledSlippage = 2.0 * float(slipTicks) * syminfo.mintick * qtyFloat
+    float totalCost = chargesExSlippage + modeledSlippage
+    [chargesExSlippage, modeledSlippage, totalCost]
+
+// Research-only per-order cost. It intentionally mirrors the current live Groww model
+// so shadow models differ by execution legs, not by a new fee assumption.
+shadowLegCost(float priceValue, int qtyValue, bool isBuy, int slipTicks) =>
+    float qtyFloat = float(qtyValue)
+    float notional = priceValue * qtyFloat
+    float brokerage = growBrokerage(notional)
+    float stampDuty = isBuy ? notional * 0.00003 : 0.0
+    float stt = isBuy ? 0.0 : notional * 0.00025
+    float exchangeCharges = notional * 0.000030699
+    float sebiCharges = notional * 0.000001
+    float ipftCharges = notional * 0.000000001
+    float gstBase = brokerage + exchangeCharges + sebiCharges + ipftCharges
+    float gst = gstBase * 0.18
+    float modeledSlippage = float(slipTicks) * syminfo.mintick * qtyFloat
+    brokerage + stampDuty + stt + exchangeCharges + sebiCharges + ipftCharges + gst + modeledSlippage
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Core data
+// ─────────────────────────────────────────────────────────────────────────────
+bool isOneMinute = timeframe.isminutes and timeframe.multiplier == 1
+float atr1 = ta.atr(oneMinuteAtrLen)
+float sessionVwap = ta.vwap(hlc3)
+[supertrendLine, supertrendDirection] = ta.supertrend(supertrendFactor, supertrendAtrLen)
+
+bool supertrendBullish = supertrendDirection < 0
+bool bullishFlip = ta.change(supertrendDirection) < 0
+bool bearishFlip = ta.change(supertrendDirection) > 0
+
+float recentBreakoutHigh = ta.highest(high[1], breakoutLookback)
+bool freshBreakout = not na(recentBreakoutHigh) and close > recentBreakoutHigh
+
+float candleRange = high - low
+float closePosition = candleRange > 0 ? (close - low) / candleRange : 0.0
+float signalRangeAtr = not na(atr1) and atr1 > 0 ? candleRange / atr1 : na
+
+bool triggerEvent = (
+    triggerMode == "Supertrend flip" ? bullishFlip :
+    triggerMode == "Breakout while bullish" ? (supertrendBullish and freshBreakout) :
+    (bullishFlip or (supertrendBullish and freshBreakout))
+)
+
+bool candleQualityOk = close > open and (not requireStrongClose or closePosition >= minClosePosition)
+bool trendOk = not requireVwap or (not na(sessionVwap) and close >= sessionVwap)
+bool antiChaseOk = not na(signalRangeAtr) and signalRangeAtr <= maxSignalRangeAtr
+
+float avgVolume = ta.sma(volume[1], 20)
+float medianVolume20 = ta.median(volume[1], 20)
+float avgTurnover = ta.sma(close[1] * volume[1], 20)
+float previousRedBody = open[1] - close[1]
+float previousVolumeRatio = not na(avgVolume[1]) and avgVolume[1] > 0 ? volume[1] / avgVolume[1] : na
+bool heavyRedImpulse = close[1] < open[1] and not na(atr1[1]) and previousRedBody >= atr1[1] * heavyRedBodyAtr and not na(previousVolumeRatio) and previousVolumeRatio >= heavyRedVolumeRatio
+
+[ctxOpen5, ctxClose5, ctxAtr5, ctxEma5, ctxEma5Prev, ctxVol5, ctxTimeClose5] = request.security(
+    syminfo.tickerid,
+    "5",
+    [open[1], close[1], ta.atr(14)[1], ta.ema(close, 20)[1], ta.ema(close, 20)[2], volume[1], time_close[1]],
+    gaps=barmerge.gaps_off,
+    lookahead=barmerge.lookahead_on
+)
+
+bool newCompleted5m = ta.change(ctxTimeClose5) != 0
+float ctxRedBody = not na(ctxOpen5) and not na(ctxClose5) ? ctxOpen5 - ctxClose5 : na
+bool bearish5mContext = (
+    not na(ctxRedBody) and
+    not na(ctxAtr5) and
+    not na(ctxEma5) and
+    not na(ctxEma5Prev) and
+    ctxClose5 < ctxOpen5 and
+    ctxRedBody >= ctxAtr5 * fiveMinuteRedBodyAtr and
+    ctxClose5 < ctxEma5 and
+    ctxEma5 < ctxEma5Prev
+)
+
+bool fallingKnife = heavyRedImpulse or bearish5mContext
+float shadowStructuralLow3 = ta.lowest(low, SHADOW_STOP_B_LOOKBACK)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Gate telemetry (Pine-native only; scanner/Discord time is intentionally absent)
+// ─────────────────────────────────────────────────────────────────────────────
+var int gateFirstTriggerTime = na
+var int gateTriggerAttempts = 0
+var int gateBlockCandle = 0
+var int gateBlockTrend = 0
+var int gateBlockKnife = 0
+var int gateBlockChase = 0
+var int gateBlockStop = 0
+var int gateBlockQty = 0
+var int gateBlockEconomics = 0
+var string gateLastBlock = "NONE"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shadow study object. Multiple objects may coexist because a runner from an
+// earlier live trade can remain open while the live engine later takes another.
+// ─────────────────────────────────────────────────────────────────────────────
+type ShadowStudy
+    string tradeId
+    int sequence
+    int entryBar
+    int entryTime
+    int entryDayKey
+    float entry
+    float stopA
+    float stopB
+    float r0
+    float targetA
+    int qty
+    int partialQty
+    int runnerQty
+    float structuralRisk
+    float entryAtr
+    float entryVwap
+    float entryVwapAtr
+    float breakoutLevel
+    float entryBreakoutAtr
+    float avgVol20
+    float medianVol20
+    float prev1mVol
+    float completed5mVol
+    float avgTurnover20
+    float qtyToAvgVol
+    float qtyToMedianVol
+    float qtyToPrev1mVol
+    float qtyToCompleted5mVol
+    float positionToAvgTurnover
+    int shadow15PctAllocationQty
+    float liveQtyVs15PctQty
+    int firstTriggerTime
+    int triggerAttempts
+    int blockCandle
+    int blockTrend
+    int blockKnife
+    int blockChase
+    int blockStop
+    int blockQty
+    int blockEconomics
+    string lastBlock
+    bool stopAHit
+    int stopABar
+    int stopATime
+    bool stopBHit
+    int stopBBar
+    int stopBTime
+    bool recovered2RAfterA
+    float rawMfeR
+    float rawMaeR
+    int rawMfeBar
+    int rawMfeTime
+    float survivableMfeR
+    float survivableMaeR
+    int survivableMfeBar
+    int survivableMfeTime
+    float close15mR
+    float close30mR
+    float eodCloseR
+    bool m1
+    bool m15
+    bool m2
+    bool m3
+    bool m5
+    bool m8
+    int t1
+    int t15
+    int t2
+    int t3
+    int t5
+    int t8
+    int ambiguousMilestones
+    float runnerPeakHigh
+    bool pullbackActive
+    float pullbackLow
+    float pullbackBreakLevel
+    float defendedLow
+    bool modelAActive
+    bool modelADone
+    string modelAReason
+    float modelAExit
+    int modelAExitTime
+    int modelAExitBar
+    float modelAGrossR
+    float modelANetR
+    bool modelBActive
+    bool modelBPartialDone
+    float modelBPartialPrice
+    int modelBPartialTime
+    bool modelBDone
+    string modelBReason
+    float modelBRunnerExit
+    int modelBExitTime
+    int modelBExitBar
+    float modelBGrossR
+    float modelBNetR
+    float modelBRunnerMfeR
+    float modelBRunnerGivebackR
+    bool modelCActive
+    bool modelCPartialDone
+    float modelCPartialPrice
+    int modelCPartialTime
+    bool modelCDone
+    string modelCReason
+    float modelCRunnerExit
+    int modelCExitTime
+    int modelCExitBar
+    float modelCGrossR
+    float modelCNetR
+    float modelCRunnerMfeR
+    float modelCRunnerGivebackR
+    bool modelDActive
+    bool modelDDone
+    string modelDReason
+    float modelDExit
+    int modelDExitTime
+    int modelDExitBar
+    float modelDGrossR
+    float modelDNetR
+    float modelDRunnerMfeR
+    float modelDRunnerGivebackR
+    bool eodFinalized
+    bool summaryCounted
+    bool resultEmitted
+    int stopBQty
+    float stopBStructuralRisk
+    float postStopAMfeR
+    bool eventual15
+    bool eventual2
+    bool eventual3
+    bool eventual5
+    bool eventual8
+    bool firstEntry
+    string previousExitReason
+    int previousExitTime
+    float previousExitPrice
+    int barsSincePreviousExit
+    bool resetVwapRetest
+    bool resetSupertrendChanged
+    bool resetSwingFormed
+    bool resetBreakoutAboveSetup
+    float entrySupertrendBull
+    float entrySupertrendBear
+    float entryVwapDistance
+    float entryVwapPct
+    float entrySupertrendPct
+    float entrySupertrendAtr
+    float entryImpulsePct
+    int entryBullExpansionBars
+    float entryPullbackPct
+    float entryDistanceRecentHighPct
+    float entryDistanceHodPct
+    bool entryAboveVwap
+    bool entryAboveBullSt
+    bool entryBearStOverhead
+    float grossTargetInr
+    float entryPositionValue
+    float entryRoundTripCost
+    float entryNetTargetInr
+    float entryCostGrossPct
+    float entryCostRiskPct
+
+var array<ShadowStudy> shadowStudies = array.new<ShadowStudy>()
+
+// Cumulative research summary.
+var int shadowCompleted = 0
+var int shadowCurrentTargetFirst = 0
+var int shadowAfter15To2 = 0
+var int shadowAfter15To3 = 0
+var int shadowAfter15To5 = 0
+var int shadowAfter15To8 = 0
+var float shadowSumDeltaB = 0.0
+var float shadowSumDeltaC = 0.0
+var float shadowSumDeltaD = 0.0
+var int shadowComparableB = 0
+var int shadowComparableC = 0
+var int shadowComparableD = 0
+var string lastShadowSummary = "No completed shadow study yet"
+
+// v1.3.4 research-persistence aggregates. These never feed live predicates.
+var int shadowDayAnchors = 0
+var int shadowDayCompleted = 0
+var int shadowDayFirstEntries = 0
+var int shadowDayReentries = 0
+var int shadowDayStopAHits = 0
+var int shadowDayStopBHits = 0
+var int shadowDayStopASurvivedB = 0
+var int shadowDayATargetFirst = 0
+var int shadowDayReached3 = 0
+var int shadowDayReached5 = 0
+var int shadowDayReached8 = 0
+var float shadowDayNetA = 0.0
+var float shadowDayNetB = 0.0
+var float shadowDayNetC = 0.0
+var float shadowDayNetD = 0.0
+var int shadowDayNetACount = 0
+var int shadowDayNetBCount = 0
+var int shadowDayNetCCount = 0
+var int shadowDayNetDCount = 0
+var int shadowDayPairAB = 0
+var int shadowDayPairAC = 0
+var int shadowDayPairAD = 0
+var bool shadowEodEmitted = false
+var int shadowAggregateDayKey = na
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Virtual live trade state — unchanged from v1.1
+// ─────────────────────────────────────────────────────────────────────────────
+var bool engineInitialized = false
+var bool tradeActive = false
+
+var float tradeEntry = na
+var float tradeStop = na
+var float tradeTarget = na
+var float tradeRiskPerShare = na
+var float tradeGrowwCost = na
+var float tradeCoverage = na
+var float tradePlannedRisk = na
+var int tradeQty = 0
+var int tradeEntryBar = na
+var float tradeSetupHigh = na
+
+// Research-only re-entry history for this symbol/chart.
+var string previousLiveExitReason = "NONE"
+var int previousLiveExitTime = na
+var float previousLiveExitPrice = na
+var float previousSetupHigh = na
+var int researchBarsSinceExit = 0
+var bool researchResetVwapRetest = false
+var bool researchResetSupertrendChanged = false
+var bool researchResetSwingFormed = false
+var bool researchResetBreakoutAboveSetup = false
+var float sessionHighKnown = na
+
+var int tradesToday = 0
+var int cooldownUntilBar = na
+
+var string lastAction = "WAIT"
+var string lastReason = "Waiting for live initialization"
+var int lastActionBar = na
+
+bool engineEnabled = operatingMode == "HISTORICAL SIMULATION" or barstate.isrealtime
+bool newDay = ta.change(time("D")) != 0
+
+if newDay or na(sessionHighKnown)
+    sessionHighKnown := high
+else
+    sessionHighKnown := math.max(sessionHighKnown, high)
+
+if engineEnabled and not engineInitialized
+    engineInitialized := true
+    tradeActive := false
+    tradeEntry := na
+    tradeStop := na
+    tradeTarget := na
+    tradeRiskPerShare := na
+    tradeGrowwCost := na
+    tradeCoverage := na
+    tradePlannedRisk := na
+    tradeQty := 0
+    tradeEntryBar := na
+    tradeSetupHigh := na
+    tradesToday := 0
+    cooldownUntilBar := na
+    lastAction := "WAIT"
+    lastReason := operatingMode == "LIVE ALERTS" ? "Live engine armed: waiting for confirmed 1m signal" : "Historical simulation initialized"
+    lastActionBar := bar_index
+    gateFirstTriggerTime := na
+    gateTriggerAttempts := 0
+    gateBlockCandle := 0
+    gateBlockTrend := 0
+    gateBlockKnife := 0
+    gateBlockChase := 0
+    gateBlockStop := 0
+    gateBlockQty := 0
+    gateBlockEconomics := 0
+    gateLastBlock := "NONE"
+    previousLiveExitReason := "NONE"
+    previousLiveExitTime := na
+    previousLiveExitPrice := na
+    previousSetupHigh := na
+    researchBarsSinceExit := 0
+    researchResetVwapRetest := false
+    researchResetSupertrendChanged := false
+    researchResetSwingFormed := false
+    researchResetBreakoutAboveSetup := false
+    shadowAggregateDayKey := time("D")
+
+if engineEnabled and newDay
+    tradeActive := false
+    tradeEntry := na
+    tradeStop := na
+    tradeTarget := na
+    tradeRiskPerShare := na
+    tradeGrowwCost := na
+    tradeCoverage := na
+    tradePlannedRisk := na
+    tradeQty := 0
+    tradeEntryBar := na
+    tradeSetupHigh := na
+    tradesToday := 0
+    cooldownUntilBar := na
+    lastAction := "WAIT"
+    lastReason := "New day: waiting for scalp signal"
+    lastActionBar := bar_index
+    gateFirstTriggerTime := na
+    gateTriggerAttempts := 0
+    gateBlockCandle := 0
+    gateBlockTrend := 0
+    gateBlockKnife := 0
+    gateBlockChase := 0
+    gateBlockStop := 0
+    gateBlockQty := 0
+    gateBlockEconomics := 0
+    gateLastBlock := "NONE"
+    previousLiveExitReason := "NONE"
+    previousLiveExitTime := na
+    previousLiveExitPrice := na
+    previousSetupHigh := na
+    researchBarsSinceExit := 0
+    researchResetVwapRetest := false
+    researchResetSupertrendChanged := false
+    researchResetSwingFormed := false
+    researchResetBreakoutAboveSetup := false
+bool buySignalNow = false
+bool sellSignalNow = false
+string sellReasonNow = ""
+
+// Pine rolls ordinary `var` state back on realtime intrabar updates.
+// `varip` persists within the live bar so one STOP/TARGET event cannot spam alerts.
+varip bool exitAlertLatchedThisBar = false
+varip string exitAlertLatchedReason = ""
+varip float exitAlertLatchedReference = na
+
+if barstate.isnew
+    exitAlertLatchedThisBar := false
+    exitAlertLatchedReason := ""
+    exitAlertLatchedReference := na
+
+// Research-only observable reset state between live trades. Recognition uses
+// only the current confirmed bar and already-known prior bars.
+if engineEnabled and barstate.isconfirmed and not tradeActive and not na(previousLiveExitTime)
+    researchBarsSinceExit += 1
+    researchResetVwapRetest := researchResetVwapRetest or (not na(sessionVwap) and low <= sessionVwap and high >= sessionVwap)
+    researchResetSupertrendChanged := researchResetSupertrendChanged or ta.change(supertrendDirection) != 0
+    bool confirmedSwingAfterExit = (low[1] < low[2] and low[1] <= low) or (high[1] > high[2] and high[1] >= high)
+    researchResetSwingFormed := researchResetSwingFormed or confirmedSwingAfterExit
+    researchResetBreakoutAboveSetup := researchResetBreakoutAboveSetup or (not na(previousSetupHigh) and close > previousSetupHigh)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Shadow engine update helpers
+// ─────────────────────────────────────────────────────────────────────────────
+finalizeOneExitCost(float entryValue, float exitValue, int qtyValue) =>
+    float entryCost = shadowLegCost(entryValue, qtyValue, true, slippageTicks)
+    float exitCost = shadowLegCost(exitValue, qtyValue, false, slippageTicks)
+    entryCost + exitCost
+
+finalizeSplitExitCost(float entryValue, int qtyValue, float partialPrice, int partialQtyValue, float runnerPrice, int runnerQtyValue) =>
+    float entryCost = shadowLegCost(entryValue, qtyValue, true, slippageTicks)
+    float pCost = partialQtyValue > 0 ? shadowLegCost(partialPrice, partialQtyValue, false, slippageTicks) : 0.0
+    float rCost = runnerQtyValue > 0 ? shadowLegCost(runnerPrice, runnerQtyValue, false, slippageTicks) : 0.0
+    entryCost + pCost + rCost
+
+calcGrossR(float grossPnl, float structuralRisk) =>
+    structuralRisk > 0 ? grossPnl / structuralRisk : na
+
+calcNetR(float grossPnl, float costValue, float structuralRisk) =>
+    structuralRisk > 0 ? (grossPnl - costValue) / structuralRisk : na
+
+if shadowResearchEnabled and array.size(shadowStudies) > 0
+    for i = 0 to array.size(shadowStudies) - 1
+        ShadowStudy s = array.get(shadowStudies, i)
+        if not s.eodFinalized and bar_index > s.entryBar
+            float oneR = s.r0
+            float level1 = s.entry + oneR
+            float level15 = s.entry + oneR * 1.5
+            float level2 = s.entry + oneR * 2.0
+            float level3 = s.entry + oneR * 3.0
+            float level5 = s.entry + oneR * 5.0
+            float level8 = s.entry + oneR * 8.0
+
+            // If an illiquid symbol has no bar at/after the force-exit time, the first
+            // bar of the next session closes the shadow study using the prior chart close.
+            // This prevents overnight contamination while leaving LIVE behavior untouched.
+            bool crossedSessionDay = time("D") != s.entryDayKey
+            float shadowHigh = crossedSessionDay ? close[1] : high
+            float shadowLow = crossedSessionDay ? close[1] : low
+            float shadowClose = crossedSessionDay ? close[1] : close
+            // On next-session fallback the modeled fill is the previous session's
+            // last available CLOSE, so its event timestamp is that bar's close, not open.
+            int shadowTime = crossedSessionDay ? time_close[1] : time
+            // EOD and confirmed-close exits occur at the bar CLOSE, not its opening timestamp.
+            int shadowCloseTime = crossedSessionDay ? time_close[1] : time_close
+            int shadowBar = crossedSessionDay ? bar_index - 1 : bar_index
+
+            // Raw path continues until EOD even if the live/current stop was hit.
+            float rawMfeCandidate = (shadowHigh - s.entry) / oneR
+            float rawMaeCandidate = (shadowLow - s.entry) / oneR
+            if rawMfeCandidate > s.rawMfeR
+                s.rawMfeR := rawMfeCandidate
+                s.rawMfeBar := shadowBar
+                s.rawMfeTime := crossedSessionDay ? time_close[1] : time_close
+            s.rawMaeR := math.min(s.rawMaeR, rawMaeCandidate)
+
+            // Full-day reachability is intentionally independent of both stop models.
+            // These latches answer "did price ever reach it later?" without pretending
+            // that an OHLC bar proves intrabar ordering.
+            s.eventual15 := s.eventual15 or shadowHigh >= level15
+            s.eventual2 := s.eventual2 or shadowHigh >= level2
+            s.eventual3 := s.eventual3 or shadowHigh >= level3
+            s.eventual5 := s.eventual5 or shadowHigh >= level5
+            s.eventual8 := s.eventual8 or shadowHigh >= level8
+
+            bool stopANow = shadowLow <= s.stopA
+            bool stopBNow = shadowLow <= s.stopB
+
+            // Survivable excursion excludes the first Stop-A bar because OHLC cannot
+            // prove whether its high happened before or after the stop inside that 1m bar.
+            if not s.stopAHit and not stopANow
+                float survivableMfeCandidate = (shadowHigh - s.entry) / oneR
+                float survivableMaeCandidate = (shadowLow - s.entry) / oneR
+                if survivableMfeCandidate > s.survivableMfeR
+                    s.survivableMfeR := survivableMfeCandidate
+                    s.survivableMfeBar := shadowBar
+                    s.survivableMfeTime := crossedSessionDay ? time_close[1] : time_close
+                s.survivableMaeR := math.min(s.survivableMaeR, survivableMaeCandidate)
+
+            // Fixed-horizon close outcomes are descriptive only and never mutate live state.
+            if not crossedSessionDay and barstate.isconfirmed
+                if na(s.close15mR) and time_close >= s.entryTime + 15 * 60 * 1000
+                    s.close15mR := (close - s.entry) / oneR
+                if na(s.close30mR) and time_close >= s.entryTime + 30 * 60 * 1000
+                    s.close30mR := (close - s.entry) / oneR
+
+            // Milestones before Stop A. Same-bar stop+milestone is explicitly ambiguous.
+            if not s.stopAHit
+                if stopANow
+                    if (not s.m1 and shadowHigh >= level1) or (not s.m15 and shadowHigh >= level15) or (not s.m2 and shadowHigh >= level2) or (not s.m3 and shadowHigh >= level3) or (not s.m5 and shadowHigh >= level5) or (not s.m8 and shadowHigh >= level8)
+                        s.ambiguousMilestones += 1
+                else
+                    if not s.m1 and shadowHigh >= level1
+                        s.m1 := true
+                        s.t1 := shadowTime
+                    if not s.m15 and shadowHigh >= level15
+                        s.m15 := true
+                        s.t15 := shadowTime
+                    if not s.m2 and shadowHigh >= level2
+                        s.m2 := true
+                        s.t2 := shadowTime
+                    if not s.m3 and shadowHigh >= level3
+                        s.m3 := true
+                        s.t3 := shadowTime
+                    if not s.m5 and shadowHigh >= level5
+                        s.m5 := true
+                        s.t5 := shadowTime
+                    if not s.m8 and shadowHigh >= level8
+                        s.m8 := true
+                        s.t8 := shadowTime
+
+            if stopANow and not s.stopAHit
+                s.stopAHit := true
+                s.stopABar := shadowBar
+                s.stopATime := shadowTime
+
+            if stopBNow and not s.stopBHit
+                s.stopBHit := true
+                s.stopBBar := shadowBar
+                s.stopBTime := shadowTime
+
+            if s.stopAHit and shadowBar > s.stopABar
+                s.postStopAMfeR := math.max(s.postStopAMfeR, rawMfeCandidate)
+
+            if s.stopAHit and shadowBar > s.stopABar and shadowHigh >= level2
+                s.recovered2RAfterA := true
+
+            // Snapshot the defended level BEFORE processing the current 1m bar.
+            // A just-completed 5m close must never be judged against structure that
+            // only became known during the following 1m bar.
+            float defendedFor5mExit = s.defendedLow
+
+            // Shared causal structural-runner state, updated only on confirmed 1m bars.
+            if barstate.isconfirmed and not crossedSessionDay
+                if not s.pullbackActive
+                    s.runnerPeakHigh := math.max(s.runnerPeakHigh, high)
+                    bool priceAdvanced = s.runnerPeakHigh > s.entry + syminfo.mintick
+                    bool pullbackStarts = priceAdvanced and close < close[1]
+                    if pullbackStarts
+                        s.pullbackActive := true
+                        s.pullbackLow := low
+                        s.pullbackBreakLevel := s.runnerPeakHigh
+                else
+                    s.pullbackLow := math.min(s.pullbackLow, low)
+                    if close > s.pullbackBreakLevel
+                        s.defendedLow := na(s.defendedLow) ? s.pullbackLow : math.max(s.defendedLow, s.pullbackLow)
+                        s.pullbackActive := false
+                        s.runnerPeakHigh := high
+                        s.pullbackLow := na
+                        s.pullbackBreakLevel := na
+
+            bool eodShadow = crossedSessionDay or (barstate.isconfirmed and forceExitNow(time_close))
+            bool trendExitShadow = not crossedSessionDay and barstate.isconfirmed and exitOnBearishSupertrend and bearishFlip
+            bool structuralExitShadow = not crossedSessionDay and newCompleted5m and not na(defendedFor5mExit) and ctxClose5 < defendedFor5mExit
+            float structuralExitRef = structuralExitShadow ? open : na
+            if eodShadow and na(s.eodCloseR)
+                s.eodCloseR := (shadowClose - s.entry) / oneR
+
+            // Model A: exact current NG exit behavior using the frozen live target at entry.
+            if s.modelAActive and not s.modelADone
+                bool aStop = shadowLow <= s.stopA
+                bool aTarget = shadowHigh >= s.targetA
+                bool aExit = false
+                float aExitRef = na
+                string aReason = ""
+                if aStop and aTarget
+                    aExit := true
+                    aExitRef := s.stopA
+                    aReason := "STOP (AMBIGUOUS BAR)"
+                else if aStop
+                    aExit := true
+                    aExitRef := s.stopA
+                    aReason := "STOP"
+                else if aTarget
+                    aExit := true
+                    aExitRef := s.targetA
+                    aReason := "TARGET"
+                else if eodShadow
+                    aExit := true
+                    aExitRef := shadowClose
+                    aReason := crossedSessionDay ? "EOD FALLBACK SHADOW" : "EOD EXIT"
+                else if trendExitShadow
+                    aExit := true
+                    aExitRef := shadowClose
+                    aReason := "SUPERTREND EXIT"
+
+                if aExit
+                    float gross = (aExitRef - s.entry) * float(s.qty)
+                    float cost = finalizeOneExitCost(s.entry, aExitRef, s.qty)
+                    s.modelAGrossR := calcGrossR(gross, s.structuralRisk)
+                    s.modelANetR := calcNetR(gross, cost, s.structuralRisk)
+                    s.modelAExit := aExitRef
+                    s.modelAExitTime := (eodShadow or trendExitShadow) and not aStop and not aTarget ? shadowCloseTime : shadowTime
+                    s.modelAExitBar := shadowBar
+                    s.modelAReason := aReason
+                    s.modelADone := true
+                    s.modelAActive := false
+
+            // Model B: 50% at 1.5R, remainder structural runner.
+            // Before the partial is earned, retain the current live non-target exits
+            // so B differs from A because of profit capture, not because an unrelated
+            // bearish-Supertrend exit silently disappeared.
+            if s.modelBActive and not s.modelBDone
+                float bPartialLevel = s.entry + s.r0 * SHADOW_B_PARTIAL_R
+                if not s.modelBPartialDone
+                    bool bStop = shadowLow <= s.stopA
+                    bool bPartial = shadowHigh >= bPartialLevel
+                    if bStop and bPartial
+                        float gross = (s.stopA - s.entry) * float(s.qty)
+                        float cost = finalizeOneExitCost(s.entry, s.stopA, s.qty)
+                        s.modelBGrossR := calcGrossR(gross, s.structuralRisk)
+                        s.modelBNetR := calcNetR(gross, cost, s.structuralRisk)
+                        s.modelBRunnerExit := s.stopA
+                        s.modelBExitTime := shadowCloseTime
+                        s.modelBExitBar := shadowBar
+                        s.modelBReason := "STOP (AMBIGUOUS BEFORE PARTIAL)"
+                        s.modelBDone := true
+                        s.modelBActive := false
+                    else if bStop
+                        float gross = (s.stopA - s.entry) * float(s.qty)
+                        float cost = finalizeOneExitCost(s.entry, s.stopA, s.qty)
+                        s.modelBGrossR := calcGrossR(gross, s.structuralRisk)
+                        s.modelBNetR := calcNetR(gross, cost, s.structuralRisk)
+                        s.modelBRunnerExit := s.stopA
+                        s.modelBExitTime := shadowTime
+                        s.modelBExitBar := shadowBar
+                        s.modelBReason := "STOP BEFORE PARTIAL"
+                        s.modelBDone := true
+                        s.modelBActive := false
+                    else if bPartial
+                        s.modelBPartialDone := true
+                        s.modelBPartialPrice := bPartialLevel
+                        s.modelBPartialTime := shadowTime
+                        s.modelBRunnerMfeR := (shadowHigh - s.entry) / s.r0
+
+                        // A mandatory EOD exit occurs at the close of this same bar.
+                        // If the partial was earned intrabar first, bank the partial and
+                        // close the remaining runner at EOD now rather than leaking it
+                        // into the next-session fallback.
+                        if eodShadow
+                            float bRunnerExit = shadowClose
+                            float gross = (s.modelBPartialPrice - s.entry) * float(s.partialQty) + (bRunnerExit - s.entry) * float(s.runnerQty)
+                            float cost = finalizeSplitExitCost(s.entry, s.qty, s.modelBPartialPrice, s.partialQty, bRunnerExit, s.runnerQty)
+                            s.modelBGrossR := calcGrossR(gross, s.structuralRisk)
+                            s.modelBNetR := calcNetR(gross, cost, s.structuralRisk)
+                            s.modelBRunnerExit := bRunnerExit
+                            s.modelBExitTime := shadowCloseTime
+                            s.modelBExitBar := shadowBar
+                            s.modelBReason := crossedSessionDay ? "EOD FALLBACK AFTER PARTIAL" : "EOD AFTER PARTIAL"
+                            float bExitR = (bRunnerExit - s.entry) / s.r0
+                            s.modelBRunnerGivebackR := s.modelBRunnerMfeR - bExitR
+                            s.modelBDone := true
+                            s.modelBActive := false
+                    else if eodShadow or trendExitShadow
+                        float bExitRef = shadowClose
+                        string bPreReason = eodShadow ? (crossedSessionDay ? "EOD FALLBACK BEFORE PARTIAL" : "EOD BEFORE PARTIAL") : "SUPERTREND BEFORE PARTIAL"
+                        float gross = (bExitRef - s.entry) * float(s.qty)
+                        float cost = finalizeOneExitCost(s.entry, bExitRef, s.qty)
+                        s.modelBGrossR := calcGrossR(gross, s.structuralRisk)
+                        s.modelBNetR := calcNetR(gross, cost, s.structuralRisk)
+                        s.modelBRunnerExit := bExitRef
+                        s.modelBExitTime := shadowCloseTime
+                        s.modelBExitBar := shadowBar
+                        s.modelBReason := bPreReason
+                        s.modelBDone := true
+                        s.modelBActive := false
+                else
+                    float bRunnerMfeCandidate = (shadowHigh - s.entry) / s.r0
+                    bool bStopRunner = shadowLow <= s.stopA
+                    bool bStructural = structuralExitShadow
+                    bool bExitRunner = bStopRunner or bStructural or eodShadow
+                    if bExitRunner
+                        // A STOP bar has unknown high/low ordering; a structural exit occurs
+                        // at this 1m bar's open. Exclude that bar's later high in both cases.
+                        // For an ordinary EOD close, the bar high occurred before the close.
+                        bool bIncludeCurrentHigh = eodShadow and not bStopRunner and not bStructural
+                        float bMfeAtExit = bIncludeCurrentHigh ? math.max(s.modelBRunnerMfeR, bRunnerMfeCandidate) : s.modelBRunnerMfeR
+                        s.modelBRunnerMfeR := bMfeAtExit
+                        // Structural exit is known at this 1m bar's OPEN from the
+                        // already-completed 5m close, so it causally precedes any later
+                        // intrabar Stop-A touch on the same 1m bar.
+                        float bRunnerExit = bStructural ? structuralExitRef : bStopRunner ? s.stopA : shadowClose
+                        string bReason = bStructural ? "STRUCTURAL 5M" : bStopRunner ? "RUNNER STOP A" : (crossedSessionDay ? "EOD FALLBACK" : "EOD")
+                        float gross = (s.modelBPartialPrice - s.entry) * float(s.partialQty) + (bRunnerExit - s.entry) * float(s.runnerQty)
+                        float cost = finalizeSplitExitCost(s.entry, s.qty, s.modelBPartialPrice, s.partialQty, bRunnerExit, s.runnerQty)
+                        s.modelBGrossR := calcGrossR(gross, s.structuralRisk)
+                        s.modelBNetR := calcNetR(gross, cost, s.structuralRisk)
+                        s.modelBRunnerExit := bRunnerExit
+                        s.modelBExitTime := eodShadow and not bStructural and not bStopRunner ? shadowCloseTime : shadowTime
+                        s.modelBExitBar := shadowBar
+                        s.modelBReason := bReason
+                        float runnerExitR = (bRunnerExit - s.entry) / s.r0
+                        s.modelBRunnerGivebackR := bMfeAtExit - runnerExitR
+                        s.modelBDone := true
+                        s.modelBActive := false
+                    else
+                        s.modelBRunnerMfeR := math.max(s.modelBRunnerMfeR, bRunnerMfeCandidate)
+
+            // Model C: 50% at 2R, remainder identical structural runner.
+            if s.modelCActive and not s.modelCDone
+                float cPartialLevel = s.entry + s.r0 * SHADOW_C_PARTIAL_R
+                if not s.modelCPartialDone
+                    bool cStop = shadowLow <= s.stopA
+                    bool cPartial = shadowHigh >= cPartialLevel
+                    if cStop and cPartial
+                        float gross = (s.stopA - s.entry) * float(s.qty)
+                        float cost = finalizeOneExitCost(s.entry, s.stopA, s.qty)
+                        s.modelCGrossR := calcGrossR(gross, s.structuralRisk)
+                        s.modelCNetR := calcNetR(gross, cost, s.structuralRisk)
+                        s.modelCRunnerExit := s.stopA
+                        s.modelCExitTime := shadowCloseTime
+                        s.modelCExitBar := shadowBar
+                        s.modelCReason := "STOP (AMBIGUOUS BEFORE PARTIAL)"
+                        s.modelCDone := true
+                        s.modelCActive := false
+                    else if cStop
+                        float gross = (s.stopA - s.entry) * float(s.qty)
+                        float cost = finalizeOneExitCost(s.entry, s.stopA, s.qty)
+                        s.modelCGrossR := calcGrossR(gross, s.structuralRisk)
+                        s.modelCNetR := calcNetR(gross, cost, s.structuralRisk)
+                        s.modelCRunnerExit := s.stopA
+                        s.modelCExitTime := shadowTime
+                        s.modelCExitBar := shadowBar
+                        s.modelCReason := "STOP BEFORE PARTIAL"
+                        s.modelCDone := true
+                        s.modelCActive := false
+                    else if cPartial
+                        s.modelCPartialDone := true
+                        s.modelCPartialPrice := cPartialLevel
+                        s.modelCPartialTime := shadowTime
+                        s.modelCRunnerMfeR := (shadowHigh - s.entry) / s.r0
+
+                        if eodShadow
+                            float cRunnerExit = shadowClose
+                            float gross = (s.modelCPartialPrice - s.entry) * float(s.partialQty) + (cRunnerExit - s.entry) * float(s.runnerQty)
+                            float cost = finalizeSplitExitCost(s.entry, s.qty, s.modelCPartialPrice, s.partialQty, cRunnerExit, s.runnerQty)
+                            s.modelCGrossR := calcGrossR(gross, s.structuralRisk)
+                            s.modelCNetR := calcNetR(gross, cost, s.structuralRisk)
+                            s.modelCRunnerExit := cRunnerExit
+                            s.modelCExitTime := shadowCloseTime
+                            s.modelCExitBar := shadowBar
+                            s.modelCReason := crossedSessionDay ? "EOD FALLBACK AFTER PARTIAL" : "EOD AFTER PARTIAL"
+                            float cExitR = (cRunnerExit - s.entry) / s.r0
+                            s.modelCRunnerGivebackR := s.modelCRunnerMfeR - cExitR
+                            s.modelCDone := true
+                            s.modelCActive := false
+                    else if eodShadow or trendExitShadow
+                        float cExitRef = shadowClose
+                        string cPreReason = eodShadow ? (crossedSessionDay ? "EOD FALLBACK BEFORE PARTIAL" : "EOD BEFORE PARTIAL") : "SUPERTREND BEFORE PARTIAL"
+                        float gross = (cExitRef - s.entry) * float(s.qty)
+                        float cost = finalizeOneExitCost(s.entry, cExitRef, s.qty)
+                        s.modelCGrossR := calcGrossR(gross, s.structuralRisk)
+                        s.modelCNetR := calcNetR(gross, cost, s.structuralRisk)
+                        s.modelCRunnerExit := cExitRef
+                        s.modelCExitTime := shadowCloseTime
+                        s.modelCExitBar := shadowBar
+                        s.modelCReason := cPreReason
+                        s.modelCDone := true
+                        s.modelCActive := false
+                else
+                    float cRunnerMfeCandidate = (shadowHigh - s.entry) / s.r0
+                    bool cStopRunner = shadowLow <= s.stopA
+                    bool cStructural = structuralExitShadow
+                    bool cExitRunner = cStopRunner or cStructural or eodShadow
+                    if cExitRunner
+                        bool cIncludeCurrentHigh = eodShadow and not cStopRunner and not cStructural
+                        float cMfeAtExit = cIncludeCurrentHigh ? math.max(s.modelCRunnerMfeR, cRunnerMfeCandidate) : s.modelCRunnerMfeR
+                        s.modelCRunnerMfeR := cMfeAtExit
+                        float cRunnerExit = cStructural ? structuralExitRef : cStopRunner ? s.stopA : shadowClose
+                        string cReason = cStructural ? "STRUCTURAL 5M" : cStopRunner ? "RUNNER STOP A" : (crossedSessionDay ? "EOD FALLBACK" : "EOD")
+                        float gross = (s.modelCPartialPrice - s.entry) * float(s.partialQty) + (cRunnerExit - s.entry) * float(s.runnerQty)
+                        float cost = finalizeSplitExitCost(s.entry, s.qty, s.modelCPartialPrice, s.partialQty, cRunnerExit, s.runnerQty)
+                        s.modelCGrossR := calcGrossR(gross, s.structuralRisk)
+                        s.modelCNetR := calcNetR(gross, cost, s.structuralRisk)
+                        s.modelCRunnerExit := cRunnerExit
+                        s.modelCExitTime := eodShadow and not cStructural and not cStopRunner ? shadowCloseTime : shadowTime
+                        s.modelCExitBar := shadowBar
+                        s.modelCReason := cReason
+                        float runnerExitR = (cRunnerExit - s.entry) / s.r0
+                        s.modelCRunnerGivebackR := cMfeAtExit - runnerExitR
+                        s.modelCDone := true
+                        s.modelCActive := false
+                    else
+                        s.modelCRunnerMfeR := math.max(s.modelCRunnerMfeR, cRunnerMfeCandidate)
+
+            // Model D: full-position structural runner from entry.
+            if s.modelDActive and not s.modelDDone
+                float dRunnerMfeCandidate = (shadowHigh - s.entry) / s.r0
+                bool dStop = shadowLow <= s.stopA
+                bool dStructural = structuralExitShadow
+                bool dExit = dStop or dStructural or eodShadow
+                if dExit
+                    bool dIncludeCurrentHigh = eodShadow and not dStop and not dStructural
+                    float dMfeAtExit = dIncludeCurrentHigh ? math.max(s.modelDRunnerMfeR, dRunnerMfeCandidate) : s.modelDRunnerMfeR
+                    s.modelDRunnerMfeR := dMfeAtExit
+                    float dExitRef = dStructural ? structuralExitRef : dStop ? s.stopA : shadowClose
+                    string dReason = dStructural ? "STRUCTURAL 5M" : dStop ? "STOP A" : (crossedSessionDay ? "EOD FALLBACK" : "EOD")
+                    float gross = (dExitRef - s.entry) * float(s.qty)
+                    float cost = finalizeOneExitCost(s.entry, dExitRef, s.qty)
+                    s.modelDGrossR := calcGrossR(gross, s.structuralRisk)
+                    s.modelDNetR := calcNetR(gross, cost, s.structuralRisk)
+                    s.modelDExit := dExitRef
+                    s.modelDExitTime := eodShadow and not dStructural and not dStop ? shadowCloseTime : shadowTime
+                    s.modelDExitBar := shadowBar
+                    s.modelDReason := dReason
+                    float dExitR = (dExitRef - s.entry) / s.r0
+                    s.modelDRunnerGivebackR := dMfeAtExit - dExitR
+                    s.modelDDone := true
+                    s.modelDActive := false
+                else
+                    s.modelDRunnerMfeR := math.max(s.modelDRunnerMfeR, dRunnerMfeCandidate)
+
+            // At EOD every path is closed and the trade becomes one complete paired sample.
+            if eodShadow and not s.eodFinalized
+                // Safety: any still-open model is force-closed at the same EOD reference.
+                if not s.modelADone
+                    float grossA = (shadowClose - s.entry) * float(s.qty)
+                    float costA = finalizeOneExitCost(s.entry, shadowClose, s.qty)
+                    s.modelAGrossR := calcGrossR(grossA, s.structuralRisk)
+                    s.modelANetR := calcNetR(grossA, costA, s.structuralRisk)
+                    s.modelAExit := shadowClose
+                    s.modelAExitTime := shadowCloseTime
+                    s.modelAExitBar := shadowBar
+                    s.modelAReason := crossedSessionDay ? "EOD FALLBACK SAFETY" : "EOD SAFETY"
+                    s.modelADone := true
+                    s.modelAActive := false
+                if not s.modelBDone
+                    float grossB = s.modelBPartialDone ? (s.modelBPartialPrice - s.entry) * float(s.partialQty) + (shadowClose - s.entry) * float(s.runnerQty) : (shadowClose - s.entry) * float(s.qty)
+                    float costB = s.modelBPartialDone ? finalizeSplitExitCost(s.entry, s.qty, s.modelBPartialPrice, s.partialQty, shadowClose, s.runnerQty) : finalizeOneExitCost(s.entry, shadowClose, s.qty)
+                    s.modelBGrossR := calcGrossR(grossB, s.structuralRisk)
+                    s.modelBNetR := calcNetR(grossB, costB, s.structuralRisk)
+                    s.modelBRunnerExit := shadowClose
+                    s.modelBExitTime := shadowTime
+                    s.modelBExitBar := shadowBar
+                    s.modelBReason := crossedSessionDay ? "EOD FALLBACK SAFETY" : "EOD SAFETY"
+                    if s.modelBPartialDone
+                        float bSafetyExitR = (shadowClose - s.entry) / s.r0
+                        s.modelBRunnerGivebackR := s.modelBRunnerMfeR - bSafetyExitR
+                    s.modelBDone := true
+                    s.modelBActive := false
+                if not s.modelCDone
+                    float grossC = s.modelCPartialDone ? (s.modelCPartialPrice - s.entry) * float(s.partialQty) + (shadowClose - s.entry) * float(s.runnerQty) : (shadowClose - s.entry) * float(s.qty)
+                    float costC = s.modelCPartialDone ? finalizeSplitExitCost(s.entry, s.qty, s.modelCPartialPrice, s.partialQty, shadowClose, s.runnerQty) : finalizeOneExitCost(s.entry, shadowClose, s.qty)
+                    s.modelCGrossR := calcGrossR(grossC, s.structuralRisk)
+                    s.modelCNetR := calcNetR(grossC, costC, s.structuralRisk)
+                    s.modelCRunnerExit := shadowClose
+                    s.modelCExitTime := shadowTime
+                    s.modelCExitBar := shadowBar
+                    s.modelCReason := crossedSessionDay ? "EOD FALLBACK SAFETY" : "EOD SAFETY"
+                    if s.modelCPartialDone
+                        float cSafetyExitR = (shadowClose - s.entry) / s.r0
+                        s.modelCRunnerGivebackR := s.modelCRunnerMfeR - cSafetyExitR
+                    s.modelCDone := true
+                    s.modelCActive := false
+                if not s.modelDDone
+                    float grossD = (shadowClose - s.entry) * float(s.qty)
+                    float costD = finalizeOneExitCost(s.entry, shadowClose, s.qty)
+                    s.modelDGrossR := calcGrossR(grossD, s.structuralRisk)
+                    s.modelDNetR := calcNetR(grossD, costD, s.structuralRisk)
+                    s.modelDExit := shadowClose
+                    s.modelDExitTime := shadowCloseTime
+                    s.modelDExitBar := shadowBar
+                    s.modelDReason := crossedSessionDay ? "EOD FALLBACK SAFETY" : "EOD SAFETY"
+                    float dSafetyExitR = (shadowClose - s.entry) / s.r0
+                    s.modelDRunnerGivebackR := s.modelDRunnerMfeR - dSafetyExitR
+                    s.modelDDone := true
+                    s.modelDActive := false
+                s.eodFinalized := true
+
+            // Count exactly once after the paired A/B/C/D sample is complete.
+            if s.eodFinalized and not s.summaryCounted
+                shadowCompleted += 1
+                float frozenATargetR = s.r0 > 0 ? (s.targetA - s.entry) / s.r0 : na
+                bool currentTargetIs15 = not na(frozenATargetR) and math.abs(frozenATargetR - 1.5) < 0.001
+                bool currentTargetFirst = currentTargetIs15 and s.modelAReason == "TARGET"
+                if currentTargetFirst
+                    shadowCurrentTargetFirst += 1
+                    // Use Model B as the protective-path reference after the 1.5R partial.
+                    // Strict '<' is conservative for a milestone and runner exit that share
+                    // the same 1m candle because intrabar ordering is unresolved.
+                    if s.m2 and not na(s.t2) and not na(s.modelBExitTime) and s.t2 < s.modelBExitTime
+                        shadowAfter15To2 += 1
+                    if s.m3 and not na(s.t3) and not na(s.modelBExitTime) and s.t3 < s.modelBExitTime
+                        shadowAfter15To3 += 1
+                    if s.m5 and not na(s.t5) and not na(s.modelBExitTime) and s.t5 < s.modelBExitTime
+                        shadowAfter15To5 += 1
+                    if s.m8 and not na(s.t8) and not na(s.modelBExitTime) and s.t8 < s.modelBExitTime
+                        shadowAfter15To8 += 1
+
+                // Paired deltas require BOTH sides of the comparison to be exact.
+                // A fallback close is intentionally a research safety approximation, and
+                // an ambiguous same-1m STOP+TARGET bar cannot reproduce the live tick order
+                // after rollback. Neither belongs in exact paired expectancy averages.
+                bool modelAExact = shadowReasonExact(s.modelAReason)
+                bool modelBExact = shadowReasonExact(s.modelBReason)
+                bool modelCExact = shadowReasonExact(s.modelCReason)
+                bool modelDExact = shadowReasonExact(s.modelDReason)
+                bool sameBarAmbiguity = s.ambiguousMilestones > 0 or str.contains(s.modelAReason, "AMBIGUOUS") or str.contains(s.modelBReason, "AMBIGUOUS") or str.contains(s.modelCReason, "AMBIGUOUS") or str.contains(s.modelDReason, "AMBIGUOUS")
+                if modelAExact and modelBExact and s.partialQty > 0 and s.runnerQty > 0 and not na(s.modelANetR) and not na(s.modelBNetR)
+                    shadowSumDeltaB += s.modelBNetR - s.modelANetR
+                    shadowComparableB += 1
+                if modelAExact and modelCExact and s.partialQty > 0 and s.runnerQty > 0 and not na(s.modelANetR) and not na(s.modelCNetR)
+                    shadowSumDeltaC += s.modelCNetR - s.modelANetR
+                    shadowComparableC += 1
+                if modelAExact and modelDExact and not na(s.modelANetR) and not na(s.modelDNetR)
+                    shadowSumDeltaD += s.modelDNetR - s.modelANetR
+                    shadowComparableD += 1
+
+                float triggerDelayMin = not na(s.firstTriggerTime) ? float(s.entryTime - s.firstTriggerTime) / 60000.0 : na
+                int timeToRawMfeBars = not na(s.rawMfeBar) ? s.rawMfeBar - s.entryBar : na
+                int timeToSurvMfeBars = not na(s.survivableMfeBar) ? s.survivableMfeBar - s.entryBar : na
+                int aBarsHeld = not na(s.modelAExitBar) ? s.modelAExitBar - s.entryBar : na
+                int bBarsHeld = not na(s.modelBExitBar) ? s.modelBExitBar - s.entryBar : na
+                int cBarsHeld = not na(s.modelCExitBar) ? s.modelCExitBar - s.entryBar : na
+                int dBarsHeld = not na(s.modelDExitBar) ? s.modelDExitBar - s.entryBar : na
+                float aNetInr = not na(s.modelANetR) ? s.modelANetR * s.structuralRisk : na
+                float bNetInr = not na(s.modelBNetR) ? s.modelBNetR * s.structuralRisk : na
+                float cNetInr = not na(s.modelCNetR) ? s.modelCNetR * s.structuralRisk : na
+                float dNetInr = not na(s.modelDNetR) ? s.modelDNetR * s.structuralRisk : na
+                float aGrossInr = not na(s.modelAGrossR) ? s.modelAGrossR * s.structuralRisk : na
+                float bGrossInr = not na(s.modelBGrossR) ? s.modelBGrossR * s.structuralRisk : na
+                float cGrossInr = not na(s.modelCGrossR) ? s.modelCGrossR * s.structuralRisk : na
+                float dGrossInr = not na(s.modelDGrossR) ? s.modelDGrossR * s.structuralRisk : na
+                float aCostInr = not na(aGrossInr) and not na(aNetInr) ? aGrossInr - aNetInr : na
+                float bCostInr = not na(bGrossInr) and not na(bNetInr) ? bGrossInr - bNetInr : na
+                float cCostInr = not na(cGrossInr) and not na(cNetInr) ? cGrossInr - cNetInr : na
+                float dCostInr = not na(dGrossInr) and not na(dNetInr) ? dGrossInr - dNetInr : na
+
+                shadowDayCompleted += 1
+                shadowDayStopAHits += s.stopAHit ? 1 : 0
+                shadowDayStopBHits += s.stopBHit ? 1 : 0
+                shadowDayStopASurvivedB += s.stopAHit and not s.stopBHit ? 1 : 0
+                shadowDayATargetFirst += currentTargetFirst ? 1 : 0
+                shadowDayReached3 += s.eventual3 ? 1 : 0
+                shadowDayReached5 += s.eventual5 ? 1 : 0
+                shadowDayReached8 += s.eventual8 ? 1 : 0
+                if not na(s.modelANetR)
+                    shadowDayNetA += s.modelANetR
+                    shadowDayNetACount += 1
+                if not na(s.modelBNetR)
+                    shadowDayNetB += s.modelBNetR
+                    shadowDayNetBCount += 1
+                if not na(s.modelCNetR)
+                    shadowDayNetC += s.modelCNetR
+                    shadowDayNetCCount += 1
+                if not na(s.modelDNetR)
+                    shadowDayNetD += s.modelDNetR
+                    shadowDayNetDCount += 1
+                shadowDayPairAB += modelAExact and modelBExact ? 1 : 0
+                shadowDayPairAC += modelAExact and modelCExact ? 1 : 0
+                shadowDayPairAD += modelAExact and modelDExact ? 1 : 0
+
+                lastShadowSummary := (
+                    s.tradeId +
+                    " | NetR A/B/C/D " + fmtR(s.modelANetR) + "/" + fmtR(s.modelBNetR) + "/" + fmtR(s.modelCNetR) + "/" + fmtR(s.modelDNetR) +
+                    " | NetINR " + fmtMoney(aNetInr) + "/" + fmtMoney(bNetInr) + "/" + fmtMoney(cNetInr) + "/" + fmtMoney(dNetInr) +
+                    " | GrossR " + fmtR(s.modelAGrossR) + "/" + fmtR(s.modelBGrossR) + "/" + fmtR(s.modelCGrossR) + "/" + fmtR(s.modelDGrossR) +
+                    " | MFE surv/raw " + fmtR(s.survivableMfeR) + "/" + fmtR(s.rawMfeR) +
+                    " | MAE surv/raw " + fmtR(s.survivableMaeR) + "/" + fmtR(s.rawMaeR) +
+                    " | MFEbars surv/raw " + str.tostring(timeToSurvMfeBars) + "/" + str.tostring(timeToRawMfeBars) +
+                    " | CloseR 15/30/EOD " + fmtR(s.close15mR) + "/" + fmtR(s.close30mR) + "/" + fmtR(s.eodCloseR) +
+                    " | HoldBars A/B/C/D " + str.tostring(aBarsHeld) + "/" + str.tostring(bBarsHeld) + "/" + str.tostring(cBarsHeld) + "/" + str.tostring(dBarsHeld) +
+                    " | Giveback B/C/D " + fmtR(s.modelBRunnerGivebackR) + "/" + fmtR(s.modelCRunnerGivebackR) + "/" + fmtR(s.modelDRunnerGivebackR) +
+                    " | StopA/B " + (s.stopAHit ? "Y" : "N") + "/" + (s.stopBHit ? "Y" : "N") +
+                    " | Exact A/B/C/D " + (modelAExact ? "Y" : "N") + "/" + (modelBExact ? "Y" : "N") + "/" + (modelCExact ? "Y" : "N") + "/" + (modelDExact ? "Y" : "N") +
+                    " | A->2R " + (s.recovered2RAfterA ? "Y" : "N") +
+                    " | GateDelayMin " + str.tostring(triggerDelayMin, "#.##") +
+                    " | GateFails C/T/K/Ch/S/Q/E " + str.tostring(s.blockCandle) + "/" + str.tostring(s.blockTrend) + "/" + str.tostring(s.blockKnife) + "/" + str.tostring(s.blockChase) + "/" + str.tostring(s.blockStop) + "/" + str.tostring(s.blockQty) + "/" + str.tostring(s.blockEconomics) +
+                    " | Qty " + str.tostring(s.qty) +
+                    " | Qty/Med1m " + fmtRatio(s.qtyToMedianVol) +
+                    " | Qty/Prev1m " + fmtRatio(s.qtyToPrev1mVol) +
+                    " | Qty/Prev5m " + fmtRatio(s.qtyToCompleted5mVol) +
+                    " | Pos/AvgTurn " + fmtRatio(s.positionToAvgTurnover) +
+                    " | 15pctQty " + str.tostring(s.shadow15PctAllocationQty) +
+                    " | Live/15pctQty " + fmtRatio(s.liveQtyVs15PctQty) +
+                    " | VWAPextATR " + fmtRatio(s.entryVwapAtr) +
+                    " | BOextATR " + fmtRatio(s.entryBreakoutAtr) +
+                    " | amb " + str.tostring(s.ambiguousMilestones)
+                )
+
+                // One durable machine-readable record per anchor. Multiple anchors can
+                // finish on the same bar, so freq_all is required to retain every sample.
+                string shadowResult = (
+                    "SHADOW_RESULT | Schema=1 | Version=1.3.4" +
+                    " | Symbol=" + syminfo.tickerid + " | TradingDate=" + fmtDate(s.entryTime) + " | TradeId=" + s.tradeId + " | Trade=" + str.tostring(s.sequence) +
+                    " | EntryTime=" + fmtTime(s.entryTime) + " | EntryRef=" + fmtValue(s.entry) + " | Target=" + fmtValue(s.targetA) + " | R0=" + fmtValue(s.r0) + " | LiveQty=" + str.tostring(s.qty) +
+                    " | StopA=" + fmtValue(s.stopA) + " | StopATime=" + fmtTime(s.stopATime) + " | StopAHit=" + yn(s.stopAHit) +
+                    " | StopB=" + fmtValue(s.stopB) + " | StopBTime=" + fmtTime(s.stopBTime) + " | StopBHit=" + yn(s.stopBHit) +
+                    " | StopBQty=" + str.tostring(s.stopBQty) + " | RiskA_INR=" + fmtValue(s.structuralRisk) + " | RiskB_INR=" + fmtValue(s.stopBStructuralRisk) +
+                    " | LiveOutcomeR=" + fmtValue(s.modelAGrossR) + " | LiveReason=" + s.modelAReason + " | LiveExitTime=" + fmtTime(s.modelAExitTime) +
+                    " | AReason=" + s.modelAReason + " | AExit=" + fmtValue(s.modelAExit) + " | ATime=" + fmtTime(s.modelAExitTime) + " | AGrossR=" + fmtValue(s.modelAGrossR) + " | ANetR=" + fmtValue(s.modelANetR) + " | ACostINR=" + fmtValue(aCostInr) +
+                    " | BReason=" + s.modelBReason + " | BPartial=" + fmtValue(s.modelBPartialPrice) + " | BPartialTime=" + fmtTime(s.modelBPartialTime) + " | BRunnerExit=" + fmtValue(s.modelBRunnerExit) + " | BTime=" + fmtTime(s.modelBExitTime) + " | BGrossR=" + fmtValue(s.modelBGrossR) + " | BNetR=" + fmtValue(s.modelBNetR) + " | BCostINR=" + fmtValue(bCostInr) + " | BLegs=" + str.tostring(s.modelBPartialDone ? 3 : 2) +
+                    " | CReason=" + s.modelCReason + " | CPartial=" + fmtValue(s.modelCPartialPrice) + " | CPartialTime=" + fmtTime(s.modelCPartialTime) + " | CRunnerExit=" + fmtValue(s.modelCRunnerExit) + " | CTime=" + fmtTime(s.modelCExitTime) + " | CGrossR=" + fmtValue(s.modelCGrossR) + " | CNetR=" + fmtValue(s.modelCNetR) + " | CCostINR=" + fmtValue(cCostInr) +
+                    " | DReason=" + s.modelDReason + " | DExit=" + fmtValue(s.modelDExit) + " | DTime=" + fmtTime(s.modelDExitTime) + " | DGrossR=" + fmtValue(s.modelDGrossR) + " | DNetR=" + fmtValue(s.modelDNetR) + " | DCostINR=" + fmtValue(dCostInr) +
+                    " | RawMFE_R=" + fmtValue(s.rawMfeR) + " | RawMAE_R=" + fmtValue(s.rawMaeR) + " | MFEBeforeStopA_R=" + fmtValue(s.survivableMfeR) + " | MAEBeforeStopA_R=" + fmtValue(s.survivableMaeR) + " | PostStopA_MFE_R=" + fmtValue(s.postStopAMfeR) +
+                    " | ATargetFirst=" + yn(currentTargetFirst) + " | Reach15=" + yn(s.eventual15) + " | Reach2=" + yn(s.eventual2) + " | Reach3=" + yn(s.eventual3) + " | Reach5=" + yn(s.eventual5) + " | Reach8=" + yn(s.eventual8) + " | SameBarAmbiguity=" + yn(sameBarAmbiguity) + " | AmbiguousCount=" + str.tostring(s.ambiguousMilestones) +
+                    " | FirstEntry=" + yn(s.firstEntry) + " | ReEntry=" + str.tostring(s.firstEntry ? 0 : s.sequence - 1) + " | PrevExitReason=" + s.previousExitReason + " | PrevExitTime=" + fmtTime(s.previousExitTime) + " | SecondsSincePrevExit=" + (na(s.previousExitTime) ? "NA" : str.tostring((s.entryTime - s.previousExitTime) / 1000)) + " | PrevExitPrice=" + fmtValue(s.previousExitPrice) + " | BarsSincePrevExit=" + str.tostring(s.barsSincePreviousExit) +
+                    " | ResetVWAP=" + yn(s.resetVwapRetest) + " | ResetST=" + yn(s.resetSupertrendChanged) + " | ResetSwing=" + yn(s.resetSwingFormed) + " | ResetPriorSetup=" + yn(s.resetBreakoutAboveSetup) +
+                    " | EntryVWAP=" + fmtValue(s.entryVwap) + " | VWAPDist=" + fmtValue(s.entryVwapDistance) + " | VWAPPct=" + fmtValue(s.entryVwapPct) + " | VWAPAtr=" + fmtValue(s.entryVwapAtr) +
+                    " | STBull=" + fmtValue(s.entrySupertrendBull) + " | STBear=" + fmtValue(s.entrySupertrendBear) + " | BullSTPct=" + fmtValue(s.entrySupertrendPct) + " | BullSTAtr=" + fmtValue(s.entrySupertrendAtr) + " | ATR=" + fmtValue(s.entryAtr) +
+                    " | ImpulsePct=" + fmtValue(s.entryImpulsePct) + " | BullExpansionBars=" + str.tostring(s.entryBullExpansionBars) + " | PullbackPct=" + fmtValue(s.entryPullbackPct) + " | DistRecentHighPct=" + fmtValue(s.entryDistanceRecentHighPct) + " | DistHODPct=" + fmtValue(s.entryDistanceHodPct) +
+                    " | AboveVWAP=" + yn(s.entryAboveVwap) + " | AboveBullST=" + yn(s.entryAboveBullSt) + " | BearSTOverhead=" + yn(s.entryBearStOverhead) +
+                    " | PositionINR=" + fmtValue(s.entryPositionValue) + " | GrossTargetINR=" + fmtValue(s.grossTargetInr) + " | CostINR=" + fmtValue(s.entryRoundTripCost) + " | NetTargetINR=" + fmtValue(s.entryNetTargetInr) + " | CostGrossPct=" + fmtValue(s.entryCostGrossPct) + " | CostRiskPct=" + fmtValue(s.entryCostRiskPct) +
+                    " | GivebackB_R=" + fmtValue(s.modelBRunnerGivebackR) + " | GivebackC_R=" + fmtValue(s.modelCRunnerGivebackR) + " | GivebackD_R=" + fmtValue(s.modelDRunnerGivebackR) +
+                    " | ExactA=" + yn(modelAExact) + " | ExactB=" + yn(modelBExact) + " | ExactC=" + yn(modelCExact) + " | ExactD=" + yn(modelDExact)
+                )
+                if emitShadowResultAlert and not s.resultEmitted and barstate.isrealtime and barstate.isconfirmed
+                    alert(shadowResult, alert.freq_all)
+                    s.resultEmitted := true
+
+                s.summaryCounted := true
+
+            array.set(shadowStudies, i, s)
+
+// One compact per-symbol/day rollup, emitted only after every active anchor has
+// received the same EOD finalization pass above.
+bool shadowEodBoundary = barstate.isconfirmed and (forceExitNow(time_close) or (newDay and shadowDayAnchors > 0))
+if shadowResearchEnabled and emitResearchSummaryAlert and barstate.isrealtime and shadowEodBoundary and not shadowEodEmitted
+    float dayAvgA = shadowDayNetACount > 0 ? shadowDayNetA / float(shadowDayNetACount) : na
+    float dayAvgB = shadowDayNetBCount > 0 ? shadowDayNetB / float(shadowDayNetBCount) : na
+    float dayAvgC = shadowDayNetCCount > 0 ? shadowDayNetC / float(shadowDayNetCCount) : na
+    float dayAvgD = shadowDayNetDCount > 0 ? shadowDayNetD / float(shadowDayNetDCount) : na
+    string shadowEodMessage = (
+        "SHADOW_EOD | Schema=1 | Version=1.3.4 | Symbol=" + syminfo.tickerid + " | TradingDate=" + fmtDate(shadowAggregateDayKey) + " | EmittedAt=" + fmtTime(barstate.isrealtime ? timenow : time_close) +
+        " | Anchors=" + str.tostring(shadowDayAnchors) + " | Completed=" + str.tostring(shadowDayCompleted) +
+        " | FirstEntries=" + str.tostring(shadowDayFirstEntries) + " | Reentries=" + str.tostring(shadowDayReentries) +
+        " | StopAHits=" + str.tostring(shadowDayStopAHits) + " | StopBHits=" + str.tostring(shadowDayStopBHits) + " | StopASurvivedB=" + str.tostring(shadowDayStopASurvivedB) +
+        " | ATargetFirst=" + str.tostring(shadowDayATargetFirst) + " | Reached3R=" + str.tostring(shadowDayReached3) + " | Reached5R=" + str.tostring(shadowDayReached5) + " | Reached8R=" + str.tostring(shadowDayReached8) +
+        " | AvgNetR_A=" + fmtValue(dayAvgA) + " | AvgNetR_B=" + fmtValue(dayAvgB) + " | AvgNetR_C=" + fmtValue(dayAvgC) + " | AvgNetR_D=" + fmtValue(dayAvgD) +
+        " | PairedAB=" + str.tostring(shadowDayPairAB) + " | PairedAC=" + str.tostring(shadowDayPairAC) + " | PairedAD=" + str.tostring(shadowDayPairAD)
+    )
+    alert(shadowEodMessage, alert.freq_once_per_bar_close)
+    shadowEodEmitted := true
+
+// A chart without a 15:15-or-later print cannot reveal its final bar until the
+// next session. In that case the prior summary is emitted above on the first new
+// bar, then the aggregate is reset before the new day's entry engine runs.
+if engineEnabled and newDay
+    shadowDayAnchors := 0
+    shadowDayCompleted := 0
+    shadowDayFirstEntries := 0
+    shadowDayReentries := 0
+    shadowDayStopAHits := 0
+    shadowDayStopBHits := 0
+    shadowDayStopASurvivedB := 0
+    shadowDayATargetFirst := 0
+    shadowDayReached3 := 0
+    shadowDayReached5 := 0
+    shadowDayReached8 := 0
+    shadowDayNetA := 0.0
+    shadowDayNetB := 0.0
+    shadowDayNetC := 0.0
+    shadowDayNetD := 0.0
+    shadowDayNetACount := 0
+    shadowDayNetBCount := 0
+    shadowDayNetCCount := 0
+    shadowDayNetDCount := 0
+    shadowDayPairAB := 0
+    shadowDayPairAC := 0
+    shadowDayPairAD := 0
+    shadowEodEmitted := false
+    shadowAggregateDayKey := time("D")
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LIVE Exit engine — intentionally preserved from v1.1
+// ─────────────────────────────────────────────────────────────────────────────
+if engineEnabled and tradeActive and not na(tradeEntryBar) and bar_index > tradeEntryBar
+    bool stopHit = low <= tradeStop
+    bool targetHit = high >= tradeTarget
+    bool eodExit = barstate.isconfirmed and forceExitNow(time_close)
+    bool trendExit = barstate.isconfirmed and exitOnBearishSupertrend and bearishFlip
+
+    bool shouldExit = false
+    float exitReference = na
+
+    if stopHit and targetHit
+        shouldExit := true
+        sellReasonNow := "STOP (AMBIGUOUS BAR)"
+        exitReference := tradeStop
+    else if stopHit
+        shouldExit := true
+        sellReasonNow := "STOP"
+        exitReference := tradeStop
+    else if targetHit
+        shouldExit := true
+        sellReasonNow := "TARGET"
+        exitReference := tradeTarget
+    else if eodExit
+        shouldExit := true
+        sellReasonNow := "EOD EXIT"
+        exitReference := close
+    else if trendExit
+        shouldExit := true
+        sellReasonNow := "SUPERTREND EXIT"
+        exitReference := close
+
+    if shouldExit
+        bool firstExitAlertThisBar = not exitAlertLatchedThisBar
+
+        if firstExitAlertThisBar
+            exitAlertLatchedThisBar := true
+            exitAlertLatchedReason := sellReasonNow
+            exitAlertLatchedReference := exitReference
+            sellSignalNow := true
+
+            string sellMessage = (
+                "NG SCALP SELL | " + syminfo.ticker +
+                " | Reason " + sellReasonNow +
+                " | ExitRef " + fmtPrice(exitReference) +
+                " | EntryRef " + fmtPrice(tradeEntry) +
+                " | Qty " + str.tostring(tradeQty) +
+                " | SL " + fmtPrice(tradeStop) +
+                " | TP " + fmtPrice(tradeTarget)
+            )
+
+            if barstate.isrealtime
+                alert(sellMessage, alert.freq_once_per_bar)
+
+            // Research history is captured at the same boundary as the first live
+            // exit alert. It never participates in shouldExit or any live price.
+            previousLiveExitReason := sellReasonNow
+            previousLiveExitTime := barstate.isrealtime ? timenow : (eodExit or trendExit ? time_close : time)
+            previousLiveExitPrice := exitReference
+            previousSetupHigh := tradeSetupHigh
+            researchBarsSinceExit := 0
+            researchResetVwapRetest := false
+            researchResetSupertrendChanged := false
+            researchResetSwingFormed := false
+            researchResetBreakoutAboveSetup := false
+
+        tradeActive := false
+        cooldownUntilBar := bar_index + cooldownBars
+        lastAction := "SELL"
+        lastReason := exitAlertLatchedReason
+        lastActionBar := bar_index
+
+// ─────────────────────────────────────────────────────────────────────────────
+// LIVE Entry engine — conditions intentionally preserved from v1.1
+// ─────────────────────────────────────────────────────────────────────────────
+bool cooldownComplete = na(cooldownUntilBar) or bar_index >= cooldownUntilBar
+bool entryWindow = entryWindowOpen(time_close)
+bool canLookForBuy = (
+    engineEnabled and
+    engineInitialized and
+    isOneMinute and
+    not tradeActive and
+    not exitAlertLatchedThisBar and
+    entryWindow and
+    cooldownComplete and
+    tradesToday < maxTradesPerDay
+)
+
+if canLookForBuy and barstate.isconfirmed
+    float rawStop = low - atr1 * stopBufferAtr
+    float minimumDistanceStop = close - atr1 * minStopAtr
+    float stopCandidate = math.min(rawStop, minimumDistanceStop)
+    float riskCandidate = close - stopCandidate
+    bool stopOk = not na(riskCandidate) and riskCandidate > syminfo.mintick
+
+    int qtyCandidate = stopOk ? calcQty(close, stopCandidate) : 0
+    bool qtyOk = qtyCandidate >= 1
+
+    float targetCandidate = qtyOk ? close + riskCandidate * targetR : na
+    [growwChargesExSlip, growwSlip, growwTotalCost] = growwRoundTripCost(close, targetCandidate, qtyCandidate, slippageTicks)
+    float grossTarget = qtyOk ? (targetCandidate - close) * float(qtyCandidate) : na
+    float coverageCandidate = qtyOk and not na(growwTotalCost) and growwTotalCost > 0 ? grossTarget / growwTotalCost : na
+    bool economicsOk = not requireCostViability or (not na(coverageCandidate) and coverageCandidate >= costCoverageK)
+
+    bool signalOk = (
+        triggerEvent and
+        candleQualityOk and
+        trendOk and
+        not fallingKnife and
+        antiChaseOk
+    )
+
+    bool qualified = signalOk and stopOk and qtyOk and economicsOk
+
+    // Pine-native gate telemetry. We only count bars where the actual trigger occurred.
+    if triggerEvent
+        if na(gateFirstTriggerTime)
+            gateFirstTriggerTime := time_close
+        gateTriggerAttempts += 1
+
+        // Research telemetry counts every failed gate on a trigger bar. The LIVE
+        // qualified expression below is unchanged. Counting only the first failure
+        // would hide co-failing gates and over-credit whichever check appeared first.
+        if not candleQualityOk
+            gateBlockCandle += 1
+            gateLastBlock := "weak signal candle"
+        if not trendOk
+            gateBlockTrend += 1
+            gateLastBlock := "below VWAP"
+        if fallingKnife
+            gateBlockKnife += 1
+            gateLastBlock := "falling-knife veto"
+        if not antiChaseOk
+            gateBlockChase += 1
+            gateLastBlock := "signal bar too extended"
+        if not stopOk
+            gateBlockStop += 1
+            gateLastBlock := "invalid stop geometry"
+        if not qtyOk
+            gateBlockQty += 1
+            gateLastBlock := "quantity zero"
+        if not economicsOk
+            gateBlockEconomics += 1
+            gateLastBlock := "cost coverage"
+
+    if qualified
+        tradeActive := true
+        tradeEntry := close
+        tradeStop := stopCandidate
+        tradeTarget := targetCandidate
+        tradeRiskPerShare := riskCandidate
+        tradeGrowwCost := growwTotalCost
+        tradeCoverage := coverageCandidate
+        tradePlannedRisk := riskCandidate * float(qtyCandidate)
+        tradeQty := qtyCandidate
+        tradeEntryBar := bar_index
+        tradesToday += 1
+        tradeSetupHigh := high
+
+        // Strictly shadow-only anchor. No shadow value feeds back into live state.
+        if shadowResearchEnabled
+            float shadowStopB = math.min(stopCandidate, shadowStructuralLow3 - atr1 * SHADOW_STOP_B_BUFFER_ATR)
+            int partialQtyCandidate = int(math.floor(float(qtyCandidate) * 0.50))
+            int runnerQtyCandidate = qtyCandidate - partialQtyCandidate
+            float entryVwapAtrValue = not na(atr1) and atr1 > 0 and not na(sessionVwap) ? (close - sessionVwap) / atr1 : na
+            float entryBreakoutAtrValue = not na(atr1) and atr1 > 0 and not na(recentBreakoutHigh) ? (close - recentBreakoutHigh) / atr1 : na
+            float qtyToAvgVolValue = not na(avgVolume) and avgVolume > 0 ? float(qtyCandidate) / avgVolume : na
+            float qtyToMedianVolValue = not na(medianVolume20) and medianVolume20 > 0 ? float(qtyCandidate) / medianVolume20 : na
+            float qtyToPrevVolValue = volume[1] > 0 ? float(qtyCandidate) / volume[1] : na
+            float qtyTo5mVolValue = not na(ctxVol5) and ctxVol5 > 0 ? float(qtyCandidate) / ctxVol5 : na
+            float positionValue = close * float(qtyCandidate)
+            float positionToTurnoverValue = not na(avgTurnover) and avgTurnover > 0 ? positionValue / avgTurnover : na
+            int shadow15PctQty = close > 0 ? int(math.floor((SHADOW_REFERENCE_ACCOUNT * SHADOW_REFERENCE_ALLOCATION_PCT) / close)) : 0
+            float liveQtyVs15PctQtyValue = shadow15PctQty > 0 ? float(qtyCandidate) / float(shadow15PctQty) : na
+            float stopBRiskPerShare = close - shadowStopB
+            int stopBQtyCandidate = stopBRiskPerShare > 0 and close > 0 ? int(math.max(math.min(math.floor(riskBudget / stopBRiskPerShare), math.floor(maxExposure / close)), 0.0)) : 0
+            float stopBStructuralRiskValue = stopBRiskPerShare * float(stopBQtyCandidate)
+            bool firstEntryValue = tradesToday == 1
+            float entryVwapDistanceValue = not na(sessionVwap) ? close - sessionVwap : na
+            float entryVwapPctValue = not na(sessionVwap) and sessionVwap != 0 ? (close / sessionVwap - 1.0) * 100.0 : na
+            float entrySupertrendBullValue = supertrendBullish ? supertrendLine : na
+            float entrySupertrendBearValue = not supertrendBullish ? supertrendLine : na
+            float entrySupertrendPctValue = not na(entrySupertrendBullValue) and entrySupertrendBullValue != 0 ? (close / entrySupertrendBullValue - 1.0) * 100.0 : na
+            float entrySupertrendAtrValue = not na(atr1) and atr1 > 0 and not na(entrySupertrendBullValue) ? (close - entrySupertrendBullValue) / atr1 : na
+            float entryImpulsePctValue = close[1] != 0 ? (close / close[1] - 1.0) * 100.0 : na
+            int entryBullExpansionBarsValue = countBullExpansion(atr1)
+            float recentHighValue = ta.highest(high, 10)
+            float entryPullbackPctValue = recentHighValue > 0 ? (recentHighValue - close) / recentHighValue * 100.0 : na
+            float entryDistanceRecentHighPctValue = recentHighValue > 0 ? (close / recentHighValue - 1.0) * 100.0 : na
+            float entryDistanceHodPctValue = sessionHighKnown > 0 ? (close / sessionHighKnown - 1.0) * 100.0 : na
+            bool entryAboveVwapValue = not na(sessionVwap) and close > sessionVwap
+            bool entryAboveBullStValue = supertrendBullish and not na(supertrendLine) and close > supertrendLine
+            bool entryBearStOverheadValue = not supertrendBullish and not na(supertrendLine) and supertrendLine > close
+            float entryNetTargetInrValue = not na(grossTarget) and not na(growwTotalCost) ? grossTarget - growwTotalCost : na
+            float entryCostGrossPctValue = not na(grossTarget) and grossTarget != 0 and not na(growwTotalCost) ? growwTotalCost / grossTarget * 100.0 : na
+            float entryCostRiskPctValue = tradePlannedRisk != 0 and not na(growwTotalCost) ? growwTotalCost / tradePlannedRisk * 100.0 : na
+            string studyId = syminfo.ticker + "|" + str.tostring(time_close) + "|" + str.tostring(tradesToday)
+
+            ShadowStudy study = ShadowStudy.new(
+                studyId, tradesToday, bar_index, time_close, time("D"),
+                close, stopCandidate, shadowStopB, riskCandidate, targetCandidate,
+                qtyCandidate, partialQtyCandidate, runnerQtyCandidate, tradePlannedRisk, atr1,
+                sessionVwap, entryVwapAtrValue, recentBreakoutHigh, entryBreakoutAtrValue, avgVolume,
+                medianVolume20, volume[1], ctxVol5, avgTurnover, qtyToAvgVolValue,
+                qtyToMedianVolValue, qtyToPrevVolValue, qtyTo5mVolValue, positionToTurnoverValue, shadow15PctQty,
+                liveQtyVs15PctQtyValue, gateFirstTriggerTime, gateTriggerAttempts, gateBlockCandle, gateBlockTrend,
+                gateBlockKnife, gateBlockChase, gateBlockStop, gateBlockQty, gateBlockEconomics,
+                gateLastBlock, false, na, na, false,
+                na, na, false, 0.0, 0.0,
+                na, na, 0.0, 0.0, na,
+                na, na, na, na, false,
+                false, false, false, false, false,
+                na, na, na, na, na,
+                na, 0, close, false, na,
+                na, na, true, false, "",
+                na, na, na, na, na,
+                true, false, na, na, false,
+                "", na, na, na, na,
+                na, 0.0, na, true, false,
+                na, na, false, "", na,
+                na, na, na, na, 0.0,
+                na, true, false, "", na,
+                na, na, na, na, 0.0,
+                na, false, false,
+                false, stopBQtyCandidate, stopBStructuralRiskValue, 0.0,
+                false, false, false, false, false,
+                firstEntryValue, previousLiveExitReason, previousLiveExitTime, previousLiveExitPrice, researchBarsSinceExit,
+                researchResetVwapRetest, researchResetSupertrendChanged, researchResetSwingFormed, researchResetBreakoutAboveSetup,
+                entrySupertrendBullValue, entrySupertrendBearValue,
+                entryVwapDistanceValue, entryVwapPctValue, entrySupertrendPctValue, entrySupertrendAtrValue,
+                entryImpulsePctValue, entryBullExpansionBarsValue, entryPullbackPctValue, entryDistanceRecentHighPctValue, entryDistanceHodPctValue,
+                entryAboveVwapValue, entryAboveBullStValue, entryBearStOverheadValue,
+                grossTarget, positionValue, growwTotalCost, entryNetTargetInrValue, entryCostGrossPctValue, entryCostRiskPctValue
+            )
+            array.push(shadowStudies, study)
+            if shadowDayAnchors == 0
+                shadowAggregateDayKey := time("D")
+            shadowDayAnchors += 1
+            shadowDayFirstEntries += firstEntryValue ? 1 : 0
+            shadowDayReentries += firstEntryValue ? 0 : 1
+
+        buySignalNow := true
+        lastAction := "BUY"
+        lastReason := bullishFlip ? "Supertrend bullish flip" : "Bullish breakout in Supertrend"
+        lastActionBar := bar_index
+
+        string buyMessage = (
+            "NG SCALP BUY | " + syminfo.ticker +
+            " | EntryRef " + fmtPrice(tradeEntry) +
+            " | Qty " + str.tostring(tradeQty) +
+            " | SL " + fmtPrice(tradeStop) +
+            " | TP " + fmtPrice(tradeTarget) +
+            " | Target " + str.tostring(targetR, "#.##") + "R" +
+            " | PlannedRisk " + fmtMoney(tradePlannedRisk) +
+            " | GrowwCostEst " + fmtMoney(tradeGrowwCost) +
+            " | CostCoverage " + fmtRatio(tradeCoverage) +
+            " | Trigger " + lastReason
+        )
+
+        if barstate.isrealtime
+            alert(buyMessage, alert.freq_once_per_bar_close)
+
+        gateFirstTriggerTime := na
+        gateTriggerAttempts := 0
+        gateBlockCandle := 0
+        gateBlockTrend := 0
+        gateBlockKnife := 0
+        gateBlockChase := 0
+        gateBlockStop := 0
+        gateBlockQty := 0
+        gateBlockEconomics := 0
+        gateLastBlock := "NONE"
+    else
+        if not triggerEvent
+            lastReason := "WAIT: no Supertrend flip / breakout"
+        else if not candleQualityOk
+            lastReason := "WAIT: weak signal candle"
+        else if not trendOk
+            lastReason := "WAIT: below VWAP"
+        else if fallingKnife
+            lastReason := "WAIT: falling-knife veto"
+        else if not antiChaseOk
+            lastReason := "WAIT: signal bar too extended"
+        else if not stopOk
+            lastReason := "WAIT: invalid stop geometry"
+        else if not qtyOk
+            lastReason := "WAIT: quantity zero"
+        else if not economicsOk
+            lastReason := "WAIT: Groww cost coverage " + fmtRatio(coverageCandidate)
+        else
+            lastReason := "WAIT: no qualified signal"
+else if engineEnabled and engineInitialized and not tradeActive
+    if not isOneMinute
+        lastReason := "USE 1m CHART"
+    else if not entryWindow
+        lastReason := "WAIT: outside entry window"
+    else if not cooldownComplete
+        lastReason := "WAIT: cooldown"
+    else if tradesToday >= maxTradesPerDay
+        lastReason := "WAIT: daily trade limit"
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Visuals
+// ─────────────────────────────────────────────────────────────────────────────
+plot(showSupertrend and supertrendBullish ? supertrendLine : na, "Supertrend Bull", color=color.new(color.green, 0), linewidth=2, style=plot.style_linebr)
+plot(showSupertrend and not supertrendBullish ? supertrendLine : na, "Supertrend Bear", color=color.new(color.red, 0), linewidth=2, style=plot.style_linebr)
+plot(showVwap ? sessionVwap : na, "VWAP", color=color.new(color.purple, 15), linewidth=2)
+
+plot(tradeActive ? tradeEntry : na, "Active Entry", color=color.new(color.blue, 0), linewidth=2, style=plot.style_linebr)
+plot(tradeActive ? tradeStop : na, "Active Stop", color=color.new(color.red, 0), linewidth=2, style=plot.style_linebr)
+plot(tradeActive ? tradeTarget : na, "Active Target", color=color.new(color.green, 0), linewidth=2, style=plot.style_linebr)
+
+plotshape(showSignalLabels and buySignalNow, title="BUY", text="BUY", style=shape.labelup, location=location.belowbar, color=color.new(color.green, 0), textcolor=color.white, size=size.small)
+plotshape(showSignalLabels and sellSignalNow, title="SELL", text="SELL", style=shape.labeldown, location=location.abovebar, color=color.new(color.red, 0), textcolor=color.white, size=size.small)
+
+bgcolor(fallingKnife and not tradeActive ? color.new(color.red, 94) : na, title="Falling-knife veto")
+
+// Research-only data-window outputs. These do not affect trading logic.
+float researchActiveCount = 0.0
+if array.size(shadowStudies) > 0
+    for i = 0 to array.size(shadowStudies) - 1
+        ShadowStudy s = array.get(shadowStudies, i)
+        if not s.eodFinalized
+            researchActiveCount += 1.0
+
+plot(shadowResearchEnabled ? researchActiveCount : na, "Shadow Active Anchors", display=display.data_window)
+plot(shadowResearchEnabled ? float(shadowCurrentTargetFirst) : na, "Shadow A Target-First Count", display=display.data_window)
+plot(shadowResearchEnabled ? float(shadowAfter15To2) : na, "Shadow 2R after A-target", display=display.data_window)
+plot(shadowResearchEnabled ? float(shadowAfter15To3) : na, "Shadow 3R after A-target", display=display.data_window)
+plot(shadowResearchEnabled ? float(shadowAfter15To5) : na, "Shadow 5R after A-target", display=display.data_window)
+plot(shadowResearchEnabled ? float(shadowAfter15To8) : na, "Shadow 8R after A-target", display=display.data_window)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Dashboards
+// ─────────────────────────────────────────────────────────────────────────────
+var table dash = table.new(position.top_right, 2, 9, bgcolor=color.new(color.black, 15), frame_color=color.new(color.gray, 60), frame_width=1)
+var table researchDash = table.new(position.bottom_right, 2, 9, bgcolor=color.new(color.black, 15), frame_color=color.new(color.gray, 60), frame_width=1)
+
+if barstate.islast and showDashboard
+    string action = (
+        not isOneMinute ? "USE 1m" :
+        not engineInitialized ? "ARMED" :
+        tradeActive ? (lastAction == "BUY" and lastActionBar == bar_index ? "BUY" : "HOLD") :
+        (lastAction == "SELL" and lastActionBar == bar_index ? "SELL" : "WAIT")
+    )
+
+    string modeText = operatingMode == "LIVE ALERTS" ? "LIVE" : "SIM"
+    string levels = tradeActive ? fmtPrice(tradeEntry) + " / " + fmtPrice(tradeStop) + " / " + fmtPrice(tradeTarget) : "— / — / —"
+    string qtyText = tradeActive ? str.tostring(tradeQty) : "—"
+    string costText = tradeActive ? fmtMoney(tradeGrowwCost) + " / " + fmtRatio(tradeCoverage) : "—"
+
+    table.cell(dash, 0, 0, "NG SCALP ALERTS", text_color=color.white, bgcolor=color.new(color.blue, 35))
+    table.cell(dash, 1, 0, "v1.3.4 RESEARCH", text_color=color.white, bgcolor=color.new(color.blue, 35))
+    table.cell(dash, 0, 1, "ACTION", text_color=color.silver)
+    table.cell(dash, 1, 1, action, text_color=action == "BUY" ? color.lime : action == "SELL" ? color.red : action == "HOLD" ? color.aqua : color.white)
+    table.cell(dash, 0, 2, "MODE", text_color=color.silver)
+    table.cell(dash, 1, 2, modeText, text_color=color.white)
+    table.cell(dash, 0, 3, "WHY", text_color=color.silver)
+    table.cell(dash, 1, 3, lastReason, text_color=color.white)
+    table.cell(dash, 0, 4, "ENTRY / SL / TP", text_color=color.silver)
+    table.cell(dash, 1, 4, levels, text_color=color.white)
+    table.cell(dash, 0, 5, "QTY", text_color=color.silver)
+    table.cell(dash, 1, 5, qtyText, text_color=color.white)
+    table.cell(dash, 0, 6, "GROWW COST / COVER", text_color=color.silver)
+    table.cell(dash, 1, 6, costText, text_color=color.white)
+    table.cell(dash, 0, 7, "TRADES", text_color=color.silver)
+    table.cell(dash, 1, 7, str.tostring(tradesToday) + "/" + str.tostring(maxTradesPerDay), text_color=color.white)
+    table.cell(dash, 0, 8, "ST / VWAP", text_color=color.silver)
+    table.cell(dash, 1, 8, (supertrendBullish ? "BULL" : "BEAR") + " / " + (not na(sessionVwap) and close >= sessionVwap ? "ABOVE" : "BELOW"), text_color=color.white)
+
+if barstate.islast and showResearchDashboard
+    float p2 = shadowCurrentTargetFirst > 0 ? 100.0 * float(shadowAfter15To2) / float(shadowCurrentTargetFirst) : na
+    float p3 = shadowCurrentTargetFirst > 0 ? 100.0 * float(shadowAfter15To3) / float(shadowCurrentTargetFirst) : na
+    float p5 = shadowCurrentTargetFirst > 0 ? 100.0 * float(shadowAfter15To5) / float(shadowCurrentTargetFirst) : na
+    float p8 = shadowCurrentTargetFirst > 0 ? 100.0 * float(shadowAfter15To8) / float(shadowCurrentTargetFirst) : na
+    float avgDB = shadowComparableB > 0 ? shadowSumDeltaB / float(shadowComparableB) : na
+    float avgDC = shadowComparableC > 0 ? shadowSumDeltaC / float(shadowComparableC) : na
+    float avgDD = shadowComparableD > 0 ? shadowSumDeltaD / float(shadowComparableD) : na
+
+    table.cell(researchDash, 0, 0, "EXIT_SHADOW_v1", text_color=color.white, bgcolor=color.new(color.purple, 35))
+    table.cell(researchDash, 1, 0, shadowResearchEnabled ? "ON" : "OFF", text_color=shadowResearchEnabled ? color.lime : color.gray, bgcolor=color.new(color.purple, 35))
+    table.cell(researchDash, 0, 1, "ANCHORS / DONE", text_color=color.silver)
+    table.cell(researchDash, 1, 1, str.tostring(int(researchActiveCount)) + " / " + str.tostring(shadowCompleted), text_color=color.white)
+    table.cell(researchDash, 0, 2, "A TARGET FIRST", text_color=color.silver)
+    table.cell(researchDash, 1, 2, str.tostring(shadowCurrentTargetFirst), text_color=color.white)
+    table.cell(researchDash, 0, 3, "P(2R/3R | A TP)", text_color=color.silver)
+    table.cell(researchDash, 1, 3, (na(p2) ? "—" : str.tostring(p2, "#.0") + "%") + " / " + (na(p3) ? "—" : str.tostring(p3, "#.0") + "%"), text_color=color.white)
+    table.cell(researchDash, 0, 4, "P(5R/8R | A TP)", text_color=color.silver)
+    table.cell(researchDash, 1, 4, (na(p5) ? "—" : str.tostring(p5, "#.0") + "%") + " / " + (na(p8) ? "—" : str.tostring(p8, "#.0") + "%"), text_color=color.white)
+    table.cell(researchDash, 0, 5, "AVG ΔB NET R", text_color=color.silver)
+    table.cell(researchDash, 1, 5, fmtR(avgDB), text_color=na(avgDB) ? color.gray : avgDB >= 0 ? color.lime : color.red)
+    table.cell(researchDash, 0, 6, "AVG ΔC NET R", text_color=color.silver)
+    table.cell(researchDash, 1, 6, fmtR(avgDC), text_color=na(avgDC) ? color.gray : avgDC >= 0 ? color.lime : color.red)
+    table.cell(researchDash, 0, 7, "AVG ΔD NET R", text_color=color.silver)
+    table.cell(researchDash, 1, 7, fmtR(avgDD), text_color=na(avgDD) ? color.gray : avgDD >= 0 ? color.lime : color.red)
+    table.cell(researchDash, 0, 8, "LAST", text_color=color.silver)
+    table.cell(researchDash, 1, 8, lastShadowSummary, text_color=color.white)
