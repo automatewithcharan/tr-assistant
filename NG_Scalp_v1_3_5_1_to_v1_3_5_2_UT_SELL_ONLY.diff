@@ -1,0 +1,131 @@
+--- NG_Scalp_Alerts_v1_3_5_1_CLEAN_ACTION_ALERTS.pine
++++ NG_Scalp_Alerts_v1_3_5_2_UT_SELL_ONLY.pine
+@@ -2 +2 @@
+-indicator("NG Scalp Alerts v1.3.5.1 - Clean Action Alerts", shorttitle="NGS1351", overlay=true, max_labels_count=500)
++indicator("NG Scalp Alerts v1.3.5.2 - UT Sell Only", shorttitle="NGS1352", overlay=true, max_labels_count=500)
+@@ -6 +6 @@
+-// UT SELL is the normal full-position exit. Hard stop and EOD remain safety exits.
++// UT SELL is the normal full-position exit; EOD remains the mandatory exception.
+@@ -8,0 +9 @@
++// v1.3.5.2 makes the old NG stop telemetry-only; actionable exits are UT SELL/EOD.
+@@ -621,0 +623,12 @@
++var bool utOldNgStopTouched = false
++var int utOldNgStopFirstTouchTime = na
++var int utOldNgStopFirstTouchBar = na
++var bool utOldNgStopUtBullishAtTouch = false
++var float utOldNgStopMfeAfterR = 0.0
++var float utLastUtSellPrice = na
++var float utLastUtSellOutcomeR = na
++var float utLastOldNgStopMfeAfterR = na
++varip bool oldNgStopTouchLatched = false
++varip int oldNgStopTouchTimeLatched = na
++varip int oldNgStopTouchBarLatched = na
++varip bool oldNgStopBullishAtTouchLatched = false
+@@ -625 +638,2 @@
+-var int utHardStopsBeforeSell = 0
++var int utOldNgStopTouchCount = 0
++var int utOldNgStopBullishTouchCount = 0
+@@ -698,0 +713,9 @@
++    utOldNgStopTouched := false
++    utOldNgStopFirstTouchTime := na
++    utOldNgStopFirstTouchBar := na
++    utOldNgStopUtBullishAtTouch := false
++    utOldNgStopMfeAfterR := 0.0
++    oldNgStopTouchLatched := false
++    oldNgStopTouchTimeLatched := na
++    oldNgStopTouchBarLatched := na
++    oldNgStopBullishAtTouchLatched := false
+@@ -754,0 +778,9 @@
++    utOldNgStopTouched := false
++    utOldNgStopFirstTouchTime := na
++    utOldNgStopFirstTouchBar := na
++    utOldNgStopUtBullishAtTouch := false
++    utOldNgStopMfeAfterR := 0.0
++    oldNgStopTouchLatched := false
++    oldNgStopTouchTimeLatched := na
++    oldNgStopTouchBarLatched := na
++    oldNgStopBullishAtTouchLatched := false
+@@ -784 +816 @@
+-// `varip` persists within the live bar so one STOP/TARGET event cannot spam alerts.
++// `varip` persists within the live bar so one actionable exit cannot spam alerts.
+@@ -1488,2 +1520,2 @@
+-// UT-managed Exit engine. There is deliberately no fixed-profit or Supertrend
+-// exit: hard structural stop, fresh confirmed UT SELL, or EOD only.
++// UT-managed Exit engine. The old NG stop is telemetry only. There is no fixed-
++// profit, hard-stop, Supertrend, or VWAP exit: confirmed UT SELL or EOD only.
+@@ -1492 +1524 @@
+-    bool stopHit = low <= tradeStop
++    bool oldNgStopTouchedNow = low <= tradeStop
+@@ -1494,0 +1527,16 @@
++    // Capture the first old-stop touch without turning it into an action. The
++    // varip latch preserves the true realtime first-touch time across rollback.
++    if oldNgStopTouchedNow and not oldNgStopTouchLatched
++        oldNgStopTouchLatched := true
++        oldNgStopTouchTimeLatched := barstate.isrealtime ? timenow : time
++        oldNgStopTouchBarLatched := bar_index
++        oldNgStopBullishAtTouchLatched := utBullish
++
++    if oldNgStopTouchedNow and not utOldNgStopTouched
++        utOldNgStopTouched := true
++        utOldNgStopFirstTouchTime := oldNgStopTouchTimeLatched
++        utOldNgStopFirstTouchBar := oldNgStopTouchBarLatched
++        utOldNgStopUtBullishAtTouch := oldNgStopBullishAtTouchLatched
++        utOldNgStopTouchCount += 1
++        utOldNgStopBullishTouchCount += oldNgStopBullishAtTouchLatched ? 1 : 0
++
+@@ -1506,0 +1555,5 @@
++    // Exclude the touch bar because historical OHLC cannot reveal whether its
++    // high happened before or after the old-stop touch.
++    if utOldNgStopTouched and not na(utOldNgStopFirstTouchBar) and bar_index > utOldNgStopFirstTouchBar
++        utOldNgStopMfeAfterR := na(favorableRNow) ? utOldNgStopMfeAfterR : math.max(utOldNgStopMfeAfterR, favorableRNow)
++
+@@ -1510,5 +1563 @@
+-    if stopHit
+-        shouldExit := true
+-        sellReasonNow := "HARD_STOP"
+-        exitReference := tradeStop
+-    else if utFreshSellConfirmed
++    if utFreshSellConfirmed
+@@ -1532 +1581 @@
+-            int utExitTime = sellReasonNow == "HARD_STOP" ? (barstate.isrealtime ? timenow : time) : time_close
++            int utExitTime = time_close
+@@ -1538 +1587 @@
+-            string sellReasonDisplay = sellReasonNow == "UT_SELL" ? "UT SELL" : sellReasonNow == "HARD_STOP" ? "HARD STOP" : "EOD"
++            string sellReasonDisplay = sellReasonNow == "UT_SELL" ? "UT SELL" : "EOD"
+@@ -1553 +1601,0 @@
+-            utHardStopsBeforeSell += sellReasonNow == "HARD_STOP" ? 1 : 0
+@@ -1554,0 +1603,4 @@
++            utLastOldNgStopMfeAfterR := utOldNgStopTouched ? utOldNgStopMfeAfterR : na
++            if sellReasonNow == "UT_SELL"
++                utLastUtSellPrice := exitReference
++                utLastUtSellOutcomeR := utCapturedR
+@@ -1712,0 +1765,9 @@
++        utOldNgStopTouched := false
++        utOldNgStopFirstTouchTime := na
++        utOldNgStopFirstTouchBar := na
++        utOldNgStopUtBullishAtTouch := false
++        utOldNgStopMfeAfterR := 0.0
++        oldNgStopTouchLatched := false
++        oldNgStopTouchTimeLatched := na
++        oldNgStopTouchBarLatched := na
++        oldNgStopBullishAtTouchLatched := false
+@@ -1952 +2013 @@
+-plot(tradeActive ? tradeStop : na, "Active Stop", color=color.new(color.red, 0), linewidth=2, style=plot.style_linebr)
++plot(tradeActive ? tradeStop : na, "Old NG Stop (Telemetry Only)", color=color.new(color.orange, 0), linewidth=2, style=plot.style_linebr)
+@@ -1984 +2045,9 @@
+-plot(float(utHardStopsBeforeSell), "UT Hard Stops Before Sell", display=display.data_window)
++plot(float(utOldNgStopTouchCount), "UT Old NG Stop Touch Count", display=display.data_window)
++plot(float(utOldNgStopBullishTouchCount), "UT Old Stop Touches While Bullish", display=display.data_window)
++plot(utOldNgStopTouched ? 1.0 : 0.0, "UT Current Old Stop Touched", display=display.data_window)
++plot(utOldNgStopTouched ? float(utOldNgStopFirstTouchTime) : na, "UT Old Stop First Touch Time", display=display.data_window)
++plot(utOldNgStopTouched ? (utOldNgStopUtBullishAtTouch ? 1.0 : 0.0) : na, "UT Bullish At Old Stop Touch", display=display.data_window)
++plot(utOldNgStopTouched ? utOldNgStopMfeAfterR : na, "UT MFE After Old Stop R", display=display.data_window)
++plot(utLastUtSellPrice, "UT Last Eventual Sell Price", display=display.data_window)
++plot(utLastUtSellOutcomeR, "UT Last Eventual Sell Outcome R", display=display.data_window)
++plot(utLastOldNgStopMfeAfterR, "UT Last MFE After Old Stop R", display=display.data_window)
+@@ -2009 +2078 @@
+-    table.cell(dash, 1, 0, "v1.3.5.1", text_color=color.white, bgcolor=color.new(color.blue, 35))
++    table.cell(dash, 1, 0, "v1.3.5.2", text_color=color.white, bgcolor=color.new(color.blue, 35))
+@@ -2016 +2085 @@
+-    table.cell(dash, 0, 4, "ENTRY / HARD SL / UT", text_color=color.silver)
++    table.cell(dash, 0, 4, "ENTRY / OLD NG / UT", text_color=color.silver)
