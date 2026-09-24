@@ -1,0 +1,333 @@
+--- NG_Scalp_Alerts_v1_3_4_4_0915_ENTRY_START.pine
++++ NG_Scalp_Alerts_v1_3_5_0_UT_BOT_EXPERIMENT.pine
+@@ -2 +2 @@
+-indicator("NG Scalp Alerts v1.3.4.4 - 09:15 Entry Start", shorttitle="NGS1344", overlay=true, max_labels_count=500)
++indicator("NG Scalp Alerts v1.3.5.0 - NG plus UT Bot Experiment", shorttitle="NGS135UT", overlay=true, max_labels_count=500)
+@@ -4,5 +4,4 @@
+-// Research-only extension of NG Scalp Alerts v1.1 / v1.2 shadow study.
+-// LIVE BUY/SELL/STOP/TARGET logic and live sizing inputs are intentionally preserved.
+-// v1.3.4.4 changes only the entry-window start to 09:15 IST (cohort 0915).
+-// v1.3.4.2 intrabar-persistent research-alert dedupe is preserved; live behavior is unchanged.
+-// BUY decisions: confirmed 1m bars only. STOP/TARGET monitoring: realtime.
++// Experimental fork of the immutable NG Scalp Alerts v1.3.4.4 baseline.
++// NG qualification arms a candidate; a fresh confirmed UT Bot BUY times entry.
++// UT SELL is the normal full-position exit. Hard stop and EOD remain safety exits.
++// Existing NG 5m [1] + lookahead_on completed-bar requests are preserved exactly.
+@@ -63 +61,0 @@
+-exitOnBearishSupertrend = input.bool(true, "SELL on confirmed bearish Supertrend flip", group=grpTime)
+@@ -67 +64,0 @@
+-showSignalLabels = input.bool(true, "Show BUY / SELL labels", group=grpDisplay)
+@@ -81,0 +79,10 @@
++grpUt = "UT Bot Experimental"
++enableUtManagedMode = input.bool(true, "Enable UT-managed mode", group=grpUt)
++utKeyValue = input.float(3.0, "UT Key Value", step=0.5, group=grpUt)
++utAtrPeriod = input.int(10, "UT ATR Period", minval=1, group=grpUt)
++utConfirmationWindow = input.int(3, "UT Confirmation Window", minval=1, maxval=20, group=grpUt)
++showUtTrail = input.bool(true, "Show UT trail", group=grpUt)
++showUtBuyLabels = input.bool(true, "Show UT BUY labels", group=grpUt)
++showUtSellLabels = input.bool(true, "Show UT SELL labels", group=grpUt)
++showUtManagedLabels = input.bool(true, "Show UT-managed entry/exit labels", group=grpUt)
++
+@@ -206,0 +214,21 @@
++// Faithful Pine-v6 port of the supplied UT Bot v4 recursive trailing stop.
++// Every UT signal is calculated on the chart's one-minute series only.
++float utAtr = ta.atr(utAtrPeriod)
++float utLoss = utKeyValue * utAtr
++float utTrail = 0.0
++float utPreviousTrail = nz(utTrail[1], 0.0)
++utTrail := close > utPreviousTrail and close[1] > utPreviousTrail ? math.max(utPreviousTrail, close - utLoss) : close < utPreviousTrail and close[1] < utPreviousTrail ? math.min(utPreviousTrail, close + utLoss) : close > utPreviousTrail ? close - utLoss : close + utLoss
++
++int utPosition = 0
++utPosition := close[1] < utPreviousTrail and close > utPreviousTrail ? 1 : close[1] > utPreviousTrail and close < utPreviousTrail ? -1 : nz(utPosition[1], 0)
++
++// Evaluate crossover functions on every calculation; confirmation alone gates use.
++bool utBuyCross = ta.crossover(close, utTrail)
++bool utSellCross = ta.crossunder(close, utTrail)
++bool utFreshBuyConfirmed = barstate.isconfirmed and utBuyCross
++bool utFreshSellConfirmed = barstate.isconfirmed and utSellCross
++bool utBullish = close > utTrail
++bool utBearish = close < utTrail
++int utBarsSinceConfirmedBuy = ta.barssince(utFreshBuyConfirmed)
++int utLastConfirmedBuyTime = ta.valuewhen(utFreshBuyConfirmed, time_close, 0)
++
+@@ -567,0 +596,32 @@
++// NG qualification is the causal arm boundary. No pre-BUY lane exists in the
++// baseline, so this state stores only the final existing NG qualification.
++var bool ngUtArmed = false
++var int ngUtArmBar = na
++var int ngUtQualificationTime = na
++var string ngUtSource = "NONE"
++
++// Current UT-managed trade evidence. None of these fields feeds entry or exit.
++var int utTradeNgQualificationTime = na
++var int utTradeBuyTime = na
++var int utTradeEntryTime = na
++var float utTradeTrailAtEntry = na
++var float utTradeInitialRiskInr = na
++var float utTradeMfeR = 0.0
++var float utTradeMaeR = 0.0
++var float utTradePeakR = 0.0
++var bool utTradeReached05 = false
++var bool utTradeReached1 = false
++var bool utTradeReached15 = false
++var bool utTradeReached2 = false
++var bool utTradeReached3 = false
++var bool utTradeReached5 = false
++
++// Cumulative, measurement-only UT outcome summary.
++var int utTradesCompleted = 0
++var int utHardStopsBeforeSell = 0
++var int utExceededOld15R = 0
++var int utWinnerCount = 0
++var int utLoserCount = 0
++var float utWinnerSumR = 0.0
++var float utLoserSumR = 0.0
++
+@@ -616,0 +677,18 @@
++    ngUtArmed := false
++    ngUtArmBar := na
++    ngUtQualificationTime := na
++    ngUtSource := "NONE"
++    utTradeNgQualificationTime := na
++    utTradeBuyTime := na
++    utTradeEntryTime := na
++    utTradeTrailAtEntry := na
++    utTradeInitialRiskInr := na
++    utTradeMfeR := 0.0
++    utTradeMaeR := 0.0
++    utTradePeakR := 0.0
++    utTradeReached05 := false
++    utTradeReached1 := false
++    utTradeReached15 := false
++    utTradeReached2 := false
++    utTradeReached3 := false
++    utTradeReached5 := false
+@@ -654,0 +733,18 @@
++    ngUtArmed := false
++    ngUtArmBar := na
++    ngUtQualificationTime := na
++    ngUtSource := "NONE"
++    utTradeNgQualificationTime := na
++    utTradeBuyTime := na
++    utTradeEntryTime := na
++    utTradeTrailAtEntry := na
++    utTradeInitialRiskInr := na
++    utTradeMfeR := 0.0
++    utTradeMaeR := 0.0
++    utTradePeakR := 0.0
++    utTradeReached05 := false
++    utTradeReached1 := false
++    utTradeReached15 := false
++    utTradeReached2 := false
++    utTradeReached3 := false
++    utTradeReached5 := false
+@@ -1386 +1482,2 @@
+-// LIVE Exit engine — intentionally preserved from v1.1
++// UT-managed Exit engine. There is deliberately no fixed-profit or Supertrend
++// exit: hard structural stop, fresh confirmed UT SELL, or EOD only.
+@@ -1390 +1486,0 @@
+-    bool targetHit = high >= tradeTarget
+@@ -1392 +1488,12 @@
+-    bool trendExit = barstate.isconfirmed and exitOnBearishSupertrend and bearishFlip
++
++    float favorableRNow = tradeRiskPerShare > 0 ? (high - tradeEntry) / tradeRiskPerShare : na
++    float adverseRNow = tradeRiskPerShare > 0 ? (low - tradeEntry) / tradeRiskPerShare : na
++    utTradeMfeR := na(favorableRNow) ? utTradeMfeR : math.max(utTradeMfeR, favorableRNow)
++    utTradeMaeR := na(adverseRNow) ? utTradeMaeR : math.min(utTradeMaeR, adverseRNow)
++    utTradePeakR := math.max(utTradePeakR, utTradeMfeR)
++    utTradeReached05 := utTradeReached05 or utTradeMfeR >= 0.5
++    utTradeReached1 := utTradeReached1 or utTradeMfeR >= 1.0
++    utTradeReached15 := utTradeReached15 or utTradeMfeR >= 1.5
++    utTradeReached2 := utTradeReached2 or utTradeMfeR >= 2.0
++    utTradeReached3 := utTradeReached3 or utTradeMfeR >= 3.0
++    utTradeReached5 := utTradeReached5 or utTradeMfeR >= 5.0
+@@ -1397 +1504 @@
+-    if stopHit and targetHit
++    if stopHit
+@@ -1399 +1506 @@
+-        sellReasonNow := "STOP (AMBIGUOUS BAR)"
++        sellReasonNow := "HARD_STOP"
+@@ -1401 +1508 @@
+-    else if stopHit
++    else if utFreshSellConfirmed
+@@ -1403,9 +1510 @@
+-        sellReasonNow := "STOP"
+-        exitReference := tradeStop
+-    else if targetHit
+-        shouldExit := true
+-        sellReasonNow := "TARGET"
+-        exitReference := tradeTarget
+-    else if eodExit
+-        shouldExit := true
+-        sellReasonNow := "EOD EXIT"
++        sellReasonNow := "UT_SELL"
+@@ -1413 +1512 @@
+-    else if trendExit
++    else if eodExit
+@@ -1415 +1514 @@
+-        sellReasonNow := "SUPERTREND EXIT"
++        sellReasonNow := "EOD"
+@@ -1426,0 +1526,5 @@
++            int utExitTime = sellReasonNow == "HARD_STOP" ? (barstate.isrealtime ? timenow : time) : time_close
++            float utCapturedR = tradeRiskPerShare > 0 ? (exitReference - tradeEntry) / tradeRiskPerShare : na
++            float utCapturePct = utTradeMfeR > 0 and not na(utCapturedR) ? utCapturedR / utTradeMfeR * 100.0 : na
++            float utGivebackR = not na(utCapturedR) ? utTradeMfeR - utCapturedR : na
++
+@@ -1428,7 +1532,8 @@
+-                "NG SCALP SELL | " + syminfo.ticker +
+-                " | Reason " + sellReasonNow +
+-                " | ExitRef " + fmtPrice(exitReference) +
+-                " | EntryRef " + fmtPrice(tradeEntry) +
+-                " | Qty " + str.tostring(tradeQty) +
+-                " | SL " + fmtPrice(tradeStop) +
+-                " | TP " + fmtPrice(tradeTarget)
++                "🔴 NG+UT SELL | Schema=1 | Version=1.3.5.0 | Symbol=" + syminfo.tickerid +
++                " | Reason=" + sellReasonNow + " | ExitTime=" + fmtTime(utExitTime) + " | Exit=" + fmtValue(exitReference) +
++                " | NGSource=" + ngUtSource + " | NGQualificationTime=" + fmtTime(utTradeNgQualificationTime) +
++                " | UTBuyTime=" + fmtTime(utTradeBuyTime) + " | EntryTime=" + fmtTime(utTradeEntryTime) + " | Entry=" + fmtValue(tradeEntry) +
++                " | UTTrailAtEntry=" + fmtValue(utTradeTrailAtEntry) + " | HardStop=" + fmtValue(tradeStop) + " | Qty=" + str.tostring(tradeQty) + " | InitialRiskINR=" + fmtValue(utTradeInitialRiskInr) +
++                " | MFE_R=" + fmtValue(utTradeMfeR) + " | MAE_R=" + fmtValue(utTradeMaeR) + " | PeakUnrealizedR=" + fmtValue(utTradePeakR) +
++                " | Reach05=" + yn(utTradeReached05) + " | Reach1=" + yn(utTradeReached1) + " | Reach15=" + yn(utTradeReached15) + " | Reach2=" + yn(utTradeReached2) + " | Reach3=" + yn(utTradeReached3) + " | Reach5=" + yn(utTradeReached5) +
++                " | CapturedR=" + fmtValue(utCapturedR) + " | MFECapturePct=" + fmtValue(utCapturePct) + " | GivebackR=" + fmtValue(utGivebackR)
+@@ -1440,2 +1545,12 @@
+-            // Research history is captured at the same boundary as the first live
+-            // exit alert. It never participates in shouldExit or any live price.
++            utTradesCompleted += 1
++            utHardStopsBeforeSell += sellReasonNow == "HARD_STOP" ? 1 : 0
++            utExceededOld15R += utTradeReached15 ? 1 : 0
++            if not na(utCapturedR) and utCapturedR > 0
++                utWinnerCount += 1
++                utWinnerSumR += utCapturedR
++            else if not na(utCapturedR)
++                utLoserCount += 1
++                utLoserSumR += utCapturedR
++
++            // Research history is captured at the same boundary as the first
++            // action alert. It never participates in shouldExit or prices.
+@@ -1443 +1558 @@
+-            previousLiveExitTime := barstate.isrealtime ? timenow : (eodExit or trendExit ? time_close : time)
++            previousLiveExitTime := utExitTime
+@@ -1452,0 +1568,3 @@
++        ngUtArmed := false
++        ngUtArmBar := na
++        ngUtQualificationTime := na
+@@ -1459 +1577,2 @@
+-// LIVE Entry engine — conditions intentionally preserved from v1.1
++// NG qualification + UT timing entry engine. The existing NG `qualified`
++// expression is unchanged; it now acts as the arm boundary.
+@@ -1473,0 +1593,8 @@
++// An arm is valid for the next N completed one-minute bars only. It cannot
++// cross the entry cutoff, daily reset, active trade, or daily trade cap.
++if ngUtArmed and (bar_index - ngUtArmBar > utConfirmationWindow or not entryWindow or tradeActive or tradesToday >= maxTradesPerDay)
++    ngUtArmed := false
++    ngUtArmBar := na
++    ngUtQualificationTime := na
++    ngUtSource := "NONE"
++
+@@ -1531 +1658,22 @@
+-    if qualified
++    string ngSourceNow = bullishFlip ? "SUPERTREND_FLIP" : "BULLISH_BREAKOUT"
++    bool recentConfirmedUtBuy = not na(utBarsSinceConfirmedBuy) and utBarsSinceConfirmedBuy <= utConfirmationWindow and utBullish
++    bool armedWindowValid = ngUtArmed and not na(ngUtArmBar) and bar_index > ngUtArmBar and bar_index - ngUtArmBar <= utConfirmationWindow
++    bool enterFromCurrentNg = enableUtManagedMode and qualified and recentConfirmedUtBuy
++    bool enterFromArmedNg = enableUtManagedMode and armedWindowValid and utFreshBuyConfirmed
++    bool utEntryTimingReady = enterFromCurrentNg or enterFromArmedNg
++    bool utExecutionRiskValid = stopOk and qtyOk and economicsOk
++
++    // If no recent confirmed UT transition exists, freeze this NG qualification
++    // as the arm event. Later entry never reuses its price, stop, or quantity.
++    if enableUtManagedMode and qualified and not recentConfirmedUtBuy and not ngUtArmed
++        ngUtArmed := true
++        ngUtArmBar := bar_index
++        ngUtQualificationTime := time_close
++        ngUtSource := ngSourceNow
++        lastReason := "ARMED: waiting for fresh confirmed UT BUY"
++
++    if utEntryTimingReady and utExecutionRiskValid
++        int entryNgQualificationTime = enterFromCurrentNg ? time_close : ngUtQualificationTime
++        int entryUtBuyTime = enterFromCurrentNg ? utLastConfirmedBuyTime : time_close
++        string entryNgSource = enterFromCurrentNg ? ngSourceNow : ngUtSource
++
+@@ -1535 +1683 @@
+-        tradeTarget := targetCandidate
++        tradeTarget := na
+@@ -1543,0 +1692,18 @@
++        utTradeNgQualificationTime := entryNgQualificationTime
++        utTradeBuyTime := entryUtBuyTime
++        utTradeEntryTime := time_close
++        utTradeTrailAtEntry := utTrail
++        utTradeInitialRiskInr := tradePlannedRisk
++        utTradeMfeR := 0.0
++        utTradeMaeR := 0.0
++        utTradePeakR := 0.0
++        utTradeReached05 := false
++        utTradeReached1 := false
++        utTradeReached15 := false
++        utTradeReached2 := false
++        utTradeReached3 := false
++        utTradeReached5 := false
++        ngUtSource := entryNgSource
++        ngUtArmed := false
++        ngUtArmBar := na
++        ngUtQualificationTime := na
+@@ -1713 +1879 @@
+-        lastReason := bullishFlip ? "Supertrend bullish flip" : "Bullish breakout in Supertrend"
++        lastReason := "UT BUY after " + ngUtSource
+@@ -1717,10 +1883,6 @@
+-            "NG SCALP BUY | " + syminfo.ticker +
+-            " | EntryRef " + fmtPrice(tradeEntry) +
+-            " | Qty " + str.tostring(tradeQty) +
+-            " | SL " + fmtPrice(tradeStop) +
+-            " | TP " + fmtPrice(tradeTarget) +
+-            " | Target " + str.tostring(targetR, "#.##") + "R" +
+-            " | PlannedRisk " + fmtMoney(tradePlannedRisk) +
+-            " | GrowwCostEst " + fmtMoney(tradeGrowwCost) +
+-            " | CostCoverage " + fmtRatio(tradeCoverage) +
+-            " | Trigger " + lastReason
++            "🟢 NG+UT BUY | Schema=1 | Version=1.3.5.0 | Symbol=" + syminfo.tickerid +
++            " | EntryTime=" + fmtTime(utTradeEntryTime) + " | Entry=" + fmtValue(tradeEntry) +
++            " | HardStop=" + fmtValue(tradeStop) + " | Qty=" + str.tostring(tradeQty) +
++            " | UTTrail=" + fmtValue(utTradeTrailAtEntry) + " | NGSource=" + ngUtSource +
++            " | NGQualificationTime=" + fmtTime(utTradeNgQualificationTime) + " | UTBuyTime=" + fmtTime(utTradeBuyTime) +
++            " | InitialRiskINR=" + fmtValue(utTradeInitialRiskInr) + " | GrowwCostEst=" + fmtValue(tradeGrowwCost) + " | CostCoverage=" + fmtValue(tradeCoverage)
+@@ -1743 +1905,5 @@
+-        if not triggerEvent
++        if ngUtArmed
++            lastReason := "ARMED: waiting for fresh confirmed UT BUY"
++        else if not enableUtManagedMode
++            lastReason := "WAIT: UT-managed mode disabled"
++        else if not triggerEvent
+@@ -1763,0 +1930,2 @@
++    else if not enableUtManagedMode
++        lastReason := "WAIT: UT-managed mode disabled"
+@@ -1776,0 +1945 @@
++plot(showUtTrail ? utTrail : na, "UT Trail", color=utBullish ? color.new(color.green, 0) : color.new(color.red, 0), linewidth=2)
+@@ -1780 +1948,0 @@
+-plot(tradeActive ? tradeTarget : na, "Active Target", color=color.new(color.green, 0), linewidth=2, style=plot.style_linebr)
+@@ -1782,2 +1950,4 @@
+-plotshape(showSignalLabels and buySignalNow, title="BUY", text="BUY", style=shape.labelup, location=location.belowbar, color=color.new(color.green, 0), textcolor=color.white, size=size.small)
+-plotshape(showSignalLabels and sellSignalNow, title="SELL", text="SELL", style=shape.labeldown, location=location.abovebar, color=color.new(color.red, 0), textcolor=color.white, size=size.small)
++plotshape(showUtBuyLabels and utFreshBuyConfirmed, title="UT BUY", text="UT BUY", style=shape.labelup, location=location.belowbar, color=color.new(color.teal, 0), textcolor=color.white, size=size.tiny)
++plotshape(showUtSellLabels and utFreshSellConfirmed, title="UT SELL", text="UT SELL", style=shape.labeldown, location=location.abovebar, color=color.new(color.orange, 0), textcolor=color.white, size=size.tiny)
++plotshape(showUtManagedLabels and buySignalNow, title="NG+UT BUY", text="NG+UT BUY", style=shape.labelup, location=location.belowbar, color=color.new(color.green, 0), textcolor=color.white, size=size.small)
++plotshape(showUtManagedLabels and sellSignalNow, title="NG+UT SELL", text="NG+UT SELL", style=shape.labeldown, location=location.abovebar, color=color.new(color.red, 0), textcolor=color.white, size=size.small)
+@@ -1800,0 +1971,5 @@
++plot(float(utTradesCompleted), "UT Completed Trades", display=display.data_window)
++plot(float(utHardStopsBeforeSell), "UT Hard Stops Before Sell", display=display.data_window)
++plot(float(utExceededOld15R), "UT Trades Reaching Old 1.5R", display=display.data_window)
++plot(utWinnerCount > 0 ? utWinnerSumR / float(utWinnerCount) : na, "UT Average Winner R", display=display.data_window)
++plot(utLoserCount > 0 ? utLoserSumR / float(utLoserCount) : na, "UT Average Loser R", display=display.data_window)
+@@ -1813 +1988 @@
+-        (lastAction == "SELL" and lastActionBar == bar_index ? "SELL" : "WAIT")
++        (lastAction == "SELL" and lastActionBar == bar_index ? "SELL" : ngUtArmed ? "NG ARMED" : "WAIT")
+@@ -1817 +1992 @@
+-    string levels = tradeActive ? fmtPrice(tradeEntry) + " / " + fmtPrice(tradeStop) + " / " + fmtPrice(tradeTarget) : "— / — / —"
++    string levels = tradeActive ? fmtPrice(tradeEntry) + " / " + fmtPrice(tradeStop) + " / " + fmtPrice(utTrail) : "— / — / —"
+@@ -1821,2 +1996,2 @@
+-    table.cell(dash, 0, 0, "NG SCALP ALERTS", text_color=color.white, bgcolor=color.new(color.blue, 35))
+-    table.cell(dash, 1, 0, "v1.3.4.4 RESEARCH", text_color=color.white, bgcolor=color.new(color.blue, 35))
++    table.cell(dash, 0, 0, "NG + UT EXPERIMENT", text_color=color.white, bgcolor=color.new(color.blue, 35))
++    table.cell(dash, 1, 0, "v1.3.5.0", text_color=color.white, bgcolor=color.new(color.blue, 35))
+@@ -1829 +2004 @@
+-    table.cell(dash, 0, 4, "ENTRY / SL / TP", text_color=color.silver)
++    table.cell(dash, 0, 4, "ENTRY / HARD SL / UT", text_color=color.silver)
