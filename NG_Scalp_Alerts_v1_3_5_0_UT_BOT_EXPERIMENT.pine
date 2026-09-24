@@ -59,6 +59,9 @@ forceExitHour = input.int(15, "Force-exit hour IST", minval=14, maxval=15, group
 forceExitMinute = input.int(15, "Force-exit minute IST", minval=0, maxval=29, group=grpTime)
 cooldownBars = input.int(2, "Cooldown bars after SELL", minval=0, maxval=20, group=grpTime)
 maxTradesPerDay = input.int(6, "Maximum BUY alerts per stock/day", minval=1, maxval=20, group=grpTime)
+// Retained only by the legacy A/B/C/D counterfactual shadow models below.
+// It is deliberately absent from the UT-managed live exit predicate.
+exitOnBearishSupertrend = input.bool(true, "Shadow models: exit on bearish Supertrend flip", group=grpTime)
 
 grpDisplay = "7. Display"
 showDashboard = input.bool(true, "Show WAIT / BUY / HOLD / SELL dashboard", group=grpDisplay)

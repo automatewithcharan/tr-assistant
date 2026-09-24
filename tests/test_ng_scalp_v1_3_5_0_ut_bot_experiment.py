@@ -118,6 +118,15 @@ def test_ut_live_exit_has_no_fixed_target_partial_or_supertrend_exit() -> None:
     assert "tradeTarget := na" in text
 
 
+def test_legacy_supertrend_exit_switch_is_declared_but_cannot_reach_live_ut_exit() -> None:
+    text = EXPERIMENT.read_text()
+    live_exit = section(text, "// UT-managed Exit engine", "// NG qualification + UT timing entry engine")
+    shadow_engine = section(text, "// Shadow engine update helpers", "// UT-managed Exit engine")
+    assert 'exitOnBearishSupertrend = input.bool(true, "Shadow models: exit on bearish Supertrend flip"' in text
+    assert "exitOnBearishSupertrend" not in live_exit
+    assert "exitOnBearishSupertrend" in shadow_engine
+
+
 def test_state_machine_expiry_resets_and_action_alert_dedupe_are_present() -> None:
     text = EXPERIMENT.read_text()
     assert "bar_index - ngUtArmBar > utConfirmationWindow" in text

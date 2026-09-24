@@ -81,7 +81,9 @@ no 1.5R partial, no runner transition, and no Supertrend exit. Reaching 1.5R,
 
 The legacy A/B/C/D engine remains research-only and begins at the actual UT
 entry. Its fixed-target and partial calculations are counterfactual reference
-models; none feeds the UT-managed live decisions.
+models; none feeds the UT-managed live decisions. Its existing bearish-
+Supertrend exit switch remains declared because those shadow models reference
+it, but that switch is absent from the UT-managed live exit predicate.
 
 ## Alerts and fire control
 
@@ -162,7 +164,7 @@ retain a snapshot of the script used when they were created.
 
 ## Local validation
 
-- Focused NG Scalp suite: **79 passed**.
+- Focused NG Scalp suite: **80 passed**.
 - Full offline repository suite: **1192 passed, 15 existing warnings**.
 - `git diff --check`: clean.
 - TradingView compilation: pending manual validation.
