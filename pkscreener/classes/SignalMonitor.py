@@ -106,6 +106,21 @@ class SignalMonitorRunner:
     TOP_GAINER_RADAR_MIN_PCT = float(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_MIN_PCT", "1.5") or 1.5)
     TOP_GAINER_RADAR_MAX_PCT = float(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_MAX_PCT", "3.5") or 3.5)
     TOP_GAINER_RADAR_MAX_PER_CYCLE = int(os.environ.get("SIGNALMONITOR_TOP_GAINER_RADAR_MAX_PER_CYCLE", "1") or 1)
+    TRADINGVIEW_CANDIDATE_MAX_PER_CYCLE = int(
+        os.environ.get("SIGNALMONITOR_CANDIDATE_MAX_PER_CYCLE", "5") or 5
+    )
+    CANDIDATE_COOLDOWN_SECONDS = float(
+        os.environ.get("SIGNALMONITOR_CANDIDATE_COOLDOWN_SECONDS", "900") or 900
+    )
+    CANDIDATE_SCORE_IMPROVEMENT = float(
+        os.environ.get("SIGNALMONITOR_CANDIDATE_SCORE_IMPROVEMENT", "8") or 8
+    )
+    CANDIDATE_MAX_VOLUME_PARTICIPATION_PCT = float(
+        os.environ.get("SIGNALMONITOR_CANDIDATE_MAX_VOLUME_PARTICIPATION_PCT", "10") or 10
+    )
+    CANDIDATE_MIN_AVG_1M_TRADED_VALUE = float(
+        os.environ.get("SIGNALMONITOR_CANDIDATE_MIN_AVG_1M_TRADED_VALUE", "25000") or 25000
+    )
     LEADER_IGNITION_MIN_OPEN_PCT = float(os.environ.get("SIGNALMONITOR_LEADER_IGNITION_MIN_OPEN_PCT", "0.5") or 0.5)
     LEADER_IGNITION_MAX_OPEN_PCT = float(os.environ.get("SIGNALMONITOR_LEADER_IGNITION_MAX_OPEN_PCT", "2.8") or 2.8)
     LEADER_IGNITION_MIN_DAY_PCT = float(os.environ.get("SIGNALMONITOR_LEADER_IGNITION_MIN_DAY_PCT", "0.5") or 0.5)
@@ -263,6 +278,50 @@ class SignalMonitorRunner:
         self._direct_lane_timing_states: Dict[Tuple[str, str, str], Tuple[str, str]] = {}
         self._direct_candidate_lanes_by_symbol: Dict[str, Set[str]] = {}
         self._direct_candidate_lanes_date = self._refresh_queue_date
+        self._candidate_market_history: Dict[str, List[Dict[str, Any]]] = {}
+        self._candidate_feature_history: Dict[str, List[Dict[str, Any]]] = {}
+        self._direct_candidates_selected_this_cycle: Set[str] = set()
+        self.candidate_cooldown_seconds = max(
+            0.0,
+            float(os.environ.get("SIGNALMONITOR_CANDIDATE_COOLDOWN_SECONDS", self.CANDIDATE_COOLDOWN_SECONDS)),
+        )
+        self.candidate_score_improvement = max(
+            0.0,
+            float(os.environ.get("SIGNALMONITOR_CANDIDATE_SCORE_IMPROVEMENT", self.CANDIDATE_SCORE_IMPROVEMENT)),
+        )
+        self.candidate_state_change_bypasses_cooldown = self._env_truthy(
+            "SIGNALMONITOR_CANDIDATE_STATE_CHANGE_BYPASS_COOLDOWN", "1"
+        )
+        self.candidate_reject_low_liquidity = self._env_truthy(
+            "SIGNALMONITOR_CANDIDATE_REJECT_LOW_LIQUIDITY", "1"
+        )
+        self.candidate_max_volume_participation_pct = max(
+            0.1,
+            float(os.environ.get(
+                "SIGNALMONITOR_CANDIDATE_MAX_VOLUME_PARTICIPATION_PCT",
+                self.CANDIDATE_MAX_VOLUME_PARTICIPATION_PCT,
+            )),
+        )
+        self.candidate_min_avg_1m_traded_value = max(
+            0.0,
+            float(os.environ.get(
+                "SIGNALMONITOR_CANDIDATE_MIN_AVG_1M_TRADED_VALUE",
+                self.CANDIDATE_MIN_AVG_1M_TRADED_VALUE,
+            )),
+        )
+        self.candidate_score_weights = {
+            "momentum": float(os.environ.get("SIGNALMONITOR_SCORE_WEIGHT_MOMENTUM", "1.0") or 1.0),
+            "volume": float(os.environ.get("SIGNALMONITOR_SCORE_WEIGHT_VOLUME", "1.0") or 1.0),
+            "liquidity": float(os.environ.get("SIGNALMONITOR_SCORE_WEIGHT_LIQUIDITY", "1.0") or 1.0),
+            "structure": float(os.environ.get("SIGNALMONITOR_SCORE_WEIGHT_STRUCTURE", "1.0") or 1.0),
+            "penalties": float(os.environ.get("SIGNALMONITOR_SCORE_WEIGHT_PENALTIES", "1.0") or 1.0),
+        }
+        self._candidate_alert_state_path = os.path.join(
+            self.output_dir, f"signalmonitor_{self.universe}_candidate_alert_state.json"
+        )
+        self._candidate_alert_state = (
+            {} if self.reset_state else self._load_candidate_alert_state()
+        )
         self._cycle_number = 0
         self._preload_done = False
         self.fast_mode = bool(self.FAST_MODE)
@@ -685,24 +744,27 @@ class SignalMonitorRunner:
         self._record_tick_freshness_diagnostics(alerts_df, "signal_monitor")
         early_breakout_alerts_df = self._build_early_breakout_alerts(merged_simple_df)
         self._record_tick_freshness_diagnostics(early_breakout_alerts_df, "early_breakout")
-        if not early_breakout_alerts_df.empty:
-            already_alerted = set(alerts_df["Symbol"].astype(str).str.upper()) if not alerts_df.empty else set()
-            if already_alerted:
-                early_breakout_alerts_df = early_breakout_alerts_df[
-                    ~early_breakout_alerts_df["Symbol"].astype(str).str.upper().isin(already_alerted)
-                ]
-            if not early_breakout_alerts_df.empty:
-                alerts_df = pd.concat([alerts_df, early_breakout_alerts_df], ignore_index=True)
         top_gainer_radar_df = self._build_top_gainer_radar_alerts(merged_simple_df)
         self._record_tick_freshness_diagnostics(top_gainer_radar_df, "top_gainer_radar")
-        if not top_gainer_radar_df.empty:
+        direct_candidates_df = self._select_tradingview_candidates(
+            early_breakout_alerts_df,
+            top_gainer_radar_df,
+        )
+        direct_candidates_df = self._record_selected_candidate_lifecycle(
+            direct_candidates_df
+        )
+        self._direct_candidates_selected_this_cycle = (
+            set(direct_candidates_df["Symbol"].astype(str).str.upper())
+            if not direct_candidates_df.empty else set()
+        )
+        self._send_tradingview_candidate_alerts(direct_candidates_df)
+        if not direct_candidates_df.empty:
             already_alerted = set(alerts_df["Symbol"].astype(str).str.upper()) if not alerts_df.empty else set()
-            if already_alerted:
-                top_gainer_radar_df = top_gainer_radar_df[
-                    ~top_gainer_radar_df["Symbol"].astype(str).str.upper().isin(already_alerted)
-                ]
-            if not top_gainer_radar_df.empty:
-                alerts_df = pd.concat([alerts_df, top_gainer_radar_df], ignore_index=True)
+            display_candidates = direct_candidates_df[
+                ~direct_candidates_df["Symbol"].astype(str).str.upper().isin(already_alerted)
+            ]
+            if not display_candidates.empty:
+                alerts_df = pd.concat([alerts_df, display_candidates], ignore_index=True)
         momentum_alerts_df = self._build_momentum_alerts(previous_simple_df, merged_simple_df)
         if not momentum_alerts_df.empty:
             # Drop Momentum Buy rows for symbols already emitted as Buy Now this cycle
@@ -3494,6 +3556,569 @@ class SignalMonitorRunner:
                 event["event_timestamp"] = timing_row.get("QualifiedTime")
             target.append(event)
 
+    def _candidate_lifecycle_configuration(self) -> Dict[str, Any]:
+        """Capture only settings that explain selection, without secrets."""
+        return {
+            "schema": "signalmonitor-candidate-selection-v1",
+            "early_breakout_min_pct": self.EARLY_BREAKOUT_MIN_PCT,
+            "early_breakout_max_pct": self.EARLY_BREAKOUT_MAX_PCT,
+            "early_breakout_min_volume_ratio": self.EARLY_BREAKOUT_MIN_VOLUME_RATIO,
+            "early_breakout_max_per_cycle": self.EARLY_BREAKOUT_MAX_PER_CYCLE,
+            "top_gainer_radar_min_pct": self.TOP_GAINER_RADAR_MIN_PCT,
+            "top_gainer_radar_max_pct": self.TOP_GAINER_RADAR_MAX_PCT,
+            "top_gainer_radar_max_per_cycle": self.TOP_GAINER_RADAR_MAX_PER_CYCLE,
+            "global_max_per_cycle": self.TRADINGVIEW_CANDIDATE_MAX_PER_CYCLE,
+            "candidate_cooldown_seconds": getattr(self, "candidate_cooldown_seconds", None),
+            "candidate_score_improvement": getattr(self, "candidate_score_improvement", None),
+            "max_volume_participation_pct": getattr(
+                self, "candidate_max_volume_participation_pct", None
+            ),
+            "min_avg_1m_traded_value": getattr(
+                self, "candidate_min_avg_1m_traded_value", None
+            ),
+            "score_weights": dict(getattr(self, "candidate_score_weights", {}) or {}),
+        }
+
+    def _record_selected_candidate_lifecycle(self, frame: pd.DataFrame) -> pd.DataFrame:
+        """Persist selected snapshots before Discord; fail open for delivery."""
+        if frame is None or frame.empty:
+            return frame
+        tracker = getattr(self, "_candidate_lifecycle_tracker", None)
+        if tracker is None:
+            return frame
+        output = frame.copy()
+        candidate_ids = []
+        cycle_id = f"{getattr(self, 'timestamp', '') or self.run_at_str}-cycle-{getattr(self, '_cycle_number', 0)}"
+        config = self._candidate_lifecycle_configuration()
+        for row in output.to_dict(orient="records"):
+            try:
+                detected_at = (
+                    row.get("QualifiedTime") or row.get("LifecycleTimestamp")
+                    or row.get("When") or getattr(self, "run_at", None)
+                )
+                candidate_ids.append(
+                    tracker.create_candidate(row, detected_at, cycle_id, config)
+                )
+            except Exception as exc:
+                candidate_ids.append("")
+                default_logger().warning(
+                    "Candidate lifecycle snapshot failed; Discord delivery continues: "
+                    f"{type(exc).__name__}"
+                )
+        output["CandidateId"] = candidate_ids
+        return output
+
+    def _record_candidate_delivery_lifecycle(self, record: Dict[str, Any]) -> None:
+        tracker = getattr(self, "_candidate_lifecycle_tracker", None)
+        if tracker is None:
+            return
+        try:
+            tracker.record_delivery(record)
+        except Exception as exc:
+            default_logger().warning(
+                "Candidate lifecycle delivery update failed; Discord state remains authoritative: "
+                f"{type(exc).__name__}"
+            )
+
+    def _observe_candidate_lifecycle_prices(self, ticks: Dict[str, Dict[str, Any]]) -> None:
+        tracker = getattr(self, "_candidate_lifecycle_tracker", None)
+        if tracker is None or not ticks:
+            return
+        try:
+            tracker.observe_prices(ticks, getattr(self, "run_at", None))
+        except Exception as exc:
+            default_logger().debug(
+                f"Candidate lifecycle price update failed: {type(exc).__name__}",
+                exc_info=True,
+            )
+
+    def _finalize_candidate_lifecycle_if_eod(self) -> None:
+        tracker = getattr(self, "_candidate_lifecycle_tracker", None)
+        if tracker is None:
+            return
+        run_at = getattr(self, "run_at", None)
+        if run_at is None or run_at.hour * 60 + run_at.minute < self.MARKET_CLOSE_MINUTES_IST:
+            return
+        trading_date = run_at.strftime("%Y-%m-%d")
+        if getattr(self, "_candidate_lifecycle_finalized_date", "") == trading_date:
+            return
+        try:
+            tracker.finalize_eod(trading_date, run_at)
+            if bool(getattr(self, "lifecycle_daily_report_enabled", True)):
+                tracker.write_daily_report(trading_date)
+            tracker.prune(run_at.date())
+            self._candidate_lifecycle_finalized_date = trading_date
+        except Exception as exc:
+            default_logger().debug(
+                f"Candidate lifecycle EOD finalization failed: {type(exc).__name__}",
+                exc_info=True,
+            )
+
+    def _load_candidate_alert_state(self) -> Dict[str, Dict[str, Any]]:
+        """Load durable direct-candidate cooldown state, dropping prior-day rows."""
+        path = Path(getattr(self, "_candidate_alert_state_path", ""))
+        if not str(path) or not path.exists():
+            return {}
+        try:
+            payload = json.loads(path.read_text(encoding="utf-8"))
+            if payload.get("date") != self._today_key():
+                return {}
+            states = payload.get("symbols", {})
+            return states if isinstance(states, dict) else {}
+        except Exception as exc:
+            default_logger().debug(f"Candidate alert state load failed: {exc}")
+            return {}
+
+    def _save_candidate_alert_state(self) -> None:
+        path_value = str(getattr(self, "_candidate_alert_state_path", "") or "")
+        if not path_value:
+            return
+        try:
+            path = Path(path_value)
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(
+                json.dumps(
+                    {
+                        "date": self._today_key(),
+                        "symbols": getattr(self, "_candidate_alert_state", {}),
+                    },
+                    indent=2,
+                    sort_keys=True,
+                ),
+                encoding="utf-8",
+            )
+        except Exception as exc:
+            default_logger().debug(f"Candidate alert state save failed: {exc}")
+
+    @staticmethod
+    def _candidate_optional_float(value: Any) -> Optional[float]:
+        try:
+            if value in (None, "", "None") or pd.isna(value):
+                return None
+            converted = float(value)
+            return converted if math.isfinite(converted) else None
+        except (TypeError, ValueError):
+            return None
+
+    def _candidate_dynamic_metrics(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        """Calculate causal price/volume trends from observed ticks when available."""
+        symbol = str(row.get("Symbol", "") or "").strip().upper()
+        samples = list(getattr(self, "_candidate_market_history", {}).get(symbol, []) or [])
+        samples.sort(key=lambda sample: sample.get("at") or datetime.min)
+        now = samples[-1].get("at") if samples else getattr(self, "run_at", self._causal_now())
+        current_price = self._to_float(row.get("PriceNow"))
+
+        def supplied(*keys: str) -> Optional[float]:
+            for key in keys:
+                value = self._candidate_optional_float(row.get(key))
+                if value is not None:
+                    return value
+            return None
+
+        def price_change(minutes: int) -> Optional[float]:
+            explicit = supplied(f"PriceChange{minutes}m", f"price_change_{minutes}m")
+            if explicit is not None:
+                return explicit
+            if not samples or current_price <= 0:
+                return None
+            target = now - timedelta(minutes=minutes)
+            eligible = [sample for sample in samples[:-1] if sample.get("at") <= target]
+            if not eligible:
+                return None
+            old_price = self._to_float(eligible[-1].get("price"))
+            return ((current_price / old_price) - 1.0) * 100.0 if old_price > 0 else None
+
+        change_1m = price_change(1)
+        change_3m = price_change(3)
+        change_5m = price_change(5)
+        short_velocity = supplied("ShortTermVelocity", "short_term_velocity")
+        if short_velocity is None and change_1m is not None:
+            short_velocity = change_1m
+        medium_velocity = supplied("MediumTermVelocity", "medium_term_velocity")
+        if medium_velocity is None:
+            if change_3m is not None:
+                medium_velocity = change_3m / 3.0
+            elif change_5m is not None:
+                medium_velocity = change_5m / 5.0
+        acceleration = supplied("MomentumAcceleration", "momentum_acceleration")
+        if acceleration is None and short_velocity is not None and medium_velocity is not None:
+            acceleration = short_velocity - medium_velocity
+
+        volume_rates: List[float] = []
+        for previous, current in zip(samples, samples[1:]):
+            elapsed = (current.get("at") - previous.get("at")).total_seconds()
+            delta = self._to_float(current.get("volume")) - self._to_float(previous.get("volume"))
+            if elapsed > 0 and delta >= 0:
+                volume_rates.append(delta * 60.0 / elapsed)
+        current_1m_volume = supplied("Current1mVolume", "current_1m_volume")
+        if current_1m_volume is None and volume_rates:
+            current_1m_volume = volume_rates[-1]
+        avg_1m_volume = supplied("Avg1mVolume", "avg_1m_volume")
+        if avg_1m_volume is None and volume_rates:
+            avg_1m_volume = sum(volume_rates) / len(volume_rates)
+        volume_acceleration = supplied("VolumeAcceleration", "volume_acceleration")
+        if volume_acceleration is None and len(volume_rates) >= 2:
+            baseline = sum(volume_rates[:-1]) / len(volume_rates[:-1])
+            volume_acceleration = (volume_rates[-1] / baseline - 1.0) if baseline > 0 else None
+
+        rvol = supplied("VolumeRatio", "Volume vs Avg", "RVOL")
+        feature_history_by_symbol = getattr(self, "_candidate_feature_history", None)
+        if feature_history_by_symbol is None:
+            feature_history_by_symbol = {}
+            self._candidate_feature_history = feature_history_by_symbol
+        feature_history = feature_history_by_symbol.setdefault(symbol, [])
+        prior_rvol = supplied("PriorVolumeRatio", "prior_rvol")
+        if prior_rvol is None and feature_history:
+            prior_rvol = self._candidate_optional_float(feature_history[-1].get("rvol"))
+        rvol_slope = supplied("RVOLSlope", "rvol_slope")
+        if rvol_slope is None and rvol is not None and prior_rvol is not None:
+            rvol_slope = rvol - prior_rvol
+        feature_history.append({"at": self._causal_iso(now), "rvol": rvol})
+        del feature_history[:-10]
+
+        return {
+            "PriceChange1m": change_1m,
+            "PriceChange3m": change_3m,
+            "PriceChange5m": change_5m,
+            "ShortTermVelocity": short_velocity,
+            "MediumTermVelocity": medium_velocity,
+            "MomentumAcceleration": acceleration,
+            "PriorVolumeRatio": prior_rvol,
+            "RVOLSlope": rvol_slope,
+            "VolumeAcceleration": volume_acceleration,
+            "Current1mVolume": current_1m_volume,
+            "Avg1mVolume": avg_1m_volume,
+            "Current1mTradedValue": (
+                current_1m_volume * current_price
+                if current_1m_volume is not None and current_price > 0 else None
+            ),
+            "Avg1mTradedValue": (
+                avg_1m_volume * current_price
+                if avg_1m_volume is not None and current_price > 0 else None
+            ),
+        }
+
+    def _candidate_liquidity(self, row: Dict[str, Any]) -> Dict[str, Any]:
+        """Assess executable capacity; missing depth remains explicitly unknown."""
+        quantity = max(0.0, self._to_float(row.get("SuggestedQty")))
+        avg_volume = self._candidate_optional_float(row.get("Avg1mVolume"))
+        avg_value = self._candidate_optional_float(row.get("Avg1mTradedValue"))
+        liquidity_source = "observed_tick_volume_rate" if avg_volume is not None else "unavailable"
+        if avg_value is None:
+            daily_value = self._parse_value_rupees(row.get("AvgDailyValue"))
+            if daily_value > 0:
+                avg_value = daily_value / 375.0
+                if liquidity_source == "unavailable":
+                    liquidity_source = "average_daily_value_session_proxy"
+        participation = max(
+            0.1,
+            float(getattr(
+                self,
+                "candidate_max_volume_participation_pct",
+                self.CANDIDATE_MAX_VOLUME_PARTICIPATION_PCT,
+            )),
+        )
+        capacity = avg_volume * participation / 100.0 if avg_volume is not None else None
+        status = "UNKNOWN"
+        reason = "recent one-minute volume unavailable; using no invented depth"
+        if capacity is not None and quantity > capacity:
+            status = "FAIL"
+            reason = f"intended quantity {quantity:.0f} exceeds {participation:.1f}% volume capacity {capacity:.0f}"
+        elif avg_value is not None:
+            minimum = max(
+                0.0,
+                float(getattr(
+                    self,
+                    "candidate_min_avg_1m_traded_value",
+                    self.CANDIDATE_MIN_AVG_1M_TRADED_VALUE,
+                )),
+            )
+            if avg_value < minimum * 0.5:
+                status = "FAIL"
+                reason = f"average traded value/min ₹{avg_value:.0f} is clearly below ₹{minimum:.0f}"
+            elif avg_value < minimum or (capacity is not None and quantity > capacity * 0.75):
+                status = "BORDERLINE"
+                reason = "volume-based capacity is close to the configured floor"
+            else:
+                status = "PASS"
+                reason = "volume-based liquidity proxy supports intended quantity"
+        elif capacity is not None:
+            status = "PASS" if quantity <= capacity * 0.75 else "BORDERLINE"
+            reason = "recent volume proxy supports intended quantity" if status == "PASS" else "quantity is close to proxy capacity"
+        return {
+            "LiquidityStatus": status,
+            "LiquidityReason": reason,
+            "EstimatedCapacityQty": capacity,
+            "IntendedParticipationPct": (
+                quantity / avg_volume * 100.0 if avg_volume and avg_volume > 0 else None
+            ),
+            "Avg1mTradedValue": avg_value,
+            "LiquidityIsProxy": True,
+            "LiquidityDataSource": liquidity_source,
+        }
+
+    def _score_tradingview_candidate(self, row: Dict[str, Any]) -> Dict[str, float]:
+        """Return an explainable ranking score; this is never an entry probability."""
+        change = self._to_float(row.get("ChangePct"))
+        short_velocity = self._candidate_optional_float(row.get("ShortTermVelocity"))
+        medium_velocity = self._candidate_optional_float(row.get("MediumTermVelocity"))
+        acceleration = self._candidate_optional_float(row.get("MomentumAcceleration"))
+        momentum = min(18.0, max(0.0, change) * 4.0)
+        momentum += min(8.0, max(0.0, (short_velocity or 0.0)) * 8.0)
+        momentum += min(5.0, max(0.0, (medium_velocity or 0.0)) * 6.0)
+        momentum += max(-5.0, min(7.0, (acceleration or 0.0) * 10.0))
+
+        rvol = max(0.0, self._to_float(row.get("VolumeRatio")))
+        rvol_slope = self._candidate_optional_float(row.get("RVOLSlope"))
+        volume_acceleration = self._candidate_optional_float(row.get("VolumeAcceleration"))
+        volume = min(18.0, rvol * 6.0)
+        volume += max(-5.0, min(6.0, (rvol_slope or 0.0) * 6.0))
+        volume += max(-4.0, min(5.0, (volume_acceleration or 0.0) * 5.0))
+
+        liquidity_status = str(row.get("LiquidityStatus", "UNKNOWN") or "UNKNOWN")
+        liquidity = {"PASS": 10.0, "BORDERLINE": 2.0, "FAIL": -15.0}.get(liquidity_status, 0.0)
+        bs_ratio = max(0.0, self._to_float(row.get("BuyerSellerRatio")))
+        pullback = max(0.0, self._to_float(row.get("PullbackPct")))
+        strength = max(0.0, self._to_float(row.get("SignalStrengthPct")))
+        structure = min(8.0, bs_ratio * 2.5) + min(8.0, strength / 10.0)
+        if bool(row.get("MultiLane")):
+            structure += 8.0
+        if 0.15 <= pullback <= 0.8:
+            structure += 2.0
+
+        penalties = 0.0
+        if acceleration is not None and acceleration < 0:
+            penalties -= min(8.0, abs(acceleration) * 8.0)
+        if rvol_slope is not None and rvol_slope < 0:
+            penalties -= min(6.0, abs(rvol_slope) * 5.0)
+        if pullback > 0.8:
+            penalties -= min(10.0, (pullback - 0.8) * 6.0)
+        spread_bps = self._candidate_optional_float(row.get("SpreadBps"))
+        if spread_bps is not None and spread_bps > 40.0:
+            penalties -= min(8.0, (spread_bps - 40.0) / 10.0)
+        rsi = self._to_float(row.get("RSI"))
+        if rsi >= 70.0 and (
+            (acceleration is not None and acceleration < 0)
+            or (rvol_slope is not None and rvol_slope < 0)
+            or pullback > 0.8
+        ):
+            penalties -= min(8.0, (rsi - 68.0) * 0.5)
+        distance_52 = self._candidate_optional_float(row.get("Distance52WeekHighPct"))
+        if distance_52 is not None and abs(distance_52) < 2.0:
+            confirming_breakout = (
+                ((acceleration or 0.0) > 0 and (rvol_slope or 0.0) >= 0)
+                or (rvol >= 1.5 and bs_ratio >= 1.5)
+            )
+            if confirming_breakout:
+                structure += 3.0
+                row["Week52Context"] = (
+                    "breaking above 52-week high with confirmation"
+                    if distance_52 < 0
+                    else "approaching 52-week high with confirming momentum"
+                )
+            else:
+                penalties -= 4.0
+                row["Week52Context"] = "near 52-week high without confirming acceleration"
+
+        weights = getattr(self, "candidate_score_weights", {})
+        components = {
+            "ScoreMomentum": round(momentum * float(weights.get("momentum", 1.0)), 3),
+            "ScoreVolume": round(volume * float(weights.get("volume", 1.0)), 3),
+            "ScoreLiquidity": round(liquidity * float(weights.get("liquidity", 1.0)), 3),
+            "ScoreStructure": round(structure * float(weights.get("structure", 1.0)), 3),
+            "ScorePenalties": round(penalties * float(weights.get("penalties", 1.0)), 3),
+        }
+        components["ScoreTotal"] = round(sum(components.values()), 3)
+        return components
+
+    def _candidate_movement_state(self, row: Dict[str, Any]) -> str:
+        acceleration = self._candidate_optional_float(row.get("MomentumAcceleration"))
+        pullback = max(0.0, self._to_float(row.get("PullbackPct")))
+        if acceleration is not None and acceleration < -0.15:
+            return "FADING"
+        if pullback > 0.8:
+            return "WATCHING"
+        if bool(row.get("MultiLane")):
+            return "BREAKOUT"
+        if acceleration is not None and acceleration > 0.10:
+            return "STRENGTHENING"
+        return "EARLY_MOVER"
+
+    def _candidate_cooldown_allows(self, row: Dict[str, Any], now: datetime) -> Tuple[bool, str]:
+        symbol = str(row.get("Symbol", "") or "").strip().upper()
+        prior = getattr(self, "_candidate_alert_state", {}).get(symbol)
+        if not prior:
+            return True, "unseen"
+        try:
+            last_at = datetime.fromisoformat(str(prior.get("last_alert_time") or "").replace("Z", "+00:00"))
+            if last_at.tzinfo is None and now.tzinfo is not None:
+                last_at = last_at.replace(tzinfo=now.tzinfo)
+            elapsed = (now - last_at).total_seconds()
+        except (TypeError, ValueError):
+            return True, "invalid prior timestamp"
+        cooldown = max(0.0, float(getattr(self, "candidate_cooldown_seconds", self.CANDIDATE_COOLDOWN_SECONDS)))
+        if elapsed >= cooldown:
+            return True, "cooldown elapsed"
+        prior_lanes = set(prior.get("lanes", []) or [])
+        lanes = set(str(row.get("Lanes", row.get("Lane", "")) or "").split(","))
+        score_improvement = self._to_float(row.get("ScoreTotal")) - self._to_float(prior.get("last_score"))
+        state_changed = str(row.get("CandidateState")) != str(prior.get("movement_state"))
+        if lanes > prior_lanes:
+            return True, "new lane qualification"
+        if score_improvement >= max(0.0, float(getattr(self, "candidate_score_improvement", 8.0))):
+            return True, "material score improvement"
+        if state_changed and bool(getattr(self, "candidate_state_change_bypasses_cooldown", True)):
+            return True, "movement state changed"
+        return False, "substantially identical candidate inside cooldown"
+
+    def _select_tradingview_candidates(
+        self,
+        early_df: Optional[pd.DataFrame],
+        radar_df: Optional[pd.DataFrame],
+    ) -> pd.DataFrame:
+        """Normalize, merge, score, rank, cap and cooldown direct candidates."""
+        records: List[Dict[str, Any]] = []
+        for frame in (early_df, radar_df):
+            if frame is not None and not frame.empty:
+                records.extend(frame.to_dict(orient="records"))
+        if not records:
+            return pd.DataFrame(columns=self.ALERT_COLUMNS)
+
+        grouped: Dict[str, List[Dict[str, Any]]] = {}
+        for record in records:
+            symbol = str(record.get("Symbol", "") or "").strip().upper()
+            if symbol:
+                grouped.setdefault(symbol, []).append(record)
+        merged: List[Dict[str, Any]] = []
+        for symbol in sorted(grouped):
+            variants = grouped[symbol]
+            variants.sort(
+                key=lambda item: (
+                    -self._to_float(item.get("SignalStrengthPct")),
+                    -self._to_float(item.get("ChangePct")),
+                    str(item.get("Lane", "")),
+                )
+            )
+            row = dict(variants[0])
+            lanes = sorted({str(item.get("Lane", "") or "") for item in variants if item.get("Lane")})
+            row["Symbol"] = symbol
+            row["Lanes"] = ",".join(lanes)
+            row["MultiLane"] = len(lanes) > 1
+            row["MultiLaneSources"] = ",".join(lanes) if len(lanes) > 1 else ""
+            row["Lane"] = "both" if len(lanes) > 1 else lanes[0]
+            if len(lanes) > 1:
+                row["LifecycleObservationId"] = ""
+                default_logger().debug(
+                    f"Candidate {symbol} deduplicated across lanes: {row['Lanes']}"
+                )
+            row.update(self._candidate_dynamic_metrics(row))
+            row.update(self._candidate_liquidity(row))
+            row.update(self._score_tradingview_candidate(row))
+            row["DualLaneBonus"] = (
+                round(8.0 * float(getattr(self, "candidate_score_weights", {}).get("structure", 1.0)), 3)
+                if row.get("MultiLane") else 0.0
+            )
+            pullback = self._to_float(row.get("PullbackPct"))
+            row["PullbackStatus"] = (
+                "HEALTHY_SHALLOW" if 0.0 <= pullback <= 0.8 else "DEEPER_PULLBACK"
+            )
+            row["ExtensionStatus"] = "WITHIN_CONFIGURED_LANE_BAND"
+            if not row.get("Week52Context"):
+                distance_52 = self._candidate_optional_float(row.get("Distance52WeekHighPct"))
+                row["Week52Context"] = (
+                    "UNKNOWN" if distance_52 is None else
+                    "ABOVE_52_WEEK_HIGH" if distance_52 < 0 else
+                    "NEAR_52_WEEK_HIGH" if distance_52 < 2 else
+                    "ROOM_BELOW_52_WEEK_HIGH"
+                )
+            row["CandidateState"] = self._candidate_movement_state(row)
+            if (
+                row.get("LiquidityStatus") == "FAIL"
+                and bool(getattr(self, "candidate_reject_low_liquidity", True))
+            ):
+                default_logger().debug(
+                    f"Candidate {symbol} rejected: {row.get('LiquidityReason')} | score={row.get('ScoreTotal')}"
+                )
+                continue
+            merged.append(row)
+
+        merged.sort(
+            key=lambda row: (
+                -self._to_float(row.get("ScoreTotal")),
+                -self._to_float(row.get("SignalStrengthPct")),
+                -self._to_float(row.get("ChangePct")),
+                str(row.get("Symbol", "")),
+            )
+        )
+        for rank, row in enumerate(merged, 1):
+            row["CandidateRankQualified"] = rank
+
+        now = self._causal_now()
+        eligible: List[Dict[str, Any]] = []
+        for row in merged:
+            allowed, reason = self._candidate_cooldown_allows(row, now)
+            row["CooldownDecision"] = reason
+            if allowed:
+                eligible.append(row)
+            else:
+                default_logger().debug(
+                    f"Candidate {row.get('Symbol')} cooldown-suppressed: {reason}"
+                )
+
+        lane_caps = {
+            "early_breakout": max(0, int(getattr(self, "EARLY_BREAKOUT_MAX_PER_CYCLE", 4) or 0)),
+            "top_gainer_radar": max(0, int(getattr(self, "TOP_GAINER_RADAR_MAX_PER_CYCLE", 1) or 0)),
+        }
+        used = {lane: 0 for lane in lane_caps}
+        global_cap = max(0, int(getattr(self, "TRADINGVIEW_CANDIDATE_MAX_PER_CYCLE", 5) or 0))
+        selected: List[Dict[str, Any]] = []
+        for row in eligible:
+            if len(selected) >= global_cap:
+                default_logger().debug(f"Candidate {row.get('Symbol')} suppressed by global cycle cap")
+                continue
+            lanes = set(str(row.get("Lanes", "") or "").split(","))
+            available = [lane for lane in ("top_gainer_radar", "early_breakout") if lane in lanes and used[lane] < lane_caps[lane]]
+            if not available:
+                default_logger().debug(f"Candidate {row.get('Symbol')} suppressed by lane cycle cap")
+                continue
+            bucket = available[0]
+            used[bucket] += 1
+            row["CapBucket"] = bucket
+            row["CandidateRank"] = len(selected) + 1
+            selected.append(row)
+
+        state = getattr(self, "_candidate_alert_state", None)
+        if state is None:
+            state = {}
+            self._candidate_alert_state = state
+        for row in selected:
+            symbol = str(row.get("Symbol", "") or "").strip().upper()
+            lanes = [lane for lane in str(row.get("Lanes", "") or "").split(",") if lane]
+            state[symbol] = {
+                "last_alert_time": self._causal_iso(now),
+                "last_lane": row.get("Lane"),
+                "lanes": lanes,
+                "last_score": row.get("ScoreTotal"),
+                "movement_state": row.get("CandidateState"),
+            }
+            if "early_breakout" in lanes:
+                getattr(self, "_early_breakout_alerted_today", set()).add(symbol)
+                self._append_daily_symbol("early_breakout", symbol)
+            if "top_gainer_radar" in lanes:
+                getattr(self, "_top_gainer_radar_today", set()).add(symbol)
+                self._append_daily_symbol("top_gainer_radar", symbol)
+            score_breakdown = {
+                key: row.get(key)
+                for key in ("ScoreMomentum", "ScoreVolume", "ScoreLiquidity", "ScoreStructure", "ScorePenalties")
+            }
+            default_logger().debug(
+                f"Candidate {symbol} selected rank={row.get('CandidateRank')} lanes={row.get('Lanes')} "
+                f"score={row.get('ScoreTotal')} breakdown={score_breakdown}"
+            )
+        if selected:
+            self._save_candidate_alert_state()
+        return pd.DataFrame(selected)
+
     def _build_early_breakout_alerts(self, current_simple_df: pd.DataFrame) -> pd.DataFrame:
         """Catch fresh +1% to +3.5% movers before they become top-gainer chases."""
         if not getattr(self, "enable_early_breakout_alerts", True):
@@ -3795,7 +4420,6 @@ class SignalMonitorRunner:
             return pd.DataFrame(columns=self.ALERT_COLUMNS)
 
         self._emit_alert_timing_events(timing_events)
-        self._send_tradingview_candidate_alerts(pd.DataFrame(rows))
         out = pd.DataFrame(rows, columns=self.ALERT_COLUMNS)
         out["Lane"] = [row.get("Lane", "early_breakout") for row in rows]
         out["LifecycleObservationId"] = [row.get("LifecycleObservationId", "") for row in rows]
@@ -4591,7 +5215,6 @@ class SignalMonitorRunner:
             return pd.DataFrame(columns=self.ALERT_COLUMNS)
 
         self._emit_alert_timing_events(timing_events)
-        self._send_tradingview_candidate_alerts(pd.DataFrame(rows))
         out = pd.DataFrame(rows, columns=self.ALERT_COLUMNS)
         out["Lane"] = [row.get("Lane", "top_gainer_radar") for row in rows]
         out["LifecycleObservationId"] = [row.get("LifecycleObservationId", "") for row in rows]
@@ -7081,6 +7704,8 @@ class SignalMonitorRunner:
         """Build an informational direct-lane message, never a trade instruction."""
         symbol = str(row.get("Symbol", "") or "").strip().upper()
         lane = str(row.get("Lane", "") or "").strip()
+        if lane.lower() == "both":
+            lane = "EARLY_BREAKOUT + TOP_GAINER_RADAR"
         detected_at = str(
             row.get("LifecycleTimestamp") or row.get("When") or self.run_at_str
         ).strip()
@@ -7088,8 +7713,8 @@ class SignalMonitorRunner:
         multi_lane = bool(row.get("MultiLane"))
         lane_label = f"{lane} | MULTI-LANE" if multi_lane else lane
         lines = [
-            "**TRADINGVIEW CANDIDATE — MANUAL REVIEW**",
-            f"`{symbol}` | source `{lane_label}` | qualified `{detected_at}`",
+            "**MANUAL TRADINGVIEW REVIEW — NOT A BUY SIGNAL**",
+            f"attention ranking only | `{symbol}` | source `{lane_label}` | qualified `{detected_at}`",
         ]
         first_time = str(row.get("FirstEligibleTime", "") or "").strip()
         first_price = self._to_float(row.get("FirstEligiblePrice"))
@@ -7310,8 +7935,18 @@ class SignalMonitorRunner:
         shadow_records: List[Dict[str, Any]] = []
         for row in candidates_df.to_dict(orient="records"):
             lane = str(row.get("Lane", "") or "").strip()
-            if lane not in {"early_breakout", "top_gainer_radar"}:
+            lane_values = [
+                item.strip()
+                for item in str(row.get("Lanes", lane) or lane).split(",")
+                if item and item.strip()
+            ]
+            accepted_lanes = {"early_breakout", "top_gainer_radar", "both"}
+            if lane not in accepted_lanes and not any(item in accepted_lanes for item in lane_values):
                 continue
+            if lane == "both":
+                lane = "both"
+            elif lane not in {"early_breakout", "top_gainer_radar"} and lane_values:
+                lane = lane_values[0]
             if not self._manual_discord_row_is_eligible(row, lane):
                 continue
             symbol = str(row.get("Symbol", "") or "").strip().upper()
