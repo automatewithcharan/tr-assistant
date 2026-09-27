@@ -1,0 +1,565 @@
+//@version=6
+indicator("PSAR Liquidity Trade Manager V2", shorttitle="PSAR_LIQ_V2", overlay=true, max_labels_count=500)
+
+// ============================================================================
+// PSAR LIQUIDITY TRADE MANAGER V2
+// 1-minute long-only production-style indicator.
+//
+// Entry:
+//   Confirmed PSAR bearish -> bullish flip.
+//   Optional EMA/VWAP/ADX/RVOL filters are OFF by default.
+//   Liquidity is a GATE, not a quantity scaler:
+//     - Calculate intended quantity from risk/exposure/maxQty.
+//     - Estimate participation capacity from recent 1m volume.
+//     - PASS => trade intended quantity.
+//     - FAIL => SKIP the trade.
+//
+// Exit management:
+//   1) Monotonic protective stop (initial / break-even / profit lock / ATR trail)
+//   2) Fixed R target (optional)
+//   3) EOD
+//   4) PSAR SELL fallback (optional, confirmed by default)
+//
+// Important:
+//   - Signal price is a TradingView reference, NOT a guaranteed broker fill.
+//   - Liquidity capacity is a proxy based on traded volume, NOT order-book depth.
+//   - Historical bars do not reveal intrabar ordering. If historical SL and target
+//     are both touched in one bar, the event is marked AMBIGUOUS.
+// ============================================================================
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 1. PSAR ENTRY / FALLBACK
+// ─────────────────────────────────────────────────────────────────────────────
+string GRP_PSAR = "1. PSAR"
+float psarStart     = input.float(0.02, "Start", minval=0.001, step=0.001, group=GRP_PSAR)
+float psarIncrement = input.float(0.02, "Increment", minval=0.001, step=0.001, group=GRP_PSAR)
+float psarMaximum   = input.float(0.20, "Maximum", minval=0.01, step=0.01, group=GRP_PSAR)
+bool enablePsarFallback = input.bool(true, "Use PSAR SELL as final fallback", group=GRP_PSAR)
+bool confirmedPsarFallback = input.bool(true, "Require confirmed PSAR fallback", group=GRP_PSAR)
+
+float psar = ta.sar(psarStart, psarIncrement, psarMaximum)
+int psarDir = psar < close ? 1 : -1
+bool psarBuySignal = psarDir == 1 and psarDir[1] == -1
+bool psarSellSignal = psarDir == -1 and psarDir[1] == 1
+bool psarBuyConfirmed = barstate.isconfirmed and psarBuySignal
+bool psarSellConfirmed = barstate.isconfirmed and psarSellSignal
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 2. POSITION SIZING / INITIAL STOP
+// ─────────────────────────────────────────────────────────────────────────────
+string GRP_RISK = "2. Risk / Sizing"
+int atrLength = input.int(14, "ATR length", minval=1, group=GRP_RISK)
+float stopBufferAtr = input.float(0.10, "Stop below signal low (ATR)", minval=0.0, step=0.05, group=GRP_RISK)
+float minimumStopAtr = input.float(0.50, "Minimum stop distance (ATR)", minval=0.10, step=0.05, group=GRP_RISK)
+float riskBudget = input.float(500.0, "Risk budget (₹)", minval=1.0, step=50.0, group=GRP_RISK)
+float maxExposure = input.float(300000.0, "Maximum exposure (₹)", minval=1.0, step=10000.0, group=GRP_RISK)
+int maxQty = input.int(500, "Maximum quantity", minval=1, group=GRP_RISK)
+int entrySlippageTicks = input.int(0, "Entry assumption slippage (ticks)", minval=0, group=GRP_RISK)
+int exitSlippageTicks = input.int(1, "Market-exit simulation slippage (ticks)", minval=0, group=GRP_RISK)
+
+float atr = ta.atr(atrLength)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 3. LIQUIDITY GATE
+// ─────────────────────────────────────────────────────────────────────────────
+string GRP_LIQ = "3. Liquidity Gate"
+bool liquidityGateEnabled = input.bool(true, "Enable liquidity gate", group=GRP_LIQ)
+int liquidityLookback = input.int(20, "Recent 1m lookback", minval=5, group=GRP_LIQ)
+float maxParticipationPct = input.float(5.0, "Maximum participation of avg 1m volume (%)", minval=0.1, maxval=100.0, step=0.5, group=GRP_LIQ)
+float minAvgTurnover = input.float(250000.0, "Minimum avg traded value / minute (₹)", minval=0.0, step=50000.0, group=GRP_LIQ)
+float minAvgVolume = input.float(0.0, "Minimum avg volume / minute", minval=0.0, step=100.0, group=GRP_LIQ)
+float minCapacityMultiple = input.float(1.0, "Required capacity / intended qty", minval=0.1, step=0.1, group=GRP_LIQ)
+bool useLiquidityRvolGate = input.bool(false, "Require minimum relative volume", group=GRP_LIQ)
+float minLiquidityRvol = input.float(0.75, "Minimum current relative volume", minval=0.0, step=0.05, group=GRP_LIQ)
+bool emitLowLiquiditySkipAlert = input.bool(true, "Alert LOW LIQUIDITY / SKIP", group=GRP_LIQ)
+
+float avgVolume = ta.sma(volume, liquidityLookback)
+float avgTradedValue = ta.sma(close * volume, liquidityLookback)
+float relativeVolume = not na(avgVolume) and avgVolume > 0 ? volume / avgVolume : na
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 4. TARGET / TRADE MANAGEMENT
+// ─────────────────────────────────────────────────────────────────────────────
+string GRP_EXIT = "4. Exit Management"
+bool enableTarget = input.bool(true, "Enable fixed R target", group=GRP_EXIT)
+float targetR = input.float(2.0, "Target (R)", minval=0.1, step=0.1, group=GRP_EXIT)
+
+bool enableBreakEven = input.bool(false, "Enable break-even", group=GRP_EXIT)
+float breakEvenActivationR = input.float(1.0, "Break-even activation (R)", minval=0.1, step=0.1, group=GRP_EXIT)
+float breakEvenOffsetR = input.float(0.0, "Break-even stop offset (R)", minval=0.0, step=0.05, group=GRP_EXIT)
+
+bool enableProfitLock = input.bool(true, "Enable profit lock", group=GRP_EXIT)
+float profitLockActivationR = input.float(1.0, "Profit-lock activation (R)", minval=0.1, step=0.1, group=GRP_EXIT)
+float profitLockFloorR = input.float(0.25, "Minimum locked profit (R)", minval=0.0, step=0.05, group=GRP_EXIT)
+
+bool enableAtrTrail = input.bool(true, "Enable highest-price ATR trail", group=GRP_EXIT)
+int trailAtrLength = input.int(14, "Trailing ATR length", minval=1, group=GRP_EXIT)
+float trailActivationR = input.float(1.0, "ATR trail activation (R)", minval=0.1, step=0.1, group=GRP_EXIT)
+float trailAtrMultiple = input.float(1.5, "ATR distance below highest", minval=0.1, step=0.1, group=GRP_EXIT)
+
+bool emitStopUpdateAlerts = input.bool(false, "Emit stop-update alerts", group=GRP_EXIT)
+int stopUpdateMinTicks = input.int(5, "Minimum stop change for update alert (ticks)", minval=1, group=GRP_EXIT)
+
+float trailAtr = ta.atr(trailAtrLength)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 5. OPTIONAL ENTRY FILTERS — OFF BY DEFAULT
+// ─────────────────────────────────────────────────────────────────────────────
+string GRP_FILTER = "5. Optional Entry Filters (OFF by default)"
+bool useEmaFilter = input.bool(false, "Require close > EMA", group=GRP_FILTER)
+int emaLength = input.int(50, "EMA length", minval=1, group=GRP_FILTER)
+bool useVwapFilter = input.bool(false, "Require close > VWAP", group=GRP_FILTER)
+bool useAdxFilter = input.bool(false, "Require ADX minimum", group=GRP_FILTER)
+int dmiLength = input.int(14, "DMI length", minval=1, group=GRP_FILTER)
+int adxSmoothing = input.int(14, "ADX smoothing", minval=1, group=GRP_FILTER)
+float minAdx = input.float(20.0, "Minimum ADX", minval=0.0, step=1.0, group=GRP_FILTER)
+bool useEntryRvolFilter = input.bool(false, "Require entry relative volume", group=GRP_FILTER)
+float minEntryRvol = input.float(1.0, "Minimum entry relative volume", minval=0.0, step=0.05, group=GRP_FILTER)
+
+float ema = ta.ema(close, emaLength)
+float sessionVwap = ta.vwap(hlc3)
+[plusDi, minusDi, adx] = ta.dmi(dmiLength, adxSmoothing)
+
+bool optionalFiltersPass =
+     (not useEmaFilter or close > ema) and
+     (not useVwapFilter or close > sessionVwap) and
+     (not useAdxFilter or adx >= minAdx) and
+     (not useEntryRvolFilter or (not na(relativeVolume) and relativeVolume >= minEntryRvol))
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 6. SESSION / TIMEFRAME
+// ─────────────────────────────────────────────────────────────────────────────
+string GRP_SESSION = "6. Session"
+string sessionTimezone = input.string("Asia/Kolkata", "Timezone", group=GRP_SESSION)
+int entryStartHour = input.int(9, "Entry start hour", minval=0, maxval=23, group=GRP_SESSION)
+int entryStartMinute = input.int(15, "Entry start minute", minval=0, maxval=59, group=GRP_SESSION)
+int entryCutoffHour = input.int(14, "Entry cutoff hour", minval=0, maxval=23, group=GRP_SESSION)
+int entryCutoffMinute = input.int(50, "Entry cutoff minute", minval=0, maxval=59, group=GRP_SESSION)
+int eodHour = input.int(15, "EOD exit hour", minval=0, maxval=23, group=GRP_SESSION)
+int eodMinute = input.int(15, "EOD exit minute", minval=0, maxval=59, group=GRP_SESSION)
+
+bool isOneMinute = timeframe.isminutes and timeframe.multiplier == 1
+
+f_minutesOfDay(int timestamp) =>
+    hour(timestamp, sessionTimezone) * 60 + minute(timestamp, sessionTimezone)
+
+f_entryWindowOpen() =>
+    int nowMin = f_minutesOfDay(time_close)
+    int startMin = entryStartHour * 60 + entryStartMinute
+    int cutoffMin = entryCutoffHour * 60 + entryCutoffMinute
+    nowMin >= startMin and nowMin <= cutoffMin
+
+f_eodNow() =>
+    int nowMin = f_minutesOfDay(time_close)
+    int exitMin = eodHour * 60 + eodMinute
+    nowMin >= exitMin
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 7. HELPERS
+// ─────────────────────────────────────────────────────────────────────────────
+f_roundNearest(float price) =>
+    math.round_to_mintick(price)
+
+f_roundDown(float price) =>
+    math.floor(price / syminfo.mintick) * syminfo.mintick
+
+f_roundUp(float price) =>
+    math.ceil(price / syminfo.mintick) * syminfo.mintick
+
+f_fmt(float price) =>
+    na(price) ? "NA" : str.tostring(price, format.mintick)
+
+f_num(float value) =>
+    na(value) ? "NA" : str.tostring(value, "#.##")
+
+f_yesNo(bool value) =>
+    value ? "PASS" : "FAIL"
+
+f_intendedQty(float assumedEntry, float initialStop) =>
+    float riskPerShare = assumedEntry - initialStop
+    int riskQty = riskPerShare > 0 ? int(math.floor(riskBudget / riskPerShare)) : 0
+    int exposureQty = assumedEntry > 0 ? int(math.floor(maxExposure / assumedEntry)) : 0
+    int intendedQty = math.max(0, math.min(math.min(riskQty, exposureQty), maxQty))
+    [riskQty, exposureQty, intendedQty]
+
+f_liquidity(int intendedQty) =>
+    int capacityQty = not na(avgVolume) ? math.max(0, int(math.floor(avgVolume * maxParticipationPct / 100.0))) : 0
+    int requiredCapacity = int(math.ceil(intendedQty * minCapacityMultiple))
+    bool avgVolPass = not na(avgVolume) and avgVolume >= minAvgVolume
+    bool turnoverPass = not na(avgTradedValue) and avgTradedValue >= minAvgTurnover
+    bool capacityPass = capacityQty >= requiredCapacity
+    bool rvolPass = not useLiquidityRvolGate or (not na(relativeVolume) and relativeVolume >= minLiquidityRvol)
+    bool pass = not liquidityGateEnabled or (avgVolPass and turnoverPass and capacityPass and rvolPass)
+    [capacityQty, requiredCapacity, pass]
+
+f_stopCandidate(float entry, float riskPerShare, float highestPrice, float currentAtr, float initialStop) =>
+    float candidate = initialStop
+    string reason = "HARD STOP"
+
+    if enableBreakEven and highestPrice >= entry + riskPerShare * breakEvenActivationR
+        float beStop = entry + riskPerShare * breakEvenOffsetR
+        if beStop > candidate
+            candidate := beStop
+            reason := "BREAK EVEN"
+
+    if enableProfitLock and highestPrice >= entry + riskPerShare * profitLockActivationR
+        float lockStop = entry + riskPerShare * profitLockFloorR
+        if lockStop > candidate
+            candidate := lockStop
+            reason := "PROFIT LOCK"
+
+    if enableAtrTrail and highestPrice >= entry + riskPerShare * trailActivationR and not na(currentAtr)
+        float trailStop = highestPrice - currentAtr * trailAtrMultiple
+        if trailStop > candidate
+            candidate := trailStop
+            reason := "ATR TRAIL"
+
+    [f_roundDown(candidate), reason]
+
+f_marketExitPrice(float observedPrice) =>
+    f_roundDown(observedPrice - exitSlippageTicks * syminfo.mintick)
+
+f_historicalStopFill(float stopLevel) =>
+    float reference = open < stopLevel ? open : stopLevel
+    f_roundDown(reference - exitSlippageTicks * syminfo.mintick)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 8. STRICT REALTIME-SAFE TRADE STATE
+// `varip` persists through realtime rollback.
+// ─────────────────────────────────────────────────────────────────────────────
+varip bool inTradeIp = false
+varip float signalPriceIp = na
+varip float assumedEntryIp = na
+varip float initialStopIp = na
+varip float activeStopIp = na
+varip string activeStopReasonIp = "HARD STOP"
+varip float targetPriceIp = na
+varip float oneRPriceIp = na
+varip float riskPerShareIp = na
+varip int quantityIp = 0
+varip int entryBarIp = na
+varip int entryTimeIp = na
+varip float highestSinceEntryIp = na
+
+varip bool entryAlertedThisBarIp = false
+varip bool exitLatchedThisBarIp = false
+varip bool exitAlertedThisBarIp = false
+varip bool stopUpdateAlertedThisBarIp = false
+varip float stopAtBarOpenIp = na
+varip int previousPsarDirIp = na
+
+varip string latchedExitReasonIp = ""
+varip float latchedExitPriceIp = na
+varip float latchedOldStopIp = na
+varip float latchedNewStopIp = na
+
+if barstate.isnew
+    entryAlertedThisBarIp := false
+    exitLatchedThisBarIp := false
+    exitAlertedThisBarIp := false
+    stopUpdateAlertedThisBarIp := false
+    stopAtBarOpenIp := activeStopIp
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 9. ENTRY PLAN / LIQUIDITY
+// ─────────────────────────────────────────────────────────────────────────────
+float previewSignalPrice = f_roundNearest(close)
+float previewAssumedEntry = f_roundUp(previewSignalPrice + entrySlippageTicks * syminfo.mintick)
+float previewRawStop = low - atr * stopBufferAtr
+float previewMinStop = previewAssumedEntry - atr * minimumStopAtr
+float previewInitialStop = f_roundDown(math.min(previewRawStop, previewMinStop))
+float previewRiskPerShare = previewAssumedEntry - previewInitialStop
+[riskQtyPreview, exposureQtyPreview, intendedQtyPreview] = f_intendedQty(previewAssumedEntry, previewInitialStop)
+[liquidityCapacityPreview, requiredCapacityPreview, liquidityPassPreview] = f_liquidity(intendedQtyPreview)
+
+bool sizingValidPreview = previewRiskPerShare > 0 and intendedQtyPreview > 0
+bool rawEntrySignal = isOneMinute and f_entryWindowOpen() and psarBuyConfirmed and optionalFiltersPass
+bool buyReady = rawEntrySignal and sizingValidPreview and liquidityPassPreview
+bool lowLiquiditySkip = rawEntrySignal and sizingValidPreview and not liquidityPassPreview
+
+if not inTradeIp and not exitLatchedThisBarIp and buyReady and not entryAlertedThisBarIp
+    signalPriceIp := previewSignalPrice
+    assumedEntryIp := previewAssumedEntry
+    initialStopIp := previewInitialStop
+    activeStopIp := previewInitialStop
+    activeStopReasonIp := "HARD STOP"
+    riskPerShareIp := previewRiskPerShare
+    oneRPriceIp := f_roundUp(assumedEntryIp + riskPerShareIp)
+    targetPriceIp := enableTarget ? f_roundUp(assumedEntryIp + riskPerShareIp * targetR) : na
+    quantityIp := intendedQtyPreview
+    entryBarIp := bar_index
+    entryTimeIp := time_close
+    highestSinceEntryIp := assumedEntryIp
+    inTradeIp := true
+    entryAlertedThisBarIp := true
+    stopAtBarOpenIp := activeStopIp
+
+    string buyMessage =
+         "🟢 BUY | " + syminfo.ticker +
+         "\nSignal price: ₹" + f_fmt(signalPriceIp) +
+         "\nAssumed entry: ₹" + f_fmt(assumedEntryIp) +
+         "\nRisk-based qty: " + str.tostring(riskQtyPreview) +
+         "\nLiquidity capacity: " + str.tostring(liquidityCapacityPreview) +
+         "\nFinal qty: " + str.tostring(quantityIp) +
+         "\nInitial SL: ₹" + f_fmt(initialStopIp) +
+         "\n1R level: ₹" + f_fmt(oneRPriceIp) +
+         "\nTarget: ₹" + f_fmt(targetPriceIp) +
+         "\nRisk/share: ₹" + f_fmt(riskPerShareIp) +
+         "\nAvg 1m volume: " + f_num(avgVolume) +
+         "\nAvg traded value: ₹" + f_num(avgTradedValue) +
+         "\nRelative volume: " + f_num(relativeVolume) +
+         "\nLiquidity: PASS" +
+         "\nNOTE: signal/assumed prices are not guaranteed broker fills."
+
+    alert(buyMessage, alert.freq_once_per_bar_close)
+
+    label.new(
+         bar_index, low,
+         "BUY\n₹" + f_fmt(signalPriceIp) +
+         "\nQty " + str.tostring(quantityIp) +
+         "\nSL ₹" + f_fmt(initialStopIp) +
+         "\nTGT ₹" + f_fmt(targetPriceIp),
+         style=label.style_label_up,
+         textcolor=color.white,
+         color=color.new(color.green, 0),
+         size=size.small)
+
+if lowLiquiditySkip and emitLowLiquiditySkipAlert and not entryAlertedThisBarIp
+    entryAlertedThisBarIp := true
+    string skipMessage =
+         "🟠 LOW LIQUIDITY / SKIP | " + syminfo.ticker +
+         "\nSignal price: ₹" + f_fmt(previewSignalPrice) +
+         "\nRisk-based qty: " + str.tostring(riskQtyPreview) +
+         "\nIntended qty: " + str.tostring(intendedQtyPreview) +
+         "\nLiquidity capacity: " + str.tostring(liquidityCapacityPreview) +
+         "\nRequired capacity: " + str.tostring(requiredCapacityPreview) +
+         "\nFinal qty: 0" +
+         "\nInitial SL: ₹" + f_fmt(previewInitialStop) +
+         "\nTarget: ₹" + f_fmt(enableTarget ? f_roundUp(previewAssumedEntry + previewRiskPerShare * targetR) : na) +
+         "\nAvg 1m volume: " + f_num(avgVolume) +
+         "\nAvg traded value: ₹" + f_num(avgTradedValue) +
+         "\nRelative volume: " + f_num(relativeVolume) +
+         "\nLiquidity: FAIL"
+    alert(skipMessage, alert.freq_once_per_bar_close)
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 10. TRADE MANAGEMENT
+// Historical bars:
+//   - Test current bar against the stop carried INTO the bar.
+//   - If SL and target both occur, mark AMBIGUOUS and do not invent ordering.
+//   - Only after a surviving historical bar do we use its high to ratchet the
+//     stop for the NEXT bar.
+//
+// Realtime bars:
+//   - Track observed high/price update-by-update.
+//   - Ratchet stop immediately.
+//   - Use current `close` as the observed market reference.
+// ─────────────────────────────────────────────────────────────────────────────
+if inTradeIp and not na(entryBarIp) and bar_index > entryBarIp
+    float oldStopThisExecution = activeStopIp
+    bool shouldExit = false
+    bool ambiguousHistorical = false
+    string exitReason = ""
+    float exitPrice = na
+
+    if barstate.isrealtime
+        highestSinceEntryIp := math.max(nz(highestSinceEntryIp, assumedEntryIp), high)
+
+        [candidateStopRt, candidateReasonRt] = f_stopCandidate(
+             assumedEntryIp, riskPerShareIp, highestSinceEntryIp, trailAtr, initialStopIp)
+
+        if candidateStopRt > activeStopIp
+            float previousStopRt = activeStopIp
+            activeStopIp := math.max(previousStopRt, candidateStopRt)
+            activeStopReasonIp := candidateReasonRt
+
+        // In realtime use the currently observed price, not the bar's accumulated
+        // high/low, so an earlier low cannot falsely trigger a newly-raised stop.
+        bool protectiveStopHitRt = close <= activeStopIp
+        bool targetHitRt = enableTarget and not na(targetPriceIp) and close >= targetPriceIp
+        bool eodExitRt = barstate.isconfirmed and f_eodNow()
+
+        int priorPsarDir = na(previousPsarDirIp) ? psarDir[1] : previousPsarDirIp
+        bool psarFastFlipRt = psarDir == -1 and priorPsarDir == 1
+        bool psarFallbackRt = enablePsarFallback and (confirmedPsarFallback ? psarSellConfirmed : psarFastFlipRt)
+
+        if protectiveStopHitRt
+            shouldExit := true
+            exitReason := activeStopReasonIp
+            exitPrice := f_marketExitPrice(close)
+        else if targetHitRt
+            shouldExit := true
+            exitReason := "TARGET"
+            // A target is a limit-style theoretical reference. Real fills can differ.
+            exitPrice := targetPriceIp
+        else if eodExitRt
+            shouldExit := true
+            exitReason := "EOD"
+            exitPrice := f_marketExitPrice(close)
+        else if psarFallbackRt
+            shouldExit := true
+            exitReason := "PSAR FALLBACK"
+            exitPrice := f_marketExitPrice(close)
+
+    else
+        float historicalStop = activeStopIp
+        bool protectiveStopHitHist = low <= historicalStop
+        bool targetHitHist = enableTarget and not na(targetPriceIp) and high >= targetPriceIp
+
+        if protectiveStopHitHist and targetHitHist
+            shouldExit := true
+            ambiguousHistorical := true
+            exitReason := "AMBIGUOUS SL/TARGET"
+            exitPrice := na
+        else if protectiveStopHitHist
+            shouldExit := true
+            exitReason := activeStopReasonIp
+            exitPrice := f_historicalStopFill(historicalStop)
+        else if targetHitHist
+            shouldExit := true
+            exitReason := "TARGET"
+            exitPrice := targetPriceIp
+        else if barstate.isconfirmed and f_eodNow()
+            shouldExit := true
+            exitReason := "EOD"
+            exitPrice := f_marketExitPrice(close)
+        else if enablePsarFallback and psarSellConfirmed
+            shouldExit := true
+            exitReason := "PSAR FALLBACK"
+            exitPrice := f_marketExitPrice(close)
+
+        // Causal historical trailing: current high only affects NEXT bar's stop.
+        if not shouldExit
+            highestSinceEntryIp := math.max(nz(highestSinceEntryIp, assumedEntryIp), high)
+            [candidateStopHist, candidateReasonHist] = f_stopCandidate(
+                 assumedEntryIp, riskPerShareIp, highestSinceEntryIp, trailAtr, initialStopIp)
+            if candidateStopHist > activeStopIp
+                float previousStopHist = activeStopIp
+                activeStopIp := math.max(previousStopHist, candidateStopHist)
+                activeStopReasonIp := candidateReasonHist
+
+    if shouldExit and not exitLatchedThisBarIp
+        exitLatchedThisBarIp := true
+        latchedExitReasonIp := exitReason
+        latchedExitPriceIp := exitPrice
+        latchedOldStopIp := oldStopThisExecution
+        latchedNewStopIp := activeStopIp
+
+        float theoreticalPnl = not na(exitPrice) ? (exitPrice - assumedEntryIp) * quantityIp : na
+
+        if barstate.isrealtime and not exitAlertedThisBarIp
+            exitAlertedThisBarIp := true
+            string exitMessage =
+                 "🔴 EXIT | " + syminfo.ticker +
+                 "\nEntry: ₹" + f_fmt(assumedEntryIp) +
+                 "\nHighest since entry: ₹" + f_fmt(highestSinceEntryIp) +
+                 "\nOld SL: ₹" + f_fmt(oldStopThisExecution) +
+                 "\nNew SL: ₹" + f_fmt(activeStopIp) +
+                 "\nReason: " + exitReason +
+                 "\nExit price (theoretical): ₹" + f_fmt(exitPrice) +
+                 "\nQty: " + str.tostring(quantityIp) +
+                 "\nTheoretical P&L: ₹" + f_num(theoreticalPnl) +
+                 "\nNOTE: actual broker fill may differ because of spread, depth, gaps and latency."
+            alert(exitMessage, alert.freq_all)
+
+        // Marker is materialized below from the varip exit latch on every
+        // realtime execution. This survives rollback visually and commits at close.
+        inTradeIp := false
+
+    // Optional stop update alert: once per confirmed bar, only for meaningful moves.
+    if inTradeIp and emitStopUpdateAlerts and barstate.isconfirmed and not stopUpdateAlertedThisBarIp
+        float baseStop = nz(stopAtBarOpenIp, activeStopIp)
+        bool meaningfulRaise = activeStopIp >= baseStop + stopUpdateMinTicks * syminfo.mintick
+        if meaningfulRaise
+            stopUpdateAlertedThisBarIp := true
+            string updateMessage =
+                 "🔵 STOP UPDATE | " + syminfo.ticker +
+                 "\nEntry: ₹" + f_fmt(assumedEntryIp) +
+                 "\nHighest since entry: ₹" + f_fmt(highestSinceEntryIp) +
+                 "\nOld SL: ₹" + f_fmt(baseStop) +
+                 "\nNew SL: ₹" + f_fmt(activeStopIp) +
+                 "\nReason: STOP UPDATE / " + activeStopReasonIp +
+                 "\nExit price: NA" +
+                 "\nQty: " + str.tostring(quantityIp) +
+                 "\nTheoretical P&L: NA"
+            alert(updateMessage, alert.freq_once_per_bar_close)
+
+// Re-materialize the latched exit marker on every realtime execution.
+// Pine rollback deletes uncommitted drawings, but the varip latch survives.
+// Historical bars execute once, so this also creates one historical marker.
+if exitLatchedThisBarIp
+    bool markerAmbiguous = latchedExitReasonIp == "AMBIGUOUS SL/TARGET"
+    label.new(
+         bar_index,
+         na(latchedExitPriceIp) ? close : latchedExitPriceIp,
+         markerAmbiguous
+             ? "AMBIGUOUS\nSL + TARGET"
+             : "SELL\n" + latchedExitReasonIp + "\n₹" + f_fmt(latchedExitPriceIp),
+         style=label.style_label_down,
+         textcolor=color.white,
+         color=markerAmbiguous ? color.new(color.orange, 0) : color.new(color.red, 0),
+         size=size.small)
+
+// Persist the latest PSAR direction across realtime executions.
+previousPsarDirIp := psarDir
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 11. VISUALS
+// ─────────────────────────────────────────────────────────────────────────────
+color psarColor = psarDir == 1 ? color.new(color.blue, 0) : color.new(color.orange, 0)
+
+plot(psar, "PSAR", style=plot.style_circles, linewidth=2, color=psarColor)
+plot(inTradeIp ? assumedEntryIp : na, "Assumed Entry", color=color.new(color.blue, 0), linewidth=2, style=plot.style_linebr)
+plot(inTradeIp ? activeStopIp : na, "Protective Stop", color=color.new(color.red, 0), linewidth=2, style=plot.style_linebr)
+plot(inTradeIp and enableTarget ? targetPriceIp : na, "Target", color=color.new(color.green, 0), linewidth=2, style=plot.style_linebr)
+plot(inTradeIp ? oneRPriceIp : na, "1R", color=color.new(color.teal, 20), linewidth=1, style=plot.style_linebr)
+plot(inTradeIp ? highestSinceEntryIp : na, "Highest Since Entry", color=color.new(color.purple, 35), linewidth=1, style=plot.style_linebr)
+
+plot(useEmaFilter ? ema : na, "EMA Filter", color=color.new(color.aqua, 35))
+plot(useVwapFilter ? sessionVwap : na, "VWAP Filter", color=color.new(color.fuchsia, 35))
+
+plotshape(psarBuyConfirmed, title="Confirmed PSAR BUY", text="PSAR BUY", style=shape.labelup,
+     location=location.belowbar, color=color.new(color.green, 65), textcolor=color.white, size=size.tiny)
+
+plotshape(psarSellConfirmed, title="Confirmed PSAR SELL", text="PSAR SELL", style=shape.labeldown,
+     location=location.abovebar, color=color.new(color.red, 65), textcolor=color.white, size=size.tiny)
+
+plotshape(lowLiquiditySkip, title="LOW LIQUIDITY / SKIP", text="LOW LIQ\nSKIP", style=shape.labelup,
+     location=location.belowbar, color=color.new(color.orange, 0), textcolor=color.white, size=size.tiny)
+
+// Visible timeframe / liquidity status.
+var table statusTable = table.new(position.top_right, 2, 5, border_width=1)
+if barstate.islast
+    table.cell(statusTable, 0, 0, "PSAR V2", text_color=color.white, bgcolor=color.new(color.blue, 25))
+    table.cell(statusTable, 1, 0, isOneMinute ? "1m OK" : "WARNING: USE 1m",
+         text_color=color.white, bgcolor=isOneMinute ? color.new(color.green, 30) : color.new(color.red, 0))
+    table.cell(statusTable, 0, 1, "Avg Vol")
+    table.cell(statusTable, 1, 1, f_num(avgVolume))
+    table.cell(statusTable, 0, 2, "Avg Value")
+    table.cell(statusTable, 1, 2, "₹" + f_num(avgTradedValue))
+    table.cell(statusTable, 0, 3, "RVOL")
+    table.cell(statusTable, 1, 3, f_num(relativeVolume))
+    table.cell(statusTable, 0, 4, "State")
+    table.cell(statusTable, 1, 4, inTradeIp ? "LONG" : "FLAT",
+         text_color=color.white, bgcolor=inTradeIp ? color.new(color.green, 40) : color.new(color.gray, 50))
+
+// ─────────────────────────────────────────────────────────────────────────────
+// 12. SCANNER-FRIENDLY HIDDEN OUTPUTS
+// ─────────────────────────────────────────────────────────────────────────────
+plot(psarBuyConfirmed ? 1 : 0, "SCAN_PSAR_BUY", display=display.none)
+plot(psarSellConfirmed ? 1 : 0, "SCAN_PSAR_SELL", display=display.none)
+plot(buyReady ? 1 : 0, "SCAN_BUY_READY", display=display.none)
+plot(lowLiquiditySkip ? 1 : 0, "SCAN_LOW_LIQUIDITY", display=display.none)
+plot(riskQtyPreview, "SCAN_RISK_QTY", display=display.none)
+plot(intendedQtyPreview, "SCAN_INTENDED_QTY", display=display.none)
+plot(liquidityCapacityPreview, "SCAN_LIQ_CAPACITY", display=display.none)
+plot(buyReady ? intendedQtyPreview : 0, "SCAN_FINAL_QTY", display=display.none)
+plot(previewInitialStop, "SCAN_INITIAL_SL", display=display.none)
+plot(previewAssumedEntry + previewRiskPerShare, "SCAN_1R", display=display.none)
+plot(enableTarget ? f_roundUp(previewAssumedEntry + previewRiskPerShare * targetR) : na, "SCAN_TARGET", display=display.none)
+plot(avgVolume, "SCAN_AVG_VOLUME", display=display.none)
+plot(avgTradedValue, "SCAN_AVG_TRADED_VALUE", display=display.none)
+plot(relativeVolume, "SCAN_RVOL", display=display.none)
+
+alertcondition(buyReady, "BUY READY", "PSAR V2 BUY READY")
+alertcondition(lowLiquiditySkip, "LOW LIQUIDITY / SKIP", "PSAR V2 LOW LIQUIDITY / SKIP")
