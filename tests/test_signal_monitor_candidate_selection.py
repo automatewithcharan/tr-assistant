@@ -1,5 +1,5 @@
-from datetime import datetime
-from types import SimpleNamespace
+from datetime import datetime, timedelta
+from types import MethodType, SimpleNamespace
 from zoneinfo import ZoneInfo
 
 import pandas as pd
@@ -20,11 +20,13 @@ def runner(tmp_path) -> SignalMonitorRunner:
     value._candidate_market_history = {}
     value._candidate_feature_history = {}
     value._candidate_alert_state = {}
+    value._candidate_alert_state_date = "2026-09-27"
     value._candidate_alert_state_path = str(tmp_path / "candidate-state.json")
     value._early_breakout_alerted_today = set()
     value._top_gainer_radar_today = set()
     value._append_daily_symbol = lambda *_args, **_kwargs: None
     value.candidate_cooldown_seconds = 900
+    value.candidate_once_per_day = True
     value.candidate_score_improvement = 8
     value.candidate_state_change_bypasses_cooldown = True
     value.candidate_reject_low_liquidity = True
@@ -146,13 +148,62 @@ def test_cooldown_suppresses_identical_repeat(tmp_path):
     assert second.empty
 
 
-def test_dual_lane_transition_can_bypass_cooldown(tmp_path):
+def test_dual_lane_transition_does_not_repeat_same_day(tmp_path):
     value = runner(tmp_path)
     value._select_tradingview_candidates(pd.DataFrame([candidate("CHANGE")]), pd.DataFrame())
     changed = value._select_tradingview_candidates(
         pd.DataFrame([candidate("CHANGE")]),
         pd.DataFrame([candidate("CHANGE", "top_gainer_radar")]),
     )
+    assert changed.empty
+
+
+def test_same_symbol_does_not_repeat_after_legacy_cooldown_elapsed(tmp_path):
+    value = runner(tmp_path)
+    first = value._select_tradingview_candidates(
+        pd.DataFrame([candidate("DAILY")]), pd.DataFrame()
+    )
+    value._causal_clock = lambda: NOW + timedelta(minutes=16)
+    second = value._select_tradingview_candidates(
+        pd.DataFrame([candidate("DAILY", SignalStrengthPct=70)]), pd.DataFrame()
+    )
+
+    assert list(first["Symbol"]) == ["DAILY"]
+    assert second.empty
+
+
+def test_same_symbol_does_not_repeat_after_runner_restart(tmp_path):
+    first_runner = runner(tmp_path)
+    first_runner._append_daily_symbol = MethodType(
+        SignalMonitorRunner._append_daily_symbol, first_runner
+    )
+    first = first_runner._select_tradingview_candidates(
+        pd.DataFrame([candidate("RESTART")]), pd.DataFrame()
+    )
+
+    restarted = runner(tmp_path)
+    restarted._append_daily_symbol = MethodType(
+        SignalMonitorRunner._append_daily_symbol, restarted
+    )
+    repeated = restarted._select_tradingview_candidates(
+        pd.DataFrame([candidate("RESTART", SignalStrengthPct=80)]), pd.DataFrame()
+    )
+
+    assert list(first["Symbol"]) == ["RESTART"]
+    assert repeated.empty
+
+
+def test_repeat_policy_can_be_explicitly_disabled(tmp_path):
+    value = runner(tmp_path)
+    value.candidate_once_per_day = False
+    value._select_tradingview_candidates(
+        pd.DataFrame([candidate("CHANGE")]), pd.DataFrame()
+    )
+    changed = value._select_tradingview_candidates(
+        pd.DataFrame([candidate("CHANGE")]),
+        pd.DataFrame([candidate("CHANGE", "top_gainer_radar")]),
+    )
+
     assert list(changed["Symbol"]) == ["CHANGE"]
     assert changed.iloc[0]["CooldownDecision"] == "new lane qualification"
 

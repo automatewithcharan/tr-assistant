@@ -345,6 +345,9 @@ class SignalMonitorRunner:
         self._candidate_market_history: Dict[str, List[Dict[str, Any]]] = {}
         self._candidate_feature_history: Dict[str, List[Dict[str, Any]]] = {}
         self._direct_candidates_selected_this_cycle: Set[str] = set()
+        self.candidate_once_per_day = self._env_truthy(
+            "SIGNALMONITOR_CANDIDATE_ONCE_PER_DAY", "1"
+        )
         self.candidate_cooldown_seconds = max(
             0.0,
             float(os.environ.get("SIGNALMONITOR_CANDIDATE_COOLDOWN_SECONDS", self.CANDIDATE_COOLDOWN_SECONDS)),
@@ -386,6 +389,7 @@ class SignalMonitorRunner:
         self._candidate_alert_state = (
             {} if self.reset_state else self._load_candidate_alert_state()
         )
+        self._candidate_alert_state_date = self._refresh_queue_date
         self._cycle_number = 0
         self._preload_done = False
         self.fast_mode = bool(self.FAST_MODE)
@@ -3660,6 +3664,7 @@ class SignalMonitorRunner:
             "top_gainer_radar_max_pct": self.TOP_GAINER_RADAR_MAX_PCT,
             "top_gainer_radar_max_per_cycle": self.TOP_GAINER_RADAR_MAX_PER_CYCLE,
             "global_max_per_cycle": self.TRADINGVIEW_CANDIDATE_MAX_PER_CYCLE,
+            "candidate_once_per_day": getattr(self, "candidate_once_per_day", True),
             "candidate_cooldown_seconds": getattr(self, "candidate_cooldown_seconds", None),
             "candidate_score_improvement": getattr(self, "candidate_score_improvement", None),
             "max_volume_participation_pct": getattr(
@@ -4040,6 +4045,12 @@ class SignalMonitorRunner:
     def _candidate_cooldown_allows(self, row: Dict[str, Any], now: datetime) -> Tuple[bool, str]:
         symbol = str(row.get("Symbol", "") or "").strip().upper()
         prior = getattr(self, "_candidate_alert_state", {}).get(symbol)
+        if bool(getattr(self, "candidate_once_per_day", True)):
+            alerted_today = self._load_daily_symbol_set(
+                "tradingview_candidate", today=self._today_key()
+            )
+            if prior or symbol in alerted_today:
+                return False, "already alerted for this symbol today"
         if not prior:
             return True, "unseen"
         try:
@@ -4147,6 +4158,11 @@ class SignalMonitorRunner:
             row["CandidateRankQualified"] = rank
 
         now = self._causal_now()
+        today = self._today_key()
+        state_date = getattr(self, "_candidate_alert_state_date", today)
+        if state_date != today:
+            self._candidate_alert_state = {}
+        self._candidate_alert_state_date = today
         eligible: List[Dict[str, Any]] = []
         for row in merged:
             allowed, reason = self._candidate_cooldown_allows(row, now)
@@ -4196,6 +4212,8 @@ class SignalMonitorRunner:
                 "last_score": row.get("ScoreTotal"),
                 "movement_state": row.get("CandidateState"),
             }
+            if bool(getattr(self, "candidate_once_per_day", True)):
+                self._append_daily_symbol("tradingview_candidate", symbol)
             if "early_breakout" in lanes:
                 getattr(self, "_early_breakout_alerted_today", set()).add(symbol)
                 self._append_daily_symbol("early_breakout", symbol)
