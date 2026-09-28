@@ -256,7 +256,7 @@ def test_nan_change_matches_baseline_with_no_lifecycle_alert_or_delivery(
     assert load_delivery_records(tmp_path, "2026-09-07") == []
 
 
-def test_qualified_observations_receive_delivery_state_before_cycle_cap(
+def test_qualified_observations_are_ranked_and_capped_before_delivery(
     tmp_path, monkeypatch
 ):
     runner = _runner(tmp_path)
@@ -304,9 +304,12 @@ def test_qualified_observations_receive_delivery_state_before_cycle_cap(
         ]
     )
 
-    alerts = runner._build_early_breakout_alerts(frame)
+    qualified_alerts = runner._build_early_breakout_alerts(frame)
+    alerts = runner._select_tradingview_candidates(qualified_alerts, pd.DataFrame())
+    runner._send_tradingview_candidate_alerts(alerts)
 
     assert len(alerts) == 1
+    assert list(alerts["Symbol"]) == ["CAP_A"]
     observations = [
         event
         for event in runner._top_gainer_lifecycle_recorder.replay()
@@ -318,7 +321,7 @@ def test_qualified_observations_receive_delivery_state_before_cycle_cap(
         for event in runner._top_gainer_lifecycle_recorder.replay()
     )
     deliveries = load_delivery_records(tmp_path, "2026-09-07")
-    assert sum(row["delivery_status"] == "delivered" for row in deliveries) == 2
+    assert sum(row["delivery_status"] == "delivered" for row in deliveries) == 1
     qualified = [row for row in decision_rows if row.get("Decision") == "pass"]
     assert len(qualified) == 2
     assert {row["Reason"] for row in qualified} == {

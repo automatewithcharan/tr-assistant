@@ -91,8 +91,6 @@ def _decision(runner):
     [
         ({"Change %": 0.9}, "change below early-breakout band"),
         ({"Change %": 3.6}, "change above early-breakout band"),
-        ({"RSI": 70.0}, "RSI overbought"),
-        ({"Week52High": 101.0}, "too close to 52-week high"),
         ({"Suggested Qty": 0}, "quantity below one"),
         ({"What To Do": "Watch for Buy"}, "source action not buy or momentum"),
         ({"Price Now": 0}, "price unavailable or non-positive"),
@@ -109,6 +107,18 @@ def test_early_breakout_first_failure_is_journaled(
     decision = _decision(runner)
     assert decision["Decision"] == "reject"
     assert decision["Reason"] == reason
+
+
+@pytest.mark.parametrize("overrides", [{"RSI": 75.0}, {"Week52High": 101.0}])
+def test_rsi_and_52_week_high_are_context_for_ranking_not_binary_rejections(
+    tmp_path, monkeypatch, overrides
+):
+    runner = _runner(tmp_path, monkeypatch)
+
+    alerts = runner._build_early_breakout_alerts(pd.DataFrame([_row(**overrides)]))
+
+    assert list(alerts["Symbol"]) == ["TEST"]
+    assert _decision(runner)["Decision"] == "pass"
 
 
 @pytest.mark.parametrize("change_pct", [float("nan"), float("inf"), float("-inf")])
