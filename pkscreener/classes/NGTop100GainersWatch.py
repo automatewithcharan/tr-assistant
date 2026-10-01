@@ -95,7 +95,7 @@ class NGTop100GainersWatch(NSETopGainersWatch):
     def __init__(self, state_root: Path, ticks_path: Path, universe_path: Path,
                  official_state_root: Path, transport: Any, clock: Callable[[], datetime],
                  top_n: int = 100, min_shares: int = 1000,
-                 min_traded_value: float = 1_000_000.0) -> None:
+                 min_traded_value: float = 1_000_000.0, notifications_enabled: bool = False) -> None:
         super().__init__(state_root, transport, clock)
         if not 21 <= top_n <= 200:
             raise ValueError("Top-gainer coverage must be between 21 and 200")
@@ -105,6 +105,7 @@ class NGTop100GainersWatch(NSETopGainersWatch):
         self.top_n = top_n
         self.min_shares = min_shares
         self.min_traded_value = min_traded_value
+        self.notifications_enabled = bool(notifications_enabled)
 
     def process(self) -> dict[str, Any]:
         now = self.clock().astimezone(IST)
@@ -121,6 +122,8 @@ class NGTop100GainersWatch(NSETopGainersWatch):
                                        self.top_n, self.min_shares, self.min_traded_value)
         except (OSError, ValueError, KeyError) as exc:
             return {"status": "source_failed", "error": str(exc)[:160]}
+        if not self.notifications_enabled:
+            return {"status": "notification_disabled", "board_size": len(ranked)}
         official_path = self.official_state_root / f"{day}.json"
         official = json.loads(official_path.read_text(encoding="utf-8")) if official_path.exists() else {}
         sent = set(state.get("sent_symbols", []))
