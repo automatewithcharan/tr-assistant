@@ -1,16 +1,15 @@
 """Compact, shadow-only causal recorder for emerging-leader research."""
 from __future__ import annotations
-import csv,json,os,shutil,sqlite3,statistics,time
-from collections import defaultdict,deque
-from datetime import datetime
+import csv, json, os, shutil, sqlite3, statistics, time
+from collections import defaultdict, deque
+from datetime import datetime, time as clock_time
 from pathlib import Path
-from typing import Any
 from pkscreener.classes.NGP5EarlyWatchPublisher import IST
 
-SCHEMA_VERSION="emerging_leader_radar_v1_1"; SNAPSHOT_SECONDS=60; FRESH_SECONDS=120; CLOCK_SKEW_SECONDS=10
+SCHEMA_VERSION="emerging_leader_radar_v1_1"; SNAPSHOT_SECONDS=60; FRESH_SECONDS=120; CLOCK_SKEW_SECONDS=10; REQUIRED_COVERAGE=80.0
+SESSION_START=clock_time(9,15); SESSION_END=clock_time(15,30)
 RANK_MILESTONES=(1500,1000,750,500,400,300,250,200,150,125,100,75,50,20,10,5)
-FEATURE_COLUMNS=("last_price previous_close current_pct_change broad_rank broad_percentile rank_1m_ago rank_3m_ago rank_5m_ago rank_10m_ago rank_improvement_1m rank_improvement_3m rank_improvement_5m rank_improvement_10m rank_velocity_1m rank_velocity_5m rank_acceleration return_1m return_3m return_5m return_10m cumulative_volume volume_change_1m volume_change_3m volume_change_5m volume_rate_1m volume_rate_5m volume_rate_acceleration approx_turnover turnover_change_1m turnover_change_5m turnover_acceleration distance_from_day_high_pct distance_from_day_low_pct distance_from_open_pct best_bid best_ask spread_bps causal_vwap price_vs_vwap_pct rs_vs_nifty rs_change_1m rs_change_5m rvol_at_time price_momentum_percentile rank_velocity_percentile volume_rate_percentile volume_acceleration_percentile turnover_percentile turnover_acceleration_percentile rs_percentile pct_change_gap_to_top100 pct_change_gap_to_top50 pct_change_gap_to_top20 pct_change_gap_to_top10").split()
-
+FEATURE_COLUMNS="last_price previous_close current_pct_change broad_rank broad_percentile rank_1m_ago rank_3m_ago rank_5m_ago rank_10m_ago rank_improvement_1m rank_improvement_3m rank_improvement_5m rank_improvement_10m rank_velocity_1m rank_velocity_5m rank_acceleration return_1m return_3m return_5m return_10m cumulative_volume volume_change_1m volume_change_3m volume_change_5m volume_rate_1m volume_rate_5m volume_rate_acceleration approx_turnover turnover_change_1m turnover_change_5m turnover_acceleration distance_from_day_high_pct distance_from_day_low_pct distance_from_open_pct best_bid best_ask spread_bps causal_vwap price_vs_vwap_pct rs_vs_nifty rs_change_1m rs_change_5m rvol_at_time price_momentum_percentile rank_velocity_percentile volume_rate_percentile volume_acceleration_percentile turnover_percentile turnover_acceleration_percentile rs_percentile pct_change_gap_to_top100 pct_change_gap_to_top50 pct_change_gap_to_top20 pct_change_gap_to_top10".split()
 def _symbols(path,column,eq=False):
     with Path(path).open(newline="",encoding="utf-8-sig") as h:return {str(r.get(column) or "").strip().upper() for r in csv.DictReader(h) if r.get(column) and (not eq or str(r.get("SERIES") or "").upper()=="EQ")}
 def _number(v):
@@ -21,23 +20,25 @@ def _utcish(v):
     try:return datetime.fromisoformat(str(v).replace("Z","+00:00")).astimezone(IST)
     except (TypeError,ValueError):return None
 def _percentile(values):
-    ordered,result=sorted(values.items(),key=lambda x:(x[1],x[0])),{}; index=0
+    ordered,result,index=sorted(values.items(),key=lambda x:(x[1],x[0])),{},0
     while index<len(ordered):
         end=index
         while end+1<len(ordered) and ordered[end+1][1]==ordered[index][1]:end+=1
-        value=100.0 if len(ordered)==1 else ((index+end)/2)/(len(ordered)-1)*100
-        result.update({s:value for s,_ in ordered[index:end+1]});index=end+1
+        value=100.0 if len(ordered)==1 else ((index+end)/2)/(len(ordered)-1)*100;result.update({s:value for s,_ in ordered[index:end+1]});index=end+1
     return result
 
 class EmergingLeaderRecorder:
-    """Fresh-only SQLite rows. No publisher, order, or qualification dependency."""
+    """Fresh-only SQLite recorder; it has no publisher, order, or qualification dependency."""
     def __init__(self,root,eq_path,tokens_path,recorder_git_sha,clock=datetime.now):
         self.root,self.eq_path,self.tokens_path=map(Path,(root,eq_path,tokens_path));self.recorder_git_sha,self.clock=recorder_git_sha,clock
-        self.history=defaultdict(lambda:deque(maxlen=80));self.previous_rank={};self.last_snapshot_at=None;self.source_failures=[];self._disk_paused=False
+        self.history=defaultdict(lambda:deque(maxlen=80));self.previous_rank={};self.last_snapshot_at=None;self._active_date=None;self.pending_source_failures=0;self._disk_paused=False
     def _ticks(self,path):
         atomic=Path(path).with_suffix(".json")
         if not atomic.exists():raise FileNotFoundError(f"atomic Kite JSON snapshot unavailable: {atomic}")
-        x=json.loads(atomic.read_text());return list(x.values()) if isinstance(x,dict) else x if isinstance(x,list) else (_ for _ in ()).throw(ValueError("unsupported Kite snapshot"))
+        value=json.loads(atomic.read_text())
+        if isinstance(value,dict):return list(value.values())
+        if isinstance(value,list):return value
+        raise ValueError("unsupported Kite snapshot")
     @staticmethod
     def _past(history,now,seconds):
         target=now.timestamp()-seconds;c=[x for x in history if x["at"].timestamp()<=target]
@@ -48,6 +49,10 @@ class EmergingLeaderRecorder:
     def _return(a,b):return None if a is None or b in (None,0) else (a/b-1)*100
     @staticmethod
     def _epoch(now):return int(now.timestamp()*1000)
+    @staticmethod
+    def _in_session(now):return SESSION_START<=now.timetz().replace(tzinfo=None)<=SESSION_END
+    def _disk_ok(self):
+        free=shutil.disk_usage(self.root if self.root.exists() else self.root.parent).free/1024**3;low=float(os.getenv("NG_EMERGING_LEADER_MIN_FREE_GB","5"));resume=float(os.getenv("NG_EMERGING_LEADER_RESUME_FREE_GB","8"));self._disk_paused=free<resume if self._disk_paused else free<low;return not self._disk_paused,free
     def _db(self,date,expected,now_ms):
         day=self.root/date;day.mkdir(parents=True,exist_ok=True);c=sqlite3.connect(day/"emerging_leader.sqlite");c.execute("pragma journal_mode=wal");c.execute("pragma synchronous=normal")
         c.executescript("""create table if not exists session_metadata(session_id integer primary key,session_date text unique not null,schema_version text not null,recorder_git_sha text not null,expected_symbol_count integer not null,started_epoch_ms integer not null,cycle_count integer not null default 0,source_failure_count integer not null default 0);create table if not exists symbols(symbol_id integer primary key,symbol text unique not null);create table if not exists session_symbol_metadata(session_id integer not null,symbol_id integer not null,token_mapped_at_session_start integer not null,primary key(session_id,symbol_id));create table if not exists mapping_events(session_id integer not null,symbol_id integer not null,timestamp_epoch_ms integer not null,token_mapped integer not null,primary key(session_id,symbol_id,timestamp_epoch_ms));create table if not exists snapshot_times(snapshot_id integer primary key,session_id integer not null,timestamp_epoch_ms integer not null,fresh_count integer not null,expected_count integer not null,coverage_pct real not null,nifty_fresh integer not null,nifty_pct_change real,positive_count integer not null,negative_count integer not null,median_pct_change real,top100_cutoff_pct_change real,top50_cutoff_pct_change real,top20_cutoff_pct_change real,top10_cutoff_pct_change real,return_dispersion real,unique(session_id,timestamp_epoch_ms));create table if not exists rank_events(session_id integer not null,symbol_id integer not null,timestamp_epoch_ms integer not null,milestone integer not null,broad_rank integer not null,pct_change real,rank_universe_size integer not null,expected_universe_size integer not null,coverage_pct real not null,last_price real,cumulative_volume real,approx_turnover real,primary key(session_id,symbol_id,milestone));create table if not exists symbol_state(session_id integer not null,symbol_id integer not null,last_rank integer not null,last_observation_epoch_ms integer not null,token_mapped integer not null,primary key(session_id,symbol_id));""")
@@ -63,18 +68,29 @@ class EmergingLeaderRecorder:
             if old is None:c.execute("insert into session_symbol_metadata values(?,?,?)",(sid,i,flag))
             elif old[0]!=flag:c.execute("insert or ignore into mapping_events values(?,?,?,?)",(sid,i,now_ms,flag))
         return ids
-    def _disk_ok(self):
-        free=shutil.disk_usage(self.root if self.root.exists() else self.root.parent).free/1024**3;low=float(os.getenv("NG_EMERGING_LEADER_MIN_FREE_GB","5"));resume=float(os.getenv("NG_EMERGING_LEADER_RESUME_FREE_GB","8"))
-        self._disk_paused=free<resume if self._disk_paused else free<low;return not self._disk_paused,free
     def _manifest(self,date,c,sid,now):
-        path=self.root/date/"manifest.json";meta=c.execute("select cycle_count,source_failure_count,expected_symbol_count from session_metadata where session_id=?",(sid,)).fetchone();ctx=c.execute("select min(coverage_pct),avg(coverage_pct),max(coverage_pct),count(*) from snapshot_times where session_id=?",(sid,)).fetchone()
-        counts={"features":c.execute("select count(*) from features f join snapshot_times s on s.snapshot_id=f.snapshot_id where s.session_id=?",(sid,)).fetchone()[0],"rank_events":c.execute("select count(*) from rank_events where session_id=?",(sid,)).fetchone()[0],"mapping_events":c.execute("select count(*) from mapping_events where session_id=?",(sid,)).fetchone()[0]}
-        value={"date":date,"schema_version":SCHEMA_VERSION,"recorder_git_sha":self.recorder_git_sha,"recorder_end_time":now.isoformat(),"expected_cycles":1500,"completed_cycles":meta[0],"missed_cycles":max(0,1500-meta[0]),"symbols_expected":meta[2],"fresh_coverage_min":ctx[0],"fresh_coverage_median":ctx[1],"fresh_coverage_max":ctx[2],"snapshot_count":ctx[3],"database_row_counts":counts,"source_failure_count":meta[1],"valid_for_research":bool(ctx[2] and ctx[2]>=80),"fresh_row_contract":"absence of feature row means no valid fresh observation at snapshot T"};tmp=path.with_suffix(".tmp");tmp.write_text(json.dumps(value,indent=2,sort_keys=True));os.replace(tmp,path)
+        path=self.root/date/"manifest.json";meta=c.execute("select cycle_count,source_failure_count,expected_symbol_count from session_metadata where session_id=?",(sid,)).fetchone();cov=c.execute("select min(coverage_pct),max(coverage_pct),count(*),sum(coverage_pct>=?) from snapshot_times where session_id=?",(REQUIRED_COVERAGE,sid)).fetchone();coverage_values=[row[0] for row in c.execute("select coverage_pct from snapshot_times where session_id=?",(sid,))];near=c.execute("select count(*) from snapshot_times where session_id=? and coverage_pct>=? and time(timestamp_epoch_ms/1000,'unixepoch','+5 hours','+30 minutes')>='15:28:00' and time(timestamp_epoch_ms/1000,'unixepoch','+5 hours','+30 minutes')<='15:30:00'",(sid,REQUIRED_COVERAGE)).fetchone()[0]
+        counts={"features":c.execute("select count(*) from features f join snapshot_times s on s.snapshot_id=f.snapshot_id where s.session_id=?",(sid,)).fetchone()[0],"rank_events":c.execute("select count(*) from rank_events where session_id=?",(sid,)).fetchone()[0],"mapping_events":c.execute("select count(*) from mapping_events where session_id=?",(sid,)).fetchone()[0]};expected_cycles=1501
+        value={"date":date,"schema_version":SCHEMA_VERSION,"recorder_git_sha":self.recorder_git_sha,"recorder_end_time":now.isoformat(),"expected_cycles":expected_cycles,"completed_cycles":meta[0],"cycle_completion_pct":meta[0]/expected_cycles*100,"snapshot_count":cov[2],"expected_snapshot_count":376,"coverage_qualified_snapshot_count":cov[3] or 0,"coverage_qualified_snapshot_pct":((cov[3] or 0)/cov[2]*100) if cov[2] else 0.0,"coverage_min":cov[0],"coverage_median":statistics.median(coverage_values) if coverage_values else None,"coverage_max":cov[1],"near_close_eod_snapshot_valid":bool(near),"source_failure_count":meta[1],"database_row_counts":counts,"fresh_row_contract":"absence of feature row means no valid fresh observation at snapshot T"};tmp=path.with_suffix(".tmp");tmp.write_text(json.dumps(value,indent=2,sort_keys=True));os.replace(tmp,path)
+    def _failure(self,date,expected,now_ms,error):
+        self.pending_source_failures+=1
+        try:
+            c,sid=self._db(date,expected,now_ms)
+            with c:c.execute("update session_metadata set source_failure_count=source_failure_count+? where session_id=?",(self.pending_source_failures,sid));self.pending_source_failures=0;self._manifest(date,c,sid,self.clock().astimezone(IST))
+            c.close()
+        except Exception:pass
+        return {"status":"source_unavailable","error":str(error)}
     def process(self,ticks_path):
-        started=time.perf_counter();now=self.clock().astimezone(IST);date=now.date().isoformat();now_ms=self._epoch(now)
+        started=time.perf_counter();now=self.clock().astimezone(IST)
+        if not self._in_session(now):return {"status":"outside_market_session"}
+        date,now_ms=now.date().isoformat(),self._epoch(now)
+        if self._active_date!=date:self.history.clear();self.previous_rank.clear();self.last_snapshot_at=None;self._active_date=date
+        ok,free=self._disk_ok()
+        if not ok:return {"status":"research_paused_low_disk","free_gb":round(free,3)}
+        expected=_symbols(self.eq_path,"SYMBOL",True);mapped=_symbols(self.tokens_path,"Symbol") if self.tokens_path.exists() else set()
         try:ticks=self._ticks(ticks_path)
-        except Exception as e:self.source_failures.append(str(e));return {"status":"source_unavailable","error":str(e)}
-        expected=_symbols(self.eq_path,"SYMBOL",True);mapped=_symbols(self.tokens_path,"Symbol") if self.tokens_path.exists() else set();raw={};nifty=None
+        except Exception as e:return self._failure(date,expected,now_ms,e)
+        raw={};nifty=None
         for t in ticks:
             s=str(t.get("symbol") or "").strip().upper();received=_utcish(t.get("received_at"))
             if s=="NIFTY 50":nifty=t
@@ -87,10 +103,11 @@ class EmergingLeaderRecorder:
             if r and tr and tr.date()==now.date() and age is not None and -CLOCK_SKEW_SECONDS<=age<=FRESH_SECONDS and p is not None and cl not in (None,0):nifty_pct,nifty_fresh=(p/cl-1)*100,True
         current={}
         for s,v in raw.items():
-            vol=_number(v["tick"].get("volume_traded"));current[s]={"at":now,"rank":ranks[s],"price":v["price"],"volume":vol,"turnover":v["price"]*vol if vol is not None else None,"pct":v["pct"],"rs":v["pct"]-nifty_pct if nifty_pct is not None else None};self.history[s].append(current[s])
+            vol=_number(v["tick"].get("volume_traded"));current[s]={"at":now,"rank":ranks[s],"price":v["price"],"volume":vol,"turnover":v["price"]*vol if vol is not None else None,"pct":v["pct"],"rs":v["pct"]-nifty_pct if nifty_pct is not None else None}
         coverage=len(raw)/max(1,len(expected))*100;c,sid=self._db(date,expected,now_ms)
         try:
             with c:
+                if self.pending_source_failures:c.execute("update session_metadata set source_failure_count=source_failure_count+? where session_id=?",(self.pending_source_failures,sid));self.pending_source_failures=0
                 c.execute("update session_metadata set cycle_count=cycle_count+1 where session_id=?",(sid,));ids=self._ids(c,sid,expected,mapped,now_ms);persisted={i:r for i,r in c.execute("select symbol_id,last_rank from symbol_state where session_id=?",(sid,))};events=0
                 for s,v in current.items():
                     i=ids[s];previous=self.previous_rank.get(s,persisted.get(i))
@@ -98,10 +115,10 @@ class EmergingLeaderRecorder:
                         for m in RANK_MILESTONES:
                             if previous>m and v["rank"]<=m:events+=c.execute("insert or ignore into rank_events values(?,?,?,?,?,?,?,?,?,?,?,?)",(sid,i,now_ms,m,v["rank"],v["pct"],len(raw),len(expected),coverage,v["price"],v["volume"],v["turnover"])).rowcount
                     self.previous_rank[s]=v["rank"];c.execute("insert or replace into symbol_state values(?,?,?,?,?)",(sid,i,v["rank"],now_ms,int(s in mapped)))
-            if self.last_snapshot_at and (now-self.last_snapshot_at).total_seconds()<SNAPSHOT_SECONDS:self._manifest(date,c,sid,now);return {"status":"events_only","events":events,"fresh":len(raw),"expected":len(expected),"processing_ms":round((time.perf_counter()-started)*1000,3)}
-            ok,free=self._disk_ok()
-            if not ok:self._manifest(date,c,sid,now);return {"status":"research_paused_low_disk","free_gb":round(free,3),"events":events,"fresh":len(raw),"expected":len(expected)}
-            self.last_snapshot_at=now;rows={}
+            if self.last_snapshot_at and (now-self.last_snapshot_at).total_seconds()<SNAPSHOT_SECONDS:
+                for s,v in current.items():self.history[s].append(v)
+                self._manifest(date,c,sid,now);return {"status":"events_only","events":events,"fresh":len(raw),"expected":len(expected),"processing_ms":round((time.perf_counter()-started)*1000,3)}
+            rows={}
             for s,v in current.items():
                 t=raw[s]["tick"];past={m:self._past(self.history[s],now,m*60) for m in (1,3,5,10)};imp={m:self._change(past[m]["rank"] if past[m] else None,v["rank"]) for m in past};vel={m:(imp[m]/m if imp[m] is not None else None) for m in (1,5)};high,low,op,bid,ask,vwap=(_number(t.get(k)) for k in ("high","low","open","best_bid","best_ask","average_traded_price"));spread=(ask-bid)/((ask+bid)/2)*10000 if bid and ask and ask>=bid else None
                 row={"data_age_seconds":raw[s]["age"],"last_price":v["price"],"previous_close":raw[s]["close"],"current_pct_change":v["pct"],"broad_rank":v["rank"],"broad_percentile":((len(raw)-v["rank"])/(len(raw)-1)*100 if len(raw)>1 else None),"rank_acceleration":((vel[1]-vel[5])/4 if vel[1] is not None and vel[5] is not None else None),"cumulative_volume":v["volume"],"approx_turnover":v["turnover"],"distance_from_day_high_pct":self._return(v["price"],high),"distance_from_day_low_pct":self._return(v["price"],low),"distance_from_open_pct":self._return(v["price"],op),"best_bid":bid,"best_ask":ask,"spread_bps":spread,"causal_vwap":vwap,"price_vs_vwap_pct":self._return(v["price"],vwap),"rs_vs_nifty":v["rs"],"rvol_at_time":None}
@@ -116,5 +133,7 @@ class EmergingLeaderRecorder:
             changes=[v["pct"] for v in current.values()]
             with c:
                 c.execute("insert into snapshot_times(session_id,timestamp_epoch_ms,fresh_count,expected_count,coverage_pct,nifty_fresh,nifty_pct_change,positive_count,negative_count,median_pct_change,top100_cutoff_pct_change,top50_cutoff_pct_change,top20_cutoff_pct_change,top10_cutoff_pct_change,return_dispersion) values(?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",(sid,now_ms,len(raw),len(expected),coverage,int(nifty_fresh),nifty_pct,sum(x>0 for x in changes),sum(x<0 for x in changes),statistics.median(changes) if changes else None,cut[100],cut[50],cut[20],cut[10],statistics.pstdev(changes) if len(changes)>1 else None));snapshot=c.execute("select last_insert_rowid()").fetchone()[0];cols=["snapshot_id","symbol_id","data_age_seconds"]+FEATURE_COLUMNS;c.executemany("insert into features("+','.join(cols)+") values("+','.join('?'*len(cols))+")",[tuple([snapshot,ids[s]]+[row.get(k) for k in cols[2:]]) for s,row in rows.items()])
+            self.last_snapshot_at=now
+            for s,v in current.items():self.history[s].append(v)
             self._manifest(date,c,sid,now);return {"status":"recorded","events":events,"rows":len(rows),"fresh":len(raw),"expected":len(expected),"free_gb":round(free,3),"processing_ms":round((time.perf_counter()-started)*1000,3)}
         finally:c.close()

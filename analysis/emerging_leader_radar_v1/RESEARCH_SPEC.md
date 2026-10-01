@@ -62,3 +62,32 @@ window; otherwise it is UNKNOWN/NULL. Persistence is real elapsed time, not a
 snapshot count. The recorder has a fail-open disk guard: it pauses new rows
 below `NG_EMERGING_LEADER_MIN_FREE_GB` (default 5) and resumes only above
 `NG_EMERGING_LEADER_RESUME_FREE_GB` (default 8).
+
+## V1.1 correctness hardening
+
+The live recorder is explicitly gated to 09:15:00–15:30:00 IST inclusive.
+Outside that interval it returns `outside_market_session` and writes no
+research rows or state; rolling rank history is cleared at the next session
+date. A disk pause returns `research_paused_low_disk` before reading or
+mutating research state. Paused time is intentionally missing evidence and
+cannot create reconstructed crossings. Atomic snapshot failures return
+`source_unavailable`, do not count as completed cycles, and are persisted as
+source failures when the SQLite metadata store is available.
+
+For every rank outcome level, `eligible_top{N}_entry` is 1 only for a rank
+strictly greater than N, 0 for a current rank at/better than N, and NULL when
+rank is unavailable. An ineligible observation has NULL `entered_top{N}_later`.
+For eligible rows, a later entry is 1 only from a >=80%-coverage future
+snapshot. A zero requires complete future qualified evidence for that symbol;
+otherwise it is NULL. Labels expose qualified future snapshot count, final
+qualified timestamp, maximum gap, and `future_label_valid` so missing data is
+never silently converted into a negative.
+
+EOD uses the final >=80%-coverage market snapshot in the inclusive
+15:28:00–15:30:00 IST interval. Symbol EOD rank is read only from the feature
+row with that exact `snapshot_id`; a stale/missing symbol is NULL with
+`symbol_eod_rank_valid=0`. Top100 persistence is observed elapsed minutes
+between consecutive qualified fresh symbol observations where both ranks are
+<=100, with gaps over two minutes not bridged. The manifest records objective
+cycle, snapshot, coverage, near-close, failure, and database row counters;
+it does not collapse quality into a simplistic boolean.

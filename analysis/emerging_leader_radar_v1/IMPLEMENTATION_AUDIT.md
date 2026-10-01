@@ -57,3 +57,23 @@ key and one `(symbol_id,snapshot_id)` index replace the wider V1 text index.
 
 The data root is selected only when `NG_EMERGING_LEADER_RESEARCH_ENABLED=1`.
 With its default `0`, no recorder is instantiated or called.
+
+## Pre-deployment hardening
+
+The recorder has an IST 09:15:00–15:30:00 inclusive session gate and a
+pre-write disk guard. Neither after-hours ticks nor low-disk cycles may mutate
+feature rows, snapshot times, rank events, mappings, symbol state, or rolling
+rank history. Source read failures are fail-open to the watcher and are
+persisted separately from successful observation cycles. The offline labels
+now distinguish eligibility, a qualified positive, a qualified negative, and
+unknown future evidence; EOD symbol ranks are snapshot-id exact.
+
+## V1.1 representative storage regression
+
+The post-hardening synthetic full-universe benchmark processed 2,319 fresh
+symbols. The first snapshot took 234.828 ms and occupied 794,624 bytes
+(SQLite plus active WAL); the next snapshot took 243.294 ms and added 565,248
+bytes. Linear projection from that measured incremental size is **0.213 GB per
+session** and **4.255 GB for 20 sessions**. This remains within the intended
+approximately 0.221 GB/session design, without relaxing causal or quality
+requirements.
