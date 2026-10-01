@@ -20,13 +20,18 @@ if str(ROOT) not in sys.path:
 from pkscreener.classes.NGP5EarlyWatchPublisher import DiscordWebhookTransport, IST, validate_webhook_url  # noqa: E402
 from pkscreener.classes.NSETopGainersWatch import NSETopGainersWatch  # noqa: E402
 from pkscreener.classes.NGTop100GainersWatch import NGTop100GainersWatch  # noqa: E402
+from pkscreener.classes.MarketObservationLedger import MarketObservationLedger  # noqa: E402
+from pkscreener.classes.Nifty50WatchPublisher import Nifty50WatchPublisher  # noqa: E402
+
+def _truthy(name: str) -> bool:
+    return str(os.environ.get(name, "0")).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--state-root", type=Path,
                         default=ROOT / "results/Data/ng_nse_top_gainers_watch")
-    parser.add_argument("--poll-seconds", type=float, default=60.0)
+    parser.add_argument("--poll-seconds", type=float, default=15.0)
     parser.add_argument("--ticks-path", type=Path,
                         default=Path("/home/charan_sai/tr-assistant/results/Data/kiteticker_all_ticks_latest.csv"))
     parser.add_argument("--universe-path", type=Path,
@@ -38,14 +43,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--once", action="store_true")
     args = parser.parse_args(argv)
     webhook = os.environ.get("NG_QUALITY_WATCH_DISCORD_WEBHOOK_URL", "").strip()
-    if not webhook:
-        print("NG_QUALITY_WATCH_DISCORD_WEBHOOK_URL is required", file=sys.stderr)
-        return 2
-    try:
-        webhook = validate_webhook_url(webhook)
-    except ValueError as exc:
-        print(f"Invalid webhook: {exc}", file=sys.stderr)
-        return 2
+    transport = None
+    if webhook:
+        try:
+            transport = DiscordWebhookTransport(validate_webhook_url(webhook))
+        except ValueError as exc:
+            print(f"Invalid webhook: {exc}", file=sys.stderr)
+            return 2
     args.state_root.mkdir(parents=True, exist_ok=True)
     with (args.state_root / ".publisher.lock").open("a+") as lock:
         try:
@@ -56,14 +60,20 @@ def main(argv: list[str] | None = None) -> int:
         if args.min_shares < 1 or args.min_traded_value < 0:
             print("Liquidity minimums must be nonnegative", file=sys.stderr)
             return 2
-        publisher = NSETopGainersWatch(args.state_root, DiscordWebhookTransport(webhook),
+        publisher = NSETopGainersWatch(args.state_root, transport,
                                       lambda: datetime.now(IST), min_shares=args.min_shares,
                                       min_traded_value=args.min_traded_value)
         broad = NGTop100GainersWatch(args.state_root / "kite_top100", args.ticks_path,
                                     args.universe_path, args.state_root, publisher.transport,
                                     lambda: datetime.now(IST), top_n=args.top_n,
                                     min_shares=args.min_shares,
-                                    min_traded_value=args.min_traded_value)
+                                    min_traded_value=args.min_traded_value,
+                                    notifications_enabled=_truthy("NG_TOP100_WATCH_DISCORD_ENABLED"))
+        ledger = MarketObservationLedger(args.state_root / "observation_ledger", args.universe_path,
+            ROOT / "results/Indices/ind_nifty50list.csv",
+            Path("/home/charan_sai/tr-assistant/results/Data/kiteticker_all_tokens_latest.csv"), lambda: datetime.now(IST))
+        nifty_watch = Nifty50WatchPublisher(args.state_root / "nifty50_watch", transport,
+                                             _truthy("NG_NIFTY50_WATCH_DISCORD_ENABLED"))
         stop_event = threading.Event()
 
         def stop(_signum: int, _frame: object) -> None:
@@ -73,11 +83,20 @@ def main(argv: list[str] | None = None) -> int:
         signal.signal(signal.SIGINT, stop)
         last_status = None
         last_broad_status = None
+        last_official_at = None
         while not stop_event.is_set():
-            result = publisher.process()
-            if result["status"] not in {"outside_window", "up_to_date", "retry_wait"} or result["status"] != last_status:
-                print(json.dumps(result, sort_keys=True), flush=True)
-            last_status = result["status"]
+            observation = ledger.process(args.ticks_path)
+            nifty_result = nifty_watch.process(observation.pop("event_records", []))
+            print(json.dumps({"feed": "observation", **observation}, sort_keys=True), flush=True)
+            if nifty_result["status"] not in {"notification_disabled", "up_to_date"}:
+                print(json.dumps({"feed": "nifty50_watch", **nifty_result}, sort_keys=True), flush=True)
+            now_monotonic = datetime.now(IST)
+            if last_official_at is None or (now_monotonic - last_official_at).total_seconds() >= 60:
+                result = publisher.process()
+                if result["status"] not in {"outside_window", "up_to_date", "retry_wait"} or result["status"] != last_status:
+                    print(json.dumps(result, sort_keys=True), flush=True)
+                last_status = result["status"]
+                last_official_at = now_monotonic
             broad_result = broad.process()
             if broad_result["status"] not in {"outside_window", "up_to_date", "retry_wait"} or broad_result["status"] != last_broad_status:
                 print(json.dumps({"feed": "kite_top100", **broad_result}, sort_keys=True), flush=True)
