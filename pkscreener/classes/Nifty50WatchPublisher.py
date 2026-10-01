@@ -18,7 +18,9 @@ class Nifty50WatchPublisher:
         sent=0
         for event_id,e in list(state["pending"].items()):
             if float(e.get("retry_after_epoch",0))>self.clock():continue
-            result=self.transport.post(f"👀 **NIFTY50 WATCH ONLY** — **{e['symbol']}** entered NIFTY50 {e['event'].replace('first_nifty50_','').replace('_at','').upper()}. Not a BUY signal.")
+            try: result=self.transport.post(f"👀 **NIFTY50 WATCH ONLY** — **{e['symbol']}** entered NIFTY50 {e['event'].replace('first_nifty50_','').replace('_at','').upper()}. Not a BUY signal.")
+            except Exception:
+                _atomic(path,state); return {"status":"delivery_failed","pending":len(state["pending"])}
             if not result.delivered:
                 e["retry_after_epoch"]=self.clock()+max(1,float(getattr(result,"retry_after_seconds",0) or 0)); state["pending"][event_id]=e; _atomic(path,state); return {"status":"delivery_failed","pending":len(state["pending"])}
             state["pending"].pop(event_id); delivered.add(event_id); state["delivered"]=sorted(delivered); _atomic(path,state); sent+=1

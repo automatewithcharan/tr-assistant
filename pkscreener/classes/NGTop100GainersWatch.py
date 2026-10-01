@@ -70,7 +70,7 @@ def rank_live_gainers(ticks_path: Path, universe_path: Path, now: datetime,
             rows.append({"symbol": symbol, "change": change, "price": price,
                          "volume": volume, "traded_value": traded_value,
                          "received_at": received_at.isoformat()})
-    required = max(1, int(len(allowed) * 0.80))
+    required = max(1, math.ceil(len(allowed) * 0.80))
     if fresh_count < required:
         raise ValueError(f"Only {fresh_count}/{len(allowed)} fresh NSE EQ trades; need 80% coverage")
     if not rows:

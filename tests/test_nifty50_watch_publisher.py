@@ -21,3 +21,12 @@ def test_failed_delivery_survives_restart_and_retries(tmp_path):
     transport=Transport()
     assert Nifty50WatchPublisher(tmp_path,transport,True,lambda:2).process([])["status"] == "delivered"
     assert len(transport.messages)==1
+
+def test_partial_success_does_not_resend_after_restart(tmp_path):
+    events=[{"event_id":"a","symbol":"A","event":"first_nifty50_top5_at"},{"event_id":"b","symbol":"B","event":"first_nifty50_top5_at"}]
+    class Partial:
+        def __init__(self): self.n=0
+        def post(self,_): self.n+=1; return SimpleNamespace(delivered=self.n==1,retry_after_seconds=0)
+    first=Partial(); assert Nifty50WatchPublisher(tmp_path,first,True,lambda:1).process(events)["status"] == "delivery_failed"
+    transport=Transport(); Nifty50WatchPublisher(tmp_path,transport,True,lambda:2).process([])
+    assert len(transport.messages)==1 and "**B**" in transport.messages[0]

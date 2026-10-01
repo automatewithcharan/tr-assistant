@@ -14,7 +14,7 @@ IST = ZoneInfo("Asia/Kolkata")
 NOW = datetime(2026, 9, 18, 9, 20, tzinfo=IST)
 
 
-def files(tmp_path, now=NOW, positives=110):
+def files(tmp_path, now=NOW, positives=110, fresh=801):
     universe = tmp_path / "EQUITY_L.csv"
     with universe.open("w", newline="") as handle:
         writer = csv.DictWriter(handle, fieldnames=["SYMBOL", "SERIES"])
@@ -32,7 +32,7 @@ def files(tmp_path, now=NOW, positives=110):
                              "volume_traded": 10_000 + i,
                              "last_trade_time": f"{now.date()} 09:19:00",
                              "received_at": now.isoformat()})
-        for i in range(positives, 600):
+        for i in range(positives, fresh):
             writer.writerow({"symbol": f"S{i:04}", "exchange": "NSE",
                              "last_price": 99, "close": 100,
                              "volume_traded": 1000,
@@ -85,10 +85,17 @@ def test_low_share_count_and_low_traded_value_do_not_rank(tmp_path):
 
 
 def test_weak_day_reports_available_positive_names(tmp_path):
-    ticks, universe = files(tmp_path, positives=80)
+    ticks, universe = files(tmp_path, positives=80, fresh=500)
+    with pytest.raises(ValueError, match="80% coverage"):
+        rank_live_gainers(ticks, universe, NOW)
+
+def test_coverage_threshold_and_watch_message(tmp_path):
+    ticks, universe = files(tmp_path, positives=801)
     rows = rank_live_gainers(ticks, universe, NOW)
-    assert len(rows) == 80
-    assert rows[-1]["symbol"] == "S0079"
+    assert rows[0]["fresh_count"] == 801
+    from pkscreener.classes.NGTop100GainersWatch import build_message
+    message = build_message(NOW, [{**rows[0], "rank": 1}], 100)
+    assert "801/1001" in message and "WATCH ONLY" in message
 
 
 def test_stale_or_prior_day_ticks_cannot_send(tmp_path):
@@ -97,7 +104,7 @@ def test_stale_or_prior_day_ticks_cannot_send(tmp_path):
         rank_live_gainers(ticks, universe, NOW + timedelta(minutes=3))
     os.utime(ticks, ((NOW + timedelta(days=1)).timestamp(),
                      (NOW + timedelta(days=1)).timestamp()))
-    with pytest.raises(ValueError, match="Only 0 fresh"):
+    with pytest.raises(ValueError, match="Only 0/1001 fresh"):
         rank_live_gainers(ticks, universe, NOW + timedelta(days=1))
 
 
@@ -109,7 +116,7 @@ def test_skips_official_top20_batches_rest_and_dedupes(tmp_path):
         "sent_symbols": [f"S{i:04}" for i in range(20)]}))
     transport = Transport()
     watch = NGTop100GainersWatch(root / "kite_top100", ticks, universe, root,
-                                 transport, lambda: NOW)
+                                 transport, lambda: NOW, notifications_enabled=True)
     result = watch.process()
     assert result["status"] == "delivered"
     assert len(result["symbols"]) == 80
@@ -129,7 +136,7 @@ def test_failed_batch_retries_without_resending_delivered_batch(tmp_path):
                                           retry_after_seconds=None), fail])
     current = [NOW]
     watch = NGTop100GainersWatch(root / "kite_top100", ticks, universe, root,
-                                 transport, lambda: current[0])
+                                 transport, lambda: current[0], notifications_enabled=True)
     assert watch.process()["status"] == "delivery_failed"
     state = json.loads((root / "kite_top100" / "2026-09-18.json").read_text())
     assert len(state["sent_symbols"]) == 30
