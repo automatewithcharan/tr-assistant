@@ -12,6 +12,8 @@ Top100 delivery remains WATCH-only and disabled unless the local environment con
 
 Optional NIFTY50 WATCH delivery uses the separate default-off flag: `NG_NIFTY50_WATCH_DISCORD_ENABLED=1`.
 
+NIFTY50 WATCH uses a durable atomic outbox: pending evidence is stored before sending, failures retain it with retry timing, and each success is removed atomically. Top100 WATCH uses the same fixed 80% NSE EQ completeness rule and reports fresh/expected/coverage in its WATCH-only message.
+
 It has no connection to anomaly quotas, qualification, or orders. The existing Top100 dedupe and retry state remains in `NGTop100GainersWatch`.
 
 ## Trading-parity report

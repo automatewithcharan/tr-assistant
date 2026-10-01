@@ -55,7 +55,8 @@ class MarketObservationLedger:
             state["symbols"][s]=record
         with (base/"events.jsonl").open("a",encoding="utf-8") as h:
             for e in events:
-                e["event_id"]=hashlib.sha256(f"{e['symbol']}|{e['event']}|{e['at']}".encode()).hexdigest(); h.write(json.dumps(e,sort_keys=True)+"\n")
+                source_key = e["event"] if e["event"].startswith("first_") else f"{e['event']}|{e['at']}"
+                e["event_id"]=hashlib.sha256(f"{now.date().isoformat()}|{e['symbol']}|{source_key}".encode()).hexdigest(); h.write(json.dumps(e,sort_keys=True)+"\n")
             h.flush(); os.fsync(h.fileno())
         _atomic(state_path,state)
         out={"at":now.isoformat(),"expected_nse_eq":len(eq),"mapped_nse_eq":len(eq&subscribed),"fresh_nse_eq":len(changes),"expected_nifty50":len(nifty),"mapped_nifty50":len(nifty&subscribed),"fresh_nifty50":len(nifty&set(changes)),"missing_nse_eq":len(eq-subscribed),"stale_nse_eq":len(eq-set(changes)),"missing_nifty50":len(nifty-subscribed),"stale_nifty50":len(nifty-set(changes)),"rank_universe_size":len(changes),"broad_rank_coverage_pct":coverage,"broad_rank_coverage_qualified":qualified,"nifty50_rank_coverage_pct":nifty_coverage,"nifty50_rank_coverage_qualified":nifty_qualified}

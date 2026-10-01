@@ -70,18 +70,20 @@ def rank_live_gainers(ticks_path: Path, universe_path: Path, now: datetime,
             rows.append({"symbol": symbol, "change": change, "price": price,
                          "volume": volume, "traded_value": traded_value,
                          "received_at": received_at.isoformat()})
-    if fresh_count < 500:
-        raise ValueError(f"Only {fresh_count} fresh NSE EQ trades; need 500 for a broad ranking")
+    required = max(1, int(len(allowed) * 0.80))
+    if fresh_count < required:
+        raise ValueError(f"Only {fresh_count}/{len(allowed)} fresh NSE EQ trades; need 80% coverage")
     if not rows:
         raise ValueError("No fresh positive NSE EQ shares meeting liquidity minimums")
     rows.sort(key=lambda row: (-row["change"], -row["volume"], row["symbol"]))
-    return rows[:top_n]
+    coverage = fresh_count / max(1, len(allowed)) * 100
+    return [{**row, "fresh_count": fresh_count, "expected_count": len(allowed), "coverage_pct": coverage} for row in rows[:top_n]]
 
 
 def build_message(now: datetime, rows: list[dict[str, Any]], top_n: int,
                   min_shares: int = 1000, min_traded_value: float = 1_000_000.0) -> str:
     lines = [f"📈 **NG NSE EQ TOP {top_n} — WATCH ONLY** | {now:%H:%M} IST",
-             f"Live Kite rank; min {min_shares:,} shares and ₹{min_traded_value / 100_000:g}L traded; new today:"]
+             f"Live Kite rank; coverage {rows[0]['fresh_count']}/{rows[0]['expected_count']} ({rows[0]['coverage_pct']:.1f}%); WATCH ONLY; new today:"]
     for row in rows:
         lines.append(f"• #{row['rank']} **{row['symbol']}**  +{row['change']:.2f}%  ₹{row['price']:,.2f}  Vol {row['volume']:,.0f}")
     lines.append("Rank appearance only; not a BUY signal.")
