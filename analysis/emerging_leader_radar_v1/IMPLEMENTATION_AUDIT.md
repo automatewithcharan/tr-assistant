@@ -47,5 +47,13 @@ checkpointing and crossing events. This is accepted only as a shadow recorder;
 if production measurements materially exceed the benchmark it must be stopped,
 not made less causal.
 
+## V1.1 compact schema
+
+V1.1 removes repeated ISO timestamps, session text, Git SHA, schema text, and
+symbol text from every feature row. It stores session/symbol metadata once and
+stores only fresh feature rows. This preserves the causal contract while making
+absence an explicit non-fresh observation state. The SQLite `features` primary
+key and one `(symbol_id,snapshot_id)` index replace the wider V1 text index.
+
 The data root is selected only when `NG_EMERGING_LEADER_RESEARCH_ENABLED=1`.
 With its default `0`, no recorder is instantiated or called.

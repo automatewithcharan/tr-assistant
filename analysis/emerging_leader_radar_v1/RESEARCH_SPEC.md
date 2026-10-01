@@ -47,9 +47,18 @@ are NULL unless a fresh `NIFTY 50` tick with last price and prior close exists.
 
 ## Storage and labels
 
-Each session has SQLite tables for immutable feature snapshots, descriptive
-rank crossing events, and market context. Snapshots are roughly once/minute;
-rolling history and threshold crossings are updated every watcher cycle.
+Schema `emerging_leader_radar_v1_1` normalizes immutable session metadata,
+symbols, and snapshot times. `features` contains only fresh symbols, keyed by
+integer `(snapshot_id, symbol_id)`; no feature row means the symbol did not
+have a valid fresh observation at that timestamp. Token mapping is session
+metadata with separate mapping-transition events. Rank events use numeric
+columns only. Snapshots are roughly once/minute; rolling history and threshold
+crossings are updated every watcher cycle. First observation/restart does not
+fabricate a crossing: an observed persisted prior rank is required.
 The offline labeler writes a separate labels SQLite database and never updates
-the feature database. EOD rank is the last coverage-qualified snapshot at or
-before the session end; insufficient EOD coverage is UNKNOWN/NULL.
+the feature database. Future rank labels use only coverage-qualified snapshots.
+EOD rank is valid only from a >=80%-coverage snapshot in the 15:28–15:30 IST
+window; otherwise it is UNKNOWN/NULL. Persistence is real elapsed time, not a
+snapshot count. The recorder has a fail-open disk guard: it pauses new rows
+below `NG_EMERGING_LEADER_MIN_FREE_GB` (default 5) and resumes only above
+`NG_EMERGING_LEADER_RESUME_FREE_GB` (default 8).
