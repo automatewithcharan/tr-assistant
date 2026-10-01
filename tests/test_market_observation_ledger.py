@@ -23,10 +23,10 @@ def test_observation_is_raw_append_only_and_nifty_is_not_qualified(tmp_path):
     ledger = MarketObservationLedger(tmp_path / "ledger", eq, nifty, tokens, lambda: now)
     assert ledger.process(ticks)["fresh_nifty50"] == 1
     state = json.loads((tmp_path / "ledger/2026-10-01/state.json").read_text())
-    assert state["symbols"]["NIFTYONE"]["first_top5_at"] == now.isoformat()
+    assert state["symbols"]["NIFTYONE"]["first_coverage_qualified_top5_at"] == now.isoformat()
     ledger.process(ticks)
     events = [json.loads(line) for line in (tmp_path / "ledger/2026-10-01/events.jsonl").read_text().splitlines()]
-    assert sum(event["event"] == "first_top5_at" and event["symbol"] == "NIFTYONE" for event in events) == 1
+    assert sum(event["event"] == "first_coverage_qualified_top5_at" and event["symbol"] == "NIFTYONE" for event in events) == 1
     # No order, qualification, anomaly, or Discord object is exposed by the ledger.
     assert not any("order" in name or "alert" in name for name in dir(ledger))
 
@@ -59,7 +59,7 @@ def test_partial_rank_is_provisional_and_never_backfills_confirmed_history(tmp_p
     rows=[{"symbol":f"S{i}","exchange":"NSE","received_at":second.isoformat(),"last_trade_time":second.isoformat(),"last_price":str(110-i),"close":"100"} for i in range(10)]
     write_csv(ticks,["symbol","exchange","received_at","last_trade_time","last_price","close"],rows)
     ledger.clock=lambda:second; ledger.process(ticks); state=json.loads((tmp_path/"ledger/2026-10-01/state.json").read_text())
-    assert state["symbols"]["S0"]["first_top5_at"] == second.isoformat()
+    assert state["symbols"]["S0"]["first_coverage_qualified_top5_at"] == second.isoformat()
 
 def test_nifty_rank_is_local_and_velocity_uses_elapsed_minutes(tmp_path):
     eq,nifty,tokens,ticks=(tmp_path/x for x in ("eq.csv","nifty.csv","tokens.csv","ticks.csv"))
@@ -68,4 +68,4 @@ def test_nifty_rank_is_local_and_velocity_uses_elapsed_minutes(tmp_path):
     ledger=MarketObservationLedger(tmp_path/"ledger",eq,nifty,tokens,lambda:t1,0); ledger.process(ticks)
     t2=datetime(2026,10,1,10,2,tzinfo=IST); rows[0].update(last_price="104",received_at=t2.isoformat(),last_trade_time=t2.isoformat()); [r.update(received_at=t2.isoformat(),last_trade_time=t2.isoformat()) for r in rows[1:]]; write_csv(ticks,rows[0].keys(),rows); ledger.clock=lambda:t2; ledger.process(ticks)
     state=json.loads((tmp_path/"ledger/2026-10-01/state.json").read_text())["symbols"]["A"]
-    assert state["nifty50_rank"] == 1 and state["provisional_rank"] == 1 and state["nifty50_rank_improvement"] == 1
+    assert state["provisional_nifty50_rank"] == 1 and state["provisional_rank"] == 1 and state["nifty50_rank_improvement"] == 1

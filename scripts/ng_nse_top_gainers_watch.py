@@ -21,6 +21,7 @@ from pkscreener.classes.NGP5EarlyWatchPublisher import DiscordWebhookTransport, 
 from pkscreener.classes.NSETopGainersWatch import NSETopGainersWatch  # noqa: E402
 from pkscreener.classes.NGTop100GainersWatch import NGTop100GainersWatch  # noqa: E402
 from pkscreener.classes.MarketObservationLedger import MarketObservationLedger  # noqa: E402
+from pkscreener.classes.Nifty50WatchPublisher import Nifty50WatchPublisher  # noqa: E402
 
 def _truthy(name: str) -> bool:
     return str(os.environ.get(name, "0")).strip().lower() in {"1", "true", "yes", "on"}
@@ -71,6 +72,8 @@ def main(argv: list[str] | None = None) -> int:
         ledger = MarketObservationLedger(args.state_root / "observation_ledger", args.universe_path,
             ROOT / "results/Indices/ind_nifty50list.csv",
             Path("/home/charan_sai/tr-assistant/results/Data/kiteticker_all_tokens_latest.csv"), lambda: datetime.now(IST))
+        nifty_watch = Nifty50WatchPublisher(args.state_root / "nifty50_watch", transport,
+                                             _truthy("NG_NIFTY50_WATCH_DISCORD_ENABLED"))
         stop_event = threading.Event()
 
         def stop(_signum: int, _frame: object) -> None:
@@ -83,7 +86,10 @@ def main(argv: list[str] | None = None) -> int:
         last_official_at = None
         while not stop_event.is_set():
             observation = ledger.process(args.ticks_path)
+            nifty_result = nifty_watch.process(observation.pop("event_records", []))
             print(json.dumps({"feed": "observation", **observation}, sort_keys=True), flush=True)
+            if nifty_result["status"] not in {"notification_disabled", "up_to_date"}:
+                print(json.dumps({"feed": "nifty50_watch", **nifty_result}, sort_keys=True), flush=True)
             now_monotonic = datetime.now(IST)
             if last_official_at is None or (now_monotonic - last_official_at).total_seconds() >= 60:
                 result = publisher.process()
