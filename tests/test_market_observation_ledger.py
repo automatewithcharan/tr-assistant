@@ -69,3 +69,20 @@ def test_nifty_rank_is_local_and_velocity_uses_elapsed_minutes(tmp_path):
     t2=datetime(2026,10,1,10,2,tzinfo=IST); rows[0].update(last_price="104",received_at=t2.isoformat(),last_trade_time=t2.isoformat()); [r.update(received_at=t2.isoformat(),last_trade_time=t2.isoformat()) for r in rows[1:]]; write_csv(ticks,rows[0].keys(),rows); ledger.clock=lambda:t2; ledger.process(ticks)
     state=json.loads((tmp_path/"ledger/2026-10-01/state.json").read_text())["symbols"]["A"]
     assert state["provisional_nifty50_rank"] == 1 and state["provisional_rank"] == 1 and state["nifty50_rank_improvement"] == 1
+
+def test_transition_id_recovers_after_fsync_before_state_advance(tmp_path):
+    eq,nifty,tokens,ticks=(tmp_path/x for x in ("eq.csv","nifty.csv","tokens.csv","ticks.csv"))
+    write_csv(eq,["SYMBOL","SERIES"],[{"SYMBOL":"A","SERIES":"EQ"}]); write_csv(nifty,["Symbol"],[]); write_csv(tokens,["Symbol"],[{"Symbol":"A"}])
+    t1=datetime(2026,10,1,10,tzinfo=IST); row={"symbol":"A","exchange":"NSE","received_at":t1.isoformat(),"last_trade_time":t1.isoformat(),"last_price":"101","close":"100"}; write_csv(ticks,row.keys(),[row])
+    ledger=MarketObservationLedger(tmp_path/"ledger",eq,nifty,tokens,lambda:t1,0); ledger.process(ticks)
+    state_path=tmp_path/"ledger/2026-10-01/state.json"; old=state_path.read_text()
+    t2=datetime(2026,10,1,10,3,tzinfo=IST); ledger.clock=lambda:t2; ledger.process(ticks)
+    events_path=tmp_path/"ledger/2026-10-01/events.jsonl"; first=[json.loads(x) for x in events_path.read_text().splitlines() if json.loads(x)["event"]=="stale"][-1]
+    state_path.write_text(old)  # fsynced event survives; state advancement is lost.
+    t3=datetime(2026,10,1,10,6,tzinfo=IST); ledger.clock=lambda:t3; ledger.process(ticks)
+    stale=[json.loads(x) for x in events_path.read_text().splitlines() if json.loads(x)["event"]=="stale"]
+    assert stale[-1]["event_id"] == first["event_id"]
+    fresh={**row,"received_at":datetime(2026,10,1,10,7,tzinfo=IST).isoformat(),"last_trade_time":datetime(2026,10,1,10,7,tzinfo=IST).isoformat()}; write_csv(ticks,fresh.keys(),[fresh]); ledger.clock=lambda:datetime(2026,10,1,10,7,tzinfo=IST); ledger.process(ticks)
+    ledger.clock=lambda:datetime(2026,10,1,10,10,tzinfo=IST); ledger.process(ticks)
+    stale=[json.loads(x) for x in events_path.read_text().splitlines() if json.loads(x)["event"]=="stale"]
+    assert stale[-1]["event_id"] != first["event_id"]

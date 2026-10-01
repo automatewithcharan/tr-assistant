@@ -48,14 +48,14 @@ class MarketObservationLedger:
                     elif p.get(key): record[key]=p[key]
             if fresh and not p.get("first_fresh_at"): record["first_fresh_at"]=now.isoformat(); events.append({"symbol":s,"event":"first_fresh_at","at":now.isoformat()})
             elif p.get("first_fresh_at"): record["first_fresh_at"]=p["first_fresh_at"]
-            if p.get("fresh")!=fresh: events.append({"symbol":s,"event":"fresh" if fresh else "stale","at":now.isoformat()})
+            if p.get("fresh")!=fresh: events.append({"symbol":s,"event":"fresh" if fresh else "stale","at":now.isoformat(),"transition_source_observation_at":p.get("observation_at", "initial"),"transition_from_fresh":p.get("fresh")})
             for prefix,a,b in (("rank",p.get("provisional_rank"),rank),("nifty50_rank",p.get("provisional_nifty50_rank"),nrank)):
                 if a and b and p.get("observation_at"):
                     minutes=max((now-datetime.fromisoformat(p["observation_at"])).total_seconds()/60,1e-9); record[f"{prefix}_improvement"]=a-b; record[f"{prefix}_velocity_per_minute"]=(a-b)/minutes
             state["symbols"][s]=record
         with (base/"events.jsonl").open("a",encoding="utf-8") as h:
             for e in events:
-                source_key = e["event"] if e["event"].startswith("first_") else f"{e['event']}|{e['at']}"
+                source_key = e["event"] if e["event"].startswith("first_") else f"{e['event']}|{e.get('transition_source_observation_at','initial')}|{e.get('transition_from_fresh')}"
                 e["event_id"]=hashlib.sha256(f"{now.date().isoformat()}|{e['symbol']}|{source_key}".encode()).hexdigest(); h.write(json.dumps(e,sort_keys=True)+"\n")
             h.flush(); os.fsync(h.fileno())
         _atomic(state_path,state)
