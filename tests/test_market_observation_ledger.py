@@ -44,3 +44,28 @@ def test_checked_in_service_uses_canonical_checkout_not_digest():
     assert "/home/charan_sai/tr-assistant-digest" not in unit
     assert "/home/charan_sai/tr-assistant/scripts/ng_nse_top_gainers_watch.py" in unit
     assert "--poll-seconds 15" in unit
+
+def test_partial_rank_is_provisional_and_never_backfills_confirmed_history(tmp_path):
+    eq,nifty,tokens,ticks=(tmp_path/x for x in ("eq.csv","nifty.csv","tokens.csv","ticks.csv"))
+    names=[{"SYMBOL":f"S{i}","SERIES":"EQ"} for i in range(10)]
+    write_csv(eq,["SYMBOL","SERIES"],names); write_csv(nifty,["Symbol"],[]); write_csv(tokens,["Symbol"],[{"Symbol":f"S{i}"} for i in range(10)])
+    first=datetime(2026,10,1,10,tzinfo=IST)
+    write_csv(ticks,["symbol","exchange","received_at","last_trade_time","last_price","close"],[{"symbol":"S0","exchange":"NSE","received_at":first.isoformat(),"last_trade_time":first.isoformat(),"last_price":"120","close":"100"}])
+    ledger=MarketObservationLedger(tmp_path/"ledger",eq,nifty,tokens,lambda:first,80)
+    ledger.process(ticks); state=json.loads((tmp_path/"ledger/2026-10-01/state.json").read_text())
+    assert state["symbols"]["S0"]["first_provisional_top5_at"] == first.isoformat()
+    assert "first_top5_at" not in state["symbols"]["S0"]
+    second=datetime(2026,10,1,10,5,tzinfo=IST)
+    rows=[{"symbol":f"S{i}","exchange":"NSE","received_at":second.isoformat(),"last_trade_time":second.isoformat(),"last_price":str(110-i),"close":"100"} for i in range(10)]
+    write_csv(ticks,["symbol","exchange","received_at","last_trade_time","last_price","close"],rows)
+    ledger.clock=lambda:second; ledger.process(ticks); state=json.loads((tmp_path/"ledger/2026-10-01/state.json").read_text())
+    assert state["symbols"]["S0"]["first_top5_at"] == second.isoformat()
+
+def test_nifty_rank_is_local_and_velocity_uses_elapsed_minutes(tmp_path):
+    eq,nifty,tokens,ticks=(tmp_path/x for x in ("eq.csv","nifty.csv","tokens.csv","ticks.csv"))
+    write_csv(eq,["SYMBOL","SERIES"],[{"SYMBOL":s,"SERIES":"EQ"} for s in ("A","B","C")]); write_csv(nifty,["Symbol"],[{"Symbol":"A"},{"Symbol":"B"}]); write_csv(tokens,["Symbol"],[{"Symbol":s} for s in ("A","B","C")])
+    t1=datetime(2026,10,1,10,tzinfo=IST); rows=[{"symbol":s,"exchange":"NSE","received_at":t1.isoformat(),"last_trade_time":t1.isoformat(),"last_price":p,"close":"100"} for s,p in (("A","101"),("B","102"),("C","103"))]; write_csv(ticks,rows[0].keys(),rows)
+    ledger=MarketObservationLedger(tmp_path/"ledger",eq,nifty,tokens,lambda:t1,0); ledger.process(ticks)
+    t2=datetime(2026,10,1,10,2,tzinfo=IST); rows[0].update(last_price="104",received_at=t2.isoformat(),last_trade_time=t2.isoformat()); [r.update(received_at=t2.isoformat(),last_trade_time=t2.isoformat()) for r in rows[1:]]; write_csv(ticks,rows[0].keys(),rows); ledger.clock=lambda:t2; ledger.process(ticks)
+    state=json.loads((tmp_path/"ledger/2026-10-01/state.json").read_text())["symbols"]["A"]
+    assert state["nifty50_rank"] == 1 and state["provisional_rank"] == 1 and state["nifty50_rank_improvement"] == 1

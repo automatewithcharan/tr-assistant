@@ -80,13 +80,17 @@ def main(argv: list[str] | None = None) -> int:
         signal.signal(signal.SIGINT, stop)
         last_status = None
         last_broad_status = None
+        last_official_at = None
         while not stop_event.is_set():
             observation = ledger.process(args.ticks_path)
             print(json.dumps({"feed": "observation", **observation}, sort_keys=True), flush=True)
-            result = publisher.process()
-            if result["status"] not in {"outside_window", "up_to_date", "retry_wait"} or result["status"] != last_status:
-                print(json.dumps(result, sort_keys=True), flush=True)
-            last_status = result["status"]
+            now_monotonic = datetime.now(IST)
+            if last_official_at is None or (now_monotonic - last_official_at).total_seconds() >= 60:
+                result = publisher.process()
+                if result["status"] not in {"outside_window", "up_to_date", "retry_wait"} or result["status"] != last_status:
+                    print(json.dumps(result, sort_keys=True), flush=True)
+                last_status = result["status"]
+                last_official_at = now_monotonic
             broad_result = broad.process()
             if broad_result["status"] not in {"outside_window", "up_to_date", "retry_wait"} or broad_result["status"] != last_broad_status:
                 print(json.dumps({"feed": "kite_top100", **broad_result}, sort_keys=True), flush=True)
