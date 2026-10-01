@@ -9,6 +9,7 @@ import json
 import os
 from pathlib import Path
 import signal
+import subprocess
 import sys
 import threading
 from datetime import datetime
@@ -22,6 +23,7 @@ from pkscreener.classes.NSETopGainersWatch import NSETopGainersWatch  # noqa: E4
 from pkscreener.classes.NGTop100GainersWatch import NGTop100GainersWatch  # noqa: E402
 from pkscreener.classes.MarketObservationLedger import MarketObservationLedger  # noqa: E402
 from pkscreener.classes.Nifty50WatchPublisher import Nifty50WatchPublisher  # noqa: E402
+from pkscreener.classes.EmergingLeaderRecorder import EmergingLeaderRecorder  # noqa: E402
 
 def _truthy(name: str) -> bool:
     return str(os.environ.get(name, "0")).strip().lower() in {"1", "true", "yes", "on"}
@@ -41,6 +43,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--min-traded-value", type=float, default=1_000_000.0,
                         help="Minimum cumulative traded rupee value")
     parser.add_argument("--once", action="store_true")
+    parser.add_argument("--emerging-leader-root", type=Path, default=None,
+                        help="Shadow-only research output root (requires feature flag)")
     args = parser.parse_args(argv)
     webhook = os.environ.get("NG_QUALITY_WATCH_DISCORD_WEBHOOK_URL", "").strip()
     transport = None
@@ -74,6 +78,19 @@ def main(argv: list[str] | None = None) -> int:
             Path("/home/charan_sai/tr-assistant/results/Data/kiteticker_all_tokens_latest.csv"), lambda: datetime.now(IST))
         nifty_watch = Nifty50WatchPublisher(args.state_root / "nifty50_watch", transport,
                                              _truthy("NG_NIFTY50_WATCH_DISCORD_ENABLED"))
+        recorder = None
+        if _truthy("NG_EMERGING_LEADER_RESEARCH_ENABLED"):
+            try:
+                sha = subprocess.check_output(["git", "-C", str(ROOT), "rev-parse", "HEAD"], text=True).strip()
+                recorder = EmergingLeaderRecorder(
+                    args.emerging_leader_root or args.state_root / "emerging_leader_radar",
+                    args.universe_path,
+                    Path("/home/charan_sai/tr-assistant/results/Data/kiteticker_all_tokens_latest.csv"),
+                    sha,
+                    lambda: datetime.now(IST),
+                )
+            except Exception as exc:  # Research must never block observation/watch.
+                print(json.dumps({"feed": "emerging_leader", "status": "initialization_failed", "error": str(exc)}), flush=True)
         stop_event = threading.Event()
 
         def stop(_signum: int, _frame: object) -> None:
@@ -86,6 +103,12 @@ def main(argv: list[str] | None = None) -> int:
         last_official_at = None
         while not stop_event.is_set():
             observation = ledger.process(args.ticks_path)
+            if recorder is not None:
+                try:
+                    result = recorder.process(args.ticks_path)
+                    print(json.dumps({"feed": "emerging_leader", **result}, sort_keys=True), flush=True)
+                except Exception as exc:  # Fail open: no production behaviour depends on this recorder.
+                    print(json.dumps({"feed": "emerging_leader", "status": "failed_open", "error": str(exc)}), flush=True)
             nifty_result = nifty_watch.process(observation.pop("event_records", []))
             print(json.dumps({"feed": "observation", **observation}, sort_keys=True), flush=True)
             if nifty_result["status"] not in {"notification_disabled", "up_to_date"}:
