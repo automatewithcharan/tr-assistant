@@ -22,6 +22,9 @@ from pkscreener.classes.EmergingLeaderAlertPublisher import (  # noqa: E402
     IST,
     RadarUnavailable,
 )
+from pkscreener.classes.EmergingLeaderCausalMinuteProvider import (  # noqa: E402
+    EmergingLeaderCausalMinuteProvider,
+)
 from pkscreener.classes.NGP5EarlyWatchPublisher import (  # noqa: E402
     DiscordWebhookTransport,
     validate_webhook_url,
@@ -43,6 +46,11 @@ def _parser() -> argparse.ArgumentParser:
         "--state-db",
         type=Path,
         default=Path("/home/charan_sai/tr-assistant/results/Data/emerging_leader_alerts/publisher.sqlite"),
+    )
+    parser.add_argument(
+        "--ticks-path",
+        type=Path,
+        default=Path("/home/charan_sai/tr-assistant/results/Data/kiteticker_all_ticks_latest.json"),
     )
     parser.add_argument("--poll-seconds", type=float, default=2.0)
     parser.add_argument("--http-timeout-seconds", type=float, default=10.0)
@@ -94,15 +102,51 @@ def main(argv: list[str] | None = None) -> int:
         except BlockingIOError:
             print("Emerging Leader alert publisher is already running", file=sys.stderr)
             return 2
+        minute_provider = EmergingLeaderCausalMinuteProvider(
+            args.ticks_path, args.state_db
+        )
         publisher = EmergingLeaderAlertPublisher(
-            args.radar_root, args.state_db, transport=transport
+            args.radar_root,
+            args.state_db,
+            transport=transport,
+            shadow_plan_provider=minute_provider,
+        )
+        print(
+            json.dumps(
+                {
+                    "feed": "emerging_leader_alerts",
+                    "shadow_plan_provider": minute_provider.health(),
+                    "status": "causal_minute_provider_started",
+                },
+                sort_keys=True,
+            ),
+            flush=True,
         )
         stop = threading.Event()
         signal.signal(signal.SIGINT, lambda *_: stop.set())
         signal.signal(signal.SIGTERM, lambda *_: stop.set())
         last_error = None
+        last_minute_provider_error = None
         while not stop.is_set():
             session_date = publisher.clock().astimezone(IST).date().isoformat()
+            try:
+                minute_provider.observe_latest()
+                last_minute_provider_error = None
+            except Exception as exc:
+                minute_provider_error = f"{type(exc).__name__}:{exc}"
+                if minute_provider_error != last_minute_provider_error:
+                    print(
+                        json.dumps(
+                            {
+                                "feed": "emerging_leader_alerts",
+                                "status": "shadow_plan_provider_unavailable",
+                                "error": minute_provider_error,
+                            },
+                            sort_keys=True,
+                        ),
+                        flush=True,
+                    )
+                last_minute_provider_error = minute_provider_error
             try:
                 result = publisher.process_once(session_date)
                 payload = {
