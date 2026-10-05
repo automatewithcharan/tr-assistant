@@ -1,0 +1,28 @@
+[Unit]
+Description=Read-only Emerging Leader Discord alert publisher
+After=network-online.target ng-nse-top-gainers-watch.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=charan_sai
+WorkingDirectory=/home/charan_sai/tr-assistant-emerging-alerts
+EnvironmentFile=/home/charan_sai/tr-assistant/.env.dev
+Environment=TZ=Asia/Kolkata
+Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=NG_EMERGING_LEADER_DISCORD_ENABLED=1
+Environment=NG_TOP100_WATCH_DISCORD_ENABLED=0
+Environment=NG_NIFTY50_WATCH_DISCORD_ENABLED=0
+ExecStart=/home/charan_sai/tr-assistant/.venv/bin/python /home/charan_sai/tr-assistant-emerging-alerts/scripts/ng_emerging_leader_alerts.py --radar-root /home/charan_sai/tr-assistant/results/Data/emerging_leader_radar --state-db /home/charan_sai/tr-assistant/results/Data/emerging_leader_alerts/publisher.sqlite --poll-seconds 2
+Restart=on-failure
+RestartSec=5s
+NoNewPrivileges=true
+PrivateTmp=true
+UMask=0077
+ReadWritePaths=/home/charan_sai/tr-assistant/results/Data/emerging_leader_alerts
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ng-emerging-leader-alerts
+
+[Install]
+WantedBy=multi-user.target
