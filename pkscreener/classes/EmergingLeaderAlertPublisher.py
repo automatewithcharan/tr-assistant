@@ -9,6 +9,14 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Optional
 
+from pkscreener.classes.EmergingLeaderShadowPlan import (
+    ShadowPlan,
+    ShadowPlanInputs,
+    calculate_shadow_plan,
+    format_shadow_plan,
+    unavailable_shadow_plan,
+)
+
 
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
 STAGES = {
@@ -55,12 +63,14 @@ class EmergingLeaderAlertPublisher:
         transport=None,
         clock: Callable[[], dt.datetime] | None = None,
         retry_base_seconds: float = 5.0,
+        shadow_plan_provider: Callable[[sqlite3.Row], ShadowPlanInputs] | None = None,
     ) -> None:
         self.radar_root = Path(radar_root)
         self.state_db = Path(state_db)
         self.transport = transport
         self.clock = clock or (lambda: dt.datetime.now(IST))
         self.retry_base_seconds = max(0.1, float(retry_base_seconds))
+        self.shadow_plan_provider = shadow_plan_provider or self._unavailable_live_inputs
         self.state_db.parent.mkdir(parents=True, exist_ok=True)
         self._initialize_state()
 
@@ -125,6 +135,32 @@ class EmergingLeaderAlertPublisher:
                     ON source_events(session_date, applied, event_epoch_ms);
                 CREATE INDEX IF NOT EXISTS idx_outbox_pending
                     ON outbox(delivery_state, next_attempt_epoch_ms, event_epoch_ms);
+                CREATE TABLE IF NOT EXISTS shadow_plan_audit(
+                    outbox_id INTEGER PRIMARY KEY,
+                    session_date TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    stage TEXT NOT NULL,
+                    candidate_detected_at TEXT NOT NULL,
+                    reference_entry REAL,
+                    price_observed_at TEXT,
+                    shadow_plan_status TEXT NOT NULL,
+                    missing_reason TEXT,
+                    stop_input_mode TEXT,
+                    atr_input_at TEXT,
+                    atr14 REAL,
+                    signal_low_at TEXT,
+                    signal_low REAL,
+                    initial_stop REAL,
+                    risk_per_share REAL,
+                    risk_qty INTEGER,
+                    exposure_qty INTEGER,
+                    final_qty INTEGER,
+                    target_1r REAL,
+                    target_2r REAL,
+                    planned_rupee_risk REAL,
+                    position_exposure REAL,
+                    FOREIGN KEY(outbox_id) REFERENCES outbox(outbox_id)
+                );
                 """
             )
 
@@ -235,8 +271,28 @@ class EmergingLeaderAlertPublisher:
             return "unavailable"
         return f"{float(value):+.{digits}f}{suffix}"
 
+    @staticmethod
+    def _unavailable_live_inputs(event: sqlite3.Row) -> ShadowPlanInputs:
+        return ShadowPlanInputs(
+            candidate_detected_at=dt.datetime.fromtimestamp(
+                int(event["event_epoch_ms"]) / 1000, tz=IST
+            ),
+            reference_entry=event["last_price"],
+        )
+
+    def _shadow_plan(self, event: sqlite3.Row) -> ShadowPlan:
+        try:
+            return calculate_shadow_plan(self.shadow_plan_provider(event))
+        except Exception as exc:
+            inputs = self._unavailable_live_inputs(event)
+            return unavailable_shadow_plan(
+                inputs,
+                f"shadow plan formatter error: {type(exc).__name__}",
+                status="PLAN_ERROR",
+            )
+
     @classmethod
-    def format_message(cls, event: sqlite3.Row) -> str:
+    def format_message(cls, event: sqlite3.Row, plan: ShadowPlan | None = None) -> str:
         stage, title = STAGES[int(event["milestone"])]
         timestamp = dt.datetime.fromtimestamp(
             int(event["event_epoch_ms"]) / 1000, tz=IST
@@ -269,11 +325,36 @@ class EmergingLeaderAlertPublisher:
                 "",
                 timestamp,
                 f"Market coverage: {cls._number(event['coverage_pct'], 1, '%')}",
-                "",
-                "Research watch only — not a buy signal",
             ]
         )
+        if plan is not None:
+            lines.extend(["", format_shadow_plan(plan)])
+        lines.extend(["", "Research watch only — not a buy signal"])
         return "\n".join(lines)
+
+    @staticmethod
+    def _persist_plan_audit(
+        state: sqlite3.Connection,
+        outbox_id: int,
+        session_date: str,
+        symbol: str,
+        stage: str,
+        plan: ShadowPlan,
+    ) -> None:
+        values = plan.audit_values()
+        columns = [
+            "candidate_detected_at", "reference_entry", "price_observed_at",
+            "shadow_plan_status", "missing_reason", "stop_input_mode",
+            "atr_input_at", "atr14", "signal_low_at", "signal_low",
+            "initial_stop", "risk_per_share", "risk_qty", "exposure_qty",
+            "final_qty", "target_1r", "target_2r", "planned_rupee_risk",
+            "position_exposure",
+        ]
+        state.execute(
+            "INSERT OR IGNORE INTO shadow_plan_audit(outbox_id,session_date,symbol,stage,"
+            + ",".join(columns) + ") VALUES(" + ",".join("?" * (4 + len(columns))) + ")",
+            (outbox_id, session_date, symbol, stage, *(values[column] for column in columns)),
+        )
 
     @staticmethod
     def _has_top300(state: sqlite3.Connection, session_date: str, symbol: str, delivered=False) -> bool:
@@ -306,7 +387,14 @@ class EmergingLeaderAlertPublisher:
                     continue
                 if should_queue:
                     stage = STAGES[milestone][0]
-                    queued += state.execute(
+                    if state.execute(
+                        "SELECT 1 FROM outbox WHERE session_date=? AND symbol=? AND stage=?",
+                        (session_date, event["symbol"], stage),
+                    ).fetchone():
+                        state.execute("UPDATE source_events SET applied=1 WHERE event_id=?", (event["event_id"],))
+                        continue
+                    plan = self._shadow_plan(event)
+                    inserted = state.execute(
                         "INSERT OR IGNORE INTO outbox(session_date,symbol,stage,event_epoch_ms,message) "
                         "VALUES(?,?,?,?,?)",
                         (
@@ -314,9 +402,14 @@ class EmergingLeaderAlertPublisher:
                             event["symbol"],
                             stage,
                             event["event_epoch_ms"],
-                            self.format_message(event),
+                            self.format_message(event, plan),
                         ),
-                    ).rowcount
+                    )
+                    queued += inserted.rowcount
+                    if inserted.rowcount:
+                        self._persist_plan_audit(
+                            state, inserted.lastrowid, session_date, event["symbol"], stage, plan
+                        )
                 state.execute("UPDATE source_events SET applied=1 WHERE event_id=?", (event["event_id"],))
         return queued
 

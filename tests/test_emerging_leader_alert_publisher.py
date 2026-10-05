@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import hashlib
+import ast
 import sqlite3
 from pathlib import Path
 
@@ -13,6 +14,11 @@ from pkscreener.classes.EmergingLeaderAlertPublisher import (
     open_radar_read_only,
 )
 from pkscreener.classes.NGP5EarlyWatchPublisher import DeliveryResult
+from pkscreener.classes.EmergingLeaderShadowPlan import (
+    LIVE_PARTIAL_1M,
+    ShadowPlanInputs,
+    calculate_shadow_plan,
+)
 
 
 class Clock:
@@ -94,10 +100,15 @@ def add_event(path: Path, symbol: str, timestamp: int, milestone: int, rank: int
             )
 
 
-def publisher(tmp_path, transport=None, clock=None):
+def publisher(tmp_path, transport=None, clock=None, shadow_plan_provider=None):
     root, radar = make_radar(tmp_path)
     value = EmergingLeaderAlertPublisher(
-        root, tmp_path / "state" / "publisher.sqlite", transport, clock or Clock(), retry_base_seconds=0.1
+        root,
+        tmp_path / "state" / "publisher.sqlite",
+        transport,
+        clock or Clock(),
+        retry_base_seconds=0.1,
+        shadow_plan_provider=shadow_plan_provider,
     )
     return value, radar
 
@@ -217,6 +228,209 @@ def test_transport_exception_is_isolated_and_pending(tmp_path):
     row = outbox_rows(value)[0]
     assert row["delivery_state"] == "pending"
     assert row["last_error"] == "transport_exception:RuntimeError"
+
+
+def causal_inputs(entry=100.0, atr=2.0, low=99.5, price_age_seconds=1.0, mode=LIVE_PARTIAL_1M):
+    candidate = dt.datetime(2027, 1, 15, 10, 0, tzinfo=IST)
+    return ShadowPlanInputs(
+        candidate_detected_at=candidate,
+        reference_entry=entry,
+        price_observed_at=candidate - dt.timedelta(seconds=price_age_seconds),
+        atr14=atr,
+        atr_input_at=candidate,
+        signal_low=low,
+        signal_low_at=candidate,
+        stop_input_mode=mode,
+    )
+
+
+def test_valid_causal_shadow_plan_formula_and_max_quantity():
+    plan = calculate_shadow_plan(causal_inputs())
+    assert plan.shadow_plan_status == "VALID"
+    assert plan.initial_stop == pytest.approx(99.0)
+    assert plan.risk_per_share == pytest.approx(1.0)
+    assert plan.final_qty == 500
+    assert plan.target_1r == pytest.approx(101.0)
+    assert plan.target_2r == pytest.approx(102.0)
+    assert plan.planned_rupee_risk == pytest.approx(500.0)
+    assert plan.position_exposure == pytest.approx(50_000.0)
+
+
+def test_shadow_plan_risk_cap():
+    plan = calculate_shadow_plan(causal_inputs(entry=100.0, atr=2.6, low=99.5))
+    assert plan.shadow_plan_status == "VALID"
+    assert plan.planned_rupee_risk <= 500.0 + 1e-6
+
+
+def test_shadow_plan_exposure_cap():
+    plan = calculate_shadow_plan(causal_inputs(entry=1000.0, atr=1.0, low=999.8))
+    assert plan.shadow_plan_status == "VALID"
+    assert plan.exposure_qty == 300
+    assert plan.final_qty == 300
+    assert plan.position_exposure <= 300_000.0 + 1e-6
+
+
+@pytest.mark.parametrize(
+    "inputs,reason",
+    [
+        (causal_inputs(atr=None), "causal ATR14"),
+        (causal_inputs(low=None), "causal current-minute low"),
+        (causal_inputs(price_age_seconds=121), "reference price stale"),
+        (causal_inputs(mode="DAY_LOW"), "LIVE_PARTIAL_1M provenance"),
+    ],
+)
+def test_invalid_or_noncausal_inputs_make_plan_unavailable(inputs, reason):
+    plan = calculate_shadow_plan(inputs)
+    assert plan.shadow_plan_status == "INPUTS_UNAVAILABLE"
+    assert plan.final_qty is None
+    assert reason in plan.missing_reason
+
+
+def test_missing_plan_inputs_do_not_suppress_candidate_alert(tmp_path):
+    transport = Transport()
+    value, radar = publisher(tmp_path, transport)
+    value.process_once("2027-01-15")
+    add_event(radar, "NOINPUTS", 2000, 300, 250)
+    result = value.process_once("2027-01-15")
+    assert result.delivered == 1
+    assert "Plan: INPUTS_UNAVAILABLE" in transport.messages[0]
+    with sqlite3.connect(value.state_db) as connection:
+        audit = connection.execute(
+            "SELECT shadow_plan_status,price_observed_at,atr14,signal_low,final_qty "
+            "FROM shadow_plan_audit"
+        ).fetchone()
+    assert audit == ("INPUTS_UNAVAILABLE", None, None, None, None)
+
+
+@pytest.mark.parametrize("case", ["missing_atr", "missing_low", "stale_price"])
+def test_each_unavailable_input_case_still_delivers_candidate(tmp_path, case):
+    def provider(event):
+        candidate = dt.datetime.fromtimestamp(event["event_epoch_ms"] / 1000, tz=IST)
+        return ShadowPlanInputs(
+            candidate_detected_at=candidate,
+            reference_entry=event["last_price"],
+            price_observed_at=candidate - dt.timedelta(seconds=121 if case == "stale_price" else 1),
+            atr14=None if case == "missing_atr" else 2.0,
+            atr_input_at=None if case == "missing_atr" else candidate,
+            signal_low=None if case == "missing_low" else event["last_price"] - 0.5,
+            signal_low_at=None if case == "missing_low" else candidate,
+            stop_input_mode=LIVE_PARTIAL_1M,
+        )
+
+    transport = Transport()
+    value, radar = publisher(tmp_path, transport, shadow_plan_provider=provider)
+    value.process_once("2027-01-15")
+    add_event(radar, "UNAVAILABLE", 2000, 300, 250)
+    result = value.process_once("2027-01-15")
+    assert result.delivered == 1
+    assert len(transport.messages) == 1
+    assert "Plan: INPUTS_UNAVAILABLE" in transport.messages[0]
+
+
+def test_formatter_failure_cannot_suppress_alert(tmp_path):
+    def broken_provider(_event):
+        raise RuntimeError("format broke")
+
+    transport = Transport()
+    value, radar = publisher(tmp_path, transport, shadow_plan_provider=broken_provider)
+    value.process_once("2027-01-15")
+    add_event(radar, "STILLALERTS", 2000, 300, 250)
+    result = value.process_once("2027-01-15")
+    assert result.delivered == 1
+    assert "Plan: PLAN_ERROR" in transport.messages[0]
+    assert "EMERGING LEADER — STILLALERTS" in transport.messages[0]
+
+
+def test_shadow_plan_does_not_change_candidate_selection(tmp_path):
+    def valid_provider(event):
+        candidate = dt.datetime.fromtimestamp(event["event_epoch_ms"] / 1000, tz=IST)
+        return ShadowPlanInputs(
+            candidate_detected_at=candidate,
+            reference_entry=event["last_price"],
+            price_observed_at=candidate,
+            atr14=2.0,
+            atr_input_at=candidate,
+            signal_low=event["last_price"] - 0.5,
+            signal_low_at=candidate,
+            stop_input_mode=LIVE_PARTIAL_1M,
+        )
+
+    normal_dir = tmp_path / "normal"
+    error_dir = tmp_path / "error"
+    normal, normal_radar = publisher(normal_dir, Transport(), shadow_plan_provider=valid_provider)
+    broken, broken_radar = publisher(
+        error_dir,
+        Transport(),
+        shadow_plan_provider=lambda _event: (_ for _ in ()).throw(RuntimeError("no plan")),
+    )
+    for value, radar in ((normal, normal_radar), (broken, broken_radar)):
+        value.process_once("2027-01-15")
+        add_event(radar, "SAME", 2000, 300, 250)
+        value.process_once("2027-01-15")
+    normal_keys = [(row["symbol"], row["stage"]) for row in outbox_rows(normal)]
+    broken_keys = [(row["symbol"], row["stage"]) for row in outbox_rows(broken)]
+    assert normal_keys == broken_keys == [("SAME", "TOP300")]
+    assert outbox_rows(normal)[0]["event_epoch_ms"] == outbox_rows(broken)[0]["event_epoch_ms"] == 2000
+
+
+def test_valid_plan_observability_is_persisted(tmp_path):
+    def provider(event):
+        candidate = dt.datetime.fromtimestamp(event["event_epoch_ms"] / 1000, tz=IST)
+        return ShadowPlanInputs(
+            candidate_detected_at=candidate,
+            reference_entry=100.0,
+            price_observed_at=candidate - dt.timedelta(seconds=1),
+            atr14=2.0,
+            atr_input_at=candidate,
+            signal_low=99.5,
+            signal_low_at=candidate,
+            stop_input_mode=LIVE_PARTIAL_1M,
+        )
+
+    transport = Transport()
+    value, radar = publisher(tmp_path, transport, shadow_plan_provider=provider)
+    value.process_once("2027-01-15")
+    add_event(radar, "AUDITED", 2000, 300, 250)
+    value.process_once("2027-01-15")
+    with sqlite3.connect(value.state_db) as connection:
+        connection.row_factory = sqlite3.Row
+        audit = dict(connection.execute("SELECT * FROM shadow_plan_audit").fetchone())
+    assert audit["shadow_plan_status"] == "VALID"
+    assert audit["reference_entry"] == 100.0
+    assert audit["atr14"] == 2.0
+    assert audit["signal_low"] == 99.5
+    assert audit["initial_stop"] == 99.0
+    assert audit["risk_per_share"] == 1.0
+    assert audit["risk_qty"] == 500
+    assert audit["exposure_qty"] == 3000
+    assert audit["final_qty"] == 500
+    assert audit["target_1r"] == 101.0
+    assert audit["target_2r"] == 102.0
+    assert audit["planned_rupee_risk"] == 500.0
+    assert audit["position_exposure"] == 50_000.0
+
+
+def test_shadow_plan_modules_have_no_broker_or_order_dependencies():
+    root = Path(__file__).parents[1]
+    paths = [
+        root / "pkscreener/classes/EmergingLeaderShadowPlan.py",
+        root / "pkscreener/classes/EmergingLeaderAlertPublisher.py",
+    ]
+    imported = set()
+    combined = ""
+    for path in paths:
+        source = path.read_text()
+        combined += source.lower()
+        tree = ast.parse(source)
+        imported.update(
+            alias.name.lower()
+            for node in ast.walk(tree)
+            if isinstance(node, (ast.Import, ast.ImportFrom))
+            for alias in node.names
+        )
+    assert not any("broker" in name or "order" in name for name in imported)
+    assert "place_order(" not in combined
+    assert "kiteconnect" not in combined
 
 
 def test_systemd_flags_keep_legacy_alerts_disabled():
