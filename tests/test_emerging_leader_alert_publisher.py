@@ -19,6 +19,12 @@ from pkscreener.classes.EmergingLeaderShadowPlan import (
     ShadowPlanInputs,
     calculate_shadow_plan,
 )
+from pkscreener.classes.EmergingLeaderDiscordActionability import (
+    DEFAULT_MIN_CUM_VOLUME,
+    DEFAULT_MIN_TURNOVER,
+    DiscordActionabilityThresholds,
+    evaluate_discord_actionability,
+)
 
 
 class Clock:
@@ -76,7 +82,17 @@ def make_radar(tmp_path: Path, session_date="2027-01-15"):
     return root, path
 
 
-def add_event(path: Path, symbol: str, timestamp: int, milestone: int, rank: int, features=True):
+def add_event(
+    path: Path,
+    symbol: str,
+    timestamp: int,
+    milestone: int,
+    rank: int,
+    features=True,
+    cumulative_volume=800_000,
+    approx_turnover=100_000_000,
+    volume_rate_5m=40_000,
+):
     with sqlite3.connect(path) as connection:
         row = connection.execute("SELECT symbol_id FROM symbols WHERE symbol=?", (symbol,)).fetchone()
         if row:
@@ -87,7 +103,10 @@ def add_event(path: Path, symbol: str, timestamp: int, milestone: int, rank: int
             ).fetchone()[0]
         connection.execute(
             "INSERT OR REPLACE INTO rank_events VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-            (1, symbol_id, timestamp, milestone, rank, 2.41, 2180, 2337, 93.28, 125.5, 800000, 100000000),
+            (
+                1, symbol_id, timestamp, milestone, rank, 2.41, 2180, 2337,
+                93.28, 125.5, cumulative_volume, approx_turnover,
+            ),
         )
         if features:
             snapshot_id = connection.execute(
@@ -96,7 +115,20 @@ def add_event(path: Path, symbol: str, timestamp: int, milestone: int, rank: int
             ).fetchone()[0]
             connection.execute(
                 "INSERT INTO features VALUES(?,?,?,?,?,?,?,?,?,?,?,?)",
-                (snapshot_id, symbol_id, 428, 152, 30.4, 2.2, 1.83, 0.4, 12000000, 40000, -0.35, 0.62),
+                (
+                    snapshot_id,
+                    symbol_id,
+                    None if features == "liquidity_only" else 428,
+                    None if features == "liquidity_only" else 152,
+                    None if features == "liquidity_only" else 30.4,
+                    None if features == "liquidity_only" else 2.2,
+                    None if features == "liquidity_only" else 1.83,
+                    None if features == "liquidity_only" else 0.4,
+                    None if features == "liquidity_only" else 12_000_000,
+                    volume_rate_5m,
+                    None if features == "liquidity_only" else -0.35,
+                    None if features == "liquidity_only" else 0.62,
+                ),
             )
 
 
@@ -109,6 +141,7 @@ def publisher(tmp_path, transport=None, clock=None, shadow_plan_provider=None):
         clock or Clock(),
         retry_base_seconds=0.1,
         shadow_plan_provider=shadow_plan_provider,
+        actionability_thresholds=DiscordActionabilityThresholds(),
     )
     return value, radar
 
@@ -117,6 +150,14 @@ def outbox_rows(value):
     with sqlite3.connect(value.state_db) as connection:
         connection.row_factory = sqlite3.Row
         return connection.execute("SELECT * FROM outbox ORDER BY outbox_id").fetchall()
+
+
+def actionability_rows(value):
+    with sqlite3.connect(value.state_db) as connection:
+        connection.row_factory = sqlite3.Row
+        return connection.execute(
+            "SELECT * FROM discord_actionability_audit ORDER BY source_event_id"
+        ).fetchall()
 
 
 def test_radar_connection_is_read_only_and_source_is_unchanged(tmp_path):
@@ -211,7 +252,7 @@ def test_missing_feature_enrichment_is_omitted(tmp_path):
     transport = Transport()
     value, radar = publisher(tmp_path, transport)
     value.process_once("2027-01-15")
-    add_event(radar, "SPARSE", 2000, 300, 250, features=False)
+    add_event(radar, "SPARSE", 2000, 300, 250, features="liquidity_only")
     value.process_once("2027-01-15")
     message = transport.messages[0]
     assert "EMERGING LEADER — SPARSE" in message
@@ -410,9 +451,156 @@ def test_valid_plan_observability_is_persisted(tmp_path):
     assert audit["position_exposure"] == 50_000.0
 
 
+def test_actionability_environment_defaults_and_overrides(monkeypatch):
+    monkeypatch.delenv("NG_EMERGING_DISCORD_MIN_CUM_VOLUME", raising=False)
+    monkeypatch.delenv("NG_EMERGING_DISCORD_MIN_TURNOVER", raising=False)
+    defaults = DiscordActionabilityThresholds.from_environment()
+    assert defaults.min_cumulative_volume == DEFAULT_MIN_CUM_VOLUME == 1_000.0
+    assert defaults.min_turnover == DEFAULT_MIN_TURNOVER == 1_000_000.0
+    monkeypatch.setenv("NG_EMERGING_DISCORD_MIN_CUM_VOLUME", "2500")
+    monkeypatch.setenv("NG_EMERGING_DISCORD_MIN_TURNOVER", "3000000")
+    overridden = DiscordActionabilityThresholds.from_environment()
+    assert overridden == DiscordActionabilityThresholds(2_500.0, 3_000_000.0)
+
+
+@pytest.mark.parametrize(
+    "volume,turnover,rate,expected_reasons",
+    [
+        (10, 8_000, 1, ("LOW_CUM_VOLUME", "LOW_TURNOVER")),
+        (10_000, 900_000, 500, ("LOW_TURNOVER",)),
+        (999, 2_000_000, 500, ("LOW_CUM_VOLUME",)),
+        (10_000, 2_000_000, None, ("NO_RECENT_VOLUME_RATE",)),
+        (10_000, 2_000_000, 0, ("NONPOSITIVE_RECENT_VOLUME_RATE",)),
+        (10_000, 2_000_000, -1, ("NONPOSITIVE_RECENT_VOLUME_RATE",)),
+    ],
+)
+def test_actionability_suppression_reasons(volume, turnover, rate, expected_reasons):
+    result = evaluate_discord_actionability(
+        volume, turnover, rate, DiscordActionabilityThresholds()
+    )
+    assert result.discord_actionability_status == "SUPPRESSED_LOW_LIQUIDITY"
+    assert result.reasons == expected_reasons
+
+
+def test_liquid_candidate_passes_and_capacity_proxy_is_descriptive(tmp_path):
+    transport = Transport()
+    value, radar = publisher(tmp_path, transport)
+    value.process_once("2027-01-15")
+    add_event(
+        radar, "LIQUID", 2000, 300, 250,
+        cumulative_volume=10_000, approx_turnover=2_000_000, volume_rate_5m=500,
+    )
+    result = value.process_once("2027-01-15")
+    assert result.delivered == 1
+    audit = actionability_rows(value)[0]
+    assert audit["discord_actionability_status"] == "PASS"
+    assert audit["recent_5m_participation_capacity_5pct"] == 25
+    message = transport.messages[0]
+    assert "💧 ACTIONABILITY" in message
+    assert "Liquidity gate: PASS" in message
+    assert "5% recent-volume capacity proxy: 25 shares/min" in message
+    assert message.count("Volume: 10,000") == 1
+    assert message.count("Turnover: ₹0.20 Cr") == 1
+
+
+def test_low_liquidity_is_retained_and_audited_but_not_sent(tmp_path):
+    transport = Transport()
+    value, radar = publisher(tmp_path, transport)
+    value.process_once("2027-01-15")
+    add_event(
+        radar, "ILLIQUID", 2000, 300, 250,
+        cumulative_volume=10, approx_turnover=8_000, volume_rate_5m=1,
+    )
+    result = value.process_once("2027-01-15")
+    assert result.delivered == 0
+    assert transport.messages == []
+    assert outbox_rows(value) == []
+    with sqlite3.connect(value.state_db) as connection:
+        retained = connection.execute(
+            "SELECT symbol,applied,cumulative_volume,approx_turnover,volume_rate_5m "
+            "FROM source_events"
+        ).fetchone()
+    assert retained == ("ILLIQUID", 1, 10.0, 8_000.0, 1.0)
+    audit = actionability_rows(value)[0]
+    assert audit["discord_actionability_status"] == "SUPPRESSED_LOW_LIQUIDITY"
+    assert audit["reasons"] == "LOW_CUM_VOLUME;LOW_TURNOVER"
+    assert audit["min_cumulative_volume"] == 1_000.0
+    assert audit["min_turnover"] == 1_000_000.0
+    assert audit["recent_5m_participation_capacity_5pct"] == 0
+    with sqlite3.connect(radar) as connection:
+        assert connection.execute("SELECT count(*) FROM rank_events").fetchone()[0] == 1
+
+
+def test_suppressed_top300_can_alert_at_liquid_top200_and_then_graduate(tmp_path):
+    transport = Transport()
+    value, radar = publisher(tmp_path, transport)
+    value.process_once("2027-01-15")
+    add_event(
+        radar, "RECOVERS", 2000, 300, 276,
+        cumulative_volume=400, approx_turnover=2_000_000, volume_rate_5m=100,
+    )
+    value.process_once("2027-01-15")
+    assert outbox_rows(value) == []
+    add_event(
+        radar, "RECOVERS", 3000, 200, 188,
+        cumulative_volume=5_000, approx_turnover=2_000_000, volume_rate_5m=500,
+    )
+    value.process_once("2027-01-15")
+    assert [row["stage"] for row in outbox_rows(value)] == ["TOP200"]
+    add_event(
+        radar, "RECOVERS", 4000, 100, 96,
+        cumulative_volume=8_000, approx_turnover=3_000_000, volume_rate_5m=600,
+    )
+    value.process_once("2027-01-15")
+    assert [row["stage"] for row in outbox_rows(value)] == [
+        "TOP200", "TOP100_GRADUATED"
+    ]
+    assert [row["discord_actionability_status"] for row in actionability_rows(value)] == [
+        "SUPPRESSED_LOW_LIQUIDITY", "PASS", "PASS"
+    ]
+
+
+def test_suppressed_top300_can_alert_directly_at_liquid_top125(tmp_path):
+    transport = Transport()
+    value, radar = publisher(tmp_path, transport)
+    value.process_once("2027-01-15")
+    add_event(
+        radar, "LATE125", 2000, 300, 276,
+        cumulative_volume=400, approx_turnover=200_000, volume_rate_5m=10,
+    )
+    value.process_once("2027-01-15")
+    add_event(
+        radar, "LATE125", 3000, 125, 119,
+        cumulative_volume=8_000, approx_turnover=3_000_000, volume_rate_5m=600,
+    )
+    value.process_once("2027-01-15")
+    assert [row["stage"] for row in outbox_rows(value)] == ["TOP125"]
+    assert [row["discord_actionability_status"] for row in actionability_rows(value)] == [
+        "SUPPRESSED_LOW_LIQUIDITY", "PASS"
+    ]
+
+
+def test_suppressed_only_path_does_not_fake_graduation_delivery(tmp_path):
+    transport = Transport()
+    value, radar = publisher(tmp_path, transport)
+    value.process_once("2027-01-15")
+    add_event(
+        radar, "NEVERSENT", 2000, 300, 276,
+        cumulative_volume=10, approx_turnover=8_000, volume_rate_5m=1,
+    )
+    value.process_once("2027-01-15")
+    add_event(
+        radar, "NEVERSENT", 3000, 100, 96,
+        cumulative_volume=10_000, approx_turnover=2_000_000, volume_rate_5m=500,
+    )
+    value.process_once("2027-01-15")
+    assert outbox_rows(value) == []
+
+
 def test_shadow_plan_modules_have_no_broker_or_order_dependencies():
     root = Path(__file__).parents[1]
     paths = [
+        root / "pkscreener/classes/EmergingLeaderDiscordActionability.py",
         root / "pkscreener/classes/EmergingLeaderShadowPlan.py",
         root / "pkscreener/classes/EmergingLeaderAlertPublisher.py",
     ]

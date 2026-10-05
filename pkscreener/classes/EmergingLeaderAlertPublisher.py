@@ -16,6 +16,12 @@ from pkscreener.classes.EmergingLeaderShadowPlan import (
     format_shadow_plan,
     unavailable_shadow_plan,
 )
+from pkscreener.classes.EmergingLeaderDiscordActionability import (
+    DiscordActionability,
+    DiscordActionabilityThresholds,
+    evaluate_discord_actionability,
+    format_discord_actionability,
+)
 
 
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
@@ -64,6 +70,7 @@ class EmergingLeaderAlertPublisher:
         clock: Callable[[], dt.datetime] | None = None,
         retry_base_seconds: float = 5.0,
         shadow_plan_provider: Callable[[sqlite3.Row], ShadowPlanInputs] | None = None,
+        actionability_thresholds: DiscordActionabilityThresholds | None = None,
     ) -> None:
         self.radar_root = Path(radar_root)
         self.state_db = Path(state_db)
@@ -71,6 +78,9 @@ class EmergingLeaderAlertPublisher:
         self.clock = clock or (lambda: dt.datetime.now(IST))
         self.retry_base_seconds = max(0.1, float(retry_base_seconds))
         self.shadow_plan_provider = shadow_plan_provider or self._unavailable_live_inputs
+        self.actionability_thresholds = (
+            actionability_thresholds or DiscordActionabilityThresholds.from_environment()
+        )
         self.state_db.parent.mkdir(parents=True, exist_ok=True)
         self._initialize_state()
 
@@ -160,6 +170,22 @@ class EmergingLeaderAlertPublisher:
                     planned_rupee_risk REAL,
                     position_exposure REAL,
                     FOREIGN KEY(outbox_id) REFERENCES outbox(outbox_id)
+                );
+                CREATE TABLE IF NOT EXISTS discord_actionability_audit(
+                    source_event_id INTEGER PRIMARY KEY,
+                    session_date TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    stage TEXT NOT NULL,
+                    candidate_detected_epoch_ms INTEGER NOT NULL,
+                    discord_actionability_status TEXT NOT NULL,
+                    reasons TEXT NOT NULL,
+                    cumulative_volume REAL,
+                    approx_turnover REAL,
+                    volume_rate_5m REAL,
+                    min_cumulative_volume REAL NOT NULL,
+                    min_turnover REAL NOT NULL,
+                    recent_5m_participation_capacity_5pct INTEGER NOT NULL,
+                    FOREIGN KEY(source_event_id) REFERENCES source_events(event_id)
                 );
                 """
             )
@@ -292,7 +318,12 @@ class EmergingLeaderAlertPublisher:
             )
 
     @classmethod
-    def format_message(cls, event: sqlite3.Row, plan: ShadowPlan | None = None) -> str:
+    def format_message(
+        cls,
+        event: sqlite3.Row,
+        plan: ShadowPlan | None = None,
+        actionability: DiscordActionability | None = None,
+    ) -> str:
         stage, title = STAGES[int(event["milestone"])]
         timestamp = dt.datetime.fromtimestamp(
             int(event["event_epoch_ms"]) / 1000, tz=IST
@@ -304,7 +335,7 @@ class EmergingLeaderAlertPublisher:
             f"Stage: {stage}",
             f"Move today: {cls._number(event['pct_change'], 2, '%')}",
         ]
-        optional = (
+        optional = [
             ("Rank 5m ago", event["rank_5m_ago"], lambda v: f"{int(v)}"),
             ("5m rank improvement", event["rank_improvement_5m"], lambda v: f"{v:+.0f}"),
             ("5m rank velocity", event["rank_velocity_5m"], lambda v: f"{v:+.1f} ranks/min"),
@@ -312,13 +343,18 @@ class EmergingLeaderAlertPublisher:
             ("Price", event["last_price"], lambda v: f"₹{v:,.2f}"),
             ("RS vs NIFTY", event["rs_vs_nifty"], lambda v: f"{v:+.2f}%"),
             ("RS change 5m", event["rs_change_5m"], lambda v: f"{v:+.2f}%"),
-            ("Turnover", event["approx_turnover"], lambda v: f"₹{v / 10_000_000:.2f} Cr"),
             ("Turnover acceleration", event["turnover_acceleration"], lambda v: f"₹{v / 10_000_000:+.2f} Cr"),
-            ("Volume", event["cumulative_volume"], lambda v: f"{v:,.0f}"),
-            ("Volume rate 5m", event["volume_rate_5m"], lambda v: f"{v:+,.0f}/min"),
             ("From day high", event["distance_from_day_high_pct"], lambda v: f"{v:+.2f}%"),
             ("Vs causal VWAP", event["price_vs_vwap_pct"], lambda v: f"{v:+.2f}%"),
-        )
+        ]
+        if actionability is None:
+            optional.extend(
+                [
+                    ("Turnover", event["approx_turnover"], lambda v: f"₹{v / 10_000_000:.2f} Cr"),
+                    ("Volume", event["cumulative_volume"], lambda v: f"{v:,.0f}"),
+                    ("Volume rate 5m", event["volume_rate_5m"], lambda v: f"{v:+,.0f}/min"),
+                ]
+            )
         lines.extend(f"{label}: {render(float(value))}" for label, value, render in optional if value is not None)
         lines.extend(
             [
@@ -327,10 +363,43 @@ class EmergingLeaderAlertPublisher:
                 f"Market coverage: {cls._number(event['coverage_pct'], 1, '%')}",
             ]
         )
+        if actionability is not None:
+            lines.extend(["", format_discord_actionability(actionability)])
         if plan is not None:
             lines.extend(["", format_shadow_plan(plan)])
         lines.extend(["", "Research watch only — not a buy signal"])
         return "\n".join(lines)
+
+    def _actionability(self, event: sqlite3.Row) -> DiscordActionability:
+        return evaluate_discord_actionability(
+            event["cumulative_volume"],
+            event["approx_turnover"],
+            event["volume_rate_5m"],
+            self.actionability_thresholds,
+        )
+
+    @staticmethod
+    def _persist_actionability_audit(
+        state: sqlite3.Connection,
+        event: sqlite3.Row,
+        stage: str,
+        actionability: DiscordActionability,
+    ) -> None:
+        values = actionability.audit_values()
+        state.execute(
+            "INSERT OR IGNORE INTO discord_actionability_audit("
+            "source_event_id,session_date,symbol,stage,candidate_detected_epoch_ms,"
+            "discord_actionability_status,reasons,cumulative_volume,approx_turnover,"
+            "volume_rate_5m,min_cumulative_volume,min_turnover,"
+            "recent_5m_participation_capacity_5pct) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (
+                event["event_id"], event["session_date"], event["symbol"], stage,
+                event["event_epoch_ms"], values["discord_actionability_status"],
+                values["reasons"], values["cumulative_volume"], values["approx_turnover"],
+                values["volume_rate_5m"], values["min_cumulative_volume"],
+                values["min_turnover"], values["recent_5m_participation_capacity_5pct"],
+            ),
+        )
 
     @staticmethod
     def _persist_plan_audit(
@@ -364,6 +433,30 @@ class EmergingLeaderAlertPublisher:
             (session_date, symbol),
         ).fetchone() is not None
 
+    @staticmethod
+    def _has_suppressed_top300(state: sqlite3.Connection, session_date: str, symbol: str) -> bool:
+        return state.execute(
+            "SELECT 1 FROM discord_actionability_audit WHERE session_date=? AND symbol=? "
+            "AND stage='TOP300' AND discord_actionability_status='SUPPRESSED_LOW_LIQUIDITY'",
+            (session_date, symbol),
+        ).fetchone() is not None
+
+    @staticmethod
+    def _has_delivered_emerging(state: sqlite3.Connection, session_date: str, symbol: str) -> bool:
+        return state.execute(
+            "SELECT 1 FROM outbox WHERE session_date=? AND symbol=? "
+            "AND stage IN ('TOP300','TOP200','TOP125') AND delivery_state='delivered'",
+            (session_date, symbol),
+        ).fetchone() is not None
+
+    @staticmethod
+    def _has_pending_emerging(state: sqlite3.Connection, session_date: str, symbol: str) -> bool:
+        return state.execute(
+            "SELECT 1 FROM outbox WHERE session_date=? AND symbol=? "
+            "AND stage IN ('TOP300','TOP200','TOP125') AND delivery_state='pending'",
+            (session_date, symbol),
+        ).fetchone() is not None
+
     def queue_eligible(self, session_date: str) -> int:
         queued = 0
         with self._state() as state:
@@ -379,10 +472,21 @@ class EmergingLeaderAlertPublisher:
                 wait_for_emerging = False
                 if milestone == 300:
                     should_queue = current_rank > 100
-                elif self._has_top300(state, session_date, event["symbol"], delivered=True):
-                    should_queue = milestone == 100 or current_rank > 100
-                elif self._has_top300(state, session_date, event["symbol"]):
-                    wait_for_emerging = True
+                elif milestone in (200, 125):
+                    if self._has_pending_emerging(state, session_date, event["symbol"]):
+                        wait_for_emerging = True
+                    elif (
+                        self._has_top300(state, session_date, event["symbol"], delivered=True)
+                        or self._has_suppressed_top300(state, session_date, event["symbol"])
+                    ):
+                        should_queue = current_rank > 100
+                elif milestone == 100:
+                    if self._has_pending_emerging(state, session_date, event["symbol"]):
+                        wait_for_emerging = True
+                    else:
+                        should_queue = self._has_delivered_emerging(
+                            state, session_date, event["symbol"]
+                        )
                 if wait_for_emerging:
                     continue
                 if should_queue:
@@ -393,6 +497,13 @@ class EmergingLeaderAlertPublisher:
                     ).fetchone():
                         state.execute("UPDATE source_events SET applied=1 WHERE event_id=?", (event["event_id"],))
                         continue
+                    actionability = self._actionability(event)
+                    self._persist_actionability_audit(state, event, stage, actionability)
+                    if actionability.discord_actionability_status != "PASS":
+                        state.execute(
+                            "UPDATE source_events SET applied=1 WHERE event_id=?", (event["event_id"],)
+                        )
+                        continue
                     plan = self._shadow_plan(event)
                     inserted = state.execute(
                         "INSERT OR IGNORE INTO outbox(session_date,symbol,stage,event_epoch_ms,message) "
@@ -402,7 +513,7 @@ class EmergingLeaderAlertPublisher:
                             event["symbol"],
                             stage,
                             event["event_epoch_ms"],
-                            self.format_message(event, plan),
+                            self.format_message(event, plan, actionability),
                         ),
                     )
                     queued += inserted.rowcount
