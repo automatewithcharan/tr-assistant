@@ -22,6 +22,12 @@ from pkscreener.classes.EmergingLeaderDiscordActionability import (
     evaluate_discord_actionability,
     format_discord_actionability,
 )
+from pkscreener.classes.EmergingLeaderDiscordQuality import (
+    DiscordQuality,
+    DiscordQualityThresholds,
+    evaluate_discord_quality,
+    superseded_same_event_quality,
+)
 
 
 IST = dt.timezone(dt.timedelta(hours=5, minutes=30))
@@ -71,6 +77,7 @@ class EmergingLeaderAlertPublisher:
         retry_base_seconds: float = 5.0,
         shadow_plan_provider: Callable[[sqlite3.Row], ShadowPlanInputs] | None = None,
         actionability_thresholds: DiscordActionabilityThresholds | None = None,
+        quality_thresholds: DiscordQualityThresholds | None = None,
     ) -> None:
         self.radar_root = Path(radar_root)
         self.state_db = Path(state_db)
@@ -80,6 +87,9 @@ class EmergingLeaderAlertPublisher:
         self.shadow_plan_provider = shadow_plan_provider or self._unavailable_live_inputs
         self.actionability_thresholds = (
             actionability_thresholds or DiscordActionabilityThresholds.from_environment()
+        )
+        self.quality_thresholds = (
+            quality_thresholds or DiscordQualityThresholds.from_environment()
         )
         self.state_db.parent.mkdir(parents=True, exist_ok=True)
         self._initialize_state()
@@ -185,6 +195,33 @@ class EmergingLeaderAlertPublisher:
                     min_cumulative_volume REAL NOT NULL,
                     min_turnover REAL NOT NULL,
                     recent_5m_participation_capacity_5pct INTEGER NOT NULL,
+                    FOREIGN KEY(source_event_id) REFERENCES source_events(event_id)
+                );
+                CREATE TABLE IF NOT EXISTS discord_quality_audit(
+                    source_event_id INTEGER PRIMARY KEY,
+                    session_date TEXT NOT NULL,
+                    symbol TEXT NOT NULL,
+                    stage TEXT NOT NULL,
+                    candidate_detected_epoch_ms INTEGER NOT NULL,
+                    discord_quality_status TEXT NOT NULL,
+                    reasons TEXT NOT NULL,
+                    candidate_time_ist TEXT NOT NULL,
+                    rank_improvement_5m REAL,
+                    rank_velocity_5m REAL,
+                    rank_acceleration REAL,
+                    price_vs_vwap_pct REAL,
+                    distance_from_day_high_pct REAL,
+                    recent_capacity_5pct INTEGER NOT NULL,
+                    recent_traded_value_rate REAL,
+                    not_before_ist TEXT NOT NULL,
+                    min_rank_improvement_5m REAL NOT NULL,
+                    min_rank_velocity_5m REAL NOT NULL,
+                    min_rank_acceleration REAL NOT NULL,
+                    min_price_vs_vwap_pct REAL NOT NULL,
+                    min_distance_from_day_high_pct REAL NOT NULL,
+                    min_recent_capacity_5pct INTEGER NOT NULL,
+                    min_recent_traded_value_rate REAL NOT NULL,
+                    require_complete_features INTEGER NOT NULL,
                     FOREIGN KEY(source_event_id) REFERENCES source_events(event_id)
                 );
                 """
@@ -323,6 +360,7 @@ class EmergingLeaderAlertPublisher:
         event: sqlite3.Row,
         plan: ShadowPlan | None = None,
         actionability: DiscordActionability | None = None,
+        quality: DiscordQuality | None = None,
     ) -> str:
         stage, title = STAGES[int(event["milestone"])]
         timestamp = dt.datetime.fromtimestamp(
@@ -365,6 +403,8 @@ class EmergingLeaderAlertPublisher:
         )
         if actionability is not None:
             lines.extend(["", format_discord_actionability(actionability)])
+        if quality is not None:
+            lines.append("🎯 Quality gate: PASS")
         if plan is not None:
             lines.extend(["", format_shadow_plan(plan)])
         lines.extend(["", "Research watch only — not a buy signal"])
@@ -376,6 +416,27 @@ class EmergingLeaderAlertPublisher:
             event["approx_turnover"],
             event["volume_rate_5m"],
             self.actionability_thresholds,
+        )
+
+    def _quality(
+        self,
+        event: sqlite3.Row,
+        actionability: DiscordActionability,
+    ) -> DiscordQuality:
+        candidate = dt.datetime.fromtimestamp(
+            int(event["event_epoch_ms"]) / 1000, tz=IST
+        )
+        return evaluate_discord_quality(
+            candidate,
+            event["rank_improvement_5m"],
+            event["rank_velocity_5m"],
+            event["rank_acceleration"],
+            event["price_vs_vwap_pct"],
+            event["distance_from_day_high_pct"],
+            event["last_price"],
+            event["volume_rate_5m"],
+            actionability.recent_5m_participation_capacity_5pct,
+            self.quality_thresholds,
         )
 
     @staticmethod
@@ -398,6 +459,35 @@ class EmergingLeaderAlertPublisher:
                 values["reasons"], values["cumulative_volume"], values["approx_turnover"],
                 values["volume_rate_5m"], values["min_cumulative_volume"],
                 values["min_turnover"], values["recent_5m_participation_capacity_5pct"],
+            ),
+        )
+
+    @staticmethod
+    def _persist_quality_audit(
+        state: sqlite3.Connection,
+        event: sqlite3.Row,
+        stage: str,
+        quality: DiscordQuality,
+    ) -> None:
+        values = quality.audit_values()
+        columns = [
+            "discord_quality_status", "reasons", "candidate_time_ist",
+            "rank_improvement_5m", "rank_velocity_5m", "rank_acceleration",
+            "price_vs_vwap_pct", "distance_from_day_high_pct",
+            "recent_capacity_5pct", "recent_traded_value_rate", "not_before_ist",
+            "min_rank_improvement_5m", "min_rank_velocity_5m",
+            "min_rank_acceleration", "min_price_vs_vwap_pct",
+            "min_distance_from_day_high_pct", "min_recent_capacity_5pct",
+            "min_recent_traded_value_rate", "require_complete_features",
+        ]
+        state.execute(
+            "INSERT OR IGNORE INTO discord_quality_audit("
+            "source_event_id,session_date,symbol,stage,candidate_detected_epoch_ms,"
+            + ",".join(columns) + ") VALUES("
+            + ",".join("?" * (5 + len(columns))) + ")",
+            (
+                event["event_id"], event["session_date"], event["symbol"], stage,
+                event["event_epoch_ms"], *(values[column] for column in columns),
             ),
         )
 
@@ -435,10 +525,28 @@ class EmergingLeaderAlertPublisher:
 
     @staticmethod
     def _has_suppressed_top300(state: sqlite3.Connection, session_date: str, symbol: str) -> bool:
-        return state.execute(
+        actionability = state.execute(
             "SELECT 1 FROM discord_actionability_audit WHERE session_date=? AND symbol=? "
             "AND stage='TOP300' AND discord_actionability_status='SUPPRESSED_LOW_LIQUIDITY'",
             (session_date, symbol),
+        ).fetchone()
+        quality = state.execute(
+            "SELECT 1 FROM discord_quality_audit WHERE session_date=? AND symbol=? "
+            "AND stage='TOP300' AND discord_quality_status LIKE 'SUPPRESSED_%'",
+            (session_date, symbol),
+        ).fetchone()
+        return actionability is not None or quality is not None
+
+    @staticmethod
+    def _has_deeper_same_event(state: sqlite3.Connection, event: sqlite3.Row) -> bool:
+        return state.execute(
+            "SELECT 1 FROM source_events WHERE session_date=? AND symbol=? "
+            "AND event_epoch_ms=? AND milestone IN (200,125) AND milestone<? "
+            "AND current_rank>100 LIMIT 1",
+            (
+                event["session_date"], event["symbol"], event["event_epoch_ms"],
+                event["milestone"],
+            ),
         ).fetchone() is not None
 
     @staticmethod
@@ -498,8 +606,20 @@ class EmergingLeaderAlertPublisher:
                         state.execute("UPDATE source_events SET applied=1 WHERE event_id=?", (event["event_id"],))
                         continue
                     actionability = self._actionability(event)
+                    quality = self._quality(event, actionability)
+                    if self._has_deeper_same_event(state, event):
+                        quality = superseded_same_event_quality(quality)
+                        self._persist_quality_audit(state, event, stage, quality)
+                        state.execute(
+                            "UPDATE source_events SET applied=1 WHERE event_id=?", (event["event_id"],)
+                        )
+                        continue
                     self._persist_actionability_audit(state, event, stage, actionability)
-                    if actionability.discord_actionability_status != "PASS":
+                    self._persist_quality_audit(state, event, stage, quality)
+                    if (
+                        actionability.discord_actionability_status != "PASS"
+                        or quality.discord_quality_status != "PASS"
+                    ):
                         state.execute(
                             "UPDATE source_events SET applied=1 WHERE event_id=?", (event["event_id"],)
                         )
@@ -513,7 +633,7 @@ class EmergingLeaderAlertPublisher:
                             event["symbol"],
                             stage,
                             event["event_epoch_ms"],
-                            self.format_message(event, plan, actionability),
+                            self.format_message(event, plan, actionability, quality),
                         ),
                     )
                     queued += inserted.rowcount

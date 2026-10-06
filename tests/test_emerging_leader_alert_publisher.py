@@ -25,6 +25,18 @@ from pkscreener.classes.EmergingLeaderDiscordActionability import (
     DiscordActionabilityThresholds,
     evaluate_discord_actionability,
 )
+from pkscreener.classes.EmergingLeaderDiscordQuality import (
+    DEFAULT_MIN_DISTANCE_FROM_DAY_HIGH_PCT,
+    DEFAULT_MIN_PRICE_VS_VWAP_PCT,
+    DEFAULT_MIN_RANK_ACCELERATION,
+    DEFAULT_MIN_RANK_IMPROVEMENT_5M,
+    DEFAULT_MIN_RANK_VELOCITY_5M,
+    DEFAULT_MIN_RECENT_CAPACITY_5PCT,
+    DEFAULT_MIN_RECENT_TRADED_VALUE_RATE,
+    DEFAULT_NOT_BEFORE_IST,
+    DiscordQualityThresholds,
+    evaluate_discord_quality,
+)
 
 
 class Clock:
@@ -92,6 +104,11 @@ def add_event(
     cumulative_volume=800_000,
     approx_turnover=100_000_000,
     volume_rate_5m=40_000,
+    rank_improvement_5m=152,
+    rank_velocity_5m=30.4,
+    rank_acceleration=2.2,
+    distance_from_day_high_pct=-0.35,
+    price_vs_vwap_pct=0.62,
 ):
     with sqlite3.connect(path) as connection:
         row = connection.execute("SELECT symbol_id FROM symbols WHERE symbol=?", (symbol,)).fetchone()
@@ -119,20 +136,26 @@ def add_event(
                     snapshot_id,
                     symbol_id,
                     None if features == "liquidity_only" else 428,
-                    None if features == "liquidity_only" else 152,
-                    None if features == "liquidity_only" else 30.4,
-                    None if features == "liquidity_only" else 2.2,
+                    None if features == "liquidity_only" else rank_improvement_5m,
+                    None if features == "liquidity_only" else rank_velocity_5m,
+                    None if features == "liquidity_only" else rank_acceleration,
                     None if features == "liquidity_only" else 1.83,
                     None if features == "liquidity_only" else 0.4,
                     None if features == "liquidity_only" else 12_000_000,
                     volume_rate_5m,
-                    None if features == "liquidity_only" else -0.35,
-                    None if features == "liquidity_only" else 0.62,
+                    None if features == "liquidity_only" else distance_from_day_high_pct,
+                    None if features == "liquidity_only" else price_vs_vwap_pct,
                 ),
             )
 
 
-def publisher(tmp_path, transport=None, clock=None, shadow_plan_provider=None):
+def publisher(
+    tmp_path,
+    transport=None,
+    clock=None,
+    shadow_plan_provider=None,
+    quality_thresholds=None,
+):
     root, radar = make_radar(tmp_path)
     value = EmergingLeaderAlertPublisher(
         root,
@@ -142,6 +165,7 @@ def publisher(tmp_path, transport=None, clock=None, shadow_plan_provider=None):
         retry_base_seconds=0.1,
         shadow_plan_provider=shadow_plan_provider,
         actionability_thresholds=DiscordActionabilityThresholds(),
+        quality_thresholds=quality_thresholds or DiscordQualityThresholds.permissive(),
     )
     return value, radar
 
@@ -157,6 +181,14 @@ def actionability_rows(value):
         connection.row_factory = sqlite3.Row
         return connection.execute(
             "SELECT * FROM discord_actionability_audit ORDER BY source_event_id"
+        ).fetchall()
+
+
+def quality_rows(value):
+    with sqlite3.connect(value.state_db) as connection:
+        connection.row_factory = sqlite3.Row
+        return connection.execute(
+            "SELECT * FROM discord_quality_audit ORDER BY source_event_id"
         ).fetchall()
 
 
@@ -597,10 +629,131 @@ def test_suppressed_only_path_does_not_fake_graduation_delivery(tmp_path):
     assert outbox_rows(value) == []
 
 
+def test_quality_environment_defaults(monkeypatch):
+    names = (
+        "NG_EMERGING_DISCORD_NOT_BEFORE_IST",
+        "NG_EMERGING_DISCORD_MIN_RANK_IMPROVEMENT_5M",
+        "NG_EMERGING_DISCORD_MIN_RANK_VELOCITY_5M",
+        "NG_EMERGING_DISCORD_MIN_RANK_ACCELERATION",
+        "NG_EMERGING_DISCORD_MIN_PRICE_VS_VWAP_PCT",
+        "NG_EMERGING_DISCORD_MIN_DISTANCE_FROM_DAY_HIGH_PCT",
+        "NG_EMERGING_DISCORD_MIN_RECENT_CAPACITY_5PCT",
+        "NG_EMERGING_DISCORD_MIN_RECENT_TRADED_VALUE_RATE",
+        "NG_EMERGING_DISCORD_REQUIRE_COMPLETE_QUALITY_FEATURES",
+    )
+    for name in names:
+        monkeypatch.delenv(name, raising=False)
+    assert DiscordQualityThresholds.from_environment() == DiscordQualityThresholds(
+        not_before_ist=DEFAULT_NOT_BEFORE_IST,
+        min_rank_improvement_5m=DEFAULT_MIN_RANK_IMPROVEMENT_5M,
+        min_rank_velocity_5m=DEFAULT_MIN_RANK_VELOCITY_5M,
+        min_rank_acceleration=DEFAULT_MIN_RANK_ACCELERATION,
+        min_price_vs_vwap_pct=DEFAULT_MIN_PRICE_VS_VWAP_PCT,
+        min_distance_from_day_high_pct=DEFAULT_MIN_DISTANCE_FROM_DAY_HIGH_PCT,
+        min_recent_capacity_5pct=DEFAULT_MIN_RECENT_CAPACITY_5PCT,
+        min_recent_traded_value_rate=DEFAULT_MIN_RECENT_TRADED_VALUE_RATE,
+    )
+
+
+def test_quality_gate_boundary_pass_and_multiple_failure_reasons():
+    thresholds = DiscordQualityThresholds()
+    passing = evaluate_discord_quality(
+        dt.datetime(2027, 1, 15, 9, 30, tzinfo=IST),
+        100, 20, 0, 0.75, -0.50, 500, 1_000, 50, thresholds,
+    )
+    assert passing.discord_quality_status == "PASS"
+    assert passing.recent_traded_value_rate == 500_000
+    failing = evaluate_discord_quality(
+        dt.datetime(2027, 1, 15, 9, 20, tzinfo=IST),
+        -5, -1, -2, -0.5, -2, 100, 5, 0, thresholds,
+    )
+    assert failing.discord_quality_status == "SUPPRESSED_LOW_QUALITY"
+    assert set(failing.reasons) == {
+        "BEFORE_ALERT_WINDOW",
+        "LOW_RANK_IMPROVEMENT_5M",
+        "LOW_RANK_VELOCITY_5M",
+        "LOW_RANK_ACCELERATION",
+        "BELOW_VWAP_BUFFER",
+        "TOO_FAR_FROM_DAY_HIGH",
+        "LOW_RECENT_SHARE_CAPACITY",
+        "LOW_RECENT_TRADED_VALUE_RATE",
+    }
+
+
+def test_quality_suppression_is_audited_and_later_strong_stage_can_alert(tmp_path):
+    transport = Transport()
+    value, radar = publisher(
+        tmp_path, transport, quality_thresholds=DiscordQualityThresholds()
+    )
+    value.process_once("2027-01-15")
+    first = int(dt.datetime(2027, 1, 15, 9, 31, tzinfo=IST).timestamp() * 1000)
+    add_event(
+        radar, "QUALITYRECOVER", first, 300, 250,
+        rank_improvement_5m=20, rank_velocity_5m=4,
+        rank_acceleration=-1, price_vs_vwap_pct=0.2,
+    )
+    assert value.process_once("2027-01-15").delivered == 0
+    audit = quality_rows(value)[0]
+    assert audit["discord_quality_status"] == "SUPPRESSED_LOW_QUALITY"
+    assert "LOW_RANK_IMPROVEMENT_5M" in audit["reasons"]
+    with sqlite3.connect(value.state_db) as connection:
+        assert connection.execute(
+            "SELECT applied FROM source_events WHERE symbol='QUALITYRECOVER'"
+        ).fetchone()[0] == 1
+
+    add_event(
+        radar, "QUALITYRECOVER", first + 5 * 60_000, 200, 180,
+        rank_improvement_5m=150, rank_velocity_5m=30,
+        rank_acceleration=4, price_vs_vwap_pct=1.2,
+        distance_from_day_high_pct=-0.2,
+    )
+    result = value.process_once("2027-01-15")
+    assert result.delivered == 1
+    assert [row["stage"] for row in outbox_rows(value)] == ["TOP200"]
+    assert [row["discord_quality_status"] for row in quality_rows(value)] == [
+        "SUPPRESSED_LOW_QUALITY", "PASS"
+    ]
+    assert "Quality gate: PASS" in transport.messages[0]
+
+
+def test_same_event_milestones_collapse_to_deepest_stage(tmp_path):
+    transport = Transport()
+    value, radar = publisher(
+        tmp_path, transport, quality_thresholds=DiscordQualityThresholds()
+    )
+    value.process_once("2027-01-15")
+    timestamp = int(dt.datetime(2027, 1, 15, 9, 35, tzinfo=IST).timestamp() * 1000)
+    common = dict(
+        rank_improvement_5m=180,
+        rank_velocity_5m=36,
+        rank_acceleration=5,
+        price_vs_vwap_pct=1.5,
+        distance_from_day_high_pct=-0.1,
+    )
+    add_event(radar, "FASTJUMP", timestamp, 300, 120, **common)
+    add_event(radar, "FASTJUMP", timestamp, 200, 120, **common)
+    add_event(radar, "FASTJUMP", timestamp, 125, 120, **common)
+    result = value.process_once("2027-01-15")
+    assert result.delivered == 1
+    assert [row["stage"] for row in outbox_rows(value)] == ["TOP125"]
+    audits = quality_rows(value)
+    assert [row["stage"] for row in audits] == ["TOP300", "TOP200", "TOP125"]
+    assert [row["discord_quality_status"] for row in audits] == [
+        "SUPPRESSED_SUPERSEDED_STAGE", "SUPPRESSED_SUPERSEDED_STAGE", "PASS"
+    ]
+    assert [row["reasons"] for row in audits[:2]] == [
+        "SUPERSEDED_SAME_EVENT", "SUPERSEDED_SAME_EVENT"
+    ]
+    with sqlite3.connect(value.state_db) as connection:
+        assert connection.execute("SELECT count(*) FROM source_events").fetchone()[0] == 3
+        assert connection.execute("SELECT sum(applied) FROM source_events").fetchone()[0] == 3
+
+
 def test_shadow_plan_modules_have_no_broker_or_order_dependencies():
     root = Path(__file__).parents[1]
     paths = [
         root / "pkscreener/classes/EmergingLeaderDiscordActionability.py",
+        root / "pkscreener/classes/EmergingLeaderDiscordQuality.py",
         root / "pkscreener/classes/EmergingLeaderShadowPlan.py",
         root / "pkscreener/classes/EmergingLeaderAlertPublisher.py",
     ]
