@@ -1,0 +1,106 @@
+//@version=6
+indicator("QQC Clear Pressure - UT_SYNC Companion", shorttitle="QQC CLEAR", overlay=false)
+
+// Manual companion to UT_SYNC, not a replacement or an automated trading strategy.
+// QQC direction tests adapted from github.com/harryguiacorn/TradingView-Proprietary-Indicators
+// Quality/Volume scores are normalized to make the original signed measures readable.
+
+len = input.int(9, "QQC Lookback", minval=2, maxval=100, group="QQC")
+showTable = input.bool(true, "Show status table", group="QQC")
+emaTF = input.timeframe("5", "EMA timeframe", group="BUY confirmation")
+emaLen = input.int(20, "EMA length", minval=1, group="BUY confirmation")
+needSlope = input.bool(true, "Require rising EMA", group="BUY confirmation")
+
+orange = color.rgb(255, 152, 0)
+purple = color.rgb(156, 39, 176)
+grey = color.gray
+dark = color.rgb(32, 41, 56)
+
+int upBars = 0
+int downBars = 0
+float netBody = 0.0
+float absBody = 0.0
+float netVolBody = 0.0
+float sumVol = 0.0
+
+for i = 0 to len - 1
+    float body = close[i] - open[i]
+    float candleRange = high[i] - low[i]
+    float v = nz(volume[i], 0.0)
+    if not na(body)
+        upBars += body > 0 ? 1 : 0
+        downBars += body < 0 ? 1 : 0
+        netBody += body
+        absBody += math.abs(body)
+        netVolBody += candleRange > 0 ? body / candleRange * v : 0.0
+        sumVol += v
+
+bool enough = not na(close[len - 1])
+int countNet = upBars - downBars
+float bodyScore = absBody > 0 ? 100.0 * netBody / absBody : 0.0
+float volumeScore = sumVol > 0 ? 100.0 * netVolBody / sumVol : 0.0
+bool qtyUp = enough and countNet > 0
+bool qtyDown = enough and countNet < 0
+bool qualUp = enough and netBody > 0
+bool qualDown = enough and netBody < 0
+bool volUp = enough and netVolBody > 0
+bool volDown = enough and netVolBody < 0
+bool allUp = qtyUp and qualUp and volUp
+bool allDown = qtyDown and qualDown and volDown
+
+// Each row prints one orange, purple or gray circle. Gray = tie/neutral.
+plot(enough ? 3 : na, "Quantity", color=qtyUp ? orange : qtyDown ? purple : grey, linewidth=5, style=plot.style_circles)
+plot(enough ? 2 : na, "Quality", color=qualUp ? orange : qualDown ? purple : grey, linewidth=5, style=plot.style_circles)
+plot(enough ? 1 : na, "Volume", color=volUp ? orange : volDown ? purple : grey, linewidth=5, style=plot.style_circles)
+
+// The previous *completed* 5m EMA is stable on a 1m chart.
+float ema5 = request.security(syminfo.tickerid, emaTF, ta.ema(close, emaLen)[1], lookahead=barmerge.lookahead_on)
+float ema5Prior = request.security(syminfo.tickerid, emaTF, ta.ema(close, emaLen)[2], lookahead=barmerge.lookahead_on)
+float vwapVal = ta.vwap(hlc3)
+bool aboveVWAP = not na(vwapVal) and close > vwapVal
+bool aboveEMA = not na(ema5) and close > ema5
+bool emaRising = not na(ema5Prior) and ema5 > ema5Prior
+bool emaPass = aboveEMA and (not needSlope or emaRising)
+bool ready = enough and allUp and aboveVWAP and emaPass
+
+string pressure = not enough ? "WAIT FOR DATA" : allUp ? "BUY PRESSURE" : allDown ? "SELL PRESSURE" : "MIXED / WAIT"
+string decision = not barstate.isconfirmed ? "WAIT FOR 1m CLOSE" : ready ? "CHECK UT_SYNC BUY" : "NO NEW BUY"
+color pressColor = allUp ? orange : allDown ? purple : grey
+
+var table t = table.new(position.top_right, 3, 8, bgcolor=dark, border_width=1)
+if showTable and barstate.islast
+    table.cell(t, 0, 0, "MEASURE", text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 0, "ACTUAL READING", text_color=color.white, text_size=size.small)
+    table.cell(t, 2, 0, "STATE", text_color=color.white, text_size=size.small)
+
+    table.cell(t, 0, 1, "Quantity", text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 1, str.tostring(upBars) + " up / " + str.tostring(downBars) + " down", text_color=color.white, text_size=size.small)
+    table.cell(t, 2, 1, qtyUp ? "ORANGE" : qtyDown ? "PURPLE" : "TIE", text_color=qtyUp ? orange : qtyDown ? purple : grey, text_size=size.small)
+
+    table.cell(t, 0, 2, "Quality", text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 2, str.tostring(bodyScore, "#.0") + "% net body", text_color=color.white, text_size=size.small)
+    table.cell(t, 2, 2, qualUp ? "ORANGE" : qualDown ? "PURPLE" : "NEUTRAL", text_color=qualUp ? orange : qualDown ? purple : grey, text_size=size.small)
+
+    table.cell(t, 0, 3, "Volume", text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 3, str.tostring(volumeScore, "#.0") + "% weighted", text_color=color.white, text_size=size.small)
+    table.cell(t, 2, 3, volUp ? "ORANGE" : volDown ? "PURPLE" : "NEUTRAL", text_color=volUp ? orange : volDown ? purple : grey, text_size=size.small)
+
+    table.cell(t, 0, 4, "QQC RESULT", text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 4, pressure, text_color=pressColor, text_size=size.small)
+    table.cell(t, 2, 4, "NOT A TRADE", text_color=color.white, text_size=size.small)
+
+    table.cell(t, 0, 5, "Session VWAP", text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 5, str.tostring(vwapVal, format.mintick), text_color=color.white, text_size=size.small)
+    table.cell(t, 2, 5, aboveVWAP ? "ABOVE" : "BELOW", text_color=aboveVWAP ? orange : purple, text_size=size.small)
+
+    table.cell(t, 0, 6, emaTF + "m EMA " + str.tostring(emaLen), text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 6, str.tostring(ema5, format.mintick), text_color=color.white, text_size=size.small)
+    table.cell(t, 2, 6, not aboveEMA ? "BELOW" : emaRising ? "ABOVE / RISING" : "FLAT/FALLING", text_color=emaPass ? orange : purple, text_size=size.small)
+
+    table.cell(t, 0, 7, "ENTRY CHECK", text_color=color.white, text_size=size.small)
+    table.cell(t, 1, 7, decision, text_color=ready and barstate.isconfirmed ? orange : color.white, text_size=size.small)
+    table.cell(t, 2, 7, "MANUAL ONLY", text_color=color.white, text_size=size.small)
+
+// Creating an alert is optional. Neither alert is an UT_SYNC entry/exit instruction.
+alertcondition(barstate.isconfirmed and ready and not ready[1], "QQC ready - check UT_SYNC", "QQC 3 orange + VWAP + confirmed 5m EMA. Check UT_SYNC fresh BUY, breakout hold and SL.")
+alertcondition(barstate.isconfirmed and allDown and not allDown[1], "QQC bearish pressure warning", "QQC 3 purple. Review risk; exit using hard stop or UT_SYNC SELL plan.")

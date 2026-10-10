@@ -1,0 +1,582 @@
+//@version=6
+indicator("UT_SYNC", shorttitle="UT_SYNC", overlay=true, max_labels_count=150)
+
+// P v2.7a — same entry/exit rules; rejection diagnostics only.
+// UT(3,10) is independently reconstructed from THIS chart's 1m OHLCV.
+// Pine cannot read Discord/Kite or replay previously elapsed server alerts.
+// AUTO SIGNALS tracks a VIRTUAL/PAPER trade. It cannot know broker holdings.
+// No liquidity/cost execution gate: signals may be uneconomic or unfillable.
+// Same-day breakouts only; next-session carry is intentionally unsupported.
+// A fresh UT BUY creates one idea, PSAR + VWAP qualify it (no fresh PSAR flip).
+// Once a virtual BUY exits, that UT leg is consumed until another UT SELL -> BUY.
+// MANUAL TRADE mode remains available for actual fills entered explicitly.
+
+string G_UT = "1. UT + PSAR"
+float utKey = input.float(3.0, "UT key", minval=0.1, step=0.1, group=G_UT, display=display.none)
+int utAtrLen = input.int(10, "UT ATR", minval=1, group=G_UT, display=display.none)
+float psarStart = input.float(0.02, "PSAR start", minval=0.001, step=0.001, group=G_UT, display=display.none)
+float psarIncrement = input.float(0.02, "PSAR increment", minval=0.001, step=0.001, group=G_UT, display=display.none)
+float psarMax = input.float(0.20, "PSAR maximum", minval=0.01, step=0.01, group=G_UT, display=display.none)
+
+string G_CHECK = "2. Recent UT entry qualification"
+int maxUtAgeBars = input.int(2, "Maximum COMPLETED bars since UT BUY", minval=0, maxval=5, group=G_CHECK, display=display.none)
+float maxAboveBuyAtr = input.float(1.0, "Max rise above UT BUY close (UT ATR)", minval=0.1, step=0.1, group=G_CHECK, display=display.none)
+float maxAboveBuyPct = input.float(0.6, "Max rise above UT BUY close (%)", minval=0.1, step=0.1, group=G_CHECK, display=display.none)
+float maxBelowBuyAtr = input.float(0.5, "Max pullback below UT BUY close (UT ATR)", minval=0.0, step=0.1, group=G_CHECK, display=display.none)
+float maxLiveDriftAtr = input.float(0.35, "Max live move from last closed price (ATR)", minval=0.05, step=0.05, group=G_CHECK, display=display.none)
+int startHour = input.int(9, "Entry start hour IST", minval=9, maxval=15, group=G_CHECK, display=display.none)
+int startMin = input.int(20, "Entry start minute IST", minval=0, maxval=59, group=G_CHECK, display=display.none)
+int cutoffHour = input.int(14, "Entry cutoff hour IST", minval=9, maxval=15, group=G_CHECK, display=display.none)
+int cutoffMin = input.int(50, "Entry cutoff minute IST", minval=0, maxval=59, group=G_CHECK, display=display.none)
+bool showCurrentReason = input.bool(true, "Show tiny current NO BUY reason", group=G_CHECK, display=display.none)
+bool showRejectedBreakouts = input.bool(true, "Mark recent rejected breakout candles", group=G_CHECK, display=display.none)
+int maxRejectedLabelsDay = input.int(6, "Max ordinary rejection tags/day", minval=0, maxval=30, group=G_CHECK, display=display.none)
+
+// Research-first continuation: one qualified breakout per intact UT leg.
+// This is NOT a fresh UT crossover and has not been established profitable.
+string G_CONT = "2b. Controlled UT continuation"
+bool useContinuation = input.bool(true, "Allow controlled continuation breakout", group=G_CONT, display=display.none)
+int contMinAgeBars = input.int(3, "Earliest bar after UT BUY", minval=2, maxval=15, group=G_CONT, display=display.none)
+int contMaxAgeBars = input.int(30, "Latest bar after UT BUY", minval=5, maxval=120, group=G_CONT, display=display.none)
+int contBreakoutBars = input.int(5, "Break previous N completed highs", minval=2, maxval=20, group=G_CONT, display=display.none)
+float contMaxRangeAtr = input.float(1.80, "Max breakout candle range (ATR)", minval=0.50, maxval=4.0, step=0.10, group=G_CONT, display=display.none)
+float contMinCloseLocation = input.float(0.70, "Min close position in candle", minval=0.50, maxval=1.0, step=0.05, group=G_CONT, display=display.none)
+float contMaxVwapAtr = input.float(4.0, "Max extension over VWAP (ATR)", minval=0.5, maxval=10.0, step=0.5, group=G_CONT, display=display.none)
+float contMaxBreakoutAtr = input.float(0.60, "Max extension over breakout high (ATR)", minval=0.10, maxval=2.0, step=0.10, group=G_CONT, display=display.none)
+
+// Deprecated informational alert replaced by actionable model BUY/SELL messages.
+string G_MODE = "0. Signal mode and alerts"
+string signalMode = input.string("AUTO SIGNALS", "Mode", options=["AUTO SIGNALS", "MANUAL TRADE"], group=G_MODE, display=display.none)
+bool alertAutoBuy = input.bool(true, "Send BUY signal alerts", group=G_MODE, display=display.none)
+bool alertAutoSell = input.bool(true, "Send SELL signal alerts", group=G_MODE, display=display.none)
+bool showAutoBoxes = input.bool(true, "Compact BUY / SELL chart boxes", group=G_MODE, display=display.none)
+int maxAutoBuysPerSymbolDay = input.int(2, "Max model BUYs / symbol / session", minval=1, maxval=10, group=G_MODE, display=display.none)
+
+string G_RISK = "3. Reference plan (NOT a broker order)"
+float plannedRisk = input.float(500.0, "Reference risk (INR)", minval=1.0, step=50.0, group=G_RISK, display=display.none)
+float maxExposure = input.float(300000.0, "Exposure ceiling (INR)", minval=1000.0, step=10000.0, group=G_RISK, display=display.none)
+int stopAtrLen = input.int(14, "Stop ATR", minval=1, group=G_RISK, display=display.none)
+float lowBufferAtr = input.float(0.10, "SL below last closed candle low (ATR)", minval=0.0, step=0.05, group=G_RISK, display=display.none)
+float minStopAtr = input.float(0.50, "Minimum SL distance (ATR)", minval=0.1, step=0.05, group=G_RISK, display=display.none)
+
+string G_MAN = "4. Exit / profit lock / trailing (both modes)"
+string G_ACT = "5. Actual fills (MANUAL TRADE mode only)"
+bool manageManual = input.bool(false, "Manage a trade I entered manually", group=G_ACT, display=display.none)
+int actualEntryTime = input.time(timestamp("01 Jan 2026 09:15 +0530"), "Actual entry timestamp (IST)", group=G_ACT, display=display.none)
+float actualEntryPrice = input.float(0.0, "Actual entry fill price", minval=0.0, group=G_ACT, display=display.none)
+float actualInitialSL = input.float(0.0, "Actual initial protective SL", minval=0.0, group=G_ACT, display=display.none)
+int actualQty = input.int(0, "Actual shares held", minval=0, group=G_ACT, display=display.none)
+bool sendManagedExit = input.bool(true, "Alert managed exit/reversal", group=G_MAN, display=display.none)
+float lockAtR = input.float(1.0, "Activate profit lock at +R", minval=0.1, step=0.1, group=G_MAN, display=display.none)
+float lockFloorR = input.float(0.25, "Protect at least +R after lock", minval=0.0, step=0.05, group=G_MAN, display=display.none)
+float trailAtR = input.float(1.5, "Start trailing at +R", minval=0.1, step=0.1, group=G_MAN, display=display.none)
+float trailAtrMult = input.float(2.0, "Trail distance in ATR", minval=0.1, step=0.1, group=G_MAN, display=display.none)
+bool psarExit = input.bool(true, "Exit on confirmed PSAR reversal", group=G_MAN, display=display.none)
+bool utExit = input.bool(true, "Exit on confirmed UT SELL", group=G_MAN, display=display.none)
+int eodHour = input.int(15, "EOD hour IST", minval=14, maxval=15, group=G_MAN, display=display.none)
+int eodMin = input.int(15, "EOD minute IST", minval=0, maxval=29, group=G_MAN, display=display.none)
+
+f_price(float p) =>
+    na(p) ? "—" : str.tostring(p, format.mintick)
+
+f_rndDown(float p) =>
+    math.floor(p / syminfo.mintick) * syminfo.mintick
+
+f_inWindow(int ts, int sh, int sm, int eh, int em) =>
+    int minuteOfDay = hour(ts, "Asia/Kolkata") * 60 + minute(ts, "Asia/Kolkata")
+    minuteOfDay >= sh * 60 + sm and minuteOfDay < eh * 60 + em
+
+f_isEod(int ts) =>
+    hour(ts, "Asia/Kolkata") * 60 + minute(ts, "Asia/Kolkata") >= eodHour * 60 + eodMin
+
+bool oneMinute = timeframe.isminutes and timeframe.multiplier == 1
+float utAtr = ta.atr(utAtrLen)
+float utLoss = utKey * utAtr
+
+// Exact classic UT-Bot recursive trail; NEVER reset on symbol/session changes.
+float utTrail = 0.0
+float previousTrail = nz(utTrail[1], 0.0)
+utTrail := close > previousTrail and close[1] > previousTrail ? math.max(previousTrail, close - utLoss) : close < previousTrail and close[1] < previousTrail ? math.min(previousTrail, close + utLoss) : close > previousTrail ? close - utLoss : close + utLoss
+bool utBuyCross = ta.crossover(close, utTrail)
+bool utSellCross = ta.crossunder(close, utTrail)
+bool utBuy = barstate.isconfirmed and utBuyCross
+bool utSell = barstate.isconfirmed and utSellCross
+
+float psar = ta.sar(psarStart, psarIncrement, psarMax)
+float vwap = ta.vwap(hlc3)
+float stopAtr = ta.atr(stopAtrLen)
+// Evaluated unconditionally; prior highs never include this signal candle.
+float priorBreakoutHigh = ta.highest(high[1], contBreakoutBars)
+
+int sinceUtBuy = ta.barssince(utBuy)
+int lastUtBuyTime = ta.valuewhen(utBuy, time_close, 0)
+int lastUtSellTime = ta.valuewhen(utSell, time_close, 0)
+float buyRefClose = ta.valuewhen(utBuy, close, 0)
+float buyRefAtr = ta.valuewhen(utBuy, utAtr, 0)
+
+// Calculate with ONLY the last COMPLETED 1m candle when the final bar is live.
+// Historical chart loads can therefore reconstruct the same state immediately.
+int offset = barstate.isconfirmed ? 0 : 1
+int age = sinceUtBuy[offset]
+int signalTime = lastUtBuyTime[offset]
+int priorSellTime = lastUtSellTime[offset]
+float buyOrigin = buyRefClose[offset]
+float originAtr = buyRefAtr[offset]
+float refClose = close[offset]
+float refLow = low[offset]
+float refTrail = utTrail[offset]
+float refPsar = psar[offset]
+float refVwap = vwap[offset]
+float refAtr = stopAtr[offset]
+int refTime = time_close[offset]
+float refOpen = open[offset]
+float refHigh = high[offset]
+float refPriorHigh = priorBreakoutHigh[offset]
+
+bool intact = not na(signalTime) and (na(priorSellTime) or priorSellTime < signalTime)
+bool sameSignalDay = (
+    not na(signalTime) and not na(refTime) and
+    year(signalTime, "Asia/Kolkata") == year(refTime, "Asia/Kolkata") and
+    month(signalTime, "Asia/Kolkata") == month(refTime, "Asia/Kolkata") and
+    dayofmonth(signalTime, "Asia/Kolkata") == dayofmonth(refTime, "Asia/Kolkata")
+)
+bool freshEnough = intact and sameSignalDay and not na(age) and age >= 0 and age <= maxUtAgeBars
+bool trendOk = not na(refTrail) and not na(refPsar) and not na(refVwap) and refClose > refTrail and refPsar < refClose and refClose > refVwap
+bool chaseOk = not na(originAtr) and originAtr > 0 and not na(buyOrigin) and refClose <= buyOrigin + maxAboveBuyAtr * originAtr and refClose <= buyOrigin * (1.0 + maxAboveBuyPct / 100.0) and refClose >= buyOrigin - maxBelowBuyAtr * originAtr
+bool timeOk = not na(refTime) and f_inWindow(refTime, startHour, startMin, cutoffHour, cutoffMin)
+
+// Reference stop and size are from last completed bar, not the old UT alert price.
+float refStop = na
+float refRisk = na
+int refQty = 0
+float ref1R = na
+if not na(refAtr) and refAtr > 0 and not na(refClose) and not na(refLow)
+    refStop := f_rndDown(math.min(refLow - refAtr * lowBufferAtr, refClose - refAtr * minStopAtr))
+    refRisk := refClose - refStop
+    if refRisk > syminfo.mintick and refClose > 0
+        int qtyRisk = int(math.floor(plannedRisk / refRisk))
+        int qtyExposure = int(math.floor(maxExposure / refClose))
+        refQty := math.max(0, math.min(qtyRisk, qtyExposure))
+        ref1R := refClose + refRisk
+
+bool refPlanOk = refQty >= 1 and not na(refRisk) and refRisk > syminfo.mintick
+// Live price is allowed to invalidate a confirmed-bar setup; it NEVER creates
+// an early, unconfirmed BUY or reactivates an expired UT leg.
+bool liveSafe = not barstate.isrealtime or (
+    close > utTrail and close > vwap and psar < close and
+    not na(buyOrigin) and not na(originAtr) and originAtr > 0 and
+    close <= buyOrigin + maxAboveBuyAtr * originAtr and
+    close <= buyOrigin * (1.0 + maxAboveBuyPct / 100.0) and
+    close >= buyOrigin - maxBelowBuyAtr * originAtr and
+    not na(refStop) and close > refStop and
+    not na(refAtr) and refAtr > 0 and
+    math.abs(close - refClose) <= maxLiveDriftAtr * refAtr
+)
+bool validNow = oneMinute and freshEnough and trendOk and chaseOk and timeOk and refPlanOk and liveSafe
+
+// Unlike fresh-UT entry, continuation evaluates a NEW breakout against only
+// PREVIOUS candles. This avoids requiring a second UT or PSAR flip.
+// Exact same-session UT leg, PSAR bullish, above VWAP and non-extended.
+float refRange = refHigh - refLow
+float refClosePosition = not na(refRange) and refRange > 0 ? (refClose - refLow) / refRange : 0.0
+bool contConfirmedBreakout = (
+    not na(refPriorHigh) and not na(refClose) and
+    refClose > refPriorHigh and
+    refClose > refOpen and
+    refClosePosition >= contMinCloseLocation and
+    not na(refAtr) and refAtr > 0 and
+    refRange <= contMaxRangeAtr * refAtr and
+    refClose <= refPriorHigh + contMaxBreakoutAtr * refAtr and
+    refClose <= refVwap + contMaxVwapAtr * refAtr
+)
+// A new live tick cannot qualify a breakout that the last confirmed candle
+// did not establish, or reuse it after a large live drift/reversal.
+bool contLiveSafe = not barstate.isrealtime or (
+    close > utTrail and psar < close and close > vwap and
+    close > refStop and
+    not na(refAtr) and refAtr > 0 and
+    not na(refPriorHigh) and close > refPriorHigh and
+    close <= refPriorHigh + contMaxBreakoutAtr * refAtr and
+    close <= vwap + contMaxVwapAtr * refAtr and
+    math.abs(close - refClose) <= maxLiveDriftAtr * refAtr
+)
+bool continuationNow = (
+    oneMinute and useContinuation and intact and sameSignalDay and
+    not na(age) and age >= contMinAgeBars and age <= contMaxAgeBars and
+    timeOk and trendOk and refPlanOk and
+    contConfirmedBreakout and contLiveSafe
+)
+bool qualifiedNow = validNow or continuationNow
+
+// DIAGNOSTICS ONLY. Explain the first failing continuation condition without
+// changing qualifiedNow, any position state, or BUY/SELL alert predicates.
+string contBlockReason = (
+    not oneMinute ? "USE 1M" :
+    not useContinuation ? "CONT OFF" :
+    na(signalTime) ? "NO UT BUY" :
+    not intact ? "UT REVERSED" :
+    not sameSignalDay ? "PRIOR DAY UT" :
+    na(age) ? "NO UT AGE" :
+    age < contMinAgeBars ? "TOO EARLY" :
+    age > contMaxAgeBars ? "UT AGE " + str.tostring(age) + "/" + str.tostring(contMaxAgeBars) :
+    not timeOk ? "TIME WINDOW" :
+    na(refTrail) or refClose <= refTrail ? "UT NOT BULL" :
+    na(refPsar) or refPsar >= refClose ? "PSAR BEAR" :
+    na(refVwap) or refClose <= refVwap ? "BELOW VWAP" :
+    not refPlanOk ? "STOP / QTY" :
+    na(refPriorHigh) or refClose <= refPriorHigh ? "NO " + str.tostring(contBreakoutBars) + "B BREAK" :
+    refClose <= refOpen ? "RED BAR" :
+    refClosePosition < contMinCloseLocation ? "WEAK CLOSE" :
+    refRange > contMaxRangeAtr * refAtr ? "BAR TOO WIDE" :
+    refClose > refPriorHigh + contMaxBreakoutAtr * refAtr ? "BREAK EXTENDED" :
+    refClose > refVwap + contMaxVwapAtr * refAtr ? "VWAP EXTENDED" :
+    not contLiveSafe ? "LIVE DRIFT / REV" :
+    "CONT BASE PASS"
+)
+
+// Only the most recent chart session gets historical diagnostic marks.
+// These are NOT BUY markers and cannot establish whether a TradingView alert
+// was running at the time. Normal rejection marks are limited per session.
+// A late breakout gets ONE extra UT AGE mark per leg, so age expiry is visible.
+bool debugLastSession = (
+    year(time_close, "Asia/Kolkata") == year(last_bar_time, "Asia/Kolkata") and
+    month(time_close, "Asia/Kolkata") == month(last_bar_time, "Asia/Kolkata") and
+    dayofmonth(time_close, "Asia/Kolkata") == dayofmonth(last_bar_time, "Asia/Kolkata")
+)
+bool debugBreakoutAttempt = (
+    oneMinute and barstate.isconfirmed and
+    intact and sameSignalDay and not na(age) and age >= contMinAgeBars and
+    not na(refPriorHigh) and refClose > refPriorHigh
+)
+var int debugSessionCount = 0
+var int debugAgeMarkedLeg = na
+if ta.change(time("D")) != 0
+    debugSessionCount := 0
+    debugAgeMarkedLeg := na
+
+if showRejectedBreakouts and debugLastSession and debugBreakoutAttempt and not continuationNow
+    bool expiredLeg = age > contMaxAgeBars
+    bool allowMark = expiredLeg ? (na(debugAgeMarkedLeg) or debugAgeMarkedLeg != signalTime) : debugSessionCount < maxRejectedLabelsDay
+    if allowMark
+        label.new(bar_index, high, "× " + contBlockReason,
+            style=label.style_label_down, color=color.new(color.gray, 55),
+            textcolor=color.white, size=size.tiny)
+        if expiredLeg
+            debugAgeMarkedLeg := signalTime
+        else
+            debugSessionCount += 1
+
+// ─────────────────────────────────────────────────────────────────────────────
+// AUTO SIGNALS: virtual position opened only on REALTIME qualification.
+// A server-side alert is bound to a single symbol. Historic UT crosses/GO bars
+// are not replayed into old alerts. For a recent UT leg, the FIRST live update
+// after alert creation can generate a BUY if the current live price is safe.
+// ─────────────────────────────────────────────────────────────────────────────
+bool autoMode = signalMode == "AUTO SIGNALS"
+varip bool autoActive = false
+varip int autoConsumedLegTime = na
+varip float autoEntry = na
+varip float autoInitialSL = na
+varip float autoManagedSL = na
+varip float autoRisk = na
+varip float autoPeak = na
+varip int autoQty = 0
+varip int autoEntryDay = na
+varip int autoDayKey = na
+varip int autoBuysToday = 0
+
+// Limit churn in whipsawing stocks even if UT cycles several times.
+if autoMode and barstate.isrealtime and (na(autoDayKey) or autoDayKey != time("D"))
+    autoDayKey := time("D")
+    autoBuysToday := 0
+
+// Intrabar event latches: one alert each; drawings are rematerialized after
+// Pine's intrabar rollback until a bar closes, so BUY/SELL boxes survive.
+varip bool autoBuyBoxBar = false
+varip bool autoSellBoxBar = false
+varip string autoBuyBoxText = ""
+varip string autoSellBoxText = ""
+varip float autoBuyBoxAt = na
+varip float autoSellBoxAt = na
+if barstate.isnew
+    autoBuyBoxBar := false
+    autoSellBoxBar := false
+    autoBuyBoxText := ""
+    autoSellBoxText := ""
+    autoBuyBoxAt := na
+    autoSellBoxAt := na
+
+// First process exits for an existing virtual position. This ensures that a
+// BUY established on this execution cannot be retrospectively stopped by
+// movements earlier in the same bar.
+if autoMode and barstate.isrealtime and autoActive
+    bool autoShouldExit = false
+    string autoExitReason = ""
+    float autoExitObserved = close
+
+    if time("D") != autoEntryDay
+        autoShouldExit := true
+        autoExitReason := "NEXT DAY FALLBACK"
+    else
+        // Tick-observed highs only; no pretending OHLC reveals tick ordering.
+        autoPeak := math.max(autoPeak, close)
+        float autoNextSL = autoManagedSL
+        if autoPeak >= autoEntry + autoRisk * lockAtR
+            autoNextSL := math.max(autoNextSL, autoEntry + autoRisk * lockFloorR)
+        if autoPeak >= autoEntry + autoRisk * trailAtR and not na(stopAtr)
+            autoNextSL := math.max(autoNextSL, autoPeak - stopAtr * trailAtrMult)
+        autoManagedSL := f_rndDown(math.max(autoManagedSL, autoNextSL))
+
+        if close <= autoManagedSL
+            autoShouldExit := true
+            autoExitReason := autoManagedSL > autoInitialSL ? "TRAIL / PROFIT LOCK" : "HARD SL"
+        else if barstate.isconfirmed and utExit and utSell
+            autoShouldExit := true
+            autoExitReason := "UT REVERSAL"
+        else if barstate.isconfirmed and psarExit and psar > close
+            autoShouldExit := true
+            autoExitReason := "PSAR REVERSAL"
+        else if barstate.isconfirmed and f_isEod(time_close)
+            autoShouldExit := true
+            autoExitReason := "EOD"
+
+    if autoShouldExit
+        autoActive := false
+        autoSellBoxBar := true
+        autoSellBoxAt := autoExitObserved
+        autoSellBoxText := "SELL\n₹" + f_price(autoExitObserved) + "\n" + autoExitReason + "\nQ " + str.tostring(autoQty)
+        if alertAutoSell
+            alert("P SELL SIGNAL | " + syminfo.ticker + " | " + autoExitReason +
+                " | Observed ₹" + f_price(autoExitObserved) +
+                " | EntryRef ₹" + f_price(autoEntry) +
+                " | CurrentSL ₹" + f_price(autoManagedSL) +
+                " | Qty " + str.tostring(autoQty) +
+                " | VIRTUAL POSITION; not a broker fill", alert.freq_all)
+
+// One idea per UT bullish leg: fresh UT or qualified continuation breakout.
+// Once a modeled BUY has fired, a PSAR bounce cannot trigger a second BUY.
+// Another modeled BUY requires UT SELL and then a new confirmed UT BUY.
+bool freshUnconsumedLeg = not na(signalTime) and (na(autoConsumedLegTime) or signalTime != autoConsumedLegTime)
+// Exclude stale/illiquid charts without recent completed one-minute data. The
+// latest closed candle must be no more than 2 clock minutes old (not merely
+// 2 bars old). Historical data can still display UT/PSAR state normally.
+bool currentDataFresh = not na(refTime) and timenow >= refTime and timenow - refTime <= 120000
+bool autoEntryCandidate = (
+    autoMode and barstate.isrealtime and currentDataFresh and
+    not autoActive and not autoSellBoxBar and
+    qualifiedNow and freshUnconsumedLeg and
+    autoBuysToday < maxAutoBuysPerSymbolDay
+)
+
+// Recompute reference quantity at the OBSERVED live price. The closed candle's
+// reference SL is retained; fills and slippage can still differ from this model.
+if autoEntryCandidate
+    string setupType = validNow ? "UT" : "CONT"
+    float modelEntry = close
+    float modelRiskPerShare = modelEntry - refStop
+    int modelQty = 0
+    if not na(modelRiskPerShare) and modelRiskPerShare > syminfo.mintick and modelEntry > 0
+        int modelRiskQty = int(math.floor(plannedRisk / modelRiskPerShare))
+        int modelExposureQty = int(math.floor(maxExposure / modelEntry))
+        modelQty := math.max(0, math.min(modelRiskQty, modelExposureQty))
+
+    if modelQty >= 1 and not na(modelRiskPerShare)
+        autoActive := true
+        autoBuysToday += 1
+        autoConsumedLegTime := signalTime
+        autoEntry := modelEntry
+        autoInitialSL := refStop
+        autoManagedSL := refStop
+        autoRisk := modelRiskPerShare
+        autoPeak := modelEntry
+        autoQty := modelQty
+        autoEntryDay := time("D")
+
+        autoBuyBoxBar := true
+        autoBuyBoxAt := low
+        autoBuyBoxText := ("BUY " + setupType + "\nE ₹" + f_price(autoEntry) +
+            "\nSL ₹" + f_price(autoInitialSL) +
+            "\nQ " + str.tostring(autoQty) +
+            "\n1R ₹" + f_price(autoEntry + autoRisk)
+        )
+        if alertAutoBuy
+            alert("P BUY " + setupType + " SETUP | " + syminfo.ticker +
+                " | EntryRef ₹" + f_price(autoEntry) +
+                " | SL ₹" + f_price(autoInitialSL) +
+                " | Qty " + str.tostring(autoQty) +
+                " | 1R ₹" + f_price(autoEntry + autoRisk) +
+                " | UT age " + str.tostring(age) +
+                " | VIRTUAL POSITION; not a broker order", alert.freq_all)
+
+// Re-materialize latches on every live update. The final drawings commit when
+// the corresponding one-minute bar closes.
+if autoMode and showAutoBoxes and autoBuyBoxBar
+    label.new(bar_index, autoBuyBoxAt, autoBuyBoxText, style=label.style_label_up,
+        color=color.new(color.green, 0), textcolor=color.white, size=size.small)
+if autoMode and showAutoBoxes and autoSellBoxBar
+    label.new(bar_index, autoSellBoxAt, autoSellBoxText, style=label.style_label_down,
+        color=color.new(color.red, 0), textcolor=color.white, size=size.small)
+
+// Latest-bar qualification remains visible on chart immediately after switching
+// to a symbol, even before the first realtime update after the chart loads.
+var label nowBox = na
+if barstate.islast
+    if not na(nowBox)
+        label.delete(nowBox)
+    nowBox := na
+    bool alreadyModeled = autoMode and (autoActive or (not na(signalTime) and autoConsumedLegTime == signalTime))
+    if autoMode and not alreadyModeled and currentDataFresh and qualifiedNow
+        string setupTypeNow = validNow ? "UT" : "CONT"
+        string validText = ("VALID NOW " + setupTypeNow +
+            "\nE ref ₹" + f_price(refClose) +
+            "\nSL ₹" + f_price(refStop) +
+            "\nQ " + str.tostring(refQty) +
+            "\n1R ₹" + f_price(ref1R)
+        )
+        nowBox := label.new(bar_index, low, validText, style=label.style_label_up,
+            color=color.new(color.green, 0), textcolor=color.white, size=size.small)
+    else if showCurrentReason and autoMode and oneMinute and not alreadyModeled
+        string freshBlockReason = (
+            na(signalTime) ? "WAIT UT BUY" :
+            not intact ? "UT REVERSED" :
+            not sameSignalDay ? "PRIOR DAY UT" :
+            not trendOk ? "PSAR / VWAP" :
+            not chaseOk ? "FRESH CHASE" :
+            not timeOk ? "TIME WINDOW" :
+            not refPlanOk ? "STOP / QTY" :
+            not liveSafe ? "LIVE DRIFT / REV" :
+            "FRESH BASE PASS"
+        )
+        string why = (
+            not currentDataFresh ? "DATA STALE" :
+            not freshUnconsumedLeg ? "UT LEG USED" :
+            autoBuysToday >= maxAutoBuysPerSymbolDay ? "DAILY BUY LIMIT" :
+            not na(age) and age <= maxUtAgeBars ? freshBlockReason :
+            contBlockReason
+        )
+        nowBox := label.new(bar_index, high, "NO BUY\n" + why,
+            style=label.style_label_down, color=color.new(color.gray, 55),
+            textcolor=color.white, size=size.tiny)
+
+// Manual manager is mutually exclusive with AUTO SIGNALS.
+// Does NOT infer broker holdings from VALID NOW or automatic modeled BUY.
+// Set manual entry timestamp, actual fill/SL/shares and toggle manageManual ON.
+// Manual settings are a one-trade per script-instance plan, not position sync.
+bool manualReady = signalMode == "MANUAL TRADE" and manageManual and actualEntryPrice > 0 and actualInitialSL > 0 and actualInitialSL < actualEntryPrice and actualQty > 0
+float actualR = actualEntryPrice - actualInitialSL
+varip bool managedActive = false
+varip bool managedDone = false
+varip float managedStop = na
+varip float managedPeak = na
+varip int managedEntryBar = na
+varip int managedEntryDay = na
+varip bool exitLatchedBar = false
+varip float exitLatchedPrice = na
+varip string exitLatchedReason = ""
+if barstate.isnew
+    exitLatchedBar := false
+    exitLatchedPrice := na
+    exitLatchedReason := ""
+
+if manualReady and not managedActive and not managedDone and barstate.isconfirmed and time_close >= actualEntryTime
+    managedActive := true
+    managedStop := actualInitialSL
+    managedPeak := actualEntryPrice
+    managedEntryBar := bar_index
+    managedEntryDay := time("D")
+    label.new(bar_index, low, "MANUAL\nE ₹" + f_price(actualEntryPrice) + "\nSL ₹" + f_price(actualInitialSL) + "\nQ " + str.tostring(actualQty), style=label.style_label_up, color=color.new(color.blue, 5), textcolor=color.white, size=size.small)
+
+if manualReady and managedActive and not na(managedEntryBar) and bar_index > managedEntryBar
+    bool shouldExit = false
+    float exitRef = na
+    string exitWhy = ""
+    float oldStop = managedStop
+
+    if barstate.isrealtime
+        // Tick-order-aware live model: accumulate only observed current prices.
+        // Never assume the current candle's HIGH occurred before its LOW.
+        managedPeak := math.max(managedPeak, close)
+        float candidate = managedStop
+        if managedPeak >= actualEntryPrice + actualR * lockAtR
+            candidate := math.max(candidate, actualEntryPrice + actualR * lockFloorR)
+        if managedPeak >= actualEntryPrice + actualR * trailAtR and not na(stopAtr)
+            candidate := math.max(candidate, managedPeak - stopAtr * trailAtrMult)
+        managedStop := f_rndDown(math.max(managedStop, candidate))
+
+        if not na(managedEntryDay) and time("D") != managedEntryDay
+            shouldExit := true
+            exitRef := close
+            exitWhy := "NEXT DAY FALLBACK"
+        else if close <= managedStop
+            shouldExit := true
+            exitRef := close
+            exitWhy := managedStop > actualInitialSL ? "TRAIL / LOCK" : "HARD SL"
+        else if barstate.isconfirmed and utExit and utSell
+            shouldExit := true
+            exitRef := close
+            exitWhy := "UT REV"
+        else if barstate.isconfirmed and psarExit and psar > close
+            shouldExit := true
+            exitRef := close
+            exitWhy := "PSAR REV"
+        else if barstate.isconfirmed and f_isEod(time_close)
+            shouldExit := true
+            exitRef := close
+            exitWhy := "EOD"
+    else
+        // Conservative historical sequence: use stop entering the bar; ratchet
+        // only AFTER a surviving bar, effective on the FOLLOWING bar.
+        if not na(managedEntryDay) and time("D") != managedEntryDay
+            shouldExit := true
+            exitRef := open
+            exitWhy := "NEXT DAY FALLBACK"
+        else if low <= oldStop
+            shouldExit := true
+            exitRef := math.min(open, oldStop)
+            exitWhy := oldStop > actualInitialSL ? "TRAIL / LOCK" : "HARD SL"
+        else if utExit and utSell
+            shouldExit := true
+            exitRef := close
+            exitWhy := "UT REV"
+        else if psarExit and psar > close
+            shouldExit := true
+            exitRef := close
+            exitWhy := "PSAR REV"
+        else if f_isEod(time_close)
+            shouldExit := true
+            exitRef := close
+            exitWhy := "EOD"
+
+        if not shouldExit
+            managedPeak := math.max(managedPeak, high)
+            float candidate = managedStop
+            if managedPeak >= actualEntryPrice + actualR * lockAtR
+                candidate := math.max(candidate, actualEntryPrice + actualR * lockFloorR)
+            if managedPeak >= actualEntryPrice + actualR * trailAtR and not na(stopAtr)
+                candidate := math.max(candidate, managedPeak - stopAtr * trailAtrMult)
+            managedStop := f_rndDown(math.max(managedStop, candidate))
+
+    if shouldExit
+        exitLatchedBar := true
+        exitLatchedPrice := exitRef
+        exitLatchedReason := exitWhy
+        managedActive := false
+        managedDone := true
+        if barstate.isrealtime and sendManagedExit
+            alert("P EXIT | " + syminfo.ticker + " | " + exitWhy + " | observed ₹" + f_price(exitRef) + " | Q " + str.tostring(actualQty) + " | ALERT ONLY — broker fill not guaranteed", alert.freq_all)
+
+// Repaint-safe for realtime drawing rollback: re-create the latched exit box
+// on each update of the exiting bar, and commit at the close.
+if exitLatchedBar
+    label.new(bar_index, na(exitLatchedPrice) ? close : exitLatchedPrice,
+        "EXIT\n₹" + f_price(exitLatchedPrice) + "\n" + exitLatchedReason + "\nQ " + str.tostring(actualQty),
+        style=label.style_label_down, color=color.new(color.red, 0), textcolor=color.white, size=size.small)
+
+// PSAR/UT/VWAP price reference lines without the long chart header.
+plot(utTrail, "UT", color=color.new(color.aqua, 0), linewidth=2, display=display.all - display.status_line)
+plot(psar, "PSAR", color=psar < close ? color.new(color.blue, 0) : color.new(color.orange, 0), style=plot.style_circles, linewidth=2, display=display.all - display.status_line)
+plot(vwap, "VWAP", color=color.new(color.fuchsia, 20), linewidth=1, display=display.all - display.status_line)
+plot(autoMode and autoActive ? autoEntry : manualReady and managedActive ? actualEntryPrice : na, "Entry Ref", color=color.new(color.blue, 0), style=plot.style_linebr, linewidth=2, display=display.all - display.status_line)
+plot(autoMode and autoActive ? autoManagedSL : manualReady and managedActive ? managedStop : na, "Managed SL", color=color.new(color.red, 0), style=plot.style_linebr, linewidth=2, display=display.all - display.status_line)
+plotshape(oneMinute and utBuy, "UT BUY", style=shape.triangleup, location=location.belowbar, color=color.new(color.lime, 25), size=size.tiny, display=display.all - display.status_line)
+plotshape(oneMinute and utSell, "UT SELL", style=shape.triangledown, location=location.abovebar, color=color.new(color.red, 25), size=size.tiny, display=display.all - display.status_line)
