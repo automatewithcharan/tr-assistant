@@ -34,6 +34,13 @@ No access token, API key, password, session cookie, authorization header, webhoo
 - Preserved aggregate CAS-evidence counts, the no-replay decision, and future-study design.
 - Excluded local master-file inventory, request manifests, raw matrices, paths, and service details.
 
+## Phase 6B historical CAS blocker audit addition
+
+- Published the exact official public URLs, expected filenames, fixed evaluation dates, aggregate cache counts, source hashes and validation controls needed for independent review.
+- Replaced local evidence locations with artifact descriptions; no username, absolute path, service detail, credential, cookie or account identifier is included.
+- Excluded all raw market candles, local coverage CSV rows, HTTP response bodies, authentication material, trading journals and implementation source.
+- Preserved the unfavorable `NO` readiness conclusion, the 1,540 unresolved cohort-session count and all stated selection-bias limitations.
+
 ## Review limitation
 
 Evidence CSV/JSON files, raw research caches, databases, Pine source, configuration JSON, and implementation code are deliberately excluded. Reports identify many of those dependencies by relative path and/or SHA-256, but those references cannot be opened from this documentation-only branch.
