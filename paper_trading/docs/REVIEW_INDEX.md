@@ -39,6 +39,7 @@ The reports are historical research records. Their statements about service stat
 | Phase 6A | [Exploratory backtest](PHASE6A_EXPLORATORY_BACKTEST_REPORT.md) | Fixed-cohort A/B/C results, costs, and limitations. | `0daf8a681214e2e3c44c060021c05268f275a766` | Raw candles, journals, trade/event exports, and detailed manifests are excluded. |
 | Phase 6A | [Trade forensics](PHASE6A_TRADE_FORENSICS.md) | Aggregate loss, MFE/MAE, gate, and counterfactual analysis. | local research analysis, not committed on feature branch | Raw trades/events and detailed indicator rows are excluded. |
 | Phase 6A | [Detailed aggregate trading evidence](PHASE6A_AGGREGATE_TRADING_EVIDENCE.md) | Entry-type, MFE/MAE, cost, exit, funnel, and concentration tables. | authoritative `verified2` local research artifacts | Raw trades/events, local artifact paths, and per-entry rows are excluded. |
+| Phase 6B | [Extended-evaluation limitation and research design](PHASE6B_EXTENDED_EVALUATION_LIMITATION_AND_RESEARCH_DESIGN.md) | Why no 20-session replay was defensible; predeclared future research designs. | offline Phase 5E/6A evidence review | Raw classification matrices, artifacts, and implementation are excluded. |
 | Policy | [Public review policy](CODEX_PUBLIC_REVIEW_POLICY.md) | Required sanitization and documentation-only publication workflow. | this documentation commit | Implementation and production systems are out of scope. |
 
 ## Missing from this export
