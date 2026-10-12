@@ -54,6 +54,12 @@ No access token, API key, password, session cookie, authorization header, webhoo
 - Explicitly retained the limitation that the two circular PDFs were not locally present or byte/hash-verified; no document was downloaded in Phase 6D.
 - Excluded raw NSE masters, the original research ledger, local instrument maps, candle-cache rows, absolute paths and implementation source.
 
+## Phase 6E frozen backtest addition
+
+- Preserved the predeclared cohort/dates, CAS counts, immutable hashes, unfavorable gross/net results, cost components, exit and MFE/MAE aggregates, daily aggregates, symbol-concentration observations, test status and all execution limitations.
+- Excluded the raw candle cache, normalized-source and replay SQLite files, detailed trade/event CSVs, full input file manifest, local artifact paths, credentials and implementation code.
+- Published no broker fills, account data, service state, token, cookie, webhook or personal path. The report states that reconstructed bar-open fills are not verified broker fills.
+
 ## Review limitation
 
 Evidence CSV/JSON files, raw research caches, databases, Pine source, configuration JSON, and implementation code are deliberately excluded. Reports identify many of those dependencies by relative path and/or SHA-256, but those references cannot be opened from this documentation-only branch.
