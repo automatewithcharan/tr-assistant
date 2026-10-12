@@ -23,6 +23,12 @@ No access token, API key, password, session cookie, authorization header, webhoo
 - Excluded local artifact paths, input manifests, raw candles, SQLite journals, full trade/event exports, unsent notification previews, and per-entry indicator rows.
 - Preserved unfavorable gross/net results, fees, loss distributions, MFE/MAE counts, exit statistics, selection-bias limitations, and the no-broker/no-production conclusion.
 
+## Phase 6A detailed aggregate evidence addition
+
+- Preserved only aggregate distributions, fee components, candidate funnels, daily totals, and symbol-concentration summaries.
+- Explicitly marked individual ₹ spread/slippage attribution unavailable because the journal embeds it in adverse proxy fills.
+- Excluded raw trades, events, forensic CSV rows, local artifacts, and source-data references.
+
 ## Review limitation
 
 Evidence CSV/JSON files, raw research caches, databases, Pine source, configuration JSON, and implementation code are deliberately excluded. Reports identify many of those dependencies by relative path and/or SHA-256, but those references cannot be opened from this documentation-only branch.

@@ -38,6 +38,7 @@ The reports are historical research records. Their statements about service stat
 | Phase 5E | [CAS execution readiness](PHASE5E_CAS_EXECUTION_READINESS_REPORT.md) | Dated CAS evidence limits and broker-realistic EOD sensitivity. | `e44b27d4074c81c064b58bda8f24c96d05d4a588` | Generated matrices/manifests, code and tests are excluded. |
 | Phase 6A | [Exploratory backtest](PHASE6A_EXPLORATORY_BACKTEST_REPORT.md) | Fixed-cohort A/B/C results, costs, and limitations. | `0daf8a681214e2e3c44c060021c05268f275a766` | Raw candles, journals, trade/event exports, and detailed manifests are excluded. |
 | Phase 6A | [Trade forensics](PHASE6A_TRADE_FORENSICS.md) | Aggregate loss, MFE/MAE, gate, and counterfactual analysis. | local research analysis, not committed on feature branch | Raw trades/events and detailed indicator rows are excluded. |
+| Phase 6A | [Detailed aggregate trading evidence](PHASE6A_AGGREGATE_TRADING_EVIDENCE.md) | Entry-type, MFE/MAE, cost, exit, funnel, and concentration tables. | authoritative `verified2` local research artifacts | Raw trades/events, local artifact paths, and per-entry rows are excluded. |
 | Policy | [Public review policy](CODEX_PUBLIC_REVIEW_POLICY.md) | Required sanitization and documentation-only publication workflow. | this documentation commit | Implementation and production systems are out of scope. |
 
 ## Missing from this export
