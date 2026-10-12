@@ -48,6 +48,12 @@ No access token, API key, password, session cookie, authorization header, webhoo
 - The report was authored with repository-relative evidence descriptions; no personal path replacement was required.
 - No credentials, cookies, authorization headers, account identifiers, raw market candles, broker data or operational service details are included.
 
+## Phase 6D KOTAKBANK identity-resolution addition
+
+- Preserved the user-supplied official circular identifiers, dated old/new ISIN mapping, token/master crosswalk, classification totals, test results and the separate broker-execution limitation.
+- Explicitly retained the limitation that the two circular PDFs were not locally present or byte/hash-verified; no document was downloaded in Phase 6D.
+- Excluded raw NSE masters, the original research ledger, local instrument maps, candle-cache rows, absolute paths and implementation source.
+
 ## Review limitation
 
 Evidence CSV/JSON files, raw research caches, databases, Pine source, configuration JSON, and implementation code are deliberately excluded. Reports identify many of those dependencies by relative path and/or SHA-256, but those references cannot be opened from this documentation-only branch.
