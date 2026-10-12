@@ -18,6 +18,7 @@ This is a sanitized, documentation-only review export. It is not a release, depl
 | Phase 6C | The approved 22-file NSE reference acquisition classified 1,540 of 1,560 frozen cohort sessions; the replay remained blocked by one fail-closed security-identity conflict. | Phase 6C report |
 | Phase 6D | User-supplied dated split evidence resolved the KOTAKBANK snapshot/master mismatch; historical data and identity readiness became affirmative, while broker-realistic CAS execution remained separate. | Phase 6D report |
 | Phase 6E | One predeclared 78-symbol, 20-session frozen streaming replay completed with dated CAS calendar; all variants were gross- and net-negative. | Phase 6E report and reproducibility summary |
+| Phase 7 | A pre-registered leader-first candidate and independent September holdout protocol were documented; no replay was run because dated September eligibility/CAS evidence is missing. | Phase 7 research design |
 
 The reports are historical research records. Their statements about service state, test totals, data coverage and authorization apply to their recorded dates and do not assert a current deployment state.
 
@@ -49,6 +50,7 @@ The reports are historical research records. Their statements about service stat
 | Phase 6D | [KOTAKBANK identity resolution](PHASE6D_KOTAKBANK_IDENTITY_RESOLUTION.md) | Dated split mapping, identity reconciliation, CAS reclassification and readiness distinction. | `3425a014dd16f8fe832f958438de3a0163af7d12` | Circular PDFs, raw masters, local maps, cache rows and source code are excluded. |
 | Phase 6E | [Frozen 20-session A/B/C backtest](PHASE6E_20_SESSION_ABC_BACKTEST_REPORT.md) | Predeclared 78-symbol streaming reconstruction, aggregate results, costs, exits, MFE/MAE and limitations. | `e4c78e931acd4615d6dbf09022ccf320fbabc4ee` | Immutable manifest, raw candles, normalized source, SQLite journal, trade/event CSVs and code are excluded. |
 | Phase 6E | [Reproducibility summary](PHASE6E_REPRODUCIBILITY_SUMMARY.md) | Run identifiers, input hashes and reconciled aggregate results. | `e4c78e931acd4615d6dbf09022ccf320fbabc4ee` | Raw research artifacts and source implementation are excluded. |
+| Phase 7 | [Leader-first momentum research design](PHASE7_LEADER_FIRST_RESEARCH_DESIGN.md) | Pre-registered independent candidate, Phase 6E evidence audit, later-holdout blocker and fair-test protocol. | `843bb0261a473a3ea4aec7d1b987c0fcfc30a4ab` | Raw artifact queries, market data, master files, journals and code are excluded. |
 | Policy | [Public review policy](CODEX_PUBLIC_REVIEW_POLICY.md) | Required sanitization and documentation-only publication workflow. | this documentation commit | Implementation and production systems are out of scope. |
 
 ## Missing from this export

@@ -60,6 +60,12 @@ No access token, API key, password, session cookie, authorization header, webhoo
 - Excluded the raw candle cache, normalized-source and replay SQLite files, detailed trade/event CSVs, full input file manifest, local artifact paths, credentials and implementation code.
 - Published no broker fills, account data, service state, token, cookie, webhook or personal path. The report states that reconstructed bar-open fills are not verified broker fills.
 
+## Phase 7 leader-first research-design addition
+
+- Preserved adverse Phase 6E aggregate evidence, the complete frozen leader-first specification, September holdout proposal, missing-evidence blocker and failure criteria.
+- Excluded raw journal queries, raw candles, full NSE cache inventory, dated-master files, local artifact paths, source code and operational data.
+- No personal path, credential, account, broker operation, service state, webhook, or raw trade ledger is included.
+
 ## Review limitation
 
 Evidence CSV/JSON files, raw research caches, databases, Pine source, configuration JSON, and implementation code are deliberately excluded. Reports identify many of those dependencies by relative path and/or SHA-256, but those references cannot be opened from this documentation-only branch.
