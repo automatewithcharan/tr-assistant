@@ -171,6 +171,13 @@ worktree based on the remote head.  The publication contains sanitized Markdown
 only; no cache, source code, raw journal, authentication material or production
 details are eligible.
 
+Publication completed by fast-forward at documentation commit
+`ce537d22da6dc36cf7561d9502365eb02ed67945`.  Review links:
+
+- [Review index](https://raw.githubusercontent.com/automatewithcharan/tr-assistant/codex/ut-sync-paper-docs-review-20261012/paper_trading/docs/REVIEW_INDEX.md)
+- [Phase 7A readiness](https://raw.githubusercontent.com/automatewithcharan/tr-assistant/codex/ut-sync-paper-docs-review-20261012/paper_trading/docs/PHASE7A_LEADER_FIRST_EVALUATION_READINESS.md)
+- [Phase 7B integration](https://raw.githubusercontent.com/automatewithcharan/tr-assistant/codex/ut-sync-paper-docs-review-20261012/paper_trading/docs/PHASE7B_LEADER_FIRST_INTEGRATION_REPORT.md)
+
 ## 7. Final readiness
 
 | Dimension | Status |
