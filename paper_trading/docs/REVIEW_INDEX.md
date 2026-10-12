@@ -15,6 +15,7 @@ This is a sanitized, documentation-only review export. It is not a release, depl
 | Phase 5D–5E | Closing Auction Session (CAS) data classification and a separate broker-realistic EOD sensitivity were documented. | Phase 5D–5E reports |
 | Phase 6A | A fixed 78-symbol, five-session frozen A/B/C reconstruction and trade forensics were completed. | Phase 6A reports |
 | Phase 6B | The proposed extended replay was stopped; the earliest 20-session post-CAS window was frozen and its exact historical CM-MII acquisition blocker was bounded. | Phase 6B reports |
+| Phase 6C | The approved 22-file NSE reference acquisition classified 1,540 of 1,560 frozen cohort sessions; the replay remained blocked by one fail-closed security-identity conflict. | Phase 6C report |
 
 The reports are historical research records. Their statements about service state, test totals, data coverage and authorization apply to their recorded dates and do not assert a current deployment state.
 
@@ -42,6 +43,7 @@ The reports are historical research records. Their statements about service stat
 | Phase 6A | [Detailed aggregate trading evidence](PHASE6A_AGGREGATE_TRADING_EVIDENCE.md) | Entry-type, MFE/MAE, cost, exit, funnel, and concentration tables. | authoritative `verified2` local research artifacts | Raw trades/events, local artifact paths, and per-entry rows are excluded. |
 | Phase 6B | [Extended-evaluation limitation and research design](PHASE6B_EXTENDED_EVALUATION_LIMITATION_AND_RESEARCH_DESIGN.md) | Why no 20-session replay was defensible; predeclared future research designs. | offline Phase 5E/6A evidence review | Raw classification matrices, artifacts, and implementation are excluded. |
 | Phase 6B | [Historical CAS blocker audit](PHASE6B_HISTORICAL_CAS_BLOCKER_AUDIT.md) | Frozen 20-session window, official CM-MII schema findings, exact no-download acquisition manifest, cache reconciliation and readiness decision. | offline Phase 5D/5E/6B evidence and official public-source review | Dated CM-MII masters, circular packages, raw matrices and implementation are excluded. |
+| Phase 6C | [CAS classification results](PHASE6C_CAS_CLASSIFICATION_RESULTS.md) | Approved public NSE acquisition, dated CAS/non-CAS classification, candle completeness and the remaining identity blocker. | offline acquisition and classification audit; feature branch unchanged | Raw circulars, dated masters, response metadata and the 1,560-row classification ledger are excluded. |
 | Policy | [Public review policy](CODEX_PUBLIC_REVIEW_POLICY.md) | Required sanitization and documentation-only publication workflow. | this documentation commit | Implementation and production systems are out of scope. |
 
 ## Missing from this export

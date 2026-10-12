@@ -41,6 +41,13 @@ No access token, API key, password, session cookie, authorization header, webhoo
 - Excluded all raw market candles, local coverage CSV rows, HTTP response bodies, authentication material, trading journals and implementation source.
 - Preserved the unfavorable `NO` readiness conclusion, the 1,540 unresolved cohort-session count and all stated selection-bias limitations.
 
+## Phase 6C historical CAS classification addition
+
+- Preserved the exact request IDs, official public filenames, file hashes, schema findings, classification counts, symbol classifications, candle-quality totals, unresolved identity evidence and unfavorable `NO` readiness conclusion.
+- Published only aggregate and symbol-level research findings. Excluded the 22 raw source files, HTTP headers, extracted circular content, response bodies, local artifact paths and the 1,560-row classification ledger.
+- The report was authored with repository-relative evidence descriptions; no personal path replacement was required.
+- No credentials, cookies, authorization headers, account identifiers, raw market candles, broker data or operational service details are included.
+
 ## Review limitation
 
 Evidence CSV/JSON files, raw research caches, databases, Pine source, configuration JSON, and implementation code are deliberately excluded. Reports identify many of those dependencies by relative path and/or SHA-256, but those references cannot be opened from this documentation-only branch.
