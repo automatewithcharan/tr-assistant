@@ -17,6 +17,12 @@ Research conclusions, limitations, A/B/C definitions, parameter values, performa
 
 No access token, API key, password, session cookie, authorization header, webhook URL, raw market data, SQLite database, HTTP response, trade ledger, or source code is included in this export.
 
+## Phase 6A addition
+
+- Published only aggregate research tables and conclusions from the exploratory replay and forensic analysis.
+- Excluded local artifact paths, input manifests, raw candles, SQLite journals, full trade/event exports, unsent notification previews, and per-entry indicator rows.
+- Preserved unfavorable gross/net results, fees, loss distributions, MFE/MAE counts, exit statistics, selection-bias limitations, and the no-broker/no-production conclusion.
+
 ## Review limitation
 
 Evidence CSV/JSON files, raw research caches, databases, Pine source, configuration JSON, and implementation code are deliberately excluded. Reports identify many of those dependencies by relative path and/or SHA-256, but those references cannot be opened from this documentation-only branch.

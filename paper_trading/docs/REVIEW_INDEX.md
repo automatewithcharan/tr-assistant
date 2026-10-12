@@ -13,6 +13,7 @@ This is a sanitized, documentation-only review export. It is not a release, depl
 | Phase 5 | Historical data, benchmark coverage and Pine-parity blockers were audited. | Phase 5 report |
 | Phase 5A–5C | Approved benchmark retrieval, integration, and a bounded stock-history pilot were documented. | Phase 5A–5C reports |
 | Phase 5D–5E | Closing Auction Session (CAS) data classification and a separate broker-realistic EOD sensitivity were documented. | Phase 5D–5E reports |
+| Phase 6A | A fixed 78-symbol, five-session frozen A/B/C reconstruction and trade forensics were completed. | Phase 6A reports |
 
 The reports are historical research records. Their statements about service state, test totals, data coverage and authorization apply to their recorded dates and do not assert a current deployment state.
 
@@ -35,6 +36,9 @@ The reports are historical research records. Their statements about service stat
 | Phase 5C | [Stock-backfill pilot](PHASE5C_STOCK_BACKFILL_PILOT_REPORT.md) | Bounded 20-request read-only repair pilot and validation. | `f81a0756a8b625dc4c03f7553b1ab2f23b106792` | Raw responses, pilot cache and sanitized JSON evidence are excluded. |
 | Phase 5D | [CAS session audit](PHASE5D_CAS_SESSION_AUDIT.md) | CAS classification, tail-gap recalculation and EOD findings. | `716b0aa50feb33174614894c767d8062347b5d41` | Classification matrices, request manifests and code are excluded. |
 | Phase 5E | [CAS execution readiness](PHASE5E_CAS_EXECUTION_READINESS_REPORT.md) | Dated CAS evidence limits and broker-realistic EOD sensitivity. | `e44b27d4074c81c064b58bda8f24c96d05d4a588` | Generated matrices/manifests, code and tests are excluded. |
+| Phase 6A | [Exploratory backtest](PHASE6A_EXPLORATORY_BACKTEST_REPORT.md) | Fixed-cohort A/B/C results, costs, and limitations. | `0daf8a681214e2e3c44c060021c05268f275a766` | Raw candles, journals, trade/event exports, and detailed manifests are excluded. |
+| Phase 6A | [Trade forensics](PHASE6A_TRADE_FORENSICS.md) | Aggregate loss, MFE/MAE, gate, and counterfactual analysis. | local research analysis, not committed on feature branch | Raw trades/events and detailed indicator rows are excluded. |
+| Policy | [Public review policy](CODEX_PUBLIC_REVIEW_POLICY.md) | Required sanitization and documentation-only publication workflow. | this documentation commit | Implementation and production systems are out of scope. |
 
 ## Missing from this export
 
