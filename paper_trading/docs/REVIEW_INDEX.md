@@ -19,6 +19,8 @@ This is a sanitized, documentation-only review export. It is not a release, depl
 | Phase 6D | User-supplied dated split evidence resolved the KOTAKBANK snapshot/master mismatch; historical data and identity readiness became affirmative, while broker-realistic CAS execution remained separate. | Phase 6D report |
 | Phase 6E | One predeclared 78-symbol, 20-session frozen streaming replay completed with dated CAS calendar; all variants were gross- and net-negative. | Phase 6E report and reproducibility summary |
 | Phase 7 | Two deterministic leader-first parent strategies and E1–E4 entry-quality plans were prototyped offline; no replay was run because dated September eligibility/CAS evidence is missing. | Phase 7 research design |
+| Phase 7A | The independent September calendar was corrected to twenty sessions, and the leader-first prototype/cache readiness audit stopped the replay on data and integration blockers. | Phase 7A readiness |
+| Phase 7B | The external September cache was located, frozen leader rules were repaired, and a paper-only leader streaming integration was tested; master-backed data eligibility remains blocked. | Phase 7B integration report |
 
 The reports are historical research records. Their statements about service state, test totals, data coverage and authorization apply to their recorded dates and do not assert a current deployment state.
 
@@ -51,6 +53,8 @@ The reports are historical research records. Their statements about service stat
 | Phase 6E | [Frozen 20-session A/B/C backtest](PHASE6E_20_SESSION_ABC_BACKTEST_REPORT.md) | Predeclared 78-symbol streaming reconstruction, aggregate results, costs, exits, MFE/MAE and limitations. | `e4c78e931acd4615d6dbf09022ccf320fbabc4ee` | Immutable manifest, raw candles, normalized source, SQLite journal, trade/event CSVs and code are excluded. |
 | Phase 6E | [Reproducibility summary](PHASE6E_REPRODUCIBILITY_SUMMARY.md) | Run identifiers, input hashes and reconciled aggregate results. | `e4c78e931acd4615d6dbf09022ccf320fbabc4ee` | Raw research artifacts and source implementation are excluded. |
 | Phase 7 | [Leader-first momentum research design](PHASE7_LEADER_FIRST_RESEARCH_DESIGN.md) | Two pre-registered independent parent strategies, E1–E4 plans, deterministic prototype tests, later-holdout blocker and fair-test protocol. | `68dcb940e5c64676c2cd94224cb4e5eafa615996` | Raw artifact queries, market data, master files, journals and code are excluded. |
+| Phase 7A | [Leader-first evaluation readiness](PHASE7A_LEADER_FIRST_EVALUATION_READINESS.md) | Calendar correction, cache/benchmark inspection, contract audit, data blockers and exact master-reference manifest. | `176bc79b1b2df21453613c575f2624d92ab132d2` | External cache contents, masters, journals and implementation are excluded. |
+| Phase 7B | [Leader-first integration and readiness repairs](PHASE7B_LEADER_FIRST_INTEGRATION_REPORT.md) | External-cache inventory, frozen-contract repairs, paper-only streaming integration, tests and remaining September data blockers. | `50cba95cc374688f9abd0fdf3a136ce68797e94c` | Raw cache files, master files, journals, source code and operational detail are excluded. |
 | Policy | [Public review policy](CODEX_PUBLIC_REVIEW_POLICY.md) | Required sanitization and documentation-only publication workflow. | this documentation commit | Implementation and production systems are out of scope. |
 
 ## Missing from this export

@@ -71,6 +71,18 @@ No access token, API key, password, session cookie, authorization header, webhoo
 - Preserved the exact two parent-strategy formulas, E1–E4 entry timing/expiry rules, shared exit/risk policy, fixed diagnostic horizon, deterministic-test result, and the explicit no-replay decision.
 - Excluded the implementation source, test source, raw local-artifact queries, candle caches, journals, market master files and operational paths.
 
+## Phase 7A/7B additions
+
+- Preserved the unfavorable September-readiness decision, calendar correction,
+  cache availability counts, metadata-inventory hashes, rule-contract decisions,
+  exact public-master manifest, test results and remaining data limitations.
+- Replaced local cache/worktree locations with repository-relative descriptions.
+  Published metadata-inventory hashes are derived from names and byte sizes, not
+  raw candle bodies.
+- Excluded all raw stock/benchmark candles, per-symbol matrices, dated masters,
+  SQLite journals, implementation/test source, credentials, accounts, broker
+  operations and production-service detail.
+
 ## Review limitation
 
 Evidence CSV/JSON files, raw research caches, databases, Pine source, configuration JSON, and implementation code are deliberately excluded. Reports identify many of those dependencies by relative path and/or SHA-256, but those references cannot be opened from this documentation-only branch.
