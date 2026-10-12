@@ -2,10 +2,13 @@
 
 ## Decision
 
-No leader-first replay, strategy implementation, market-data request, or production
-change was performed in this phase.  This document pre-registers one independent
-candidate and describes the minimum evidence required to test it fairly against
-the frozen UT_SYNC A/B/C baselines.
+No leader-first replay, market-data request, or production change was performed in
+this phase.  An isolated, deterministic offline prototype was implemented in
+`paper_trading/leader_first.py` with tests in
+`tests/paper_trading/test_leader_first.py`.  It creates research opportunities and
+entry plans only; it has no network, Kite, Discord, production-service, or broker
+order dependency.  A future separately-authorized replay may adapt a ready plan
+to the existing paper-only `Candidate`/Portfolio/journal interfaces.
 
 The candidate is deliberately independent of UT_SYNC: UT signals neither create,
 rank, veto, nor exit its positions.  UT_SYNC v2.7a, QQC CLEAR v6, A/B/C and the
@@ -176,6 +179,108 @@ symbol per session.  No UT signal is read anywhere in this pathway.
 - No entry after 14:45 IST, no same-bar re-entry after exit, no overnight carry;
   a position without a credible same-session exit is reported incomplete/censored.
 
+## Implemented Phase 7 prototype contract
+
+`paper_trading.leader_first` is the authoritative executable specification below.
+It accepts completed `Candle` objects and an explicitly supplied `LeaderSnapshot`.
+The snapshot carries only point-in-time eligibility, prior-session liquidity,
+confirmed higher-timeframe EMA values, aligned benchmark returns, RVOL and ATR;
+the module will fail closed when these are missing.  It does not calculate a
+universe from a modern list and it does not read a UT flag.
+
+### Parent strategy 1 — momentum breakout plus pullback
+
+On the current completed recovery bar, inspect exactly the prior nine completed
+one-minute bars: a five-bar impulse, then a three-bar pullback, then recovery.
+With `A=ATR14` on the recovery bar, the parent exists only when all are true:
+
+1. `max(high impulse)-min(low impulse) >= 1.80A`; the last impulse close minus
+   the first impulse open is at least `1.20A`; and the last impulse close location
+   is at least 0.70.
+2. Pullback low is no lower than `impulseHigh - 0.50*impulseRange`; pullback high
+   does not exceed impulse high by more than one tick; and pullback bearish volume
+   is no more than 75% of impulse bullish volume.
+3. Recovery close is above the pullback-high trigger, its close location is at
+   least 0.70, and its volume is at least the mean pullback-bar volume.
+4. The common causal context passes: point-in-time eligible, current volume >0,
+   RVOL >=1.50 using prior same-minute observations, RS positive and rising,
+   price above VWAP and prior-completed five-minute EMA20, and EMA20 rising.
+5. Structural stop is `floor_tick(min(pullbackLow,recoveryLow)-0.10A)`.  Planned
+   risk must be 0.35–1.25 ATR, close must be no more than 0.75 ATR above trigger
+   and no more than 1.50 ATR above VWAP.  Any breach is a no-chase rejection.
+
+The parent signal/observable time is the completed recovery bar's `bar_end`; its
+retest expiry is 15 completed minutes.  The values are fixed experimental
+constants rather than fitted Phase 6A/6E thresholds.
+
+### Parent strategy 2 — relative strength during market pullback
+
+Use the current completed bar and exactly three prior completed one-minute bars.
+The parent exists only when the aligned NIFTY five-minute return is <= -0.25%, the
+stock's own five-minute return is >=0%, RS is >=+0.30% and rising versus its
+three-completed-minute value, and the stock recovers with a close above the
+three-bar high, close location >=0.70, positive RVOL/price/VWAP/confirmed-EMA
+context as above.  Requiring non-negative absolute stock return prevents a merely
+less-negative stock from being labelled a leader during benchmark weakness.
+
+The trigger is the prior three-bar high.  Stop is
+`floor_tick(min(low prior-three,currentLow)-0.10*ATR14)` and uses the same
+no-chase and risk-distance rules.  The parent is not a UT continuation.
+
+Parent overlap is reported when two parent kinds have the same symbol and session
+and observable signals within five minutes.  Such pairs remain one overlapping
+opportunity cluster in evaluation reporting, rather than being represented as two
+independent edges.
+
+### Common E1–E4 entry comparison
+
+Each parent produces four independently labelled plans with the same structural
+stop and common exit policy; they are not four unrelated strategies.
+
+| Method | Signal condition | First permitted proxy fill | Wait/expiry | Rejection/miss record |
+|---|---|---|---|---|
+| E1 immediate | Parent recovery signal | First next candle boundary after completed signal (`bar_open_zero_latency_proxy`) | None | Parent rejection / no next observation |
+| E2 confirmation | One later completed close remains above trigger | Boundary after confirming close | Must occur on next completed bar; otherwise reject after 3 bars | `CONFIRMATION_FAILED` / `CONFIRMATION_EXPIRED` |
+| E3 retest | Within 15 bars, low touches trigger ±0.15 ATR, then bullish close reclaims above trigger with location >=0.70 | Boundary after retest-reclaim close | 15 completed bars | `WAIT_RETEST` / `RETEST_EXPIRED` |
+| E4 context | Parent recovery signal plus room to prior 60-bar resistance >=1.5 planned R and all no-chase limits | Boundary after completed parent signal | Immediate only | `ROOM_OR_EXTENSION_FAIL` |
+
+The timestamp describes the earliest existing simulator proxy, not a verified
+tradable broker fill: the completed signal is known at `bar_end`, and a historical
+next-bar-open price at that boundary is optimistic about publication/latency.
+Every pending/expired/rejected plan stays in the research journal when a replay is
+authorized.  A ready plan converts only to the existing paper `Candidate` object;
+it cannot invoke broker code.
+
+### Shared exits, sizing and diagnostics
+
+All E1–E4 plans use the frozen A/B/C fee model, adverse spread/slippage proxy,
+₹500 reference risk, recomputed actual-fill quantity, ₹300,000 capital, three
+open positions, ₹1,500 daily loss guard, and participation/liquidity limits.
+Stops are active immediately.  The old stop is checked before any same-bar
+ratchet; at +1R lock to +0.25R on the next bar and at +1.5R trail peak minus
+2*ATR14 on the next bar.  A completed close below both session VWAP and confirmed
+five-minute EMA20 schedules a next-observation exit.  The inherited CAS-aware EOD
+censoring policy remains mandatory; closing-auction prices are never normal fills.
+
+The prototype provides a fixed 30-bar **diagnostic-only** horizon.  It records:
+initial breakout failure (low reaches stop), stopped-then-recovered (same horizon
+high reaches entry+1R after a stop), continued fall (low reaches stop-1R), and a
+strong advance without an eligible retest (no low at/below trigger but high reaches
+trigger+2R).  These are retrospective labels; the module never turns them into a
+reversal, chase, or re-entry trade.
+
+### Deterministic verification
+
+The focused test set verifies five properties: causal momentum parent detection
+and structural stop; fail-closed zero-volume/extension behaviour; genuine strength
+instead of benchmark-only weakness; E1–E4 timing and paper-candidate adaptation;
+and deterministic rank, overlap and diagnostic labels.  It is run with existing
+paper-engine/checkpoint tests to confirm no regression of the shared offline
+infrastructure.  Result: **67 passed** (`test_leader_first.py`,
+`test_paper_engine.py`, and `test_streaming_checkpoint.py`).  The full repository
+suite also passed through `scripts/test_offline.sh -q`; the wrapper cleaned its
+isolated temporary root, its defined success condition.
+
 ## Independent evaluation readiness
 
 July and August are development evidence, not holdout data.  The earliest proposed
@@ -235,8 +340,9 @@ if the primary result is favorable.
 
 ## Safety and publication
 
-This phase performed only local read-only artifact inspection and documentation.
-No Kite API request/order/GTT/modification/cancellation, Discord message, live
-paper activation, production-service change, deployment, merge, or feature-branch
-push occurred.  Raw candles, SQLite journals, and detailed trade/event ledgers are
-not included in the public documentation export.
+This phase performed local read-only artifact inspection, a pure offline prototype
+implementation, and deterministic tests.  No Kite API request/order/GTT/
+modification/cancellation, Discord message, live paper activation, production-
+service change, deployment, merge, replay, or feature-branch push occurred. Raw
+candles, SQLite journals, and detailed trade/event ledgers are not included in the
+public documentation export.

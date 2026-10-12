@@ -66,6 +66,11 @@ No access token, API key, password, session cookie, authorization header, webhoo
 - Excluded raw journal queries, raw candles, full NSE cache inventory, dated-master files, local artifact paths, source code and operational data.
 - No personal path, credential, account, broker operation, service state, webhook, or raw trade ledger is included.
 
+## Phase 7 prototype update
+
+- Preserved the exact two parent-strategy formulas, E1–E4 entry timing/expiry rules, shared exit/risk policy, fixed diagnostic horizon, deterministic-test result, and the explicit no-replay decision.
+- Excluded the implementation source, test source, raw local-artifact queries, candle caches, journals, market master files and operational paths.
+
 ## Review limitation
 
 Evidence CSV/JSON files, raw research caches, databases, Pine source, configuration JSON, and implementation code are deliberately excluded. Reports identify many of those dependencies by relative path and/or SHA-256, but those references cannot be opened from this documentation-only branch.
