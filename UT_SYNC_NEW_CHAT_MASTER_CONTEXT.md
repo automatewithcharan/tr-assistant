@@ -54,13 +54,9 @@ Original QQC source: `https://github.com/harryguiacorn/TradingView-Proprietary-I
 
 ## 4. Existing Python/Codex/Kite/Discord context
 - User has existing local VS Code repo that ChatGPT cannot inspect without new uploaded files or Codex output. **Do not invent path or current service state.**
-- Last reported Codex status after Kite session-file repair:
-  - `UT-SYNC` PID 18967, Discord enabled, kill switch false;
-  - Kite data 22/22 instruments AVAILABLE after refresh; 468 completed rows, 0 failures, 10 active candidates, fresh UT BUY 0, Discord errors 0, historical replay 0;
-  - separate Strict Emerging Leader PID 654 untouched;
-  - stale Kite token path within isolated worktree fixed to use canonical session file, verified startup refresh;
+- A historical Codex status snapshot recorded that protected UT-SYNC and Strict Emerging Leader services were not modified. Operational health counters, service identifiers, notification state, kill-switch state, and authentication/session-path details are redacted from this review export.
   - Codex-reported commit `6e7ec011ad6e2f66fd54c88374f5d5f4d34928ad`, 13 tests passed.
-- These PIDs are **old reported snapshots, not live/current guaranteed processes**. Obtain new diagnostics before modifying services.
+- The original snapshot was not a live/current guarantee. Obtain new diagnostics before modifying services.
 - Wants premarket Discord 08:45 IST watchlist from prior day's available data with source trading date and no false BUY; continue live scan from 09:15. These are separate tasks; status unverified.
 
 ## 5. Critical research caveat
@@ -79,12 +75,12 @@ Assistant recommended **three independent parallel paper variants**, but user di
 - Record full reason codes on **every rejected eligible trigger**; event log includes timestamps IST, candle close time, signal time vs simulated fill time, symbol, variant, per-indicator values, stop, qty, gross/net, fees, slippage, max adverse/favorable excursion, forced exits; maintain SQLite/CSV append-only storage + daily summary.
 - Discord: paper BUY/SELL clearly marked **PAPER** and variant A/B/C, daily stats incl P&L/R, win rate, max drawdown, rejected counts and missed signals. Prevent notification flooding and duplicate notifications.
 - Data parity: 1m UT(3,10), PSAR, session VWAP, 5m confirmed EMA 20, QQC lookback 9; reconcile exact Python vs Pine on known candles; proper IST calendar, historical lookback, holiday/opening range, incomplete candles; no lookahead or survivorship bias.
-- Preserve existing production UT-SYNC and Strict Emerging Leader services, including existing Kite auth repair. Paper engine should be its **own isolated module/process**; add tests and dry-run. Audit config/kill switches. Paper credentials not needed to place orders.
+- Preserve existing production UT-SYNC and Strict Emerging Leader services. Paper engine should be its **own isolated module/process**; add tests and dry-run. Audit protected-service boundaries. Paper credentials are not needed to place orders.
 - Do historical replay first, then live paper 20–30 trading sessions **or longer until meaningful sample size**, and analyze **out-of-sample net expectancy**, distribution and fees before even considering real. 20–30 calendar sessions alone are not sufficient evidence.
 - Later optional Kite sandbox/controlled real execution **only after separate written user approval**, regulatory/broker rules review, order reconciliation and kill switch.
 
 ## 7. Concrete work to ask VS Code Codex to do next
-1. Read/inspect **existing repo and service topology**; produce a short dependency map and list existing tests/risks, especially Kite session file and active processes.
+1. Read/inspect **existing repo and protected-service topology**; produce a short dependency map and list existing tests/risks without accessing authentication/session material.
 2. **Do not touch** Strict Emerging Leader, frozen research or production UT_SYNC routines; keep diff additive and isolated.
 3. Build standalone `paper_trading` package/service with signal-parity adapter to existing UT logic or a clearly tested Pine-vs-Python translation. Specify exact A/B/C strategies (configurable).
 4. Create candle ingestion aggregator with anti-duplicate, timezone and completed-candle checks. Never use future/unfinished HTF data.
